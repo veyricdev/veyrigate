@@ -1,3 +1,27 @@
 {
-	"chat.mcp.autostart": "newAndOutdated"
+	"chat.mcp.autostart": "newAndOutdated",
+	"chat.tools.terminal.autoApprove": {
+		"pnpm": true,
+		"corepack": true,
+		"git rev-parse": true,
+		"docker compose": true,
+		"git check-ignore": true,
+		"timeout": true,
+		"git add": true,
+		"git commit": true,
+		"/^python -c \"import yaml,sys; yaml\\.safe_load\\(open\\('\\.github/workflows/ci\\.yml'\\)\\); yaml\\.safe_load\\(open\\('\\.pre-commit-config\\.yaml'\\)\\); print\\('YAML OK: ci\\.yml \\+ \\.pre-commit-config\\.yaml'\\)\"; echo \"EXIT=\\$\\?\"$/": {
+			"approve": true,
+			"matchCommandLine": true
+		},
+		"npx --yes actionlint": true,
+		"command": true,
+		"gitleaks": true,
+		"pre-commit": true,
+		"/^command -v actionlint 2>&1 \\|\\| echo \"no actionlint\"; command -v python 2>&1 \\|\\| echo \"no python\"; python -c \"import yaml; print\\('pyyaml OK'\\)\" 2>&1 \\|\\| echo \"no pyyaml module\"$/": {
+			"approve": true,
+			"matchCommandLine": true
+		},
+		"docker run": true
+	},
+  "python.terminal.useEnvFile": true
 }
