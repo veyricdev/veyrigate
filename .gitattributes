@@ -1,0 +1,16 @@
+# Normalize line endings: store everything as LF in the repo, so Windows
+# checkouts stop showing spurious "modified" (CRLF) diffs. Text files are
+# auto-detected and committed with LF regardless of the local OS.
+* text=auto eol=lf
+
+# Binary files: never touch line endings.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.pdf binary
