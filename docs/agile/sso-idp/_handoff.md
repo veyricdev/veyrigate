@@ -1,9 +1,12 @@
 # Handoff — sso-idp
-- Trạng thái: DONE (R1–R2)
-- Agent hiện tại: orchestrator
+- Trạng thái: DONE (R3 · R4 · R5)
+- Agent hiện tại: tester
 - Cổng gần nhất: tester
-- Kết quả cổng: **PASS** (8/8 case xanh — R2 "3 service healthy" đã verify khi Docker chạy: mongo/redis/mailpit `healthy`)
-- Việc tiếp theo: R1–R2 DONE hoàn toàn. Nhóm kế: R3–R5 (agent workspace + CI + secret/.env.example) theo _run-plan.md.
+- Kết quả cổng: PASS (R3 · R4 · R5 — 11/11 case, 0 pending)
+- Việc tiếp theo: hoàn tất R3–R5. Nhóm kế theo _run-plan.md (B*/A*/T*).
 - Vòng lặp: analyst=0, dev/senior=0, dev/tester=0
-- Phạm vi lần chạy này: R1 (monorepo pnpm workspace + script gốc) + R2 (docker-compose mongo/redis/mailpit healthcheck)
-- Verify thật (tester): `pnpm i` OK (4 projects, EXIT=0) · `pnpm -r run typecheck` EXIT=0 · `pnpm lint` EXIT=0 · `pnpm dev:all` fan-out 3 app không treo EXIT=0 · `.nvmrc`==`.node-version`==v22.23.2 · `docker compose config` EXIT=0 · `docker compose config --services` mặc định không có `be` · `docker compose up -d` FAILED (daemon off) ⇒ PENDING (no Docker host, không FAIL)
+- Phạm vi lần chạy này: R3 (agent workspace — verify+doc), R4 (CI GitHub Actions), R5 (.env.example §1.4 + gitleaks pre-commit + README 5 phút)
+- File mới: `.github/workflows/ci.yml`, `be/.env.example`, `fe-admin/.env.example`, `fe-sso-test/.env.example`, `.pre-commit-config.yaml`
+- File sửa: `README.md`, `tasks.md`, `test-report.md`
+- Verify tester (chạy thật): 11/11 case PASS. ci.yml + .pre-commit-config.yaml YAML VALID (js-yaml@4.1.0); job `quality` đủ bước + job `e2e` mongo:7/redis:7 healthcheck (grep); 3 `.env.example` đủ biến §1.4; `.env.example` KHÔNG bị gitignore (check-ignore EXIT=1, `.env`/`.env.local` bị loại); **secret scan THẬT PASS** — gitleaks v8.21.2 qua Docker phát hiện private-key giả (EXIT=1, đã xoá file tạm) ⇒ KHÔNG pending; `pnpm i --frozen-lockfile` EXIT=0
+- Đã xong trước đó: R1–R2 (commit 8b75f24, 8/8 case PASS)
