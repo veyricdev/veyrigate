@@ -1,156 +1,157 @@
 # Run Plan — SSO IdP qua pipeline AI team
 
-Kế hoạch chia `sso-idp-spec-final.md` thành các **lần chạy orchestrator** độc lập, có thứ tự
-phụ thuộc. Mỗi lần chạy = 1 module đủ nhỏ để pipeline (analyst → tech-lead → dev → senior →
-tester) hoàn thành gọn trong giới hạn retry.
+Kế hoạch chạy pipeline (analyst → tech-lead → dev → senior → tester) theo
+**`plan.md`** (cùng thư mục). Mỗi lần chạy orchestrator = 1 nhóm task đủ nhỏ để
+pipeline hoàn thành trong giới hạn retry.
 
-## Cách dùng
+- **Nguồn sự thật**: `spec.md` (spec) + `plan.md` (plan) — cùng thư mục `docs/agile/sso-idp/`.
+- **Slug dùng chung**: `sso-idp` → mọi file handoff nằm ở `docs/agile/sso-idp/`.
+- Task ID (R/B/A/T/X) và cột "Phụ thuộc" lấy nguyên từ plan; chạy theo đúng thứ tự đó.
+- Spec đã hoàn chỉnh → **có thể bỏ qua analyst** (xem "Biến thể nhanh" ở cuối).
 
-- Chạy **tuần tự theo số thứ tự** — module sau phụ thuộc module trước.
-- Với mỗi module: gõ vào chat lệnh trong cột "Lệnh chạy".
-- Spec đã hoàn chỉnh nên **có thể bỏ qua analyst**: xem mục "Biến thể nhanh" ở cuối.
-- Slug dùng chung: `sso-idp`. Các file handoff nằm ở `docs/agile/sso-idp/`.
+> ⚠️ **`spec.md` và `plan.md` đã viết sẵn — ĐỪNG để analyst ghi đè.** Khi chạy `@orchestrator`,
+> thêm câu: *"spec.md và plan.md đã có, KHÔNG ghi đè; nếu thiếu `tasks.md` thì chỉ sinh tasks.md
+> từ nhóm task tương ứng trong plan."* Hoặc dùng "Biến thể nhanh" (bỏ qua analyst hoàn toàn).
 
 ## Điều kiện tiên quyết (bạn tự chuẩn bị, agent KHÔNG dựng được)
 
-- [ ] MongoDB chạy được (local/docker) cho integration test
-- [ ] Redis chạy được (single instance đủ cho dev; Sentinel/Cluster là việc hạ tầng)
-- [ ] Cơ chế KMS/Vault hoặc **stub** ký RS256 cho môi trường dev (spec §6.4)
-- [ ] Quyết các mục còn treo ở spec §17 (ít nhất: consent scope, token TTL, resource identifier)
+- [ ] Docker chạy được (compose sẽ dựng mongo/redis/mailpit — xem R2)
+- [ ] pnpm + Node theo `.nvmrc` (R1)
+- [ ] Chốt các "Việc cần bạn quyết định" trong plan §12 **trước** khi tới task bị chặn:
+  - Q1 (semantic scope trong consent) → chặn **B4.2**
+  - Q4 (`offline_access` / D7) → ảnh hưởng **B4.4/B4.5/B4.6**
+  - Q6 (token TTL), Q7 (session timeout) → ảnh hưởng **B2.3/B4.4**
+  - Q8 (KeyProvider thật) → chặn **B7.3**
+- [ ] Các quyết định ngoài spec D1–D12 (plan §2) đã đọc & đồng ý
 
 ---
 
-## Thứ tự chạy (P0 trước)
+## Milestone & thứ tự (theo plan §3)
 
-| # | Module | Spec ref | Phụ thuộc | Nhãn |
-|---|--------|----------|-----------|------|
-| 0 | Bootstrap project | §5, §13.1 | — | [BE] |
-| 1 | Data model + index | §10 | 0 | [BE] |
-| 2 | Config + kết nối Mongo/Redis | §3, §6.1 | 0 | [BE] |
-| 3 | Key management + `/jwks.json` (RS256) | §6.4, §13.3 | 1,2 | [BE] |
-| 4 | Clients + Resources CRUD (admin-only) | §7, §9.3, §13.4 | 1 | [BE] |
-| 5 | Authentication (register/login/argon2/lockout/enumeration) | §9.12, §13.5 | 1,2 | [BE] |
-| 6 | Email verification + password reset (atomic single-use) | §9.5, §13.5 | 5 | [BE] |
-| 7 | Sessions (cookie bảo mật, fixation, timeout) | §9.6, §13.7 | 2,5 | [BE] |
-| 8 | `/authorize` + AuthorizeRequestContext + resource binding | §9.1, §9.2 | 4,7 | [BE] |
-| 9 | Consent screen + versioning + `prompt` | §9.4 | 8 | [BE]+[FE] |
-| 10 | `/token` — atomic consume+bind + PKCE + phát token | §9.5, §8 | 3,8 | [BE] |
-| 11 | Refresh token — atomic rotation + reuse detection | §9.5 | 10 | [BE] |
-| 12 | `/userinfo` + discovery + `/introspect` | §11, §12 | 10 | [BE] |
-| 13 | Federation Google/GitHub (broker, re-auth linking) | §9.9 | 8 | [BE] |
-| 14 | Logout local/global + CSRF boundary | §9.8 | 7,11 | [BE] |
-| 15 | Admin control-plane + step-up re-auth | §9.11 | 4 | [BE] |
-| 16 | Rate limit đa chiều + helmet + CORS tách redirect_uri | §6.3, §9.7 | 5,8 | [BE] |
-| 17 | Multi-tenancy enforcement (tenant từ session) | §9.10 | 4,8 | [BE] |
-| 18 | Audit log + alerting sự kiện nhạy cảm | §10, §13.16 | nhiều | [BE] |
+| Mốc | Nội dung | Nhóm task |
+|-----|----------|-----------|
+| M0 | Repo & hạ tầng | R1–R5 |
+| M1 | Backend foundation | B1.* |
+| M2 | Danh tính, phiên, client/resource | B2.*, B3.* |
+| M3 | **Walking skeleton** (authorize→login→token→claims) | B4.1–B4.4, T1–T2, X1 |
+| M4 | OAuth core đầy đủ | B4.5–B4.7 |
+| M5 | Federation + Admin API + seed | B5.*, B6.* |
+| M6 | Admin FE + SSO Test FE | A*, T3–T7 |
+| M7 | E2E liên module | X2–X4 |
+| M8 | Hardening & release | B7.*, X5–X6, A9 |
 
-> P1/P2 (§16): emergency key rotation, front/back-channel logout, DPoP, admin UI, risk-based
-> auth — chạy sau khi P0 (module 0–12) ổn định.
+> **Lane song song**: sau M2, lane Backend (B4→B7) và lane FE (A*, T*) chạy song song được
+> nhờ mock (A5 dùng MSW, T2 dùng discovery). Nếu chạy tuần tự 1 người, theo đúng thứ tự bảng dưới.
 
 ---
 
-## Lệnh chạy từng module
+## Lệnh chạy từng nhóm
 
-Mỗi lệnh giữ slug `sso-idp` để dùng chung thư mục handoff. Chạy tuần tự theo số.
+Mỗi lệnh giữ slug `sso-idp`. Chạy tuần tự theo thứ tự các nhóm; orchestrator sẽ chia nhỏ tiếp
+nếu 1 nhóm còn quá lớn cho 1 vòng pipeline.
 
-```
-# 0 — Bootstrap project
-@orchestrator Bootstrap NestJS + FastifyAdapter + ConfigModule theo sso-idp-spec-final.md §5,§13.1. Slug: sso-idp.
-
-# 1 — Data model + index
-@orchestrator Định nghĩa toàn bộ Mongoose schemas + index (User, FederatedIdentity, Client, ClientCredential, Resource, RefreshToken, PasswordResetToken, EmailVerificationToken, Consent, Tenant, UserTenant, AuditLog) theo §10. Slug: sso-idp.
-
-# 2 — Config + kết nối Mongo/Redis
-@orchestrator Config validation (Joi/Zod) + module kết nối MongoDB (Mongoose) & Redis (ioredis, Lua script loader) theo §3,§6.1. Slug: sso-idp.
-
-# 3 — Key management + /jwks.json
-@orchestrator Key management qua KMS/Vault (hoặc stub dev ký RS256) + endpoint GET /jwks.json, mỗi key có kid, thiết kế sẵn quy trình rotation thường + emergency theo §6.4,§13.3. Slug: sso-idp.
-
-# 4 — Clients + Resources CRUD (admin-only)
-@orchestrator Module clients + resources CRUD admin-only: clientType public/confidential, token_endpoint_auth_method, redirect_uris exact match, allowedCorsOrigins, allowedResources registry, ClientCredential rotation có version theo §7,§9.3,§13.4. Slug: sso-idp.
-
-# 5 — Authentication
-@orchestrator Authentication: register/login hash argon2, account lockout (failedLoginCount/lockedUntil), chống account enumeration (response đồng nhất), rate limit đa chiều theo §9.12,§13.5. Slug: sso-idp.
-
-# 6 — Email verification + password reset
-@orchestrator Email verification + password reset dùng tokenHash atomic single-use (findOneAndUpdate check usedAt+expiresAt) theo §9.5,§13.5. Slug: sso-idp.
-
-# 7 — Sessions
-@orchestrator Module sessions: cookie idp_session opaque HttpOnly Secure SameSite=Lax, Redis-backed, session fixation protection (cấp ID mới sau login), idle + absolute timeout theo §9.6,§13.7. Slug: sso-idp.
-
-# 8 — /authorize + AuthorizeRequestContext + resource binding
-@orchestrator Endpoint GET /authorize: validate tham số (redirect_uri exact match, code_challenge_method=S256, resource ∈ allowedResources), tạo AuthorizeRequestContext (Redis TTL 5-10p single-use), phân biệt state/nonce/request_id, iss trong redirect response (RFC 9207) theo §9.1,§9.2. Slug: sso-idp.
-
-# 9 — Consent screen + versioning + prompt
-@orchestrator Module consent: kiểm tra Consent đã bao phủ scope + đúng policyVersion/termsVersion, trang consent [FE], xử lý prompt=none/login/consent, allow/deny theo §9.4. Slug: sso-idp.
-
-# 10 — /token atomic consume+bind + PKCE
-@orchestrator Endpoint POST /token: Lua script atomic consume authorization code kèm binding validation (client_id+redirect_uri) TRƯỚC khi xoá, verify PKCE code_verifier S256, xác thực client theo auth method, phát access token (aud=resource đã bind) + id_token (nonce) + refresh_token theo §9.5,§8. Slug: sso-idp.
-
-# 11 — Refresh token rotation + reuse detection
-@orchestrator Refresh token: atomic rotation tra cứu bằng SHA-256 hash (findOneAndUpdate revokedAt:null), strict rotation — reuse detected → revoke toàn bộ family; token mới giữ nguyên scope/resource gốc theo §9.5. Slug: sso-idp.
-
-# 12 — /userinfo + discovery + /introspect
-@orchestrator Endpoint GET /userinfo (verify access token qua JWKS, trả claims theo scope), GET /.well-known/openid-configuration (§12), POST /introspect (RFC 7662) theo §11,§12. Slug: sso-idp.
-
-# 13 — Federation Google/GitHub
-@orchestrator Module federation (Identity Broker): Google/GitHub static provider config, state riêng của IdP cho leg này + gắn request_id, FederatedIdentity collection riêng, KHÔNG auto-link theo email trùng — yêu cầu re-auth, ràng buộc SSRF (chỉ endpoint cứng) theo §9.9. Slug: sso-idp.
-
-# 14 — Logout local/global + CSRF boundary
-@orchestrator Logout: GET /logout chỉ hiển thị xác nhận (không side-effect), POST /logout destructive (CSRF-protected) huỷ session + revoke refresh family; POST /logout?scope=all global logout mọi thiết bị; RP-initiated + front-channel theo §9.8. Slug: sso-idp.
-
-# 15 — Admin control-plane + step-up re-auth
-@orchestrator Module admin: đổi redirect_uris / rotate client secret / đổi allowedResources / đổi vai trò admin bắt buộc step-up re-authentication + audit log đầy đủ theo §9.11. Slug: sso-idp.
-
-# 16 — Rate limit + helmet + CORS
-@orchestrator Hardening: @fastify/helmet, rate limit đa chiều (IP+account+device) qua @nestjs/throttler + Redis, CORS dùng allowedCorsOrigins tách khỏi redirect_uris, HTTPS enforce theo §6.3,§9.7. Slug: sso-idp.
-
-# 17 — Multi-tenancy enforcement
-@orchestrator Multi-tenancy: tenant context luôn suy ra từ phiên đã xác thực (KHÔNG tin tenantId client gửi), mọi query nhạy cảm có ràng buộc tenant tường minh, cách ly cross-tenant theo §9.10. Slug: sso-idp.
-
-# 18 — Audit log + alerting
-@orchestrator Audit log chuẩn hoá (không log secret/token), alert riêng cho TOKEN_REUSE_DETECTED, SIGNING_KEY_ROTATED (emergency), và mọi thao tác admin control-plane theo §10,§13.16. Slug: sso-idp.
-```
-
-### P1/P2 (chạy sau khi module 0–18 ổn định)
+### Phase R — Repo & hạ tầng (M0)
 
 ```
-# P1 — emergency key rotation
-@orchestrator Emergency key rotation: publish key mới + gỡ key cũ khỏi JWKS ngay theo §6.4. Slug: sso-idp.
+# R1–R2 — Monorepo + docker
+@orchestrator Làm R1, R2 theo docs/agile/sso-idp/plan.md §4: pnpm workspace monorepo (be/, fe-admin/, fe-sso-test/), script gốc (dev:all/lint/typecheck/test), docker-compose (mongo/redis/mailpit healthcheck). Slug: sso-idp.
 
-# P1 — back-channel logout
-@orchestrator Back-channel logout: server-to-server notify RP theo §9.8(4). Slug: sso-idp.
+# R3–R5 — Agent workspace + CI + secret
+@orchestrator Làm R3, R4, R5 theo plan §4: docs/spec.md + docs/plan.md + PROGRESS.md, CI GitHub Actions theo package (lint/typecheck/unit + e2e mongo/redis), .env.example từng package + secret scan + README chạy-trong-5-phút. Slug: sso-idp.
+```
 
-# P2 — DPoP sender-constrained token
-@orchestrator DPoP (RFC 9449) sender-constrained access token theo §9.13. Slug: sso-idp.
+### Phase B — Backend `be/` (`:4000`, ISSUER=http://localhost:4000)
 
-# P2 — admin UI
-@orchestrator Admin UI [FE] cho quản lý client/resource (thay vì chỉ API) theo §16 P2. Slug: sso-idp.
+```
+# B1 — Foundation (§13 bước 1–3)
+@orchestrator Làm B1.1–B1.5 theo plan §5.B1: scaffold NestJS+Fastify TS strict, config fail-fast (zod/joi), logging Pino+redact + /health + /ready + helmet + ValidationPipe + exception filter chuẩn OAuth + graceful shutdown, Mongo+Redis+Lua loader, crypto utils (argon2, CSPRNG, sha256, PKCE S256). Slug: sso-idp.
+@orchestrator Làm B1.6–B1.10 theo plan §5.B1: toàn bộ schema §10 + index/TTL + sync index tường minh, module Audit (không nhận trường bí mật, hook alert), rate-limit đa chiều Redis, KeyProvider + LocalKeyProvider + /jwks.json RS256 + TokenSigner/Verifier + rotation thường/khẩn, Mailer + template verify/reset. Slug: sso-idp.
 
-# P2 — risk-based authentication
-@orchestrator Risk-based authentication module theo §5(security/risk). Slug: sso-idp.
+# B2 — Danh tính & phiên (§9.6, §9.8, §9.12)
+@orchestrator Làm B2.1–B2.5 theo plan §5.B2: tenant context từ session (INV-24), identity services + seed default-tenant, sessions Redis (fixation/idle+absolute timeout, INV-16/17), authentication (register/login/lockout/reset atomic single-use, chống enumeration INV-27), UI server-side D1 (login/register/verify/forgot/reset/consent/logout + CSRF + CSP). Slug: sso-idp.
+
+# B3 — Client & Resource (§7, §9.3, §9.7)
+@orchestrator Làm B3.1–B3.4 theo plan §5.B3: Client+ClientCredential (rotation có version, INV-18) + validator redirect_uri exact (INV-4/21) + postLogoutRedirectUris (D4), Resource + allowedResources (INV-14), client auth cho /token (basic/post/none), CORS động dùng allowedCorsOrigins (D8, §9.7). Slug: sso-idp.
+
+# B4 — OAuth core (§9.1–9.5, §9.8) — B4.1–B4.4 là mốc walking skeleton M3
+@orchestrator Làm B4.1–B4.4 theo plan §5.B4: /authorize + AuthorizeRequestContext (INV-3/4/14/15, chống open redirect, reject PKCE plain, max_age D3), consent versioning (§9.4 — CẦN chốt Q1 trước), AuthorizationCode + Lua consume-with-binding (INV-1/2/13), /token authorization_code (access aud=resource + id_token nonce + refresh, iss RFC 9207, sub bất biến). Slug: sso-idp.
+@orchestrator Làm B4.5–B4.7 theo plan §5.B4: refresh grant rotation atomic + reuse→revoke family (INV-10/11/12) + /revoke, /userinfo + discovery §12 + /introspect (RFC 7662), logout local/global + RP-initiated + front-channel (§9.8). Slug: sso-idp.
+
+# B5 — Federation (§9.9)
+@orchestrator Làm B5.1–B5.3 theo plan §5.B5: cấu hình tĩnh Google/GitHub endpoint cứng (INV-23, GitHub lấy email primary+verified), broker flow state riêng IdP nối qua request_id, account linking an toàn KHÔNG auto-link theo email (INV-22, bắt re-auth local). Slug: sso-idp.
+
+# B6 — Admin API & seed (§9.10–9.11)
+@orchestrator Làm B6.1–B6.5 theo plan §5.B6: admin guard (aud=admin resource, INV-24), step-up @RequireRecentAuth đọc auth_time (INV-26, 403 step_up_required), endpoint quản trị + OpenAPI (secret hiện 1 lần), seed idempotent (default-tenant/admin/resource admin+demo/client fe-admin+fe-sso-test), demo-resource dev (D5). Slug: sso-idp.
+
+# B7 — Hardening & release (§13 bước 14–18)
+@orchestrator Làm B7.1–B7.5 theo plan §5.B7: security test suite theo ma trận §14 (concurrent thật), observability Prometheus + alert (reuse/rotation khẩn), Dockerfile multi-stage non-root + KeyProvider thật (Q8) + fallback Redis-down §6.2, supply-chain scan (pnpm audit/SAST/secret), runbook. Slug: sso-idp.
+```
+
+### Phase A — Admin FE `fe-admin/` (TanStack Start, BFF confidential client, `:3000`)
+
+```
+# A1–A5 — Nền tảng + BFF login + API layer
+@orchestrator Làm A1–A5 theo plan §6: scaffold TanStack Start (:3000, xoá file demo, pin version), T3Env (server/client tách), UI foundation shadcn + layout + dark mode, đăng nhập OIDC kiểu BFF (D2, resource=admin), API layer server functions + types từ OpenAPI (D11) + TanStack Query + xử lý 401 và 403 step_up_required. Dùng MSW mock khi BE chưa xong. Slug: sso-idp.
+
+# A6 — Màn hình quản trị
+@orchestrator Làm A6.1–A6.6 theo plan §6: Clients (bảng server-side, form validate redirect_uri exact, secret hiện 1 lần + rotate qua step-up), Resources, Users&sessions (revoke), Audit log (highlight TOKEN_REUSE_DETECTED), Keys (rotate khẩn cấp 2 bước + step-up), Dashboard. Slug: sso-idp.
+
+# A7–A9 — Hardening + test + deploy
+@orchestrator Làm A7–A9 theo plan §6: CSP/headers/cookie/CSRF FE + không lộ secret vào bundle (INV-20), test Vitest + Playwright (login→tạo client→audit→step-up), Dockerfile deploy Node server của Start + healthcheck. Slug: sso-idp.
+```
+
+### Phase T — SSO Test FE `fe-sso-test/` (React + React Router, public SPA + PKCE, `:5173`)
+
+```
+# T1–T2 — Scaffold + OIDC client viết tay (thuộc walking skeleton M3)
+@orchestrator Làm T1, T2 theo plan §7: Vite+React+React Router SPA (:5173) + env zod, OIDC client mỏng viết tay (fetch discovery, PKCE S256 WebCrypto, state/nonce, callback kiểm state+iss, validate ID token iss/aud/exp/nonce qua JWKS bằng jose, token trong memory, refresh rotation, RP-initiated logout, INV-6). Slug: sso-idp.
+
+# T3–T5 — Trang + gọi resource thật + security lab
+@orchestrator Làm T3–T5 theo plan §7: các route (/,/login,/callback,/profile,/tokens,/api-test,/logout + guard + trang lỗi hiện error_description), gọi GET /demo/me bằng access token + case sai aud→401 (INV-8) + userinfo, security lab dev (refresh replay→family revoke, bảng chỉnh tham số /authorize, đổi state trước callback). Slug: sso-idp.
+
+# T6–T7 — (tuỳ chọn) so sánh oidc-client-ts + test
+@orchestrator Làm T7 (và T6 nếu muốn) theo plan §7: unit PKCE/validator + e2e Playwright (login/consent/refresh/logout/kịch bản lab). Slug: sso-idp.
+```
+
+### Phase X — Liên module, E2E, phát hành
+
+```
+# X1 — Walking skeleton (M3) — chạy sau B4.1–B4.4 + T2
+@orchestrator Làm X1 theo plan §8: walking skeleton email/password → /authorize → login UI BE → /token → fe-sso-test hiện claims; Playwright 1 kịch bản. Slug: sso-idp.
+
+# X2–X4 — E2E đầy đủ + cookie matrix + federation
+@orchestrator Làm X2, X3, X4 theo plan §8: E2E đầy đủ (consent/refresh rotation/reuse-detect/logout local+global/admin tạo client→test app dùng→step-up→đổi redirect_uris hỏng đúng cách), cookie topology matrix đa trình duyệt (§9.6), federation E2E với mock OAuth provider (D12, INV-22 không auto-link). Slug: sso-idp.
+
+# X5–X6 — Security regression CI + release
+@orchestrator Làm X5, X6 theo plan §8: gom security regression vào CI (B7.1 + lab T5 + FE hardening, chặn merge khi vi phạm INV), release checklist (OWASP ASVS/OAuth BCP, dependency audit, diễn tập backup+restore + rotate khẩn cấp, đóng hết P0). Slug: sso-idp.
 ```
 
 ---
 
-## Biến thể nhanh (bỏ qua analyst khi spec đã đủ)
+## Biến thể nhanh (bỏ qua analyst)
 
-Spec này đã hoàn chỉnh, có acceptance criteria (§14,§15). Với mỗi module có thể chạy thẳng:
+Spec + plan đã đủ chi tiết. Muốn tiết kiệm vòng lặp thì chạy thẳng dev → review → test thay vì
+cả pipeline. Ví dụ cho nhóm B4.1–B4.4:
 
 ```
-@tech-lead Review tính khả thi module "<tên>" theo sso-idp-spec-final.md <ref>. Slug: sso-idp. Trả PASS/REJECT.
-# nếu PASS:
-@backend-dev Implement module "<tên>" theo <ref> và review-techlead.md. Slug: sso-idp.
-@senior-reviewer Review code module "<tên>". Slug: sso-idp.
-@tester Viết+chạy test theo acceptance criteria §14/§15 cho module "<tên>". Slug: sso-idp.
+@backend-dev Hiện thực B4.1–B4.4 theo docs/agile/sso-idp/plan.md §5.B4 và docs/agile/sso-idp/spec.md §9.1–9.5. Ghi handoff ở docs/agile/sso-idp/.
+@senior-reviewer Review thay đổi B4.1–B4.4 ở docs/agile/sso-idp/. Trả PASS/REJECT.
+@tester Viết + chạy test cho B4.1–B4.4 theo acceptance trong plan và ma trận §14. Báo pass/fail thật.
 ```
+
+Nhóm FE thay `@backend-dev` bằng `@frontend-dev`.
 
 ---
 
 ## Lưu ý giới hạn
 
-- **Retry cap = 2** mỗi cổng. Module phức tạp (10,11,13) dễ REJECT/FAIL nhiều lần → nếu kẹt,
-  chia nhỏ hơn nữa (vd tách "PKCE verify" khỏi "phát token").
-- Agent **không dựng hạ tầng thật** (KMS, Redis HA, k8s). Chuẩn bị sẵn hoặc dùng stub dev.
-- Module 9 có phần [FE] (trang consent + trang login) → frontend-dev tham gia; phần còn lại
-  gần như thuần [BE].
+- **Retry cap = 2** mỗi cổng. Nhóm phức tạp (B4.3 Lua atomic, B4.5 refresh rotation, B5.2
+  broker) dễ REJECT/FAIL nhiều lần → nếu kẹt, tách nhỏ hơn (vd tách "PKCE verify" khỏi "phát token").
+- Agent **không dựng hạ tầng thật** (KMS thật, Redis HA, k8s). R2 dựng compose dev; KeyProvider
+  thật để ở B7.3 (cần chốt Q8).
+- **Ma trận Invariant → task**: plan §9 (đủ 27 INV + nơi kiểm chứng) — tester dùng làm checklist.
+- **Definition of Done**: plan §10.
+- File handoff giữa agent: `_handoff.md` (trạng thái hiện tại, ghi đè) + `_progress.md` (log,
+  ghi thêm) — theo `HANDOFF-PROTOCOL.md`.
+```
+
