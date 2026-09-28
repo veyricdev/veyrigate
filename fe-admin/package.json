@@ -1,0 +1,11 @@
+{
+  "name": "@sso-idp/fe-admin",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "echo \"[fe-admin] TODO: scaffold TanStack Start at A1\"",
+    "lint": "echo \"[fe-admin] TODO: lint at A1\"",
+    "typecheck": "echo \"[fe-admin] TODO: typecheck at A1\"",
+    "test": "echo \"[fe-admin] TODO: test at A1\""
+  }
+}

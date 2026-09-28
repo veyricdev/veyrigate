@@ -1,0 +1,11 @@
+{
+  "name": "@sso-idp/be",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "echo \"[be] TODO: scaffold NestJS + Fastify at B1.1\"",
+    "lint": "echo \"[be] TODO: lint at B1.1\"",
+    "typecheck": "echo \"[be] TODO: typecheck at B1.1\"",
+    "test": "echo \"[be] TODO: test at B1.1\""
+  }
+}

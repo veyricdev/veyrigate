@@ -1,0 +1,11 @@
+{
+  "name": "@sso-idp/fe-sso-test",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "dev": "echo \"[fe-sso-test] TODO: scaffold Vite + React + React Router at T1\"",
+    "lint": "echo \"[fe-sso-test] TODO: lint at T1\"",
+    "typecheck": "echo \"[fe-sso-test] TODO: typecheck at T1\"",
+    "test": "echo \"[fe-sso-test] TODO: test at T1\""
+  }
+}

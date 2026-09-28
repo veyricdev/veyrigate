@@ -1,0 +1,4 @@
+packages:
+  - be
+  - fe-admin
+  - fe-sso-test
