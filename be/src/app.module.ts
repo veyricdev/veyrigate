@@ -6,9 +6,21 @@ import { OAuthExceptionFilter } from './common/filters/oauth-exception.filter';
 import { MongoModule } from './database/mongo/mongo.module';
 import { RedisModule } from './database/redis/redis.module';
 import { HealthModule } from './modules/health/health.module';
+import { KeysModule } from './modules/keys/keys.module';
+import { MailerModule } from './modules/mailer/mailer.module';
+import { SecurityModule } from './modules/security/security.module';
 
 @Module({
-  imports: [ConfigModule, LoggerModule, MongoModule, RedisModule, HealthModule],
+  imports: [
+    ConfigModule,
+    LoggerModule,
+    MongoModule,
+    RedisModule,
+    HealthModule,
+    SecurityModule,
+    KeysModule,
+    MailerModule,
+  ],
   providers: [
     {
       provide: APP_FILTER,

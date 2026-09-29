@@ -9,6 +9,9 @@ build/
 .env
 .env.local
 
+# Dev signing keys (LocalKeyProvider, B1.9) — never commit
+be/keys/
+
 # Test / coverage
 coverage/
 

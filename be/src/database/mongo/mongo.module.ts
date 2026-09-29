@@ -1,7 +1,8 @@
 import { Global, Logger, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
-import type { DatabaseConfig } from '../../config/configuration';
+import type { AppConfig, DatabaseConfig } from '../../config/configuration';
+import { MODELS } from './models';
 import { MongoService } from './mongo.service';
 
 /**
@@ -20,8 +21,11 @@ import { MongoService } from './mongo.service';
       useFactory: (config: ConfigService) => {
         const logger = new Logger('MongoClient');
         const { mongoUri } = config.getOrThrow<DatabaseConfig>('database');
+        const { nodeEnv } = config.getOrThrow<AppConfig>('app');
         return {
           uri: mongoUri,
+          // B1.6: never build indexes implicitly in prod — run `db:sync-indexes`.
+          autoIndex: nodeEnv !== 'production',
           serverSelectionTimeoutMS: 5000,
           retryAttempts: 5,
           retryDelay: 1000,
@@ -34,8 +38,9 @@ import { MongoService } from './mongo.service';
         };
       },
     }),
+    MongooseModule.forFeature(MODELS),
   ],
   providers: [MongoService],
-  exports: [MongoService],
+  exports: [MongoService, MongooseModule],
 })
 export class MongoModule {}

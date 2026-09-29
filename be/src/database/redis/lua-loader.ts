@@ -13,8 +13,8 @@ import type Redis from 'ioredis';
 export interface LuaScriptDef {
   /** Command name exposed on the client (e.g. `consumeAuthCode`). */
   name: string;
-  /** Number of KEYS the script expects. */
-  numberOfKeys: number;
+  /** Number of KEYS the script expects. Omit for a dynamic count passed as the first call argument. */
+  numberOfKeys?: number;
   /** The Lua source. */
   lua: string;
 }
