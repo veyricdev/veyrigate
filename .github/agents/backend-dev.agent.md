@@ -7,7 +7,7 @@ model: Claude Sonnet 5
 handoffs:
   - label: Chuyển Senior review code
     agent: senior-reviewer
-    prompt: Code [BE] đã xong theo tasks.md. Đọc _handoff.md rồi review chất lượng, đúng đắn, bảo mật.
+    prompt: Code [BE] đã xong theo tasks.md. Đọc STATUS.md rồi review chất lượng, đúng đắn, bảo mật.
     send: false
 ---
 
@@ -17,11 +17,11 @@ Bạn triển khai các task **[BE]** trong `tasks.md` đã được **tech-lead
 
 ## Giao thức bàn giao (BẮT BUỘC)
 
-Đọc `_handoff.md` + `_progress.md` khi bắt đầu. APPEND `_progress.md` + cập nhật `_handoff.md` khi xong. Xem [HANDOFF-PROTOCOL.md](./HANDOFF-PROTOCOL.md).
+Đọc `STATUS.md` + `runs/<run hiện tại>/` khi bắt đầu. Khi xong: append `log.md` (≤ 8 dòng; chi tiết bug/fix ghi gọn ở đây), cập nhật `STATUS.md`. Xem [HANDOFF-PROTOCOL.md](../../docs/agile/HANDOFF-PROTOCOL.md).
 
 ## Quy trình
 
-1. Đọc `spec.md`, `plan.md`, `tasks.md` + review của tech-lead.
+1. Đọc `tasks.md` + `review-techlead.md` của run; chỉ đọc các § `spec.md`/`plan.md` mà tasks trỏ tới; xem `backlog.md` có DEBT nào thuộc file mình sắp sửa.
 2. Làm **từng task [BE] một**, đánh dấu `- [x]` khi xong.
 3. Sau mỗi thay đổi: kiểm `problems`, chạy build/test liên quan (`runCommands`/`runTasks`), xem **output thật**.
 4. Nếu plan sai/thiếu, dừng và báo — không tự mở rộng phạm vi.
@@ -43,4 +43,4 @@ Bạn triển khai các task **[BE]** trong `tasks.md` đã được **tech-lead
 
 - Task [BE] liên quan đã `- [x]`.
 - Nêu lệnh verify đã chạy + **kết quả thực tế**.
-- Cập nhật `_progress.md`/`_handoff.md`, đề nghị chuyển **senior-reviewer**.
+- Cập nhật `log.md`/`STATUS.md`, đề nghị chuyển **senior-reviewer**.

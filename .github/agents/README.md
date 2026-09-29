@@ -28,13 +28,14 @@ Chúng giao tiếp qua **2 kênh**:
 
 ### Làm sao agent sau biết agent trước đã làm gì?
 
-Qua 2 file bàn giao mà **mọi agent bắt buộc cập nhật**:
+Mỗi lần chạy pipeline là một **run** (thư mục `runs/NN-<task-ids>/`). Agent chỉ đọc:
 
-- **`_progress.md`** — nhật ký giao ca. Mỗi agent APPEND: đã làm gì, đổi file nào, kết quả, bàn giao cho ai.
-- **`_handoff.md`** — trạng thái hiện tại: ai đang giữ việc, cổng nào, PASS/REJECT/FAIL, việc tiếp theo.
+- **`STATUS.md`** — dashboard ngắn: run hiện tại, cổng, tiến độ, chặn.
+- **`runs/<run hiện tại>/`** — tasks, review, test-report, `log.md` (nhật ký giao ca của run).
+- **`backlog.md`** — việc còn mở (🟡, debt).
 
-Chi tiết trong [HANDOFF-PROTOCOL.md](./HANDOFF-PROTOCOL.md). Đây chính là "sổ giao ca" giúp
-agent kế tiếp nắm được toàn cảnh mà không cần bộ nhớ chung.
+Run cũ không bao giờ phải đọc lại → tài liệu không phình theo thời gian.
+Chi tiết trong [HANDOFF-PROTOCOL.md](../../docs/agile/HANDOFF-PROTOCOL.md).
 
 ## Cách dùng
 
@@ -42,7 +43,7 @@ agent kế tiếp nắm được toàn cảnh mà không cần bộ nhớ chung.
 
 1. Mở Chat, chọn agent **orchestrator**.
 2. Nhập yêu cầu, ví dụ: *"Thêm endpoint đăng nhập email/password trả JWT"*.
-3. Orchestrator tạo `docs/agile/<slug>/`, khởi tạo file bàn giao, rồi tự chạy:
+3. Orchestrator tạo `docs/agile/<slug>/` (hoặc mở run mới nếu slug đã có), rồi tự chạy:
    analyst → tech-lead → backend-dev/frontend-dev → senior-reviewer → tester, xử lý retry và báo cáo cuối.
 
 ### Cách 2 — Thủ công từng bước (Handoff)
@@ -54,14 +55,16 @@ agent kế tiếp nắm được toàn cảnh mà không cần bộ nhớ chung.
 
 ```
 docs/agile/<slug>/
-  _handoff.md          # trạng thái (mọi agent)
-  _progress.md         # nhật ký giao ca (mọi agent append)
-  spec.md              # analyst
-  plan.md              # analyst
-  tasks.md             # analyst → dev đánh dấu [x]  (task gắn nhãn [FE]/[BE])
-  review-techlead.md   # tech-lead
-  review-senior.md     # senior-reviewer
-  test-report.md       # tester
+  STATUS.md            # dashboard (mọi agent cập nhật, ≤ 40 dòng)
+  backlog.md           # việc còn mở / debt
+  spec.md, plan.md     # analyst (không ghi đè khi đã có)
+  runs/NN-<task-ids>/
+    tasks.md           # analyst/orchestrator → dev đánh dấu [x]
+    review-techlead.md # tech-lead
+    review-senior.md   # senior-reviewer
+    test-report.md     # tester
+    log.md             # nhật ký giao ca của run
+    summary.md         # orchestrator, khi đóng run
 ```
 
 ## Cổng kiểm soát (quality gates)

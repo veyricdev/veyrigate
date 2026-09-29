@@ -102,8 +102,10 @@ Layout thực tế của quy trình agile-agent (khác đường dẫn nêu tron
 
 | Thành phần | Vị trí thực tế |
 |---|---|
-| Agents (7) | `.github/agents/*.agent.md` (analyst, tech-lead, backend-dev, frontend-dev, senior-reviewer, tester, orchestrator) + `HANDOFF-PROTOCOL.md` |
+| Agents (7) | `.github/agents/*.agent.md` (analyst, tech-lead, backend-dev, frontend-dev, senior-reviewer, tester, orchestrator) |
+| Giao thức bàn giao | `docs/agile/HANDOFF-PROTOCOL.md` |
 | Spec / plan | `docs/agile/<slug>/spec.md` + `plan.md` (mỗi tính năng một thư mục theo `<slug>`) |
-| Progress / handoff | `docs/agile/<slug>/_progress.md` + `_handoff.md` |
+| Trạng thái / việc tồn | `docs/agile/<slug>/STATUS.md` + `backlog.md` |
+| Từng lần chạy | `docs/agile/<slug>/runs/NN-<task-ids>/` (tasks, review, test-report, log, summary) |
 
 Mỗi agent đọc spec trong thư mục tính năng (`docs/agile/<slug>/`) trước khi làm; không dùng `docs/spec.md` hay root `PROGRESS.md`.

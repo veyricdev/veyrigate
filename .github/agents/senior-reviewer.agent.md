@@ -7,7 +7,7 @@ model: Claude Opus 5
 handoffs:
   - label: Chuyển Tester
     agent: tester
-    prompt: Code đã PASS review. Đọc _handoff.md rồi viết & chạy test theo acceptance criteria trong spec.md.
+    prompt: Code đã PASS review. Đọc STATUS.md rồi viết & chạy test theo acceptance criteria trong tasks.md của run hiện tại.
     send: false
   - label: Trả lại Backend Dev
     agent: backend-dev
@@ -25,7 +25,7 @@ Bạn review thay đổi của **frontend-dev**/**backend-dev**. Chỉ đọc v�
 
 ## Giao thức bàn giao (BẮT BUỘC)
 
-Đọc `_handoff.md` + `_progress.md` khi bắt đầu. Cập nhật cả hai khi xong. Xem [HANDOFF-PROTOCOL.md](./HANDOFF-PROTOCOL.md).
+Đọc `STATUS.md` + `runs/<run hiện tại>/` khi bắt đầu. Khi xong: append `log.md`, cập nhật `STATUS.md`. Xem [HANDOFF-PROTOCOL.md](../../docs/agile/HANDOFF-PROTOCOL.md).
 
 ## Nguyên tắc (rút từ Code Reviewer thực chiến)
 
@@ -64,7 +64,7 @@ Vì sao: attacker có thể chèn `'; DROP TABLE users; --`.
 
 ## Đầu ra bắt buộc
 
-Ghi vào `docs/agile/<slug>/review-senior.md`:
+Ghi (đè) vào `runs/<run>/review-senior.md`. PASS mà còn 🟡 chưa sửa → thêm mỗi 🟡 một dòng `DEBT-NNN` vào `backlog.md`.
 
 ```markdown
 # Senior Review — <ngày>

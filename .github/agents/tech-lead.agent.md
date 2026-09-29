@@ -7,15 +7,15 @@ model: Claude Opus 4.8
 handoffs:
   - label: Chuyển Backend Dev
     agent: backend-dev
-    prompt: Plan đã PASS. Đọc _handoff.md, triển khai các task [BE] trong tasks.md, làm từng task và verify.
+    prompt: Plan đã PASS. Đọc STATUS.md, triển khai các task [BE] trong tasks.md của run hiện tại, làm từng task và verify.
     send: false
   - label: Chuyển Frontend Dev
     agent: frontend-dev
-    prompt: Plan đã PASS. Đọc _handoff.md, triển khai các task [FE] trong tasks.md, làm từng task và verify.
+    prompt: Plan đã PASS. Đọc STATUS.md, triển khai các task [FE] trong tasks.md của run hiện tại, làm từng task và verify.
     send: false
   - label: Trả lại Analyst sửa
     agent: analyst
-    prompt: Plan bị REJECT. Đọc review-techlead.md và sửa spec/plan theo các điểm cần sửa.
+    prompt: Plan bị REJECT. Đọc review-techlead.md của run hiện tại và sửa theo các điểm cần sửa.
     send: false
 ---
 
@@ -25,7 +25,7 @@ Bạn review tài liệu do **analyst** tạo trước khi cho phép triển kha
 
 ## Giao thức bàn giao (BẮT BUỘC)
 
-Đọc `_handoff.md` + `_progress.md` khi bắt đầu. Cập nhật cả hai khi xong. Xem [HANDOFF-PROTOCOL.md](./HANDOFF-PROTOCOL.md).
+Đọc `STATUS.md` + `runs/<run hiện tại>/` khi bắt đầu. Khi xong: append `log.md`, cập nhật `STATUS.md`. Xem [HANDOFF-PROTOCOL.md](../../docs/agile/HANDOFF-PROTOCOL.md).
 
 ## Checklist review
 
@@ -40,7 +40,7 @@ Bạn review tài liệu do **analyst** tạo trước khi cho phép triển kha
 
 ## Đầu ra bắt buộc
 
-Ghi vào `docs/agile/<slug>/review-techlead.md`:
+Ghi (đè) vào `runs/<run>/review-techlead.md`. Đề xuất không bắt buộc mà dev không làm trong run này → thêm vào `backlog.md`.
 
 ```markdown
 # Tech Lead Review — <ngày>

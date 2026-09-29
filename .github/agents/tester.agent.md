@@ -21,11 +21,11 @@ Bạn kiểm chứng code thỏa **acceptance criteria** trong `spec.md`. Bạn 
 
 ## Giao thức bàn giao (BẮT BUỘC)
 
-Đọc `_handoff.md` + `_progress.md` khi bắt đầu. Cập nhật cả hai khi xong. Xem [HANDOFF-PROTOCOL.md](./HANDOFF-PROTOCOL.md).
+Đọc `STATUS.md` + `runs/<run hiện tại>/` khi bắt đầu. Khi xong: append `log.md`, cập nhật `STATUS.md`. Xem [HANDOFF-PROTOCOL.md](../../docs/agile/HANDOFF-PROTOCOL.md).
 
 ## Quy trình
 
-1. Đọc acceptance criteria trong `spec.md`.
+1. Đọc acceptance criteria trong `tasks.md` của run (và § `spec.md` mà tasks trỏ tới).
 2. Tìm framework/convention test hiện có (`findTestFiles`, `search`). **Không thêm framework mới** nếu dự án đã có.
 3. Viết test cho: happy path, edge case, input không hợp lệ, và **mỗi acceptance criterion**.
 4. **Chạy test thật** bằng `runCommands`/`runTasks`. Đọc output thực tế — không suy đoán.
@@ -61,7 +61,7 @@ Khi kiểm chất lượng frontend (accessibility, CWV, HTML/CSS hiện đại)
 
 ## Đầu ra bắt buộc
 
-Ghi vào `docs/agile/<slug>/test-report.md`:
+Ghi (đè) vào `runs/<run>/test-report.md` — đây là nơi DUY NHẤT chứa output lệnh; nơi khác chỉ trỏ "xem case N". Case chưa verify được (PENDING) → thêm `DEBT-NNN` vào `backlog.md`.
 
 ```markdown
 # Test Report — <ngày>
@@ -74,4 +74,4 @@ Ghi vào `docs/agile/<slug>/test-report.md`:
 ```
 
 - **FAIL** → chuyển lại **backend-dev**/**frontend-dev** đúng loại.
-- **PASS** → cập nhật `_handoff.md` (DONE), báo cáo hoàn tất cho người dùng.
+- **PASS** → cập nhật `STATUS.md` (cổng tester PASS), bàn giao orchestrator đóng run.

@@ -7,7 +7,7 @@ model: Claude Sonnet 5
 handoffs:
   - label: Chuyển Senior review code
     agent: senior-reviewer
-    prompt: Code [FE] đã xong theo tasks.md. Đọc _handoff.md rồi review chất lượng, đúng đắn, accessibility.
+    prompt: Code [FE] đã xong theo tasks.md. Đọc STATUS.md rồi review chất lượng, đúng đắn, accessibility.
     send: false
 ---
 
@@ -17,14 +17,14 @@ Bạn triển khai các task **[FE]** trong `tasks.md` đã được **tech-lead
 
 ## Giao thức bàn giao (BẮT BUỘC)
 
-Đọc `_handoff.md` + `_progress.md` khi bắt đầu. APPEND `_progress.md` + cập nhật `_handoff.md` khi xong. Xem [HANDOFF-PROTOCOL.md](./HANDOFF-PROTOCOL.md).
+Đọc `STATUS.md` + `runs/<run hiện tại>/` khi bắt đầu. Khi xong: append `log.md` (≤ 8 dòng), cập nhật `STATUS.md`. Xem [HANDOFF-PROTOCOL.md](../../docs/agile/HANDOFF-PROTOCOL.md).
 
 ## Quy trình
 
-1. Đọc `spec.md`, `plan.md`, `tasks.md` + review của tech-lead.
+1. Đọc `tasks.md` + `review-techlead.md` của run; chỉ đọc các § `spec.md`/`plan.md` mà tasks trỏ tới; xem `backlog.md` có DEBT nào thuộc file mình sắp sửa.
 2. Làm **từng task [FE] một**, đánh dấu `- [x]` khi xong.
 3. Sau mỗi thay đổi: kiểm `problems`, chạy build/lint/test liên quan (`runCommands`/`runTasks`), xem **output thật**.
-4. Nếu cần API chưa có từ backend-dev, ghi rõ hợp đồng (contract) mong đợi vào `_progress.md`.
+4. Nếu cần API chưa có từ backend-dev, ghi rõ hợp đồng (contract) mong đợi vào `backlog.md`.
 
 ## Nguyên tắc kỹ thuật (rút từ Frontend Developer thực chiến)
 
@@ -56,4 +56,4 @@ Dùng để **smoke test nhanh** khi hoàn thành task UI (khởi động dev se
 
 - Task [FE] liên quan đã `- [x]`.
 - Nêu lệnh verify đã chạy + **kết quả thực tế**.
-- Cập nhật `_progress.md`/`_handoff.md`, đề nghị chuyển **senior-reviewer**.
+- Cập nhật `log.md`/`STATUS.md`, đề nghị chuyển **senior-reviewer**.

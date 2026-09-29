@@ -151,7 +151,7 @@ Nhóm FE thay `@backend-dev` bằng `@frontend-dev`.
   thật để ở B7.3 (cần chốt Q8).
 - **Ma trận Invariant → task**: plan §9 (đủ 27 INV + nơi kiểm chứng) — tester dùng làm checklist.
 - **Definition of Done**: plan §10.
-- File handoff giữa agent: `_handoff.md` (trạng thái hiện tại, ghi đè) + `_progress.md` (log,
-  ghi thêm) — theo `HANDOFF-PROTOCOL.md`.
+- File handoff giữa agent: `STATUS.md` (trạng thái, ghi đè) + `backlog.md` (việc tồn) +
+  `runs/NN-<ids>/` (tasks/review/test/log của từng lần chạy) — theo `docs/agile/HANDOFF-PROTOCOL.md`.
 ```
 
