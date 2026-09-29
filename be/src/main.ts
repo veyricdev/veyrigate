@@ -1,3 +1,4 @@
+import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -18,6 +19,10 @@ async function bootstrap(): Promise<void> {
 
   // Security headers.
   await app.register(helmet);
+
+  // Cookie parsing/serialisation for `idp_session` (B2.3). Unsigned on purpose:
+  // the value is a 256-bit random ID, see SessionCookie.
+  await app.register(cookie);
 
   // Reject unknown/extra fields on all DTOs.
   app.useGlobalPipes(

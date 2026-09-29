@@ -13,37 +13,59 @@ import { z } from 'zod';
 
 const positiveInt = z.coerce.number().int().positive();
 
-export const envSchema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  PORT: z.coerce.number().int().min(1).max(65535).default(4000),
-  ISSUER: z.string().url(),
+export const envSchema = z
+  .object({
+    NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+    PORT: z.coerce.number().int().min(1).max(65535).default(4000),
+    ISSUER: z.string().url(),
 
-  MONGO_URI: z.string().min(1),
-  REDIS_URL: z.string().min(1),
+    MONGO_URI: z.string().min(1),
+    REDIS_URL: z.string().min(1),
 
-  ACCESS_TOKEN_TTL: positiveInt,
-  REFRESH_TOKEN_TTL: positiveInt,
-  SESSION_IDLE_TTL: positiveInt,
-  SESSION_ABSOLUTE_TTL: positiveInt,
+    ACCESS_TOKEN_TTL: positiveInt,
+    REFRESH_TOKEN_TTL: positiveInt,
+    SESSION_IDLE_TTL: positiveInt,
+    SESSION_ABSOLUTE_TTL: positiveInt,
+    // Not z.coerce.boolean(): that maps the string "false" to true.
+    SESSION_COOKIE_SECURE: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((v) => v === 'true'),
 
-  KEY_PROVIDER: z.enum(['local', 'aws-kms', 'vault']).default('local'),
-  KEY_LOCAL_DIR: z.string().min(1),
+    KEY_PROVIDER: z.enum(['local', 'aws-kms', 'vault']).default('local'),
+    KEY_LOCAL_DIR: z.string().min(1),
 
-  SMTP_URL: z.string().min(1),
+    SMTP_URL: z.string().min(1),
 
-  GOOGLE_CLIENT_ID: z.string().min(1),
-  GOOGLE_CLIENT_SECRET: z.string().min(1),
-  GITHUB_CLIENT_ID: z.string().min(1),
-  GITHUB_CLIENT_SECRET: z.string().min(1),
+    GOOGLE_CLIENT_ID: z.string().min(1),
+    GOOGLE_CLIENT_SECRET: z.string().min(1),
+    GITHUB_CLIENT_ID: z.string().min(1),
+    GITHUB_CLIENT_SECRET: z.string().min(1),
 
-  ADMIN_SEED_EMAIL: z.string().email(),
-  ADMIN_SEED_PASSWORD: z.string().min(1),
+    ADMIN_SEED_EMAIL: z.string().email(),
+    ADMIN_SEED_PASSWORD: z.string().min(1),
 
-  CSRF_SECRET: z.string().min(1),
+    CSRF_SECRET: z.string().min(1),
 
-  RATE_LIMIT_WINDOW: positiveInt,
-  RATE_LIMIT_MAX: positiveInt,
-});
+    RATE_LIMIT_WINDOW: positiveInt,
+    RATE_LIMIT_MAX: positiveInt,
+  })
+  .superRefine((env, ctx) => {
+    if (env.NODE_ENV === 'production' && !env.SESSION_COOKIE_SECURE) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['SESSION_COOKIE_SECURE'],
+        message: 'SESSION_COOKIE_SECURE=false is not allowed when NODE_ENV=production',
+      });
+    }
+    if (env.SESSION_IDLE_TTL > env.SESSION_ABSOLUTE_TTL) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['SESSION_IDLE_TTL'],
+        message: 'SESSION_IDLE_TTL must be <= SESSION_ABSOLUTE_TTL',
+      });
+    }
+  });
 
 /** Fully-typed, validated environment. */
 export type Env = z.infer<typeof envSchema>;

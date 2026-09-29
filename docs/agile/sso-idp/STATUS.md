@@ -2,10 +2,10 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: [`runs/04-B1.6-B1.10/`](runs/04-B1.6-B1.10/tasks.md)
-- **Cổng**: done · **Kết quả**: tester PASS 45/45 · commit `1dcb2a8`
-- **Vòng lặp**: analyst=0, dev/senior=1, dev/tester=1
-- **Việc tiếp theo**: người dùng commit run 04 → bắt đầu B2.
+- **Run hiện tại**: [`runs/05-B2.1-B2.3/`](runs/05-B2.1-B2.3/tasks.md)
+- **Cổng**: done · **Kết quả**: tester PASS 80/80 (unit 35 + int 45) · chưa commit
+- **Vòng lặp**: analyst=0, dev/senior=0, dev/tester=0
+- **Việc tiếp theo**: người dùng commit run 05 → run 06 = B2.4–B2.5 (kéo DEBT-010, 011, 014).
 
 ## Tiến độ
 
@@ -15,11 +15,12 @@
 | [02](runs/02-R3-R5/summary.md) | M0 | R3–R5 | ✅ 11/11 | `4c2104a` |
 | [03](runs/03-B1.1-B1.5/summary.md) | M1 | B1.1–B1.5 | ✅ 9/9 | `6d04558` |
 | [04](runs/04-B1.6-B1.10/summary.md) | M1 | B1.6–B1.10 | ✅ 45/45 | `1dcb2a8` |
+| [05](runs/05-B2.1-B2.3/summary.md) | M2 | B2.1–B2.3 | ✅ 80/80 | — |
 
 ## Chặn / cần người quyết định
 
-Xem `plan.md` §12. Sắp chạm tới: **Q6** (TTL token/session → B2.3, B4.4), **Q1** (consent → B4.2), **Q4** (→ B4.4/B6.2).
+Xem `plan.md` §12. Sắp chạm tới: **Q6** (chốt tạm session idle 8h/absolute 30d; token TTL → B4.4), **Q1** (consent → B4.2), **Q4** (→ B4.4/B6.2).
 
 ## Backlog mở
 
-7 mục — xem [backlog.md](backlog.md).
+13 mục — xem [backlog.md](backlog.md).

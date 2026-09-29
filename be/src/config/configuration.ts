@@ -7,8 +7,8 @@ import type { Env } from './validation.schema';
  * the rest of the app reads config through `ConfigService.get('<ns>')` and never
  * touches `process.env` directly.
  *
- * ConfigModule runs `validateEnv` first, so `process.env` here is already
- * validated; `validateEnv` re-parses to recover the coerced/typed values.
+ * ConfigModule's single `load` factory calls `validateEnv(process.env)` once
+ * and passes the typed result here.
  */
 
 export interface AppConfig {
@@ -27,6 +27,10 @@ export interface TokenConfig {
   refreshTokenTtl: number;
   sessionIdleTtl: number;
   sessionAbsoluteTtl: number;
+}
+
+export interface SessionConfig {
+  cookieSecure: boolean;
 }
 
 export interface KeysConfig {
@@ -60,6 +64,7 @@ export interface Config {
   app: AppConfig;
   database: DatabaseConfig;
   token: TokenConfig;
+  session: SessionConfig;
   keys: KeysConfig;
   federation: FederationConfig;
   security: SecurityConfig;
@@ -87,6 +92,9 @@ export function buildConfig(env: Env): Config {
       refreshTokenTtl: env.REFRESH_TOKEN_TTL,
       sessionIdleTtl: env.SESSION_IDLE_TTL,
       sessionAbsoluteTtl: env.SESSION_ABSOLUTE_TTL,
+    },
+    session: {
+      cookieSecure: env.SESSION_COOKIE_SECURE,
     },
     keys: {
       provider: env.KEY_PROVIDER,

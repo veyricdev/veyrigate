@@ -6,9 +6,10 @@ import { validateEnv } from './validation.schema';
 /**
  * Global config module (B1.2).
  *
- * - `validate: validateEnv` → fail-fast at bootstrap: a missing/invalid env var
- *   throws before the app listens, and the message names the offending var(s).
- * - `load` exposes the typed, namespaced config tree so the rest of the app
+ * - The single `load` factory validates the env once (`validateEnv`, DEBT-002)
+ *   and throws on a missing/invalid var → fail-fast at bootstrap, before the
+ *   app listens; the message names the offending var(s).
+ * - It exposes the typed, namespaced config tree so the rest of the app
  *   reads via `ConfigService.get<Config['app']>('app')` and never touches
  *   `process.env` directly.
  */
@@ -17,7 +18,6 @@ import { validateEnv } from './validation.schema';
   imports: [
     NestConfigModule.forRoot({
       isGlobal: true,
-      validate: validateEnv,
       load: [(): Config => buildConfig(validateEnv(process.env))],
     }),
   ],

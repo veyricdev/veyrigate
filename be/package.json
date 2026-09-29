@@ -14,6 +14,7 @@
     "db:sync-indexes": "node --env-file-if-exists=.env dist/database/mongo/sync-indexes.js"
   },
   "dependencies": {
+    "@fastify/cookie": "11.1.2",
     "@fastify/helmet": "13.1.1",
     "@nestjs/common": "12.1.1",
     "@nestjs/config": "12.0.1",

@@ -6,6 +6,7 @@ import { OAuthExceptionFilter } from './common/filters/oauth-exception.filter';
 import { MongoModule } from './database/mongo/mongo.module';
 import { RedisModule } from './database/redis/redis.module';
 import { HealthModule } from './modules/health/health.module';
+import { IdentityModule } from './modules/identity/identity.module';
 import { KeysModule } from './modules/keys/keys.module';
 import { MailerModule } from './modules/mailer/mailer.module';
 import { SecurityModule } from './modules/security/security.module';
@@ -20,6 +21,7 @@ import { SecurityModule } from './modules/security/security.module';
     SecurityModule,
     KeysModule,
     MailerModule,
+    IdentityModule,
   ],
   providers: [
     {
