@@ -21,6 +21,16 @@ docs/agile/<slug>/
       summary.md           # orchestrator viết khi đóng run, ≤ 15 dòng
 ```
 
+## Preflight — CodeGraph (BẮT BUỘC, MỌI agent, trước mọi việc khác)
+
+Chạy ở thư mục gốc repo:
+
+1. `codegraph --version` — lỗi / không tìm thấy lệnh → `npm install -g @colbymchenry/codegraph`, rồi chạy lại `codegraph --version` để xác nhận.
+2. `codegraph status` — output có `Not initialized` → `codegraph init` (tạo `.codegraph/` + build index lần đầu).
+3. Đã init → `codegraph sync`.
+
+Lỗi lock → `codegraph unlock` rồi chạy lại. Cài/init/sync vẫn lỗi → dừng, báo lỗi thật, không làm tiếp.
+
 ## Đọc gì khi bắt đầu (BẮT BUỘC, theo thứ tự)
 
 1. `STATUS.md` → biết run hiện tại.

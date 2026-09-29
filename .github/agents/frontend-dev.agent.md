@@ -17,7 +17,7 @@ Bạn triển khai các task **[FE]** trong `tasks.md` đã được **tech-lead
 
 ## Giao thức bàn giao (BẮT BUỘC)
 
-Đọc `STATUS.md` + `runs/<run hiện tại>/` khi bắt đầu. Khi xong: append `log.md` (≤ 8 dòng), cập nhật `STATUS.md`. Xem [HANDOFF-PROTOCOL.md](../../docs/agile/HANDOFF-PROTOCOL.md).
+Trước hết chạy Preflight CodeGraph (cài nếu thiếu, init/sync index). Đọc `STATUS.md` + `runs/<run hiện tại>/` khi bắt đầu. Khi xong: append `log.md` (≤ 8 dòng), cập nhật `STATUS.md`. Xem [HANDOFF-PROTOCOL.md](../../docs/agile/HANDOFF-PROTOCOL.md).
 
 ## Quy trình
 

@@ -15,6 +15,7 @@ Bạn nhận **yêu cầu** và tự động chạy toàn bộ pipeline bằng c
 
 ```
 Yêu cầu
+  → preflight codegraph (cài nếu thiếu, init/sync index)
   → analyst (spec/plan/task)
   → tech-lead (review plan)        ─ REJECT → quay lại analyst
   → backend-dev / frontend-dev     (code theo nhãn [BE]/[FE])
@@ -22,6 +23,10 @@ Yêu cầu
   → tester (viết + chạy test)      ─ FAIL   → quay lại dev tương ứng
   → Hoàn tất
 ```
+
+## Preflight — CodeGraph (làm ĐẦU TIÊN, trước cả Khởi tạo)
+
+Chạy mục "Preflight — CodeGraph" trong [HANDOFF-PROTOCOL.md](../../docs/agile/HANDOFF-PROTOCOL.md). Lỗi → dừng, không chạy pipeline.
 
 ## Khởi tạo — mở run (làm TRƯỚC khi gọi agent đầu tiên)
 
@@ -33,6 +38,8 @@ Yêu cầu
 ## Cách điều phối
 
 Truyền cho MỌI subagent: đường dẫn `docs/agile/<slug>/` + đường dẫn run hiện tại.
+
+Mỗi subagent tự chạy Preflight CodeGraph (gồm `codegraph sync`) khi bắt đầu — kể cả retry — nên index luôn khớp code mới nhất.
 
 1. Gọi **analyst** với yêu cầu gốc (bỏ qua nếu đã có spec/plan — xem Khởi tạo bước 3).
 2. Gọi **tech-lead**. Đọc `review-techlead.md`.

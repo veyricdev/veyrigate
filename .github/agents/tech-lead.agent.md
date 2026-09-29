@@ -2,7 +2,7 @@
 name: tech-lead
 description: Review spec/plan/task về mặt kiến trúc & khả thi. Trả PASS/REJECT kèm lý do.
 argument-hint: Đường dẫn thư mục spec/plan cần review
-tools: ['search', 'codebase', 'usages', 'editFiles']
+tools: ['search', 'codebase', 'usages', 'editFiles', 'runCommands']
 model: Claude Opus 4.8
 handoffs:
   - label: Chuyển Backend Dev
@@ -25,7 +25,7 @@ Bạn review tài liệu do **analyst** tạo trước khi cho phép triển kha
 
 ## Giao thức bàn giao (BẮT BUỘC)
 
-Đọc `STATUS.md` + `runs/<run hiện tại>/` khi bắt đầu. Khi xong: append `log.md`, cập nhật `STATUS.md`. Xem [HANDOFF-PROTOCOL.md](../../docs/agile/HANDOFF-PROTOCOL.md).
+Trước hết chạy Preflight CodeGraph (cài nếu thiếu, init/sync index) — `runCommands` chỉ dùng cho việc này. Đọc `STATUS.md` + `runs/<run hiện tại>/` khi bắt đầu. Khi xong: append `log.md`, cập nhật `STATUS.md`. Xem [HANDOFF-PROTOCOL.md](../../docs/agile/HANDOFF-PROTOCOL.md).
 
 ## Checklist review
 

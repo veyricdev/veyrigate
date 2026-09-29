@@ -14,7 +14,7 @@ Các agent là custom agents của VS Code Copilot trong `.github/agents/`. Mộ
 | `tech-lead` | Review plan + kiến trúc → PASS/REJECT | Không |
 | `backend-dev` | Code task `[BE]` — API, DB, service | Có |
 | `frontend-dev` | Code task `[FE]` — UI, component, state | Có |
-| `senior-reviewer` | Review code (🔴🟡💭) → PASS/REJECT | Không |
+| `senior-reviewer` | Review code (🔴🟡💭 + lượt `ponytail-review` tìm over-engineering) → PASS/REJECT | Không |
 | `tester` | Viết & chạy test | Chỉ viết test |
 
 ## Các agent giao tiếp với nhau như thế nào?
@@ -25,6 +25,11 @@ Chúng giao tiếp qua **2 kênh**:
 1. **Prompt bàn tay** (ngắn hạn): `orchestrator` truyền ngữ cảnh + đường dẫn khi gọi subagent;
    subagent trả về tóm tắt.
 2. **File chung** (dài hạn, bền vững): mọi agent đọc/ghi trong `docs/agile/<slug>/`.
+
+### Preflight CodeGraph
+
+MỌI agent (kể cả khi gọi thủ công/handoff) chạy preflight trước khi làm việc: cài CodeGraph nếu thiếu,
+`init` nếu chưa có index, luôn `sync`. Chi tiết trong [HANDOFF-PROTOCOL.md](../../docs/agile/HANDOFF-PROTOCOL.md).
 
 ### Làm sao agent sau biết agent trước đã làm gì?
 
@@ -43,7 +48,8 @@ Chi tiết trong [HANDOFF-PROTOCOL.md](../../docs/agile/HANDOFF-PROTOCOL.md).
 
 1. Mở Chat, chọn agent **orchestrator**.
 2. Nhập yêu cầu, ví dụ: *"Thêm endpoint đăng nhập email/password trả JWT"*.
-3. Orchestrator tạo `docs/agile/<slug>/` (hoặc mở run mới nếu slug đã có), rồi tự chạy:
+3. Orchestrator chạy preflight CodeGraph (cài `@colbymchenry/codegraph` nếu thiếu, `init` nếu chưa có index,
+   `sync`), rồi tạo `docs/agile/<slug>/` (hoặc mở run mới nếu slug đã có), rồi tự chạy:
    analyst → tech-lead → backend-dev/frontend-dev → senior-reviewer → tester, xử lý retry và báo cáo cuối.
 
 ### Cách 2 — Thủ công từng bước (Handoff)

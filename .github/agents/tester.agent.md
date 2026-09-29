@@ -21,7 +21,7 @@ Bạn kiểm chứng code thỏa **acceptance criteria** trong `spec.md`. Bạn 
 
 ## Giao thức bàn giao (BẮT BUỘC)
 
-Đọc `STATUS.md` + `runs/<run hiện tại>/` khi bắt đầu. Khi xong: append `log.md`, cập nhật `STATUS.md`. Xem [HANDOFF-PROTOCOL.md](../../docs/agile/HANDOFF-PROTOCOL.md).
+Trước hết chạy Preflight CodeGraph (cài nếu thiếu, init/sync index). Đọc `STATUS.md` + `runs/<run hiện tại>/` khi bắt đầu. Khi xong: append `log.md`, cập nhật `STATUS.md`. Xem [HANDOFF-PROTOCOL.md](../../docs/agile/HANDOFF-PROTOCOL.md).
 
 ## Quy trình
 
