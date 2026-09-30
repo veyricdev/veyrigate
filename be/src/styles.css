@@ -1,0 +1,40 @@
+@import 'tailwindcss' source('./views');
+
+@theme {
+  --color-ink: #17201b;
+  --color-paper: #f3f1e8;
+  --color-accent: #235f45;
+}
+body {
+  @apply min-h-screen bg-paper text-ink antialiased;
+}
+.shell {
+  @apply mx-auto flex min-h-screen w-full max-w-xl items-center px-6 py-16;
+}
+.panel {
+  @apply w-full border border-ink/15 bg-white p-8;
+}
+.eyebrow {
+  @apply mb-3 text-xs font-bold uppercase tracking-[0.18em] text-accent;
+}
+h1 {
+  @apply text-3xl font-semibold tracking-tight;
+}
+p {
+  @apply mt-3 leading-7 text-ink/70;
+}
+form {
+  @apply mt-8 grid gap-5;
+}
+label {
+  @apply grid gap-2 text-sm font-semibold;
+}
+input {
+  @apply w-full border border-ink/25 bg-white px-3 py-3 font-normal outline-none focus:border-accent;
+}
+button {
+  @apply bg-accent px-4 py-3 font-semibold text-white hover:bg-ink;
+}
+a {
+  @apply text-accent underline underline-offset-4;
+}

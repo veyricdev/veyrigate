@@ -1,0 +1,1 @@
+<h1><%= it.title %></h1><p>Only this browser session will be ended.</p><form method="post" action="/logout"><input type="hidden" name="_csrf" value="<%= it.csrf %>"><button type="submit">Sign out</button></form>

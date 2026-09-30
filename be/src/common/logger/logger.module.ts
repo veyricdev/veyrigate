@@ -40,6 +40,13 @@ const REDACT_PATHS = [
   'authorization',
 ];
 
+export function serializeRequest(req: { method?: string; url?: string }): {
+  method?: string;
+  url?: string;
+} {
+  return { method: req.method, url: req.url?.split('?', 1)[0] };
+}
+
 @Module({
   imports: [
     PinoLoggerModule.forRootAsync({
@@ -57,6 +64,7 @@ const REDACT_PATHS = [
               return id;
             },
             redact: { paths: REDACT_PATHS, remove: true },
+            serializers: { req: serializeRequest },
             transport: isDev ? { target: 'pino-pretty', options: { singleLine: true } } : undefined,
           },
         };

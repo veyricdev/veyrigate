@@ -4,12 +4,13 @@ import { Schema } from 'mongoose';
 export const UserSchema = new Schema(
   {
     email: { type: String, required: true, lowercase: true, trim: true },
-    passwordHash: { type: String },
+    passwordHash: { type: String, select: false },
     profile: { type: Schema.Types.Mixed, default: {} },
     mfaSecret: { type: String }, // placeholder, not enabled (spec §10)
     emailVerifiedAt: { type: Date },
     failedLoginCount: { type: Number, default: 0 },
     lockedUntil: { type: Date },
+    lockTransitionNonce: { type: String, select: false },
   },
   { timestamps: true },
 );

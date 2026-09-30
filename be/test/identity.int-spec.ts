@@ -58,6 +58,7 @@ describe('Identity services on real Mongo (B2.2)', () => {
     const stored = await moduleRef
       .get<Model<{ passwordHash: string }>>(getModelToken('User'))
       .findById(u.sub)
+      .select('+passwordHash')
       .lean();
     expect(stored?.passwordHash).toMatch(/^\$argon2id\$/);
 
@@ -76,11 +77,13 @@ describe('Identity services on real Mongo (B2.2)', () => {
     expect(err).not.toHaveProperty('getStatus');
   });
 
-  it('changing email keeps sub; changing to a taken email → DuplicateError', async () => {
+  it('changing email keeps sub, removes prior verification; changing to a taken email → DuplicateError', async () => {
     const u = await users.create({ email: 'bob@example.com' });
+    await users.updateStatus(u.sub, { emailVerifiedAt: new Date() });
     const changed = await users.changeEmail(u.sub, 'Bobby@Example.com');
     expect(changed?.sub).toBe(u.sub);
     expect(changed?.email).toBe('bobby@example.com');
+    expect(changed?.emailVerifiedAt).toBeUndefined();
     await expect(users.changeEmail(u.sub, 'alice@example.com')).rejects.toBeInstanceOf(
       DuplicateError,
     );
@@ -102,6 +105,21 @@ describe('Identity services on real Mongo (B2.2)', () => {
       lockedUntil: lock,
       email: 'carol@example.com',
     });
+  });
+
+  it('records failed logins atomically and locks at the fifth failure, then resets', async () => {
+    const u = await users.create({ email: 'lock@example.com' });
+    const now = new Date('2026-01-01T00:00:00Z');
+    const failures = await Promise.all(
+      Array.from({ length: 10 }, () => users.recordFailedLogin(u.sub, now)),
+    );
+    const locked = await users.findById(u.sub);
+    expect(locked?.failedLoginCount).toBe(10);
+    expect(locked?.lockedUntil).toEqual(new Date('2026-01-01T00:15:00Z'));
+    expect(failures.filter((failure) => failure?.newlyLocked)).toHaveLength(1);
+    const reset = await users.resetFailedLogins(u.sub);
+    expect(reset?.failedLoginCount).toBe(0);
+    expect(reset?.lockedUntil).toBeUndefined();
   });
 
   it('membership: add, check active, roles; duplicate membership → DuplicateError', async () => {

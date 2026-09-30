@@ -1,0 +1,1 @@
+<h1><%= it.title %></h1><p>The authorization consent flow will appear here when an application requests access.</p>

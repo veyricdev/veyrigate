@@ -1,0 +1,1 @@
+<h1><%= it.title %></h1><p>We will send reset instructions if the account exists.</p><form method="post" action="/forgot"><input type="hidden" name="_csrf" value="<%= it.csrf %>"><label>Email<input name="email" type="email" autocomplete="email" required></label><button type="submit">Send reset link</button></form>

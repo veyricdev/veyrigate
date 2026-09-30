@@ -1,0 +1,1 @@
+<h1><%= it.title %></h1><p>Confirm this email verification request.</p><form method="post" action="/verify-email"><input type="hidden" name="_csrf" value="<%= it.csrf %>"><input type="hidden" name="token" value="<%= it.token %>"><button type="submit">Verify email</button></form>

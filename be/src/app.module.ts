@@ -10,6 +10,8 @@ import { IdentityModule } from './modules/identity/identity.module';
 import { KeysModule } from './modules/keys/keys.module';
 import { MailerModule } from './modules/mailer/mailer.module';
 import { SecurityModule } from './modules/security/security.module';
+import { AuthenticationModule } from './modules/authentication/authentication.module';
+import { UiModule } from './modules/ui/ui.module';
 
 @Module({
   imports: [
@@ -22,6 +24,8 @@ import { SecurityModule } from './modules/security/security.module';
     KeysModule,
     MailerModule,
     IdentityModule,
+    AuthenticationModule,
+    UiModule,
   ],
   providers: [
     {

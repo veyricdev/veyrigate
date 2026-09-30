@@ -2,10 +2,10 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: [`runs/05-B2.1-B2.3/`](runs/05-B2.1-B2.3/tasks.md)
-- **Cổng**: done · **Kết quả**: tester PASS 80/80 (unit 35 + int 45) · chưa commit
-- **Vòng lặp**: analyst=0, dev/senior=0, dev/tester=0
-- **Việc tiếp theo**: người dùng commit run 05 → run 06 = B2.4–B2.5 (kéo DEBT-010, 011, 014).
+- **Run hiện tại**: kế tiếp `09-B3.1-B3.4` (chưa mở)
+- **Cổng**: hoàn tất · **Kết quả**: run 08 PASS — 158/158 test
+- **Vòng lặp**: analyst=2, tech-lead=3, dev=1, senior=1, tester=1
+- **Việc tiếp theo**: mở run 09 cho B3.1–B3.4.
 
 ## Tiến độ
 
@@ -15,7 +15,10 @@
 | [02](runs/02-R3-R5/summary.md) | M0 | R3–R5 | ✅ 11/11 | `4c2104a` |
 | [03](runs/03-B1.1-B1.5/summary.md) | M1 | B1.1–B1.5 | ✅ 9/9 | `6d04558` |
 | [04](runs/04-B1.6-B1.10/summary.md) | M1 | B1.6–B1.10 | ✅ 45/45 | `1dcb2a8` |
-| [05](runs/05-B2.1-B2.3/summary.md) | M2 | B2.1–B2.3 | ✅ 80/80 | — |
+| [05](runs/05-B2.1-B2.3/summary.md) | M2 | B2.1–B2.3 | ✅ 80/80 | `aea2d3f` |
+| [06](runs/06-B2.4-B2.5/summary.md) | M2 | B2.4–B2.5 | ✅ 123/123 | chưa commit |
+| [07](runs/07-BUG-login-session/summary.md) | M2 | BUG-login-session | ✅ 144/144 | chưa commit |
+| [08](runs/08-BUG-logout-action/summary.md) | M2 | BUG-logout-action | ✅ 158/158 | chưa commit |
 
 ## Chặn / cần người quyết định
 
@@ -23,4 +26,4 @@ Xem `plan.md` §12. Sắp chạm tới: **Q6** (chốt tạm session idle 8h/abs
 
 ## Backlog mở
 
-13 mục — xem [backlog.md](backlog.md).
+11 mục — xem [backlog.md](backlog.md).

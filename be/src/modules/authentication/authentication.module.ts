@@ -1,5 +1,10 @@
 import { Module } from '@nestjs/common';
+import { IdentityModule } from '../identity/identity.module';
+import { AuthenticationService } from './authentication.service';
 
-// Stub — implemented in B2 (register/login/lockout/verification/reset).
-@Module({})
+@Module({
+  imports: [IdentityModule],
+  providers: [AuthenticationService],
+  exports: [AuthenticationService],
+})
 export class AuthenticationModule {}
