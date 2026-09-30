@@ -33,6 +33,17 @@ Xem [HANDOFF-PROTOCOL.md](../../docs/agile/HANDOFF-PROTOCOL.md).
    - `docs/agile/<slug>/plan.md` — tiếp cận kỹ thuật, các bước theo thứ tự, mỗi bước kèm `verify`.
    - `runs/<run>/tasks.md` — **chỉ các task của run này** (~5 task), atomic, checkbox `- [ ]`, ghi rõ **[FE]/[BE]**, phụ thuộc, và § spec/plan liên quan.
 
+## Security invariants (BẮT BUỘC khi task chạm trust boundary)
+
+Task liên quan authn/authz, session, token, cookie, OAuth, tenant, secret, dữ liệu nhạy cảm hoặc thao tác ghi phải nêu rõ trong `tasks.md`:
+
+- **Tài sản** cần bảo vệ và **actor**: anonymous, owner, user khác, tenant khác, role thấp hơn, admin, attacker.
+- **Invariant** luôn đúng: actor nào không được làm gì; credential/state nào không được tái sử dụng.
+- **Trust boundary + state transition**: input đi qua đâu; trạng thái trước → hành động → trạng thái sau, gồm request kế tiếp nếu cookie/token/redirect thay đổi.
+- **Abuse/failure cases**: malformed/expired/revoked/replay, IDOR/cross-tenant, race/concurrency, enumeration, dependency timeout/down/partial failure; chốt fail-open hay fail-closed.
+- **Exposure budget**: dữ liệu nào tuyệt đối không xuất hiện trong response, URL, redirect, log, audit hoặc email.
+- Mỗi rủi ro quan trọng phải có acceptance đo được; nếu không test được, ghi rõ cách kiểm chứng và debt/chặn quyết định.
+
 ## Nguyên tắc (rút từ Senior PM thực chiến)
 
 - **Scope thực tế**: phần lớn yêu cầu đơn giản hơn vẻ ngoài. Ưu tiên chức năng, không mạ vàng.
@@ -52,6 +63,7 @@ Xem [HANDOFF-PROTOCOL.md](../../docs/agile/HANDOFF-PROTOCOL.md).
 ```markdown
 ### [ ] Task 1 [BE]: <mô tả>
 - Acceptance: <đo được>
+- Security invariants: <actor / state / failure / exposure; hoặc N/A kèm lý do>
 - Phụ thuộc: <task nào / không>
 ```
 

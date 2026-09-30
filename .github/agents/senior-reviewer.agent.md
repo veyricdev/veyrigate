@@ -3,7 +3,7 @@ name: senior-reviewer
 description: Review code về chất lượng, đúng đắn, bảo mật, over-engineering. Trả PASS/REJECT.
 argument-hint: Mô tả thay đổi cần review (hoặc diff)
 tools: ['search', 'codebase', 'usages', 'changes', 'problems', 'editFiles', 'runCommands']
-model: Claude Opus 5
+model: Claude Opus 5.5
 handoffs:
   - label: Chuyển Tester
     agent: tester
@@ -43,6 +43,21 @@ Trước hết chạy Preflight CodeGraph (cài nếu thiếu, init/sync index) 
 - Nguy cơ mất/hỏng dữ liệu, race condition/deadlock
 - Không thỏa acceptance criteria trong `spec.md` (đối chiếu `changes`)
 - Thiếu xử lý lỗi ở đường đi quan trọng, phá vỡ API contract
+- Security invariant/trust boundary quan trọng chưa được triển khai hoặc chưa có bằng chứng kiểm chứng
+
+### Lượt security invariant (BẮT BUỘC khi diff chạm trust boundary)
+
+Review độc lập theo **invariant**, không chỉ đối chiếu test dev đã viết:
+
+- **Identity/authentication**: absent/malformed/expired/revoked/replayed credential; tồn tại không đồng nghĩa hợp lệ; rotate/revoke sau login/reset/privilege change.
+- **Authorization**: server-side owner/non-owner, cross-tenant, role/scope/audience; tìm IDOR và confused deputy.
+- **State/concurrency**: trước → hành động → sau; retry/replay/idempotency; single-use/rotation/counter phải atomic dưới concurrent requests.
+- **Chuỗi request**: cookie/token/redirect thay đổi phải đúng ở request kế tiếp (CSRF identity, callback, logout, rotation); kiểm redirect loop.
+- **Failure behavior**: DB/Redis/provider timeout/down/partial failure không được biến thành guest/not-found/success nếu invariant yêu cầu fail closed.
+- **Exposure**: response, URL, redirect, log, audit, email không lộ secret/token/password/cookie/PII ngoài contract; error không tạo enumeration oracle.
+- **Boundary input/output**: malformed, oversized, encoded input; injection/XSS/header/open-redirect; output encoding đúng sink.
+
+Thiếu test/bằng chứng cho invariant có thể gây bypass, cross-tenant access, replay, mất dữ liệu hoặc rò secret là 🔴 REJECT. Không bắt tích Descartes; ưu tiên tổ hợp có blast radius cao.
 
 ### 🟡 Nên sửa
 - Thiếu validate input, đặt tên/logic khó hiểu
@@ -78,6 +93,7 @@ Ghi (đè) vào `runs/<run>/review-senior.md`. PASS mà còn 🟡 chưa sửa �
 ## Tổng quan (ấn tượng chung + điểm tốt)
 ## 🔴 Blocker
 - [ ] file:line — vấn đề — vì sao — cách sửa
+## Security invariants / trust boundaries đã kiểm
 ## 🟡 Nên sửa
 ## 💭 Nit
 ## ✂️ Ponytail

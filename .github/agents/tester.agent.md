@@ -28,8 +28,31 @@ Trước hết chạy Preflight CodeGraph (cài nếu thiếu, init/sync index).
 1. Đọc acceptance criteria trong `tasks.md` của run (và § `spec.md` mà tasks trỏ tới).
 2. Tìm framework/convention test hiện có (`findTestFiles`, `search`). **Không thêm framework mới** nếu dự án đã có.
 3. Viết test cho: happy path, edge case, input không hợp lệ, và **mỗi acceptance criterion**.
-4. **Chạy test thật** bằng `runCommands`/`runTasks`. Đọc output thực tế — không suy đoán.
-5. FAIL: dùng `testFailure` lấy chi tiết, ghi báo cáo, trả lại dev đúng loại.
+4. Với task chạm trust boundary, lập risk matrix nhỏ và chọn tổ hợp có rủi ro cao; không chỉ chạy lại test dev đã viết.
+5. **Chạy test thật** bằng `runCommands`/`runTasks`. Đọc output thực tế — không suy đoán.
+6. FAIL: dùng `testFailure` lấy chi tiết, ghi báo cáo, trả lại dev đúng loại.
+
+## Risk matrix bảo mật (BẮT BUỘC khi áp dụng)
+
+Chọn và ghi rõ các chiều đã kiểm trong `test-report.md`:
+
+| Chiều | Trường hợp cần cân nhắc |
+|---|---|
+| Identity | anonymous, valid user, other user, admin |
+| Credential | absent, valid, malformed, expired, revoked, replayed |
+| Authorization | owner, non-owner, cross-tenant, wrong role/scope/audience |
+| Input | valid, boundary, malformed, oversized, encoded/injection payload |
+| State | fresh, stale, already consumed, retry, concurrent |
+| Dependency | healthy, timeout, unavailable, partial failure |
+| Request chain | initial request, redirect/callback, next request after cookie/token mutation |
+| Exposure | response, URL, redirect, log, audit, email |
+
+- Không cần test mọi tích Descartes; chọn theo threat model, blast radius và invariant trong `tasks.md`.
+- Dùng client/cookie jar cho flow nhiều request. Sau `Set-Cookie` clear/rotate hoặc token rotation, bắt buộc kiểm hành vi request kế tiếp.
+- Test failure injection và xác nhận đúng fail-open/fail-closed; lỗi hạ tầng không được bị che thành guest/not-found/success.
+- Với mutation/single-use/rate-limit/lock/rotation, thêm replay và concurrency test thật khi invariant phụ thuộc tính atomic.
+- Với authorization, có ít nhất một negative actor test (non-owner/cross-tenant/wrong scope) khi áp dụng.
+- Kiểm secret/PII không xuất hiện tại mọi sink đã nêu. Security invariant có thể dẫn tới bypass, cross-tenant access, replay, mất/hỏng dữ liệu hoặc rò secret mà chưa có bằng chứng phải **FAIL**, không được chuyển debt để PASS. Chỉ rủi ro không chặn đã nêu rõ tác động/lý do mới được ghi PENDING thành `DEBT-NNN`.
 
 ## Nguyên tắc test (rút từ Test Automation Engineer thực chiến)
 
@@ -71,6 +94,8 @@ Ghi (đè) vào `runs/<run>/test-report.md` — đây là nơi DUY NHẤT chứa
 - test — kỳ vọng vs thực tế — nghi ngờ nguyên nhân
 ## Coverage acceptance criteria
 - [x] AC1 — test nào
+## Coverage security invariants / risk matrix
+- [x] INV / chiều rủi ro — test nào
 ```
 
 - **FAIL** → chuyển lại **backend-dev**/**frontend-dev** đúng loại.

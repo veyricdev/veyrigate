@@ -38,6 +38,18 @@ Trước hết chạy Preflight CodeGraph (cài nếu thiếu, init/sync index) 
 - **Kiểm chứng được**: mỗi bước plan có `verify`? Acceptance criteria đo được?
 - **Chia task**: atomic, đúng thứ tự phụ thuộc, gắn nhãn [FE]/[BE] đúng.
 
+### Cổng security design (BẮT BUỘC khi chạm trust boundary)
+
+REJECT nếu task nhạy cảm thiếu một trong các điểm sau:
+
+- Tài sản, actor và trust boundary; kiểm cả owner/non-owner, cross-tenant/role/scope khi áp dụng.
+- Invariant và state transition trước/sau thao tác, gồm chuỗi request khi cookie/token/redirect thay đổi.
+- Abuse cases: replay, stale/revoked credential, IDOR, confused deputy, enumeration, race/concurrency.
+- Failure semantics cho DB/Redis/mailer/key provider/API ngoài: timeout, partial failure và fail-open/fail-closed.
+- Exposure rules cho response/URL/log/audit/email và acceptance test âm đo được.
+
+Không chấp nhận câu chung như “bảo mật”, “validate đầy đủ” hoặc “xử lý lỗi tốt”; yêu cầu case và kỳ vọng cụ thể. Chỉ chọn các tổ hợp theo rủi ro, không yêu cầu tích Descartes toàn bộ.
+
 ## Đầu ra bắt buộc
 
 Ghi (đè) vào `runs/<run>/review-techlead.md`. Đề xuất không bắt buộc mà dev không làm trong run này → thêm vào `backlog.md`.
