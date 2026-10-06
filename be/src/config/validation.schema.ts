@@ -26,6 +26,11 @@ export const envSchema = z
     REFRESH_TOKEN_TTL: positiveInt,
     SESSION_IDLE_TTL: positiveInt,
     SESSION_ABSOLUTE_TTL: positiveInt,
+    // Client secret rotation overlap/grace (B3.1, spec §9.3/§17 — not finalised; see C2 in
+    // runs/09-B3.1-B3.4/review-techlead.md). Old ClientCredential stays valid for this long
+    // after a newer version is created, so backends don't have to rotate atomically.
+    CLIENT_SECRET_GRACE_TTL: positiveInt.default(604800), // 7 days, temporary pending spec §17
+
     // Not z.coerce.boolean(): that maps the string "false" to true.
     SESSION_COOKIE_SECURE: z
       .enum(['true', 'false'])

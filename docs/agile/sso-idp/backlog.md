@@ -18,6 +18,9 @@ Việc còn mở (🟡 từ review/test, debt, việc hoãn). **Nguồn duy nh�
 | DEBT-015 | run 06 tech-lead | CSP `form-action 'self'` (A6) có thể chặn chuỗi redirect sau POST form sang `redirect_uri` của RP ở một số trình duyệt | Khi làm B4.1/B4.2: thêm origin RP đã đăng ký vào `form-action` của response đó, hoặc dùng redirect GET trung gian; test trên Chrome/Firefox/Safari | B4.1 / B4.2 |
 | DEBT-016 | run 06 tech-lead | Lockout theo tài khoản (A3) cho phép kẻ tấn công cố ý khoá tài khoản nạn nhân (DoS) | Cân nhắc khoá theo (account+IP/device), CAPTCHA/step-up thay vì khoá cứng; mở khoá qua reset password | B7.x |
 | DEBT-017 | run 06 tech-lead | Tài khoản local chưa verify email có thể do kẻ tấn công tạo trước (pre-account hijack) | B5.3: không link/merge federated identity vào tài khoản local chưa verify; cân nhắc xoá user chưa verify sau TTL | B5.3 |
+| DEBT-019 | run 09 senior 🟡#1 | `@fastify/cors` thêm vào `be/package.json` (C5) nhưng chưa dùng ở bất kỳ đâu trong `src/` — B3.4 mới dừng ở primitive `ClientCorsService`, chưa wire HTTP | Khi làm B4: dùng `@fastify/cors` hoặc hook thủ công đúng mapping đã tả trong `client-cors.service.ts`; nếu chọn tự viết hook thì gỡ dependency thừa | B4 |
+| DEBT-020 | run 09 senior 🟡#2 | `ClientSchema` chưa có index trên `allowedCorsOrigins` — `isOriginRegisteredForAnyClient` full-scan collection `Client` mỗi lần preflight/jwks/discovery | Thêm `ClientSchema.index({ allowedCorsOrigins: 1 })` khi B4 wire thật và có traffic để đo | B4 |
+| DEBT-021 | run 09 senior 🟡#3 | `ClientCredentialService.rotateSecret` không atomic dưới concurrent rotate trên cùng `clientId` — `nextVersion` tính bằng `Math.max` sau khi load, hai lời gọi đồng thời có thể trùng version (index `{clientId,version}` không unique) | Ghi rõ giới hạn trong code; cân nhắc unique index `(clientId, version)` khi có admin API thật | B6.3 |
 
 ## Đã đóng
 

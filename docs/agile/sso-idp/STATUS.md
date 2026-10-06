@@ -2,10 +2,10 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: kế tiếp `09-B3.1-B3.4` (chưa mở)
-- **Cổng**: hoàn tất · **Kết quả**: run 08 PASS — 158/158 test
-- **Vòng lặp**: analyst=2, tech-lead=3, dev=1, senior=1, tester=1
-- **Việc tiếp theo**: mở run 09 cho B3.1–B3.4.
+- **Run hiện tại**: `09-B3.1-B3.4` (đã xong)
+- **Cổng**: tester · **Kết quả**: tester PASS — 206/206 test (67 unit + 139 int), bổ sung 1 test concurrent cho DEBT-021, không có case nghiệm thu thiếu bằng chứng, không blocker mới
+- **Vòng lặp**: tech-lead=1, dev=1, senior=1, tester=1
+- **Việc tiếp theo**: orchestrator đóng run 09, commit, mở run kế tiếp.
 
 ## Tiến độ
 
@@ -19,6 +19,7 @@
 | [06](runs/06-B2.4-B2.5/summary.md) | M2 | B2.4–B2.5 | ✅ 123/123 | chưa commit |
 | [07](runs/07-BUG-login-session/summary.md) | M2 | BUG-login-session | ✅ 144/144 | chưa commit |
 | [08](runs/08-BUG-logout-action/summary.md) | M2 | BUG-logout-action | ✅ 158/158 | chưa commit |
+| [09](runs/09-B3.1-B3.4/test-report.md) | M2 | B3.1–B3.4 | ✅ 206/206 | chưa commit |
 
 ## Chặn / cần người quyết định
 

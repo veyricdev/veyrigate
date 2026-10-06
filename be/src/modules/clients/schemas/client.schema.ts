@@ -11,6 +11,8 @@ export const ClientSchema = new Schema(
       enum: ['client_secret_basic', 'client_secret_post', 'none'],
     },
     redirectUris: { type: [String], default: [] },
+    // RP-initiated logout target(s) (D4). Same validation rule as redirectUris (INV-4).
+    postLogoutRedirectUris: { type: [String], default: [] },
     allowedCorsOrigins: { type: [String], default: [] },
     allowedResources: { type: [String], default: [] },
     scopes: { type: [String], default: [] },

@@ -29,6 +29,11 @@ export interface TokenConfig {
   sessionAbsoluteTtl: number;
 }
 
+export interface ClientConfig {
+  /** Grace period (seconds) an older `ClientCredential` version stays valid after rotation (C2). */
+  secretGraceTtl: number;
+}
+
 export interface SessionConfig {
   cookieSecure: boolean;
 }
@@ -70,6 +75,7 @@ export interface Config {
   security: SecurityConfig;
   adminSeed: AdminSeedConfig;
   mailer: MailerConfig;
+  client: ClientConfig;
 }
 
 /**
@@ -117,6 +123,9 @@ export function buildConfig(env: Env): Config {
     },
     mailer: {
       smtpUrl: env.SMTP_URL,
+    },
+    client: {
+      secretGraceTtl: env.CLIENT_SECRET_GRACE_TTL,
     },
   };
 }
