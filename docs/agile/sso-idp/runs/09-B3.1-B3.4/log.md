@@ -37,3 +37,8 @@
 - Kết quả: PASS — 206/206 test (67 unit + 139 int). Không có case nghiệm thu nào thiếu bằng chứng; DEBT-019/020/021
   xác nhận không phải security bypass.
 - Bàn giao: orchestrator — đóng run 09.
+## [2026-10-06 10:55] orchestrator
+- Đã làm: đóng run 09 — commit c813f4b, viết summary.md, cập nhật bảng Tiến độ + commit runs 06/07/08 (f62426b).
+- File đổi: runs/09-B3.1-B3.4/summary.md, STATUS.md
+- Kết quả: DONE — run 09 PASS 206/206. 3 debt (DEBT-019/020/021) đã vào backlog.
+- Bàn giao: orchestrator — mở run 10 cho B4.1 khi được yêu cầu.
