@@ -1,12 +1,11 @@
-# Status — sso-idp
+﻿# Status — sso-idp
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `12-B4.2` (Consent) — cổng = **tester PASS** → chờ orchestrator đóng run.
-- **Run vừa đóng**: `11-B4.3` ✅ 4/4 cổng — 245/245 test (unit 67 + int 178). Xem `runs/11-B4.3/summary.md`.
-- **Vòng lặp (run 12)**: analyst=1, tech-lead=1 (PASS), backend-dev=1 (DONE), senior=1 (PASS), tester=1 (PASS — 269 test: unit 67 + int 202, +5 test; DEBT-027 fail-closed)
-- **Việc tiếp theo**: orchestrator đóng run 12 (không commit). Q1/Q4 **ĐÃ CHỐT** (plan §12).
-  B4.2 = B4.2a consent store (`user×client×resource`) + B4.2b wire /authorize + trang consent BE + issue code via B4.3.
+- **Run hiện tại**: không có (12-B4.2 đã đóng, commit `b89ca9e`).
+- **Run vừa đóng**: `12-B4.2` ✅ 4/4 cổng — 269/269 test (unit 67 + int 202). Xem `runs/12-B4.2/summary.md`.
+- **Vòng lặp (run 12)**: analyst=1, tech-lead=1, dev=1, senior=1, tester=1
+- **Việc tiếp theo**: **B4.4** (`/token` authorization_code) — cần chốt Q6 (token TTL) trong run đó (user ủy quyền analyst/tech-lead tự quyết, hướng production).
   Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`; PowerShell gọi `pnpm.cmd`.
 
 ## Tiến độ
@@ -24,6 +23,7 @@
 | [09](runs/09-B3.1-B3.4/summary.md) | M2 | B3.1–B3.4 | ✅ 206/206 | `c813f4b` |
 | [10](runs/10-B4.1/summary.md) | M3 | B4.1 | ✅ 233/233 | `cd15c81` |
 | [11](runs/11-B4.3/summary.md) | M3 | B4.3 | ✅ 245/245 | `7bebdb7` |
+| [12](runs/12-B4.2/summary.md) | M4 | B4.2 | ✅ 269/269 | `b89ca9e` |
 
 ## Chặn / cần người quyết định
 
