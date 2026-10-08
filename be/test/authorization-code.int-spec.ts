@@ -53,17 +53,17 @@ describe('AuthorizationCodeService on real Redis (B4.3, spec §9.1 step 3 / §9.
     const allKeys = await redis.keys('*');
     expect(allKeys.some((k) => k.includes(code))).toBe(false);
 
-    await svc.consume(code, d.clientId, d.redirectUri);
+    await svc.consume(code, d.clientId, d.redirectUri, d.codeChallenge);
   });
 
   it('C5(a): wrong clientId → null, code still intact (EXISTS=1), valid consume right after still succeeds', async () => {
     const d = dataFor(`${RUN}-user-b`);
     const { code } = await svc.create(d);
 
-    expect(await svc.consume(code, 'wrong-client', d.redirectUri)).toBeNull();
+    expect(await svc.consume(code, 'wrong-client', d.redirectUri, d.codeChallenge)).toBeNull();
     expect(await redis.exists(`authz_code:${sha256(code)}`)).toBe(1);
 
-    const consumed = await svc.consume(code, d.clientId, d.redirectUri);
+    const consumed = await svc.consume(code, d.clientId, d.redirectUri, d.codeChallenge);
     expect(consumed).toEqual(d);
   });
 
@@ -71,10 +71,12 @@ describe('AuthorizationCodeService on real Redis (B4.3, spec §9.1 step 3 / §9.
     const d = dataFor(`${RUN}-user-c`);
     const { code } = await svc.create(d);
 
-    expect(await svc.consume(code, d.clientId, 'https://evil.example.com/cb')).toBeNull();
+    expect(
+      await svc.consume(code, d.clientId, 'https://evil.example.com/cb', d.codeChallenge),
+    ).toBeNull();
     expect(await redis.exists(`authz_code:${sha256(code)}`)).toBe(1);
 
-    const consumed = await svc.consume(code, d.clientId, d.redirectUri);
+    const consumed = await svc.consume(code, d.clientId, d.redirectUri, d.codeChallenge);
     expect(consumed).toEqual(d);
   });
 
@@ -83,8 +85,8 @@ describe('AuthorizationCodeService on real Redis (B4.3, spec §9.1 step 3 / §9.
     const { code } = await svc.create(d);
 
     const [a, b] = await Promise.all([
-      svc.consume(code, d.clientId, d.redirectUri),
-      svc.consume(code, d.clientId, d.redirectUri),
+      svc.consume(code, d.clientId, d.redirectUri, d.codeChallenge),
+      svc.consume(code, d.clientId, d.redirectUri, d.codeChallenge),
     ]);
     const wins = [a, b].filter((x) => x !== null);
     expect(wins).toHaveLength(1);
@@ -98,7 +100,7 @@ describe('AuthorizationCodeService on real Redis (B4.3, spec §9.1 step 3 / §9.
     const pttl = await redis.pttl(`authz_code:${sha256(code)}`);
     expect(pttl).toBeGreaterThan(59_000);
     expect(pttl).toBeLessThanOrEqual(60_000);
-    await svc.consume(code, d.clientId, d.redirectUri);
+    await svc.consume(code, d.clientId, d.redirectUri, d.codeChallenge);
   });
 
   it('C5(c): expired code (TTL elapsed) → consume returns null', async () => {
@@ -108,26 +110,40 @@ describe('AuthorizationCodeService on real Redis (B4.3, spec §9.1 step 3 / §9.
     await redis.pexpire(`authz_code:${sha256(code)}`, 1);
     await new Promise((r) => setTimeout(r, 50));
     expect(await redis.exists(`authz_code:${sha256(code)}`)).toBe(0);
-    expect(await svc.consume(code, d.clientId, d.redirectUri)).toBeNull();
+    expect(await svc.consume(code, d.clientId, d.redirectUri, d.codeChallenge)).toBeNull();
   });
 
   it('C5(d): single-use — consuming an already-consumed code returns null', async () => {
     const d = dataFor(`${RUN}-user-g`);
     const { code } = await svc.create(d);
-    expect(await svc.consume(code, d.clientId, d.redirectUri)).toEqual(d);
-    expect(await svc.consume(code, d.clientId, d.redirectUri)).toBeNull();
+    expect(await svc.consume(code, d.clientId, d.redirectUri, d.codeChallenge)).toEqual(d);
+    expect(await svc.consume(code, d.clientId, d.redirectUri, d.codeChallenge)).toBeNull();
   });
 
   it('unknown/empty code → null, no throw', async () => {
-    expect(await svc.consume('does-not-exist', 'any-client', 'https://x/cb')).toBeNull();
-    expect(await svc.consume('', 'any-client', 'https://x/cb')).toBeNull();
+    expect(
+      await svc.consume(
+        'does-not-exist',
+        'any-client',
+        'https://x/cb',
+        'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
+      ),
+    ).toBeNull();
+    expect(
+      await svc.consume(
+        '',
+        'any-client',
+        'https://x/cb',
+        'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
+      ),
+    ).toBeNull();
   });
 
   it('AC7: optional authTime round-trips through create → consume when supplied', async () => {
     const d: AuthorizationCodeData = { ...dataFor(`${RUN}-user-h`), authTime: 1_700_000_000 };
     const { code, data } = await svc.create(d);
     expect(data.authTime).toBe(1_700_000_000);
-    const consumed = await svc.consume(code, d.clientId, d.redirectUri);
+    const consumed = await svc.consume(code, d.clientId, d.redirectUri, d.codeChallenge);
     expect(consumed).toEqual(d);
     expect(consumed?.authTime).toBe(1_700_000_000);
   });
@@ -135,7 +151,7 @@ describe('AuthorizationCodeService on real Redis (B4.3, spec §9.1 step 3 / §9.
   it('AC7: authTime is omitted (not fabricated) when caller does not supply it', async () => {
     const d = dataFor(`${RUN}-user-i`);
     const { code } = await svc.create(d);
-    const consumed = await svc.consume(code, d.clientId, d.redirectUri);
+    const consumed = await svc.consume(code, d.clientId, d.redirectUri, d.codeChallenge);
     expect(consumed).not.toHaveProperty('authTime');
   });
 
@@ -145,8 +161,18 @@ describe('AuthorizationCodeService on real Redis (B4.3, spec §9.1 step 3 / §9.
     expect(codeA).not.toBe(codeB);
     expect(codeA).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(codeB).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    await svc.consume(codeA, `${RUN}-client`, 'https://app.example.com/callback');
-    await svc.consume(codeB, `${RUN}-client`, 'https://app.example.com/callback');
+    await svc.consume(
+      codeA,
+      `${RUN}-client`,
+      'https://app.example.com/callback',
+      'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
+    );
+    await svc.consume(
+      codeB,
+      `${RUN}-client`,
+      'https://app.example.com/callback',
+      'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
+    );
   });
 
   it('AC3 (stronger): 5 concurrent consumes with the correct identity — exactly one succeeds', async () => {
@@ -154,7 +180,9 @@ describe('AuthorizationCodeService on real Redis (B4.3, spec §9.1 step 3 / §9.
     const { code } = await svc.create(d);
 
     const results = await Promise.all(
-      Array.from({ length: 5 }, () => svc.consume(code, d.clientId, d.redirectUri)),
+      Array.from({ length: 5 }, () =>
+        svc.consume(code, d.clientId, d.redirectUri, d.codeChallenge),
+      ),
     );
     const wins = results.filter((x) => x !== null);
     expect(wins).toHaveLength(1);

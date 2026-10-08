@@ -2,11 +2,12 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `13-B4.4` — cổng: **tech-lead** (review tasks.md B4.4). Q6 đã chốt (plan §12), tasks.md đã viết (4 task).
+- **Run hiện tại**: `13-B4.4` — cổng: **tester PASS** → chờ orchestrator đóng run. 4/4 cổng.
 - **Run vừa đóng**: `12-B4.2` ✅ 4/4 cổng — 269/269 test (unit 67 + int 202). Xem `runs/12-B4.2/summary.md`.
 - **Vòng lặp (run 12)**: analyst=1, tech-lead=1, dev=1, senior=1, tester=1
-- **Việc tiếp theo**: tech-lead review kiến trúc `/token` + `TokenService`, rồi bàn giao dev. B4.5 (refresh grant/rotation) tách riêng.
-  Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`; PowerShell gọi `pnpm.cmd`.
+- **Vòng lặp (run 13)**: analyst=1, tech-lead=1, dev=2, senior=2 (REJECT→PASS), tester=1
+- **Việc tiếp theo**: orchestrator đóng run 13-B4.4 (viết summary.md, mở run kế). Tester PASS: build+typecheck+lint sạch; unit 80/80; int 230/230 (token 24/24, +1 QA Task1-fold legacy `/token`). Xem `runs/13-B4.4/test-report.md`.
+  Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`; full suite = `pnpm test` (80) + `pnpm test:int` (230) = 310.
 
 ## Tiến độ
 
@@ -31,4 +32,4 @@ Xem `plan.md` §12. Còn mở: **Q3, Q5, Q7–Q9**. **Q1, Q4, Q6 đã chốt** (
 
 ## Backlog mở
 
-18 mục — xem [backlog.md](backlog.md).
+20 mục — xem [backlog.md](backlog.md) (mới: DEBT-029 rate-limit `/token` → B7, DEBT-030 amr/acr → B5).

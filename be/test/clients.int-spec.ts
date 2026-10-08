@@ -50,9 +50,7 @@ describe('Clients + Resources on real Mongo (B3.1–B3.3)', () => {
   }
 
   beforeAll(async () => {
-    connection = await mongoose
-      .createConnection(MONGO_URI, { autoIndex: false })
-      .asPromise();
+    connection = await mongoose.createConnection(MONGO_URI, { autoIndex: false }).asPromise();
     for (const { name, schema } of MODELS) connection.model(name, schema);
     await syncAllIndexes(connection);
     clientModel = connection.model<Client>('Client');
@@ -182,9 +180,9 @@ describe('Clients + Resources on real Mongo (B3.1–B3.3)', () => {
     });
 
     it('rejects a resource with a fragment or non-absolute URI (format)', async () => {
-      await expect(resources.resolveForClient(['res-game-a'], 'https://x.example.com/#f')).rejects.toBeInstanceOf(
-        InvalidResourceError,
-      );
+      await expect(
+        resources.resolveForClient(['res-game-a'], 'https://x.example.com/#f'),
+      ).rejects.toBeInstanceOf(InvalidResourceError);
       await expect(resources.resolveForClient(['res-game-a'], 'not-a-uri')).rejects.toBeInstanceOf(
         InvalidResourceError,
       );
@@ -439,6 +437,67 @@ describe('Clients + Resources on real Mongo (B3.1–B3.3)', () => {
 
     it('union allowlist rejects an origin registered by no client', async () => {
       expect(await cors.isOriginRegisteredForAnyClient('https://evil.example.com')).toBe(false);
+    });
+  });
+
+  describe('B4.4 Task 1 — grantTypes field (Q4/D7)', () => {
+    it('new client defaults to grantTypes === [authorization_code]', async () => {
+      const client = await clients.create({
+        clientId: 'gt-default',
+        clientType: 'public',
+        tokenEndpointAuthMethod: 'none',
+        redirectUris: ['https://app.example.com/callback'],
+        tenantId: 'tenant-A',
+      });
+      expect(client.grantTypes).toEqual(['authorization_code']);
+      const read = await clients.findByClientId('gt-default');
+      expect(read?.grantTypes).toEqual(['authorization_code']);
+    });
+
+    it('stores and reads back an explicit [authorization_code, refresh_token]', async () => {
+      await clients.create({
+        clientId: 'gt-refresh',
+        clientType: 'confidential',
+        tokenEndpointAuthMethod: 'client_secret_basic',
+        redirectUris: ['https://app.example.com/callback'],
+        grantTypes: ['authorization_code', 'refresh_token'],
+        tenantId: 'tenant-A',
+      });
+      const read = await clients.findByClientId('gt-refresh');
+      expect(read?.grantTypes).toEqual(['authorization_code', 'refresh_token']);
+    });
+
+    it('a legacy doc written without grantTypes reads back [authorization_code] (lean normalise)', async () => {
+      // Insert a raw document (bypasses Mongoose defaults, like a pre-B4.4 client).
+      await clientModel.collection.insertOne({
+        clientId: 'gt-legacy',
+        clientType: 'public',
+        tokenEndpointAuthMethod: 'none',
+        redirectUris: [],
+        postLogoutRedirectUris: [],
+        allowedCorsOrigins: [],
+        allowedResources: [],
+        scopes: [],
+        tenantId: 'tenant-A',
+      });
+      const read = await clients.findByClientId('gt-legacy');
+      expect(read?.grantTypes).toEqual(['authorization_code']);
+    });
+
+    it('rejects an unknown grant value at write time (schema enum)', async () => {
+      await expect(
+        clientModel.collection
+          .insertOne({ clientId: 'gt-bad', clientType: 'public', tenantId: 'tenant-A' })
+          .then(() =>
+            clientModel.validate({
+              clientId: 'gt-bad2',
+              clientType: 'public',
+              tokenEndpointAuthMethod: 'none',
+              grantTypes: ['password'],
+              tenantId: 'tenant-A',
+            }),
+          ),
+      ).rejects.toBeTruthy();
     });
   });
 });

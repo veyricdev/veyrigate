@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ClientsModule } from '../clients/clients.module';
+import { KeysModule } from '../keys/keys.module';
 import { ResourcesModule } from '../resources/resources.module';
 import { SessionsModule } from '../sessions/sessions.module';
 import { AuthorizeController } from './authorize/authorize.controller';
@@ -7,6 +8,8 @@ import { AuthorizeRequestContextService } from './authorize/authorize-request-co
 import { AuthorizeService } from './authorize/authorize.service';
 import { AuthorizationCodeService } from './code/authorization-code.service';
 import { ConsentService } from './consent/consent.service';
+import { TokenController } from './token/token.controller';
+import { TokenService } from './token/token.service';
 import { HtmlExceptionFilter } from '../ui/html-exception.filter';
 import { CsrfGuard, CsrfService } from '../ui/csrf.service';
 
@@ -19,13 +22,14 @@ import { CsrfGuard, CsrfService } from '../ui/csrf.service';
  * so no `UiModule` DI import is needed.
  */
 @Module({
-  imports: [ClientsModule, ResourcesModule, SessionsModule],
-  controllers: [AuthorizeController],
+  imports: [ClientsModule, ResourcesModule, SessionsModule, KeysModule],
+  controllers: [AuthorizeController, TokenController],
   providers: [
     AuthorizeService,
     AuthorizeRequestContextService,
     AuthorizationCodeService,
     ConsentService,
+    TokenService,
     CsrfService,
     CsrfGuard,
     HtmlExceptionFilter,

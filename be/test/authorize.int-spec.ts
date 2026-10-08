@@ -570,11 +570,23 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
     expect(code).toBeTruthy();
 
     // The code is bound to the stored client_id/redirect_uri and consumable exactly once.
-    const data = await codeSvc.consume(code, `${RUN}-http`, 'https://app.example.com/callback');
+    const data = await codeSvc.consume(
+      code,
+      `${RUN}-http`,
+      'https://app.example.com/callback',
+      VALID_CHALLENGE,
+    );
     expect(data).not.toBeNull();
     expect(data!.userId).toBe(userId);
     expect(data!.scope).toBe('openid profile');
-    expect(await codeSvc.consume(code, `${RUN}-http`, 'https://app.example.com/callback')).toBeNull();
+    expect(
+      await codeSvc.consume(
+        code,
+        `${RUN}-http`,
+        'https://app.example.com/callback',
+        VALID_CHALLENGE,
+      ),
+    ).toBeNull();
 
     // Consent was persisted for the owner.
     const consent = await consentSvc.find(userId, `${RUN}-http`, undefined);
@@ -602,9 +614,20 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
 
   it('already-covered consent => GET /authorize skips the screen and 302s a code immediately', async () => {
     const userId = new Types.ObjectId().toHexString();
-    await consentSvc.grant(userId, `${RUN}-http`, undefined, ['openid', 'profile'], consentSvc.currentVersions(), ['openid', 'profile']);
+    await consentSvc.grant(
+      userId,
+      `${RUN}-http`,
+      undefined,
+      ['openid', 'profile'],
+      consentSvc.currentVersions(),
+      ['openid', 'profile'],
+    );
     const { id } = await sessionSvc.create(userId, 'tenant-A');
-    const res = await httpApp.inject({ method: 'GET', url: fullQuery(), cookies: { [SESSION_COOKIE]: id } });
+    const res = await httpApp.inject({
+      method: 'GET',
+      url: fullQuery(),
+      cookies: { [SESSION_COOKIE]: id },
+    });
     expect(res.statusCode).toBe(302);
     const url = new URL(res.headers['location'] as string);
     expect(url.searchParams.get('code')).toBeTruthy();
@@ -615,9 +638,20 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
 
   it('prompt=consent still shows the screen even when consent already covers the request', async () => {
     const userId = new Types.ObjectId().toHexString();
-    await consentSvc.grant(userId, `${RUN}-http`, undefined, ['openid', 'profile'], consentSvc.currentVersions(), ['openid', 'profile']);
+    await consentSvc.grant(
+      userId,
+      `${RUN}-http`,
+      undefined,
+      ['openid', 'profile'],
+      consentSvc.currentVersions(),
+      ['openid', 'profile'],
+    );
     const { id } = await sessionSvc.create(userId, 'tenant-A');
-    const res = await httpApp.inject({ method: 'GET', url: fullQuery('&prompt=consent'), cookies: { [SESSION_COOKIE]: id } });
+    const res = await httpApp.inject({
+      method: 'GET',
+      url: fullQuery('&prompt=consent'),
+      cookies: { [SESSION_COOKIE]: id },
+    });
     expect(res.statusCode).toBe(200);
     expect(res.body).toContain('Authorize access');
     await sessionSvc.revoke(id);
@@ -626,7 +660,11 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
   it('prompt=none + no consent => 302 error=consent_required (fail-closed, no UI)', async () => {
     const userId = new Types.ObjectId().toHexString();
     const { id } = await sessionSvc.create(userId, 'tenant-A');
-    const res = await httpApp.inject({ method: 'GET', url: fullQuery('&prompt=none'), cookies: { [SESSION_COOKIE]: id } });
+    const res = await httpApp.inject({
+      method: 'GET',
+      url: fullQuery('&prompt=none'),
+      cookies: { [SESSION_COOKIE]: id },
+    });
     expect(res.statusCode).toBe(302);
     const url = new URL(res.headers['location'] as string);
     expect(url.searchParams.get('error')).toBe('consent_required');
@@ -638,9 +676,20 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
 
   it('prompt=none + already covered => 302 a code (success case, OIDC Core, no error)', async () => {
     const userId = new Types.ObjectId().toHexString();
-    await consentSvc.grant(userId, `${RUN}-http`, undefined, ['openid', 'profile'], consentSvc.currentVersions(), ['openid', 'profile']);
+    await consentSvc.grant(
+      userId,
+      `${RUN}-http`,
+      undefined,
+      ['openid', 'profile'],
+      consentSvc.currentVersions(),
+      ['openid', 'profile'],
+    );
     const { id } = await sessionSvc.create(userId, 'tenant-A');
-    const res = await httpApp.inject({ method: 'GET', url: fullQuery('&prompt=none'), cookies: { [SESSION_COOKIE]: id } });
+    const res = await httpApp.inject({
+      method: 'GET',
+      url: fullQuery('&prompt=none'),
+      cookies: { [SESSION_COOKIE]: id },
+    });
     expect(res.statusCode).toBe(302);
     const url = new URL(res.headers['location'] as string);
     expect(url.searchParams.get('code')).toBeTruthy();

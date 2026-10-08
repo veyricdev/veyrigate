@@ -28,11 +28,11 @@ export interface AuthorizationCodeData {
 const codeKey = (code: string): string => `authz_code:${sha256(code)}`;
 
 /**
- * Atomic consume-with-binding (spec §9.5): return the stored data and delete the key only when
- * both `clientId` and `redirectUri` match the caller's claim. A mismatch returns nil *without*
- * deleting — so a `/token` request carrying a wrong identifier can never pre-empt (DoS) the
- * legitimate holder of the code (INV-13). Single key (KEYS[1]) — Cluster-safe (no CROSSSLOT,
- * see DEBT-013 note in tasks.md).
+ * Atomic consume-with-binding (spec §9.5 / §15 #13): return the stored data and delete the key
+ * only when `clientId`, `redirectUri` *and* the PKCE `codeChallenge` all match the caller's claim.
+ * A mismatch returns nil *without* deleting — so a `/token` request carrying a wrong identifier
+ * or a wrong `code_verifier` can never pre-empt (DoS) the legitimate holder of the code (INV-13).
+ * Single key (KEYS[1]) — Cluster-safe (no CROSSSLOT, see DEBT-013 note in tasks.md).
  */
 const CONSUME_SCRIPT = {
   name: 'consumeAuthCode',
@@ -41,7 +41,7 @@ const CONSUME_SCRIPT = {
 local value = redis.call('GET', KEYS[1])
 if not value then return nil end
 local data = cjson.decode(value)
-if data.clientId ~= ARGV[1] or data.redirectUri ~= ARGV[2] then
+if data.clientId ~= ARGV[1] or data.redirectUri ~= ARGV[2] or data.codeChallenge ~= ARGV[3] then
   return nil
 end
 redis.call('DEL', KEYS[1])
@@ -49,7 +49,12 @@ return value`,
 };
 
 type AuthCodeRedis = {
-  consumeAuthCode(key: string, clientId: string, redirectUri: string): Promise<string | null>;
+  consumeAuthCode(
+    key: string,
+    clientId: string,
+    redirectUri: string,
+    codeChallenge: string,
+  ): Promise<string | null>;
 };
 
 /**
@@ -88,20 +93,24 @@ export class AuthorizationCodeService {
   }
 
   /**
-   * Atomically consume a code bound to `clientId`/`redirectUri` (spec §9.5). Returns null when
-   * missing, expired, already consumed, or when the identifiers do not match — in the mismatch
-   * case the code is left intact so a subsequent legitimate consume can still succeed (INV-13).
+   * Atomically consume a code bound to `clientId`/`redirectUri`/`codeChallenge` (spec §9.5 /
+   * §15 #13). Returns null when missing, expired, already consumed, or when any of the three
+   * identifiers do not match — in the mismatch case the code is left intact so a subsequent
+   * legitimate consume can still succeed (INV-13). `codeChallenge` is `S256(code_verifier)`, so
+   * a wrong `code_verifier` cannot delete another holder's code (PKCE bound *before* DEL).
    */
   async consume(
     code: string,
     clientId: string,
     redirectUri: string,
+    codeChallenge: string,
   ): Promise<AuthorizationCodeData | null> {
     if (!code) return null;
     const raw = await (this.redis.client as unknown as AuthCodeRedis).consumeAuthCode(
       codeKey(code),
       clientId,
       redirectUri,
+      codeChallenge,
     );
     return raw ? (JSON.parse(raw) as AuthorizationCodeData) : null;
   }

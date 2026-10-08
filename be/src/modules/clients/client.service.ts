@@ -8,11 +8,13 @@ import { validateRedirectUriList } from './redirect-uri.validator';
 
 export type ClientType = 'public' | 'confidential';
 export type TokenEndpointAuthMethod = 'client_secret_basic' | 'client_secret_post' | 'none';
+export type GrantType = 'authorization_code' | 'refresh_token';
 
 export interface Client {
   clientId: string;
   clientType: ClientType;
   tokenEndpointAuthMethod: TokenEndpointAuthMethod;
+  grantTypes: GrantType[];
   redirectUris: string[];
   postLogoutRedirectUris: string[];
   allowedCorsOrigins: string[];
@@ -25,6 +27,7 @@ export interface CreateClientInput {
   clientId: string;
   clientType: ClientType;
   tokenEndpointAuthMethod: TokenEndpointAuthMethod;
+  grantTypes?: GrantType[];
   redirectUris?: string[];
   postLogoutRedirectUris?: string[];
   allowedCorsOrigins?: string[];
@@ -65,6 +68,7 @@ export class ClientService {
         clientId: input.clientId,
         clientType: input.clientType,
         tokenEndpointAuthMethod: input.tokenEndpointAuthMethod,
+        ...(input.grantTypes ? { grantTypes: input.grantTypes } : {}),
         redirectUris,
         postLogoutRedirectUris,
         allowedCorsOrigins: input.allowedCorsOrigins ?? [],
@@ -76,7 +80,12 @@ export class ClientService {
     return doc.toObject();
   }
 
-  findByClientId(clientId: string): Promise<Client | null> {
-    return this.clients.findOne({ clientId }).lean<Client>().exec();
+  async findByClientId(clientId: string): Promise<Client | null> {
+    const client = await this.clients.findOne({ clientId }).lean<Client>().exec();
+    if (!client) return null;
+    // `.lean()` bypasses Mongoose defaults, so a document written before `grantTypes` existed
+    // reads back without the field — normalise here so every caller sees a concrete array and
+    // `/token` cannot 500 on an older client (tech-lead fold, Task 1).
+    return { ...client, grantTypes: client.grantTypes ?? ['authorization_code'] };
   }
 }
