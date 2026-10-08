@@ -2,16 +2,15 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `10-B4.1` (đang mở) — OAuth core `/authorize` (M3 walking skeleton)
-- **Cổng**: tester = PASS · 233/233 test (unit 67/67 + int 166/166, trong đó authorize.int-spec.ts
-  27/27). Rà soát đủ 9 acceptance criteria (spec §9.2, INV-3/4/14/15) → tester phát hiện 2 gap
-  coverage (AC8 `response_type!=code`, AC9 `prompt=none` thiếu test HTTP-level) và tự bổ sung 2
-  test (`app.inject`) + 1 assertion `error_description` còn thiếu ở test PKCE-plain có sẵn.
-  KHÔNG sửa code production — không có FAIL thật, không có DEBT mới. Xem
-  `runs/10-B4.1/test-report.md` (bảng map đủ AC + risk matrix).
-- **Vòng lặp**: tech-lead=1, dev=3, senior=3, tester=1
-- **Việc tiếp theo**: orchestrator — đóng run 10-B4.1 (PASS tất cả cổng), mở run kế (B4.2 consent
-  hoặc B4.3 AuthorizationCode store theo plan.md §B4). Q6/Q1 vẫn mở, không chặn B4.1.
+- **Run hiện tại**: không có (10-B4.1 đã đóng, commit `cd15c81`). Sẵn sàng mở run kế.
+- **Run vừa đóng**: `10-B4.1` ✅ 4/4 cổng — 233/233 test (unit 67/67 + int 166/166, authorize
+  27/27). `/authorize` + AuthorizeRequestContext (M3 walking skeleton). Hạ tầng test: thêm
+  fail-fast cho 5 int-spec (retryAttempts:5) để DB test down không treo. Xem
+  `runs/10-B4.1/summary.md`.
+- **Vòng lặp (run 10)**: tech-lead=1, dev=3, senior=3, tester=1
+- **Việc tiếp theo**: orchestrator — mở run kế (B4.2 consent hoặc B4.3 AuthorizationCode store
+  theo plan.md §B4). **Trước B4.2**: chốt Q1 (consent semantic). Q6/Q1 vẫn mở. Hạ tầng test cần 2
+  container `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`.
 
 ## Tiến độ
 
@@ -26,6 +25,7 @@
 | [07](runs/07-BUG-login-session/summary.md) | M2 | BUG-login-session | ✅ 144/144 | `f62426b` |
 | [08](runs/08-BUG-logout-action/summary.md) | M2 | BUG-logout-action | ✅ 158/158 | `f62426b` |
 | [09](runs/09-B3.1-B3.4/summary.md) | M2 | B3.1–B3.4 | ✅ 206/206 | `c813f4b` |
+| [10](runs/10-B4.1/summary.md) | M3 | B4.1 | ✅ 233/233 | `cd15c81` |
 
 ## Chặn / cần người quyết định
 
