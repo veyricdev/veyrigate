@@ -2,15 +2,11 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: không có (10-B4.1 đã đóng, commit `cd15c81`). Sẵn sàng mở run kế.
-- **Run vừa đóng**: `10-B4.1` ✅ 4/4 cổng — 233/233 test (unit 67/67 + int 166/166, authorize
-  27/27). `/authorize` + AuthorizeRequestContext (M3 walking skeleton). Hạ tầng test: thêm
-  fail-fast cho 5 int-spec (retryAttempts:5) để DB test down không treo. Xem
-  `runs/10-B4.1/summary.md`.
-- **Vòng lặp (run 10)**: tech-lead=1, dev=3, senior=3, tester=1
-- **Việc tiếp theo**: orchestrator — mở run kế (B4.2 consent hoặc B4.3 AuthorizationCode store
-  theo plan.md §B4). **Trước B4.2**: chốt Q1 (consent semantic). Q6/Q1 vẫn mở. Hạ tầng test cần 2
-  container `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`.
+- **Run hiện tại**: `11-B4.3` (đang đóng) — AuthorizationCode store + Lua consume-with-binding (M3)
+- **Cổng**: tester · **Kết quả**: **PASS** — unit 67/67, int 178/178 (suite mới 12/12, +4 test tester bổ sung AC7/AC8/AC3-stronger). Xem `runs/11-B4.3/test-report.md`.
+- **Vòng lặp**: tech-lead=1, dev=1, senior=1, tester=1
+- **Việc tiếp theo**: orchestrator đóng run 11. B4.2 chờ **Q1**, B4.4 chờ **Q4**. DEBT-025 ghi trong backlog.md.
+  Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`; PowerShell gọi `pnpm.cmd`.
 
 ## Tiến độ
 
@@ -33,4 +29,4 @@ Xem `plan.md` §12. Sắp chạm tới: **Q6** (chốt tạm session idle 8h/abs
 
 ## Backlog mở
 
-15 mục — xem [backlog.md](backlog.md).
+16 mục — xem [backlog.md](backlog.md).
