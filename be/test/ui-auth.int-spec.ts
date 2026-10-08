@@ -53,7 +53,14 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
       },
     };
     moduleRef = await Test.createTestingModule({
-      imports: [MongooseModule.forRoot(MONGO_URI), MongooseModule.forFeature(MODELS)],
+      imports: [
+        MongooseModule.forRoot(MONGO_URI, {
+          serverSelectionTimeoutMS: 5000,
+          retryAttempts: 5,
+          retryDelay: 1000,
+        }),
+        MongooseModule.forFeature(MODELS),
+      ],
       controllers: [UiController],
       providers: [
         AuthenticationService,

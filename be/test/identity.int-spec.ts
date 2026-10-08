@@ -23,7 +23,14 @@ describe('Identity services on real Mongo (B2.2)', () => {
 
   beforeAll(async () => {
     moduleRef = await Test.createTestingModule({
-      imports: [MongooseModule.forRoot(MONGO_URI), MongooseModule.forFeature(MODELS)],
+      imports: [
+        MongooseModule.forRoot(MONGO_URI, {
+          serverSelectionTimeoutMS: 5000,
+          retryAttempts: 5,
+          retryDelay: 1000,
+        }),
+        MongooseModule.forFeature(MODELS),
+      ],
       providers: [TenantService, UserService, UserTenantService, FederatedIdentityService],
     }).compile();
     tenantModel = moduleRef.get(getModelToken('Tenant'));

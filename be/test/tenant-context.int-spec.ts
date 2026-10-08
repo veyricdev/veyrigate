@@ -63,7 +63,14 @@ describe('Tenant context + tenant-scoped repository (B2.1, INV-24)', () => {
           : { sessionIdleTtl: 600, sessionAbsoluteTtl: 3600 },
     };
     const moduleRef = await Test.createTestingModule({
-      imports: [MongooseModule.forRoot(MONGO_URI), MongooseModule.forFeature(MODELS)],
+      imports: [
+        MongooseModule.forRoot(MONGO_URI, {
+          serverSelectionTimeoutMS: 5000,
+          retryAttempts: 5,
+          retryDelay: 1000,
+        }),
+        MongooseModule.forFeature(MODELS),
+      ],
       controllers: [MembersController],
       providers: [
         { provide: ConfigService, useValue: config },

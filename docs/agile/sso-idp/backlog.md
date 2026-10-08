@@ -21,6 +21,7 @@ Việc còn mở (🟡 từ review/test, debt, việc hoãn). **Nguồn duy nh�
 | DEBT-019 | run 09 senior 🟡#1 | `@fastify/cors` thêm vào `be/package.json` (C5) nhưng chưa dùng ở bất kỳ đâu trong `src/` — B3.4 mới dừng ở primitive `ClientCorsService`, chưa wire HTTP | Khi làm B4: dùng `@fastify/cors` hoặc hook thủ công đúng mapping đã tả trong `client-cors.service.ts`; nếu chọn tự viết hook thì gỡ dependency thừa | B4 |
 | DEBT-020 | run 09 senior 🟡#2 | `ClientSchema` chưa có index trên `allowedCorsOrigins` — `isOriginRegisteredForAnyClient` full-scan collection `Client` mỗi lần preflight/jwks/discovery | Thêm `ClientSchema.index({ allowedCorsOrigins: 1 })` khi B4 wire thật và có traffic để đo | B4 |
 | DEBT-021 | run 09 senior 🟡#3 | `ClientCredentialService.rotateSecret` không atomic dưới concurrent rotate trên cùng `clientId` — `nextVersion` tính bằng `Math.max` sau khi load, hai lời gọi đồng thời có thể trùng version (index `{clientId,version}` không unique) | Ghi rõ giới hạn trong code; cân nhắc unique index `(clientId, version)` khi có admin API thật | B6.3 |
+| DEBT-022 | run 10 senior 🟡#1 | `AuthorizeRequest`/`AuthorizeReply` (`authorize.controller.ts`) là bản sao gần như y hệt `UiRequest`/`UiReply` (`ui.controller.ts`) — hai interface structural lặp cho cùng Fastify request/reply, dễ lệch khi một bên thêm field mà bên kia quên | Tách type Fastify request/reply dùng chung (`common/http/` hoặc cạnh `ui/`), cả hai controller import lại | B4.2+ (khi sửa B4.1 REJECT) |
 
 ## Đã đóng
 
@@ -33,3 +34,5 @@ Việc còn mở (🟡 từ review/test, debt, việc hoãn). **Nguồn duy nh�
 | DEBT-012 | 06 | Đổi email unset xác minh; integration test bao phủ. |
 | DEBT-014 | 06 | Update pipeline atomic; integration test 10 cập nhật song song. |
 | DEBT-018 | 06 | Xoá artifact test trùng; nguồn là dirty VS Code buffer save-back, không có task/watcher/config repo tạo file. |
+| DEBT-023 | 10 | Bỏ `UiModule` khỏi `imports` của `OauthModule`; `HtmlExceptionFilter` provide cục bộ, `safeReturnTo` import hàm trực tiếp. |
+| DEBT-024 | 10 | `AuthorizeRedirectError` nay tự mang `redirectUri`/`state` (gắn trong `handle()` Phase 2, nơi redirect_uri đã trusted); controller redirect từ error, không còn đọc `params` → resume Phase-2-fail trả 302 đúng hợp đồng, không còn 500. |

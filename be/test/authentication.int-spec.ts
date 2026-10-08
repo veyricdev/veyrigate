@@ -33,7 +33,14 @@ describe('Authentication races on real Mongo (B2.4, C2-C6, C13)', () => {
 
   beforeAll(async () => {
     moduleRef = await Test.createTestingModule({
-      imports: [MongooseModule.forRoot(MONGO_URI), MongooseModule.forFeature(MODELS)],
+      imports: [
+        MongooseModule.forRoot(MONGO_URI, {
+          serverSelectionTimeoutMS: 5000,
+          retryAttempts: 5,
+          retryDelay: 1000,
+        }),
+        MongooseModule.forFeature(MODELS),
+      ],
       providers: [
         AuthenticationService,
         UserService,

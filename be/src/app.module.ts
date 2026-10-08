@@ -12,6 +12,7 @@ import { MailerModule } from './modules/mailer/mailer.module';
 import { SecurityModule } from './modules/security/security.module';
 import { AuthenticationModule } from './modules/authentication/authentication.module';
 import { UiModule } from './modules/ui/ui.module';
+import { OauthModule } from './modules/oauth/oauth.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { UiModule } from './modules/ui/ui.module';
     IdentityModule,
     AuthenticationModule,
     UiModule,
+    OauthModule,
   ],
   providers: [
     {

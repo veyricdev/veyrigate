@@ -2,10 +2,16 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: kế tiếp `10-B4.1` (chưa mở) — bắt đầu OAuth core
-- **Cổng**: hoàn tất · **Kết quả**: run 09 PASS — 206/206 test (67 unit + 139 int)
-- **Vòng lặp**: tech-lead=1, dev=1, senior=1, tester=1
-- **Việc tiếp theo**: mở run 10 cho B4.1 (`/authorize`); lưu ý Q6/Q1/Q4 chốt trước B4.2/B4.4.
+- **Run hiện tại**: `10-B4.1` (đang mở) — OAuth core `/authorize` (M3 walking skeleton)
+- **Cổng**: tester = PASS · 233/233 test (unit 67/67 + int 166/166, trong đó authorize.int-spec.ts
+  27/27). Rà soát đủ 9 acceptance criteria (spec §9.2, INV-3/4/14/15) → tester phát hiện 2 gap
+  coverage (AC8 `response_type!=code`, AC9 `prompt=none` thiếu test HTTP-level) và tự bổ sung 2
+  test (`app.inject`) + 1 assertion `error_description` còn thiếu ở test PKCE-plain có sẵn.
+  KHÔNG sửa code production — không có FAIL thật, không có DEBT mới. Xem
+  `runs/10-B4.1/test-report.md` (bảng map đủ AC + risk matrix).
+- **Vòng lặp**: tech-lead=1, dev=3, senior=3, tester=1
+- **Việc tiếp theo**: orchestrator — đóng run 10-B4.1 (PASS tất cả cổng), mở run kế (B4.2 consent
+  hoặc B4.3 AuthorizationCode store theo plan.md §B4). Q6/Q1 vẫn mở, không chặn B4.1.
 
 ## Tiến độ
 
@@ -27,4 +33,4 @@ Xem `plan.md` §12. Sắp chạm tới: **Q6** (chốt tạm session idle 8h/abs
 
 ## Backlog mở
 
-14 mục — xem [backlog.md](backlog.md).
+15 mục — xem [backlog.md](backlog.md).
