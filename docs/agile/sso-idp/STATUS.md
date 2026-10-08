@@ -2,11 +2,10 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `13-B4.4` — cổng: **tester PASS** → chờ orchestrator đóng run. 4/4 cổng.
-- **Run vừa đóng**: `12-B4.2` ✅ 4/4 cổng — 269/269 test (unit 67 + int 202). Xem `runs/12-B4.2/summary.md`.
-- **Vòng lặp (run 12)**: analyst=1, tech-lead=1, dev=1, senior=1, tester=1
+- **Run hiện tại**: không có (13-B4.4 đã đóng, commit `c6a8026`).
+- **Run vừa đóng**: `13-B4.4` ✅ 4/4 cổng — 310/310 test (unit 80 + int 230). Xem `runs/13-B4.4/summary.md`.
 - **Vòng lặp (run 13)**: analyst=1, tech-lead=1, dev=2, senior=2 (REJECT→PASS), tester=1
-- **Việc tiếp theo**: orchestrator đóng run 13-B4.4 (viết summary.md, mở run kế). Tester PASS: build+typecheck+lint sạch; unit 80/80; int 230/230 (token 24/24, +1 QA Task1-fold legacy `/token`). Xem `runs/13-B4.4/test-report.md`.
+- **Việc tiếp theo**: **B4.5** (refresh grant + rotation + reuse detection + `/revoke`) — hoàn tất M3 cần thêm T2 (fe-sso-test) + X1.
   Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`; full suite = `pnpm test` (80) + `pnpm test:int` (230) = 310.
 
 ## Tiến độ
