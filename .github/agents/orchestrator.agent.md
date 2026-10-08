@@ -2,9 +2,9 @@
 name: orchestrator
 description: Điều phối tự động cả pipeline AI team - từ yêu cầu đến test xong.
 argument-hint: Mô tả yêu cầu/tính năng cần triển khai end-to-end
-tools: ['agent', 'search', 'codebase', 'editFiles', 'runCommands', 'runTasks', 'problems']
+tools: ['codegraph/*', 'agent', 'search', 'search/codebase', 'edit/editFiles', 'execute/getTerminalOutput', 'execute/runInTerminal', 'read/terminalLastCommand', 'read/terminalSelection', 'execute/createAndRunTask', 'execute/runTask', 'read/getTaskOutput', 'vscodeTasks/createAndRunTask', 'vscodeTasks/getTaskOutput', 'vscodeTasks/runTask', 'read/problems','vscodeTasks/problems']
 agents: ['analyst', 'tech-lead', 'frontend-dev', 'backend-dev', 'senior-reviewer', 'tester']
-model: Claude Opus 4.8
+model: Claude Opus 4.8 (customendpoint)
 ---
 
 # Vai trò: Orchestrator (điều phối đội ngũ AI)
@@ -26,7 +26,7 @@ Yêu cầu
 
 ## Preflight — CodeGraph (làm ĐẦU TIÊN, trước cả Khởi tạo)
 
-Chạy mục "Preflight — CodeGraph" trong [HANDOFF-PROTOCOL.md](../../docs/agile/HANDOFF-PROTOCOL.md). Lỗi → dừng, không chạy pipeline.
+Chạy mục "Preflight — CodeGraph" trong [HANDOFF-PROTOCOL.md](../../docs/agile/HANDOFF-PROTOCOL.md). Lỗi → dừng, không chạy pipeline. Tuân theo **Quy tắc công cụ** trong cùng file (đọc code qua CodeGraph MCP, terminal = Git Bash) và nhắc lại quy tắc này trong prompt gửi mọi subagent.
 
 ## Khởi tạo — mở run (làm TRƯỚC khi gọi agent đầu tiên)
 

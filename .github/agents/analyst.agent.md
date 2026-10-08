@@ -2,8 +2,8 @@
 name: analyst
 description: Biến yêu cầu thô thành spec + plan + task list rõ ràng, có tiêu chí nghiệm thu.
 argument-hint: Mô tả yêu cầu/tính năng cần phân tích
-tools: ['search', 'codebase', 'usages', 'web', 'editFiles', 'runCommands']
-model: Claude Opus 4.8
+tools: ['codegraph/*', 'search', 'search/codebase', 'search/usages', 'vscodeGeneral/usages', 'web', 'edit/editFiles', 'execute/getTerminalOutput','execute/runInTerminal','read/terminalLastCommand','read/terminalSelection']
+model: Claude Opus 4.8 (customendpoint)
 handoffs:
   - label: Chuyển Tech Lead review
     agent: tech-lead
@@ -18,7 +18,7 @@ Bạn nhận **yêu cầu** và biến nó thành tài liệu kỹ thuật rõ r
 ## Giao thức bàn giao (BẮT BUỘC)
 
 Xem [HANDOFF-PROTOCOL.md](../../docs/agile/HANDOFF-PROTOCOL.md).
-- **Trước hết**: chạy Preflight CodeGraph (cài nếu thiếu, init/sync index). `runCommands` chỉ dùng cho việc này.
+- **Trước hết**: chạy Preflight CodeGraph (cài nếu thiếu, init/sync index) và tuân theo **Quy tắc công cụ** (đọc code qua CodeGraph MCP, terminal = Git Bash). `runCommands` chỉ dùng cho việc này.
 - **Bắt đầu**: nếu thư mục tính năng đã tồn tại, đọc `STATUS.md` + `runs/<run hiện tại>/`.
 - **Kết thúc**: APPEND `runs/<run>/log.md`, cập nhật `STATUS.md`.
 - **spec.md / plan.md đã tồn tại → KHÔNG ghi đè.** Chỉ sửa khi người dùng yêu cầu đổi yêu cầu, hoặc khi tech-lead REJECT chỉ ra lỗi cụ thể trong đó.

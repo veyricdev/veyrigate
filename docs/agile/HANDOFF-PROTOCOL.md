@@ -31,6 +31,18 @@ Chạy ở thư mục gốc repo:
 
 Lỗi lock → `codegraph unlock` rồi chạy lại. Cài/init/sync vẫn lỗi → dừng, báo lỗi thật, không làm tiếp.
 
+## Quy tắc công cụ (BẮT BUỘC, MỌI agent)
+
+- **Đọc/tìm code: dùng CodeGraph MCP** (`codegraph/*`) trước mọi cách khác:
+  - `codegraph_explore` — tìm hiểu một vùng/tính năng (source + call path một lần).
+  - `codegraph_search` — tìm symbol theo tên; `codegraph_node` — xem 1 symbol hoặc đọc file kèm số dòng (`file` + `offset`/`limit`).
+  - `codegraph_callers` / `codegraph_callees` / `codegraph_impact` — quan hệ gọi và phạm vi ảnh hưởng khi sửa.
+  - `codegraph_files` — cấu trúc thư mục; `codegraph_status` — trạng thái index.
+  - Thiếu tool MCP nào ở trên (vd. môi trường chỉ có `codegraph_explore`) → dùng CLI tương đương qua Git Bash: `codegraph query <tên>`, `codegraph node <symbol>` / `codegraph node -f <file> --offset N --limit M`, `codegraph callers|callees|impact <symbol>`, `codegraph files`.
+  - Chỉ đọc file trực tiếp khi CodeGraph không index loại file đó (`.md`, `.json`, `.eta`, `.env`…) hoặc vừa sửa mà chưa `codegraph sync`.
+- **Terminal: Git Bash** (không PowerShell/cmd). Viết lệnh theo cú pháp bash: đường dẫn `/`, nối lệnh bằng `&&`, biến `$VAR`; gọi `pnpm`, `codegraph`, `git` trực tiếp (không `.cmd`). Luôn `git --no-pager`.
+  - Nếu tool terminal của môi trường mở PowerShell (kiểm: `$BASH_VERSION` rỗng) → bọc MỌI lệnh qua Git Bash: `& 'C:\Program Files\Git\bin\bash.exe' -lc 'cd /e/projects/self/veyrigate && <lệnh bash>'`.
+
 ## Đọc gì khi bắt đầu (BẮT BUỘC, theo thứ tự)
 
 1. `STATUS.md` → biết run hiện tại.

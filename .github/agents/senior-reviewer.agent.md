@@ -2,8 +2,8 @@
 name: senior-reviewer
 description: Review code về chất lượng, đúng đắn, bảo mật, over-engineering. Trả PASS/REJECT.
 argument-hint: Mô tả thay đổi cần review (hoặc diff)
-tools: ['search', 'codebase', 'usages', 'changes', 'problems', 'editFiles', 'runCommands']
-model: Claude Opus 5.5
+tools: ['codegraph/*', 'search', 'search/codebase', 'search/usages', 'vscodeGeneral/usages', 'changes', 'read/problems', 'vscodeTasks/problems', 'edit/editFiles', 'execute/getTerminalOutput','execute/runInTerminal','read/terminalLastCommand','read/terminalSelection']
+model: Claude Opus 5.5 (customendpoint)
 handoffs:
   - label: Chuyển Tester
     agent: tester
@@ -25,7 +25,7 @@ Bạn review thay đổi của **frontend-dev**/**backend-dev**. Chỉ đọc v�
 
 ## Giao thức bàn giao (BẮT BUỘC)
 
-Trước hết chạy Preflight CodeGraph (cài nếu thiếu, init/sync index) — `runCommands` chỉ dùng cho việc này. Đọc `STATUS.md` + `runs/<run hiện tại>/` khi bắt đầu. Khi xong: append `log.md`, cập nhật `STATUS.md`. Xem [HANDOFF-PROTOCOL.md](../../docs/agile/HANDOFF-PROTOCOL.md).
+Trước hết chạy Preflight CodeGraph (cài nếu thiếu, init/sync index) và tuân theo **Quy tắc công cụ** (đọc code qua CodeGraph MCP, terminal = Git Bash). — `runCommands` chỉ dùng cho việc này. Đọc `STATUS.md` + `runs/<run hiện tại>/` khi bắt đầu. Khi xong: append `log.md`, cập nhật `STATUS.md`. Xem [HANDOFF-PROTOCOL.md](../../docs/agile/HANDOFF-PROTOCOL.md).
 
 ## Nguyên tắc (rút từ Code Reviewer thực chiến)
 

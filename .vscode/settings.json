@@ -21,7 +21,32 @@
 			"approve": true,
 			"matchCommandLine": true
 		},
-		"docker run": true
+		"docker run": true,
+		":": true,
+		"/^cd e:/projects/self/veyrigate/docs/agile/sso-idp && sed -i 's/ Lịch sử R giữ trong `<details>` cuối file\\\\\\.//' runs/03-B1\\.1-B1\\.5/review-techlead\\.md && sed -n 5p runs/03-B1\\.1-B1\\.5/review-techlead\\.md && git rm -q _handoff\\.md _progress\\.md tasks\\.md review-techlead\\.md review-senior\\.md test-report\\.md && ls$/": {
+			"approve": true,
+			"matchCommandLine": true
+		},
+		"/^cd e:/projects/self/veyrigate/be && node -e \"const m=require\\('mongoose'\\);m\\.connect\\('mongodb://localhost:27017/sso-idp\\?directConnection=true',\\{serverSelectionTimeoutMS:3000\\}\\)\\.then\\(async c=>\\{console\\.log\\('OK',\\(await c\\.connection\\.db\\.admin\\(\\)\\.ping\\(\\)\\)\\);process\\.exit\\(0\\)\\}\\)\\.catch\\(e=>\\{console\\.log\\('FAIL',e\\.message\\);process\\.exit\\(1\\)\\}\\)\"$/": {
+			"approve": true,
+			"matchCommandLine": true
+		},
+		"/^cd /e/projects/self/veyrigate && ls \\.github/workflows && cat \\.github/workflows/\\*\\.yml \\| head -80 && cat be/tsconfig\\.json && node -v && ls be/node_modules \\| head -50$/": {
+			"approve": true,
+			"matchCommandLine": true
+		},
+		"cygpath": true,
+		"type": true,
+		"git reset": true,
+		"codegraph": true,
+		"npm install": true,
+		"pnpx": true,
+		"printf": true
 	},
-  "python.terminal.useEnvFile": true
+  "python.terminal.useEnvFile": true,
+  "terminal.integrated.defaultProfile.windows": "Git Bash",
+  "chat.tools.terminal.terminalProfile.windows": {
+    "path": "C:\\Program Files\\Git\\bin\\bash.exe",
+    "args": ["--login"]
+  }
 }

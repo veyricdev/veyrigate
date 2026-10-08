@@ -1,11 +1,11 @@
-﻿# Status — sso-idp
+# Status — sso-idp
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: không có (12-B4.2 đã đóng, commit `b89ca9e`).
+- **Run hiện tại**: `13-B4.4` — cổng: **tech-lead** (review tasks.md B4.4). Q6 đã chốt (plan §12), tasks.md đã viết (4 task).
 - **Run vừa đóng**: `12-B4.2` ✅ 4/4 cổng — 269/269 test (unit 67 + int 202). Xem `runs/12-B4.2/summary.md`.
 - **Vòng lặp (run 12)**: analyst=1, tech-lead=1, dev=1, senior=1, tester=1
-- **Việc tiếp theo**: **B4.4** (`/token` authorization_code) — cần chốt Q6 (token TTL) trong run đó (user ủy quyền analyst/tech-lead tự quyết, hướng production).
+- **Việc tiếp theo**: tech-lead review kiến trúc `/token` + `TokenService`, rồi bàn giao dev. B4.5 (refresh grant/rotation) tách riêng.
   Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`; PowerShell gọi `pnpm.cmd`.
 
 ## Tiến độ
@@ -27,7 +27,7 @@
 
 ## Chặn / cần người quyết định
 
-Xem `plan.md` §12. Còn mở: **Q3, Q5, Q6, Q7–Q9**. Q6 (token TTL) sẽ cần cho **B4.4**. **Q1, Q4 đã chốt**.
+Xem `plan.md` §12. Còn mở: **Q3, Q5, Q7–Q9**. **Q1, Q4, Q6 đã chốt** (Q6: access 15', refresh 30d, idle 8h, absolute 30d, secret grace 7d — đọc từ env).
 
 ## Backlog mở
 
