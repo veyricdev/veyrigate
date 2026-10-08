@@ -2,10 +2,11 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `11-B4.3` (đang đóng) — AuthorizationCode store + Lua consume-with-binding (M3)
-- **Cổng**: tester · **Kết quả**: **PASS** — unit 67/67, int 178/178 (suite mới 12/12, +4 test tester bổ sung AC7/AC8/AC3-stronger). Xem `runs/11-B4.3/test-report.md`.
-- **Vòng lặp**: tech-lead=1, dev=1, senior=1, tester=1
-- **Việc tiếp theo**: orchestrator đóng run 11. B4.2 chờ **Q1**, B4.4 chờ **Q4**. DEBT-025 ghi trong backlog.md.
+- **Run hiện tại**: không có (11-B4.3 đã đóng, commit `7bebdb7`).
+- **Run vừa đóng**: `11-B4.3` ✅ 4/4 cổng — 245/245 test (unit 67 + int 178). Xem `runs/11-B4.3/summary.md`.
+- **Vòng lặp (run 11)**: tech-lead=1, dev=1, senior=1, tester=1
+- **Việc tiếp theo**: **bị chặn bởi quyết định** — B4.2 cần **Q1** (consent semantic), B4.4 cần **Q4**
+  (D3 max_age/auth_time, D7 offline_access). Lane khác không chặn: T1, A1–A3 (xem plan §3).
   Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`; PowerShell gọi `pnpm.cmd`.
 
 ## Tiến độ
@@ -22,6 +23,7 @@
 | [08](runs/08-BUG-logout-action/summary.md) | M2 | BUG-logout-action | ✅ 158/158 | `f62426b` |
 | [09](runs/09-B3.1-B3.4/summary.md) | M2 | B3.1–B3.4 | ✅ 206/206 | `c813f4b` |
 | [10](runs/10-B4.1/summary.md) | M3 | B4.1 | ✅ 233/233 | `cd15c81` |
+| [11](runs/11-B4.3/summary.md) | M3 | B4.3 | ✅ 245/245 | `7bebdb7` |
 
 ## Chặn / cần người quyết định
 
