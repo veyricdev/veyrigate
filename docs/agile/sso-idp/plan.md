@@ -95,11 +95,11 @@ Khi lập plan tôi phát hiện một số chỗ spec chưa đủ để triển
 |---|---|---|---|
 | D1 | Spec có `/login`, consent, logout-confirm nhưng chưa nói **UI này nằm ở đâu** (chỉ có 2 FE) | **BE tự render** các trang login/register/verify/reset/consent/logout bằng template server-side (cùng origin với cookie session → CSRF/SameSite đơn giản, IdP độc lập với FE nào). Không đặt trong fe-admin | B2.5 |
 | D2 | fe-admin đăng nhập bằng cách nào? | **Dogfooding**: fe-admin là **client confidential kiểu BFF** — code exchange + giữ token ở server (server functions của TanStack Start), trình duyệt chỉ có cookie session mã hoá httpOnly; token không bao giờ xuống JS | A4, B6.1 |
-| D3 | Step-up re-auth (INV-26) chưa có cơ chế cụ thể | Hỗ trợ `prompt=login` + **`max_age`**; access token cấp cho resource `admin` mang thêm claim **`auth_time`**; API admin từ chối thao tác nhạy cảm nếu `auth_time` quá N phút (đề xuất 5) → trả `403 step_up_required` để fe-admin đẩy user đi re-auth | B4.1, B4.4, B6.2, A5 |
+| D3 | Step-up re-auth (INV-26) chưa có cơ chế cụ thể | Hỗ trợ `prompt=login` + **`max_age`**; access token cấp cho resource `admin` mang thêm claim **`auth_time`**; API admin từ chối thao tác nhạy cảm nếu `auth_time` quá N phút (đề xuất 5) → trả `403 step_up_required` để fe-admin đẩy user đi re-auth | B4.1, B4.4, B6.2, A5 ✅ CHỐT (Q4) |
 | D4 | RP-initiated logout cần `post_logout_redirect_uri` nhưng model `Client` chưa có | Thêm `postLogoutRedirectUris[]` (exact match, cấm wildcard — cùng quy tắc INV-4) | B3.1, B4.7 |
 | D5 | Cần một **resource server thật** để test `aud` (INV-8, spec §7) | Module **demo-resource** trong BE, chỉ bật khi `NODE_ENV != production`: `GET /demo/me` verify JWT (iss/aud/exp/sig). Identifier `http://localhost:4000/demo/` | B6.5, T4 |
 | D6 | Resource `admin` cho admin API | Resource identifier `http://localhost:4000/admin/`, scope `admin.read`, `admin.write`; quyền theo `UserTenant.roles[]` (`super_admin`, `tenant_admin`) | B6.1, B6.4 |
-| D7 | Khi nào cấp refresh token? Spec chưa nói (scopes chỉ có openid/profile/email) | Cấp refresh token khi client có grant `refresh_token` **và** scope yêu cầu gồm `offline_access` (chuẩn OIDC); thêm `offline_access` vào `scopes_supported` | B4.4, B4.5 |
+| D7 | Khi nào cấp refresh token? Spec chưa nói (scopes chỉ có openid/profile/email) | Cấp refresh token khi client có grant `refresh_token` **và** scope yêu cầu gồm `offline_access` (chuẩn OIDC); thêm `offline_access` vào `scopes_supported` | B4.4, B4.5 ✅ CHỐT (Q4) |
 | D8 | CORS cho `/token`, `/userinfo`, `/jwks.json` khi SPA public gọi từ trình duyệt | Preflight cho phép nếu origin ∈ **hợp** mọi `allowedCorsOrigins` đã đăng ký; request thực kiểm tra origin ∈ danh sách **của đúng client** (theo `client_id`) | B3.4 |
 | D9 | KMS thật chưa chọn | Định nghĩa interface `KeyProvider`; dev dùng `LocalKeyProvider` (file key, **chỉ dev**), prod cắm `AwsKmsProvider`/`VaultProvider` (chọn ở B7.3) | B1.9, B7.3 |
 | D10 | Email verify/reset cần mailer | Interface `Mailer`; dev dùng Mailpit; prod chọn SMTP/SES | B1.10 |
@@ -326,10 +326,10 @@ Mục tiêu app này: **kiểm chứng IdP từ phía RP** — vừa là demo, v
 
 ## 12. Việc cần bạn quyết định (chặn task tương ứng)
 
-- [ ] **Q1** (chặn B4.2): `Consent` theo `user × client` hay `user × tenant × client × resource`? *Khuyến nghị bắt đầu `user × client`, chừa chỗ mở rộng.*
+- [x] **Q1** (chặn B4.2): **ĐÃ CHỐT** — `Consent` key theo **`user × client × resource`** (unique `{userId, clientId, resource}`). Lý do: `Client.tenantId` đã bắt buộc (1 client ⇒ 1 tenant) nên chiều tenant là thừa, không cần đưa vào key; mỗi `/authorize` bind đúng 1 `resource` (INV-14/15, resource indicators) nên consent phải tính theo resource để scope-audience đúng boundary và revoke/version độc lập từng resource. Document (public client không gửi `resource`) dùng sentinel `resource = ""` (chuỗi rỗng) để vẫn 1 index duy nhất.
 - [x] **Q2** (chặn B2.5): **ĐÃ CHỐT** — D1: UI login/consent/logout do **BE render**.
 - [ ] **Q3** (chặn A4): xác nhận D2 — fe-admin là **BFF/confidential client**.
-- [ ] **Q4** (chặn B4.4/B6.2): xác nhận D3 (`max_age` + `auth_time` cho step-up) và D7 (`offline_access`).
+- [x] **Q4** (chặn B4.4/B6.2): **ĐÃ CHỐT** — xác nhận **D3** (`prompt=login` + `max_age` → re-auth; access token resource `admin` mang claim `auth_time`; API nhạy cảm từ chối `403 step_up_required` nếu `auth_time` quá hạn) và **D7** (cấp refresh token **chỉ khi** client có grant `refresh_token` **VÀ** scope xin gồm `offline_access`; thêm `offline_access` vào `scopes_supported`). Đúng OIDC Core/§offline_access. Ghi chú schema: `Client` hiện **chưa có** trường `grantTypes[]` — B4.4 phải thêm `grantTypes: string[]` (mặc định `['authorization_code']`) trước khi cấp refresh token; không thuộc phạm vi B4.2.
 - [ ] **Q5** (chặn B7.3): KMS/Vault dùng dịch vụ nào? Hạ tầng Redis (Sentinel/Cluster, self-host/managed)?
 - [ ] **Q6**: thời hạn token/session cuối cùng (đề xuất access 15', refresh 30 ngày sliding, idle 8h, absolute 30 ngày) và grace period rotate secret (24h/7 ngày?).
 - [ ] **Q7**: quy ước `identifier` resource ở môi trường thật (domain thật hay URN).

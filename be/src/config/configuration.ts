@@ -56,6 +56,11 @@ export interface SecurityConfig {
   rateLimitMax: number;
 }
 
+export interface ConsentConfig {
+  policyVersion: string;
+  termsVersion: string;
+}
+
 export interface AdminSeedConfig {
   email: string;
   password: string;
@@ -76,6 +81,7 @@ export interface Config {
   adminSeed: AdminSeedConfig;
   mailer: MailerConfig;
   client: ClientConfig;
+  consent: ConsentConfig;
 }
 
 /**
@@ -126,6 +132,10 @@ export function buildConfig(env: Env): Config {
     },
     client: {
       secretGraceTtl: env.CLIENT_SECRET_GRACE_TTL,
+    },
+    consent: {
+      policyVersion: env.CONSENT_POLICY_VERSION,
+      termsVersion: env.CONSENT_TERMS_VERSION,
     },
   };
 }

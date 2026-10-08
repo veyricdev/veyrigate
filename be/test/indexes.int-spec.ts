@@ -17,7 +17,7 @@ const EXPECTED: Record<string, { key: Record<string, number>; unique?: boolean; 
     Client: [{ key: { clientId: 1 }, unique: true }],
     ClientCredential: [{ key: { clientId: 1, version: 1 } }],
     Resource: [{ key: { identifier: 1 }, unique: true }],
-    Consent: [{ key: { userId: 1, clientId: 1 }, unique: true }],
+    Consent: [{ key: { userId: 1, clientId: 1, resource: 1 }, unique: true }],
     RefreshToken: [
       { key: { tokenHash: 1 }, unique: true },
       { key: { userId: 1, clientId: 1 } },

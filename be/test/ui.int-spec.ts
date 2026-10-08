@@ -110,7 +110,9 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
       headers: cookie ? { cookie } : {},
     });
     const cookieHeader = response.headers['set-cookie'];
-    const sessionCookie = (Array.isArray(cookieHeader) ? cookieHeader[0] : cookieHeader)?.split(';')[0];
+    const sessionCookie = (Array.isArray(cookieHeader) ? cookieHeader[0] : cookieHeader)?.split(
+      ';',
+    )[0];
     const csrf = response.body.match(/name="_csrf" value="([^"]+)"/)?.[1];
     return { response, cookie: sessionCookie ?? cookie!, csrf: csrf! };
   };
@@ -290,32 +292,35 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
   it.each([
     ['/login', { email: 'user@example.com', password: 'correct password', returnTo: '/' }, 302],
     ['/register', { email: 'new@example.com', password: 'correct password' }, 201],
-  ] as const)('submits the %s form after the browser clears a stale session cookie', async (url, payload, status) => {
-    const page = await app.inject({
-      method: 'GET',
-      url,
-      headers: { cookie: 'idp_session=stale-session' },
-    });
-    const setCookies = Array.isArray(page.headers['set-cookie'])
-      ? page.headers['set-cookie']
-      : [page.headers['set-cookie']];
-    const browserCookies = setCookies
-      .filter((value) => value && !value.includes('Max-Age=0'))
-      .map((value) => value!.split(';')[0])
-      .join('; ');
-    const csrf = page.body.match(/name="_csrf" value="([^"]+)"/)?.[1];
+  ] as const)(
+    'submits the %s form after the browser clears a stale session cookie',
+    async (url, payload, status) => {
+      const page = await app.inject({
+        method: 'GET',
+        url,
+        headers: { cookie: 'idp_session=stale-session' },
+      });
+      const setCookies = Array.isArray(page.headers['set-cookie'])
+        ? page.headers['set-cookie']
+        : [page.headers['set-cookie']];
+      const browserCookies = setCookies
+        .filter((value) => value && !value.includes('Max-Age=0'))
+        .map((value) => value!.split(';')[0])
+        .join('; ');
+      const csrf = page.body.match(/name="_csrf" value="([^"]+)"/)?.[1];
 
-    const response = await app.inject({
-      method: 'POST',
-      url,
-      headers: { cookie: browserCookies },
-      payload: { _csrf: csrf, ...payload },
-    });
+      const response = await app.inject({
+        method: 'POST',
+        url,
+        headers: { cookie: browserCookies },
+        payload: { _csrf: csrf, ...payload },
+      });
 
-    expect(page.statusCode).toBe(200);
-    expect(browserCookies).not.toContain('idp_session=');
-    expect(response.statusCode).toBe(status);
-  });
+      expect(page.statusCode).toBe(200);
+      expect(browserCookies).not.toContain('idp_session=');
+      expect(response.statusCode).toBe(status);
+    },
+  );
 
   it.each(['/register', '/login', '/forgot', '/verify-email', '/reset', '/logout'])(
     'rejects POST %s without CSRF before invoking the action',
@@ -364,7 +369,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
     expect(auth.resetPassword).not.toHaveBeenCalled();
   });
 
-  it.each(['/forgot', '/verify-email?token=x', '/reset?token=x', '/consent', '/logout'])(
+  it.each(['/forgot', '/verify-email?token=x', '/reset?token=x', '/logout'])(
     'leaves GET %s outside guest-route session classification',
     async (url) => {
       const response = await app.inject({
@@ -381,16 +386,19 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
     },
   );
 
-  it.each(['https://evil.example', '//evil.example', '/\\evil.example', '/%0d%0a', 'javascript:alert(1)'])(
-    'drops unsafe returnTo %s',
-    async (returnTo) => {
-      const response = await app.inject({
-        method: 'GET',
-        url: `/login?returnTo=${encodeURIComponent(returnTo)}`,
-      });
-      expect(response.body).toContain('name="returnTo" value="/"');
-    },
-  );
+  it.each([
+    'https://evil.example',
+    '//evil.example',
+    '/\\evil.example',
+    '/%0d%0a',
+    'javascript:alert(1)',
+  ])('drops unsafe returnTo %s', async (returnTo) => {
+    const response = await app.inject({
+      method: 'GET',
+      url: `/login?returnTo=${encodeURIComponent(returnTo)}`,
+    });
+    expect(response.body).toContain('name="returnTo" value="/"');
+  });
 
   it('rotates the session cookie after login and redirects only internally', async () => {
     const page = await form('/login?returnTo=%2Faccount');
@@ -399,9 +407,9 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
       url: '/login',
       headers: { cookie: `${page.cookie}; idp_session=old-session` },
       payload: {
-        _csrf: new CsrfService({ getOrThrow: () => ({ csrfSecret: 'test-csrf-secret' }) } as never).token(
-          'old-session',
-        ),
+        _csrf: new CsrfService({
+          getOrThrow: () => ({ csrfSecret: 'test-csrf-secret' }),
+        } as never).token('old-session'),
         email: 'USER@example.com',
         password: 'correct password',
         returnTo: '/account',
@@ -409,7 +417,9 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
     });
     expect(response.statusCode).toBe(302);
     expect(response.headers.location).toBe('/account');
-    expect(response.headers['set-cookie']).toEqual(expect.stringContaining('idp_session=fresh-session'));
+    expect(response.headers['set-cookie']).toEqual(
+      expect.stringContaining('idp_session=fresh-session'),
+    );
     expect(auth.login).toHaveBeenCalledWith(
       'user@example.com',
       'correct password',
@@ -418,7 +428,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
   });
 
   it('authenticated GET logout renders confirmation without changing session state', async () => {
-    let live = true;
+    const live = true;
     const page = await form('/logout', 'idp_session=session-a');
 
     expect(page.response.statusCode).toBe(200);
@@ -463,8 +473,8 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
   it('cross-session CSRF replay fails closed without changing either session', async () => {
     const pageA = await form('/logout', 'idp_session=session-a');
     jest.clearAllMocks();
-    let sessionA = true;
-    let sessionB = true;
+    const sessionA = true;
+    const sessionB = true;
 
     const response = await app.inject({
       method: 'POST',

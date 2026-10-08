@@ -54,6 +54,12 @@ export const envSchema = z
 
     RATE_LIMIT_WINDOW: positiveInt,
     RATE_LIMIT_MAX: positiveInt,
+
+    // Current consent policy/terms versions (B4.2). A stored consent only "covers" a request when
+    // these match the versions recorded on the grant, so bumping a version forces re-consent.
+    // Non-empty so an empty env can never auto-approve by matching an empty stored version.
+    CONSENT_POLICY_VERSION: z.string().min(1).default('1'),
+    CONSENT_TERMS_VERSION: z.string().min(1).default('1'),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV === 'production' && !env.SESSION_COOKIE_SECURE) {

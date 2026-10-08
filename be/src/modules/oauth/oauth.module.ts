@@ -6,7 +6,9 @@ import { AuthorizeController } from './authorize/authorize.controller';
 import { AuthorizeRequestContextService } from './authorize/authorize-request-context.service';
 import { AuthorizeService } from './authorize/authorize.service';
 import { AuthorizationCodeService } from './code/authorization-code.service';
+import { ConsentService } from './consent/consent.service';
 import { HtmlExceptionFilter } from '../ui/html-exception.filter';
+import { CsrfGuard, CsrfService } from '../ui/csrf.service';
 
 /**
  * OAuth core (B4). B4.1: `/authorize` + AuthorizeRequestContext. B4.3: AuthorizationCode store
@@ -23,8 +25,11 @@ import { HtmlExceptionFilter } from '../ui/html-exception.filter';
     AuthorizeService,
     AuthorizeRequestContextService,
     AuthorizationCodeService,
+    ConsentService,
+    CsrfService,
+    CsrfGuard,
     HtmlExceptionFilter,
   ],
-  exports: [AuthorizeRequestContextService, AuthorizationCodeService],
+  exports: [AuthorizeRequestContextService, AuthorizationCodeService, ConsentService],
 })
 export class OauthModule {}

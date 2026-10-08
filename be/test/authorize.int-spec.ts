@@ -7,7 +7,7 @@ import cookie from '@fastify/cookie';
 import view from '@fastify/view';
 import { Eta } from 'eta';
 import IORedis from 'ioredis';
-import mongoose, { type Connection, type Model } from 'mongoose';
+import mongoose, { Types, type Connection, type Model } from 'mongoose';
 import { join } from 'node:path';
 import { MODELS } from '../src/database/mongo/models';
 import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
@@ -15,6 +15,7 @@ import { RedisService } from '../src/database/redis/redis.service';
 import { SessionService } from '../src/modules/sessions/session.service';
 import { SessionCookie, SESSION_COOKIE } from '../src/modules/sessions/session.cookie';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
+import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { AuthorizeController } from '../src/modules/oauth/authorize/authorize.controller';
 import { ClientService, type Client } from '../src/modules/clients/client.service';
 import { ResourceService, type Resource } from '../src/modules/resources/resource.service';
@@ -31,6 +32,8 @@ import {
   type AuthorizeParams,
   type SessionView,
 } from '../src/modules/oauth/authorize/authorize.service';
+import { AuthorizationCodeService } from '../src/modules/oauth/code/authorization-code.service';
+import { ConsentService, type Consent } from '../src/modules/oauth/consent/consent.service';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -41,7 +44,10 @@ const RUN = `az${Date.now()}`;
 const ISSUER = 'http://localhost:4000';
 
 function config(): ConfigService {
-  const base: Record<string, unknown> = { app: { nodeEnv: 'production', issuer: ISSUER } };
+  const base: Record<string, unknown> = {
+    app: { nodeEnv: 'production', issuer: ISSUER },
+    consent: { policyVersion: '1', termsVersion: '1' },
+  };
   return { getOrThrow: (ns: string) => base[ns] } as unknown as ConfigService;
 }
 
@@ -72,10 +78,15 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
   let resources: ResourceService;
   let audit: AuditService;
   let contexts: AuthorizeRequestContextService;
+  let consents: ConsentService;
+  let codes: AuthorizationCodeService;
   let ctxClock: number;
   let service: AuthorizeService;
 
-  const signedIn: SessionView = { userId: `${RUN}-user`, authTime: Date.now() };
+  const signedIn: SessionView = {
+    userId: new Types.ObjectId().toHexString(),
+    authTime: Date.now(),
+  };
 
   beforeAll(async () => {
     connection = await mongoose.createConnection(MONGO_URI, { autoIndex: false }).asPromise();
@@ -93,7 +104,10 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
     audit = new AuditService(auditModel);
     ctxClock = Date.now();
     contexts = new AuthorizeRequestContextService(rs, () => ctxClock);
-    service = new AuthorizeService(clients, resources, contexts, audit, config());
+    const consentModel = connection.model<Consent>('Consent');
+    consents = new ConsentService(consentModel, config());
+    codes = new AuthorizationCodeService(rs);
+    service = new AuthorizeService(clients, resources, contexts, audit, consents, codes, config());
 
     await clients.create({
       clientId: `${RUN}-client`,
@@ -121,9 +135,9 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
 
   describe('open-redirect boundary (INV-3)', () => {
     it('throws AuthorizeErrorPage (no redirect) for an unknown client_id', async () => {
-      await expect(
-        service.handle(params({ client_id: 'nope' }), signedIn),
-      ).rejects.toBeInstanceOf(AuthorizeErrorPage);
+      await expect(service.handle(params({ client_id: 'nope' }), signedIn)).rejects.toBeInstanceOf(
+        AuthorizeErrorPage,
+      );
     });
 
     it('throws AuthorizeErrorPage (no redirect) for a redirect_uri not registered', async () => {
@@ -171,17 +185,17 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
     });
 
     it('rejects a malformed max_age', async () => {
-      await expect(
-        service.handle(params({ max_age: '-5' }), signedIn),
-      ).rejects.toMatchObject({ error: 'invalid_request' });
+      await expect(service.handle(params({ max_age: '-5' }), signedIn)).rejects.toMatchObject({
+        error: 'invalid_request',
+      });
     });
   });
 
   describe('prompt=none', () => {
     it('returns login_required (OAuth error) when not signed in', async () => {
-      await expect(
-        service.handle(params({ prompt: 'none' }), null),
-      ).rejects.toMatchObject({ error: 'login_required' });
+      await expect(service.handle(params({ prompt: 'none' }), null)).rejects.toMatchObject({
+        error: 'login_required',
+      });
     });
 
     it('is rejected when combined with other prompt values', async () => {
@@ -202,13 +216,16 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
       expect(ctx!.redirectUri).toBe('https://app.example.com/callback');
     });
 
-    it('signed in + valid => ready; context echoes state/nonce; request_id != state (C8)', async () => {
-      const p = params({ state: 'the-rp-state', nonce: 'the-rp-nonce', resource: 'https://api.example.com/' });
+    it('signed in + valid, no consent => consent_required; context echoes state/nonce; request_id != state (C8)', async () => {
+      const p = params({
+        state: 'the-rp-state',
+        nonce: 'the-rp-nonce',
+        resource: 'https://api.example.com/',
+      });
       const outcome = await service.handle(p, signedIn);
-      expect(outcome.kind).toBe('ready');
-      if (outcome.kind !== 'ready') throw new Error('unreachable');
+      expect(outcome.kind).toBe('consent_required');
+      if (outcome.kind !== 'consent_required') throw new Error('unreachable');
       expect(outcome.requestId).not.toBe(p.state);
-      expect(outcome.userId).toBe(signedIn.userId);
       const ctx = await contexts.consume(outcome.requestId);
       expect(ctx).not.toBeNull();
       expect(ctx!.originalState).toBe('the-rp-state');
@@ -217,8 +234,11 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
     });
 
     it('resolves resource via identifier->resourceId, never the URI directly', async () => {
-      const outcome = await service.handle(params({ resource: 'https://api.example.com/' }), signedIn);
-      if (outcome.kind !== 'ready') throw new Error('expected ready');
+      const outcome = await service.handle(
+        params({ resource: 'https://api.example.com/' }),
+        signedIn,
+      );
+      if (outcome.kind !== 'consent_required') throw new Error('expected consent_required');
       const ctx = await contexts.consume(outcome.requestId);
       expect(ctx!.resource).toBe('https://api.example.com/');
     });
@@ -255,10 +275,7 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
         codeChallenge: VALID_CHALLENGE,
         scope: 'openid',
       });
-      const [a, b] = await Promise.all([
-        contexts.consume(requestId),
-        contexts.consume(requestId),
-      ]);
+      const [a, b] = await Promise.all([contexts.consume(requestId), contexts.consume(requestId)]);
       expect([a, b].filter((x) => x !== null)).toHaveLength(1);
     });
 
@@ -278,7 +295,7 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
 
     it('request_id is opaque and unrelated to the RP state', async () => {
       const outcome = await service.handle(params({ state: 'rp-controlled-state' }), signedIn);
-      if (outcome.kind !== 'ready') throw new Error('expected ready');
+      if (outcome.kind !== 'consent_required') throw new Error('expected consent_required');
       expect(outcome.requestId).not.toContain('rp-controlled-state');
       await contexts.consume(outcome.requestId);
     });
@@ -290,6 +307,8 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
   let httpApp: NestFastifyApplication;
   let httpRedis: IORedis;
   let sessionSvc: SessionService;
+  let consentSvc: ConsentService;
+  let codeSvc: AuthorizationCodeService;
   let httpClientModel: Model<Client>;
 
   const cfg = {
@@ -297,6 +316,8 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
       if (ns === 'app') return { nodeEnv: 'production', issuer: ISSUER };
       if (ns === 'session') return { cookieSecure: false };
       if (ns === 'token') return { sessionIdleTtl: 3600, sessionAbsoluteTtl: 86400 };
+      if (ns === 'security') return { csrfSecret: 'test-csrf-secret' };
+      if (ns === 'consent') return { policyVersion: '1', termsVersion: '1' };
       throw new Error(`Unexpected config namespace: ${ns}`);
     },
   } as unknown as ConfigService;
@@ -316,6 +337,10 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
       providers: [
         AuthorizeService,
         AuthorizeRequestContextService,
+        AuthorizationCodeService,
+        ConsentService,
+        CsrfService,
+        CsrfGuard,
         ClientService,
         ResourceService,
         SessionService,
@@ -341,6 +366,8 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
     await httpApp.getHttpAdapter().getInstance().ready();
 
     sessionSvc = moduleRef.get(SessionService);
+    consentSvc = moduleRef.get(ConsentService);
+    codeSvc = moduleRef.get(AuthorizationCodeService);
 
     httpClientModel = httpApp.get<Model<Client>>(getModelToken('Client'));
     const cs = new ClientService(httpClientModel, cfg);
@@ -378,21 +405,23 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
     expect(returnTo).toMatch(/^\/authorize\?request_id=/);
   });
 
-  it('login then resume via request_id => 200 ready page (context not lost)', async () => {
+  it('login then resume via request_id => 200 consent screen (context not lost)', async () => {
     const first = await httpApp.inject({ method: 'GET', url: fullQuery() });
     const returnTo = decodeURIComponent(
       (first.headers['location'] as string).replace('/login?returnTo=', ''),
     );
     const requestId = new URLSearchParams(returnTo.split('?')[1]).get('request_id')!;
 
-    const { id } = await sessionSvc.create(`${RUN}-http-user`, 'tenant-A');
+    const { id } = await sessionSvc.create(`${new Types.ObjectId().toHexString()}`, 'tenant-A');
     const resumed = await httpApp.inject({
       method: 'GET',
       url: `/authorize?request_id=${encodeURIComponent(requestId)}`,
       cookies: { [SESSION_COOKIE]: id },
     });
     expect(resumed.statusCode).toBe(200);
-    expect(resumed.body).toContain('Authorization request accepted');
+    expect(resumed.body).toContain('Authorize access');
+    expect(resumed.body).toMatch(/name="_csrf" value="[^"]+"/);
+    expect(resumed.body).toContain('openid');
     await sessionSvc.revoke(id);
   });
 
@@ -495,4 +524,236 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
       expect(location).toContain(`iss=${encodeURIComponent(ISSUER)}`);
     },
   );
+  // --- B4.2 consent flow ---------------------------------------------------------------------
+
+  // Sign in as a fresh ObjectId-backed user and fetch the consent screen for a fresh /authorize.
+  // Returns the session cookie id, the parsed _csrf + request_id, and the raw response.
+  async function openConsent(extra = '') {
+    const userId = new Types.ObjectId().toHexString();
+    const { id } = await sessionSvc.create(userId, 'tenant-A');
+    const res = await httpApp.inject({
+      method: 'GET',
+      url: fullQuery(extra),
+      cookies: { [SESSION_COOKIE]: id },
+    });
+    const csrf = res.body.match(/name="_csrf" value="([^"]+)"/)?.[1] as string;
+    const requestId = res.body.match(/name="request_id" value="([^"]+)"/)?.[1] as string;
+    return { userId, sessionId: id, res, csrf, requestId };
+  }
+
+  it('signed in + no consent => 200 consent screen listing requested scopes, no code issued', async () => {
+    const { sessionId, res, csrf, requestId } = await openConsent();
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['location']).toBeUndefined();
+    expect(csrf).toBeTruthy();
+    expect(requestId).toBeTruthy();
+    expect(res.body).toContain('openid');
+    expect(res.body).toContain('profile');
+    await sessionSvc.revoke(sessionId);
+  });
+
+  it('approve => 302 to redirect_uri with code + state echo + iss; code consumable with bound client/uri', async () => {
+    const { userId, sessionId, csrf, requestId } = await openConsent();
+    const post = await httpApp.inject({
+      method: 'POST',
+      url: '/authorize/consent',
+      cookies: { [SESSION_COOKIE]: sessionId },
+      payload: { _csrf: csrf, request_id: requestId, approve: 'true' },
+    });
+    expect(post.statusCode).toBe(302);
+    const location = post.headers['location'] as string;
+    expect(location).toContain('https://app.example.com/callback?');
+    const url = new URL(location);
+    expect(url.searchParams.get('state')).toBe('rp-state');
+    expect(url.searchParams.get('iss')).toBe(ISSUER);
+    const code = url.searchParams.get('code')!;
+    expect(code).toBeTruthy();
+
+    // The code is bound to the stored client_id/redirect_uri and consumable exactly once.
+    const data = await codeSvc.consume(code, `${RUN}-http`, 'https://app.example.com/callback');
+    expect(data).not.toBeNull();
+    expect(data!.userId).toBe(userId);
+    expect(data!.scope).toBe('openid profile');
+    expect(await codeSvc.consume(code, `${RUN}-http`, 'https://app.example.com/callback')).toBeNull();
+
+    // Consent was persisted for the owner.
+    const consent = await consentSvc.find(userId, `${RUN}-http`, undefined);
+    expect(consent).not.toBeNull();
+    await sessionSvc.revoke(sessionId);
+  });
+
+  it('deny => 302 with error=access_denied + state + iss, NO code, NO consent record', async () => {
+    const { userId, sessionId, csrf, requestId } = await openConsent();
+    const post = await httpApp.inject({
+      method: 'POST',
+      url: '/authorize/consent',
+      cookies: { [SESSION_COOKIE]: sessionId },
+      payload: { _csrf: csrf, request_id: requestId, approve: 'false' },
+    });
+    expect(post.statusCode).toBe(302);
+    const url = new URL(post.headers['location'] as string);
+    expect(url.searchParams.get('error')).toBe('access_denied');
+    expect(url.searchParams.get('state')).toBe('rp-state');
+    expect(url.searchParams.get('iss')).toBe(ISSUER);
+    expect(url.searchParams.get('code')).toBeNull();
+    expect(await consentSvc.find(userId, `${RUN}-http`, undefined)).toBeNull();
+    await sessionSvc.revoke(sessionId);
+  });
+
+  it('already-covered consent => GET /authorize skips the screen and 302s a code immediately', async () => {
+    const userId = new Types.ObjectId().toHexString();
+    await consentSvc.grant(userId, `${RUN}-http`, undefined, ['openid', 'profile'], consentSvc.currentVersions(), ['openid', 'profile']);
+    const { id } = await sessionSvc.create(userId, 'tenant-A');
+    const res = await httpApp.inject({ method: 'GET', url: fullQuery(), cookies: { [SESSION_COOKIE]: id } });
+    expect(res.statusCode).toBe(302);
+    const url = new URL(res.headers['location'] as string);
+    expect(url.searchParams.get('code')).toBeTruthy();
+    expect(url.searchParams.get('state')).toBe('rp-state');
+    expect(url.searchParams.get('iss')).toBe(ISSUER);
+    await sessionSvc.revoke(id);
+  });
+
+  it('prompt=consent still shows the screen even when consent already covers the request', async () => {
+    const userId = new Types.ObjectId().toHexString();
+    await consentSvc.grant(userId, `${RUN}-http`, undefined, ['openid', 'profile'], consentSvc.currentVersions(), ['openid', 'profile']);
+    const { id } = await sessionSvc.create(userId, 'tenant-A');
+    const res = await httpApp.inject({ method: 'GET', url: fullQuery('&prompt=consent'), cookies: { [SESSION_COOKIE]: id } });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain('Authorize access');
+    await sessionSvc.revoke(id);
+  });
+
+  it('prompt=none + no consent => 302 error=consent_required (fail-closed, no UI)', async () => {
+    const userId = new Types.ObjectId().toHexString();
+    const { id } = await sessionSvc.create(userId, 'tenant-A');
+    const res = await httpApp.inject({ method: 'GET', url: fullQuery('&prompt=none'), cookies: { [SESSION_COOKIE]: id } });
+    expect(res.statusCode).toBe(302);
+    const url = new URL(res.headers['location'] as string);
+    expect(url.searchParams.get('error')).toBe('consent_required');
+    expect(url.searchParams.get('state')).toBe('rp-state');
+    expect(url.searchParams.get('iss')).toBe(ISSUER);
+    expect(res.body).not.toContain('Authorize access');
+    await sessionSvc.revoke(id);
+  });
+
+  it('prompt=none + already covered => 302 a code (success case, OIDC Core, no error)', async () => {
+    const userId = new Types.ObjectId().toHexString();
+    await consentSvc.grant(userId, `${RUN}-http`, undefined, ['openid', 'profile'], consentSvc.currentVersions(), ['openid', 'profile']);
+    const { id } = await sessionSvc.create(userId, 'tenant-A');
+    const res = await httpApp.inject({ method: 'GET', url: fullQuery('&prompt=none'), cookies: { [SESSION_COOKIE]: id } });
+    expect(res.statusCode).toBe(302);
+    const url = new URL(res.headers['location'] as string);
+    expect(url.searchParams.get('code')).toBeTruthy();
+    expect(url.searchParams.get('error')).toBeNull();
+    await sessionSvc.revoke(id);
+  });
+
+  it('POST consent without a valid _csrf => 403 (CsrfGuard), no code', async () => {
+    const { sessionId, requestId } = await openConsent();
+    const post = await httpApp.inject({
+      method: 'POST',
+      url: '/authorize/consent',
+      cookies: { [SESSION_COOKIE]: sessionId },
+      payload: { _csrf: 'forged', request_id: requestId, approve: 'true' },
+    });
+    expect(post.statusCode).toBe(403);
+    await sessionSvc.revoke(sessionId);
+  });
+
+  it('replay: a second approve with the same request_id => 400 expired page, no second code', async () => {
+    const { sessionId, csrf, requestId } = await openConsent();
+    const first = await httpApp.inject({
+      method: 'POST',
+      url: '/authorize/consent',
+      cookies: { [SESSION_COOKIE]: sessionId },
+      payload: { _csrf: csrf, request_id: requestId, approve: 'true' },
+    });
+    expect(first.statusCode).toBe(302);
+    const second = await httpApp.inject({
+      method: 'POST',
+      url: '/authorize/consent',
+      cookies: { [SESSION_COOKIE]: sessionId },
+      payload: { _csrf: csrf, request_id: requestId, approve: 'true' },
+    });
+    expect(second.statusCode).toBe(400);
+    expect(second.headers['location']).toBeUndefined();
+    expect(second.body).toContain('expired');
+    await sessionSvc.revoke(sessionId);
+  });
+
+  it('POST consent after the session is gone => redirect to /login, never a code', async () => {
+    const { sessionId, csrf, requestId } = await openConsent();
+    await sessionSvc.revoke(sessionId); // session expires between render and submit
+    const post = await httpApp.inject({
+      method: 'POST',
+      url: '/authorize/consent',
+      cookies: { [SESSION_COOKIE]: sessionId },
+      payload: { _csrf: csrf, request_id: requestId, approve: 'true' },
+    });
+    // CsrfGuard identity falls back to the anon cookie; with neither session nor matching anon
+    // token it is a forged submission => 403 (fail-closed). Either way: no code is ever issued.
+    expect([302, 403]).toContain(post.statusCode);
+    if (post.statusCode === 302) {
+      expect(post.headers['location']).toBe('/login');
+    }
+  });
+
+  // Negative actor / cross-session: user A opens the consent screen (gets A's _csrf + request_id);
+  // user B (a different live session) tries to submit A's request_id with A's _csrf. CSRF tokens
+  // bind to the session identity, so A's token does not match B's session => 403, no code issued,
+  // and no consent is written for either user. Proves the consent decision cannot be driven across
+  // sessions by replaying another user's form fields.
+  it('cross-session: user B submitting user A s request_id + A s _csrf => 403, no code, no consent', async () => {
+    const { userId: userA, sessionId: sessA, csrf: csrfA, requestId } = await openConsent();
+    const userB = new Types.ObjectId().toHexString();
+    const { id: sessB } = await sessionSvc.create(userB, 'tenant-A');
+
+    const post = await httpApp.inject({
+      method: 'POST',
+      url: '/authorize/consent',
+      cookies: { [SESSION_COOKIE]: sessB }, // B's session...
+      payload: { _csrf: csrfA, request_id: requestId, approve: 'true' }, // ...with A's token
+    });
+    expect(post.statusCode).toBe(403); // CsrfGuard: token bound to A's identity, not B's
+    expect(post.headers['location']).toBeUndefined();
+    // No consent was written for either user, and A's context is still intact (not consumed by B).
+    expect(await consentSvc.find(userA, `${RUN}-http`, undefined)).toBeNull();
+    expect(await consentSvc.find(userB, `${RUN}-http`, undefined)).toBeNull();
+    await sessionSvc.revoke(sessA);
+    await sessionSvc.revoke(sessB);
+  });
+
+  // Negative actor variant: user B uses B's *own* valid _csrf (minted for B's session) to submit
+  // A's request_id. CSRF passes (token matches B's session) but the approve path re-derives the
+  // owner from B's session and consumes A's context; the issued consent/code must bind to B, never
+  // to A. Either outcome is acceptable as long as nothing is ever attributed to user A.
+  it('cross-session: user B with B s own _csrf submitting A s request_id never writes consent for A', async () => {
+    const { userId: userA, sessionId: sessA, requestId } = await openConsent();
+    const userB = new Types.ObjectId().toHexString();
+    const { id: sessB } = await sessionSvc.create(userB, 'tenant-A');
+    // Mint a _csrf valid for B's session by opening B's own consent screen.
+    const bScreen = await httpApp.inject({
+      method: 'GET',
+      url: fullQuery(),
+      cookies: { [SESSION_COOKIE]: sessB },
+    });
+    const csrfB = bScreen.body.match(/name="_csrf" value="([^"]+)"/)?.[1] as string;
+    expect(csrfB).toBeTruthy();
+
+    const post = await httpApp.inject({
+      method: 'POST',
+      url: '/authorize/consent',
+      cookies: { [SESSION_COOKIE]: sessB },
+      payload: { _csrf: csrfB, request_id: requestId, approve: 'true' },
+    });
+    // Whatever the outcome, consent must NEVER be attributed to user A.
+    expect(await consentSvc.find(userA, `${RUN}-http`, undefined)).toBeNull();
+    // If a code/consent was issued, it must belong to B (the authenticated session), not A.
+    if (post.statusCode === 302 && (post.headers['location'] as string)?.includes('code=')) {
+      const consentB = await consentSvc.find(userB, `${RUN}-http`, undefined);
+      expect(consentB).not.toBeNull();
+    }
+    await sessionSvc.revoke(sessA);
+    await sessionSvc.revoke(sessB);
+  });
 });

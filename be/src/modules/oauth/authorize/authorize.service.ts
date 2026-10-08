@@ -8,7 +8,12 @@ import { isRegisteredRedirectUri } from '../../clients/redirect-uri.validator';
 import { ResourceService } from '../../resources/resource.service';
 import { InvalidResourceError } from '../../resources/resource.validator';
 import { AuthorizeErrorPage, AuthorizeRedirectError } from './authorize.errors';
-import { AuthorizeRequestContextService } from './authorize-request-context.service';
+import {
+  AuthorizeRequestContextService,
+  type AuthorizeRequestContext,
+} from './authorize-request-context.service';
+import { AuthorizationCodeService } from '../code/authorization-code.service';
+import { ConsentService } from '../consent/consent.service';
 
 /** Raw `/authorize` query parameters (already string-typed by the HTTP layer). */
 export interface AuthorizeParams {
@@ -35,18 +40,27 @@ export interface SessionView {
 }
 
 /**
- * Outcome of `/authorize` for B4.1. This task stops at the point where a code would be issued
- * (B4.3/B4.4) — it never issues a code or token. The controller turns each outcome into an HTTP
- * response.
+ * Outcome of `/authorize` (B4.1 + B4.2). The controller turns each outcome into an HTTP response.
+ * `code_issued` is the walking-skeleton terminal: B4.2 mints an authorization code and the
+ * controller 302-redirects it to the RP (`code`/`state`/`iss`); `/token` to exchange it is B4.4.
  */
 export type AuthorizeOutcome =
   /** Not signed in (and interaction allowed): send the user to the login page, resumable via requestId. */
   | { kind: 'login_required'; requestId: string }
   /**
-   * Signed in and request valid. Consent handling is B4.2; B4.1 stops here with a validated
-   * context ready for the code-issuance step (B4.3/B4.4).
+   * Signed in, valid, but consent is needed (missing coverage or `prompt=consent`). Render the
+   * consent screen; `requestId` resumes the stored context on the POST. `scopes`/`resource`/
+   * `clientId` are what the screen displays -- the redirect params are NEVER taken from the POST.
    */
-  | { kind: 'ready'; requestId: string; userId: string };
+  | {
+      kind: 'consent_required';
+      requestId: string;
+      clientId: string;
+      scopes: string[];
+      resource: string;
+    }
+  /** Consent already satisfied (or just granted): a code was issued, redirect it to the RP. */
+  | { kind: 'code_issued'; redirectUri: string; code: string; state?: string };
 
 /** PKCE S256 challenge: 43–128 chars of base64url (RFC 7636). */
 const CODE_CHALLENGE_RE = /^[A-Za-z0-9_-]{43,128}$/;
@@ -68,6 +82,8 @@ export class AuthorizeService {
     private readonly resources: ResourceService,
     private readonly contexts: AuthorizeRequestContextService,
     private readonly audit: AuditService,
+    private readonly consents: ConsentService,
+    private readonly codes: AuthorizationCodeService,
     config: ConfigService,
   ) {
     this.issuer = config.getOrThrow<AppConfig>('app').issuer;
@@ -173,12 +189,37 @@ export class AuthorizeService {
         return { kind: 'login_required', requestId };
       }
 
-      // Signed in. Consent handling is B4.2; `prompt=consent` / `consent_required` for `prompt=none`
-      // are decided there. B4.1 stops at a validated, ready context.
-      // TODO(B4.2): check Consent coverage here; `prompt=none` + missing consent => consent_required.
+      // Signed in + request valid (B4.2, spec section 9.4). Decide consent.
+      // The owner is `session.userId` (authenticated), never any client-supplied value.
+      const requestedScopes = scope.split(' ').filter(Boolean);
+      const versions = this.consents.currentVersions();
+      const existing = await this.consents.find(session.userId, client.clientId, resource);
+      const covered = this.consents.isCovered(existing, requestedScopes, versions);
+
+      if (covered && !prompt.has('consent')) {
+        // Consent already satisfied: issue a code now and redirect it to the RP. No screen, no
+        // round-trip context needed -- every redirect param comes from the validated request here.
+        const code = await this.issueCode(client, redirectUri, scope, resource, params, session);
+        await this.recordAuthorize(client, audit, session.userId, 'code_issued');
+        return { kind: 'code_issued', redirectUri, code, state: params.state };
+      }
+
+      // Consent needed (missing coverage or forced via prompt=consent).
+      if (prompt.has('none')) {
+        // Non-interactive but a consent screen would be required => OAuth error (fail-closed,
+        // never auto-approve, never render UI) -- symmetric with login_required.
+        throw new AuthorizeRedirectError('consent_required', 'User consent is required.');
+      }
+      // Persist the validated context so the POST /authorize/consent can resume it (single-use).
       const { requestId } = await this.createContext(client, redirectUri, scope, resource, params);
-      await this.recordAuthorize(client, audit, session.userId, 'ready');
-      return { kind: 'ready', requestId, userId: session.userId };
+      await this.recordAuthorize(client, audit, session.userId, 'consent_required');
+      return {
+        kind: 'consent_required',
+        requestId,
+        clientId: client.clientId,
+        scopes: requestedScopes,
+        resource: ConsentService.normalizeResource(resource),
+      };
     } catch (err) {
       if (err instanceof AuthorizeRedirectError) {
         err.redirectUri = redirectUri;
@@ -188,6 +229,117 @@ export class AuthorizeService {
     }
   }
 
+  /**
+   * Finalise a consent decision from POST /authorize/consent. Consume the single-use context by
+   * `requestId`, then build the redirect purely from the stored context -- the POST body (except
+   * `request_id`/`_csrf`) is never trusted for `redirect_uri`/`state`/`scope`/`resource`/`client_id`
+   * (anti-param-tampering, symmetric with resume). Returns null when the context is missing/expired/
+   * already consumed (replay) so the controller shows a first-party "expired" page (no redirect:
+   * `redirect_uri` is gone with the context).
+   *
+   * `approve=false` (deny) redirects `access_denied` and writes NO consent and NO code. `approve=true`
+   * records consent (owner = session.userId) and issues a code. The session is re-checked by the
+   * caller before this runs; `session` here is the live, authenticated owner.
+   */
+  async decideConsent(
+    requestId: string,
+    approve: boolean,
+    session: SessionView,
+    audit: { ip?: string; userAgent?: string; requestId?: string } = {},
+  ): Promise<{ redirectUri: string; code?: string; state?: string; denied?: boolean } | null> {
+    const ctx = await this.contexts.consume(requestId);
+    if (!ctx) return null;
+
+    if (!approve) {
+      await this.recordConsent(ctx.clientId, audit, session.userId, 'denied');
+      return { redirectUri: ctx.redirectUri, state: ctx.originalState, denied: true };
+    }
+
+    // The client could have changed between render and POST: re-resolve it and bound the granted
+    // scopes by its *current* scopes so a scope the client has since lost is never carried forward.
+    const client = await this.clients.findByClientId(ctx.clientId);
+    if (!client) {
+      // Client vanished mid-flow: fail closed with an OAuth error to the stored redirect_uri.
+      const err = new AuthorizeRedirectError('access_denied', 'Client is no longer available.');
+      err.redirectUri = ctx.redirectUri;
+      err.state = ctx.originalState;
+      throw err;
+    }
+    const requestedScopes = ctx.scope.split(' ').filter(Boolean);
+    const versions = this.consents.currentVersions();
+    await this.consents.grant(
+      session.userId,
+      client.clientId,
+      ctx.resource,
+      requestedScopes,
+      versions,
+      client.scopes,
+    );
+    const code = await this.issueCodeFromContext(ctx, session);
+    await this.recordConsent(client.clientId, audit, session.userId, 'granted');
+    return { redirectUri: ctx.redirectUri, code, state: ctx.originalState };
+  }
+
+  /** Mint an authorization code for a validated fresh request (covered path, no stored context). */
+  private async issueCode(
+    client: Client,
+    redirectUri: string,
+    scope: string,
+    resource: string | undefined,
+    params: AuthorizeParams,
+    session: SessionView,
+  ): Promise<string> {
+    const { code } = await this.codes.create({
+      clientId: client.clientId,
+      redirectUri,
+      codeChallenge: params.code_challenge!,
+      resource,
+      scope,
+      nonce: params.nonce,
+      userId: session.userId,
+      authTime: session.authTime,
+    });
+    return code;
+  }
+
+  /** Mint an authorization code from a consumed context (approve path). */
+  private async issueCodeFromContext(
+    ctx: AuthorizeRequestContext,
+    session: SessionView,
+  ): Promise<string> {
+    const { code } = await this.codes.create({
+      clientId: ctx.clientId,
+      redirectUri: ctx.redirectUri,
+      codeChallenge: ctx.codeChallenge,
+      resource: ctx.resource,
+      scope: ctx.scope,
+      nonce: ctx.nonce,
+      userId: session.userId,
+      authTime: session.authTime,
+    });
+    return code;
+  }
+
+  private async recordConsent(
+    clientId: string,
+    audit: { ip?: string; userAgent?: string; requestId?: string },
+    userId: string,
+    decision: 'granted' | 'denied',
+  ): Promise<void> {
+    await this.audit.record({
+      actorType: 'user',
+      actorId: userId,
+      action:
+        decision === 'granted'
+          ? AuditAction.OAUTH_CONSENT_GRANTED
+          : AuditAction.OAUTH_CONSENT_DENIED,
+      clientId,
+      ip: audit.ip,
+      userAgent: audit.userAgent,
+      requestId: audit.requestId,
+      result: 'success',
+    });
+  }
   private async createContext(
     client: Client,
     redirectUri: string,

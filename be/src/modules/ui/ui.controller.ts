@@ -16,6 +16,7 @@ import {
 import { IsEmail, IsOptional, IsString, Length } from 'class-validator';
 import { ConfigService } from '@nestjs/config';
 import { generateToken } from '../../common/crypto/crypto.util';
+import type { HttpReply, HttpRequest } from '../../common/http/http.types';
 import type { AppConfig, SessionConfig } from '../../config/configuration';
 import { AuthenticationService } from '../authentication/authentication.service';
 import { normalizeEmail } from '../identity/user.service';
@@ -47,18 +48,8 @@ class ResetDto extends TokenDto {
   @IsString() @Length(8, 128) password!: string;
 }
 
-interface UiRequest {
-  cookies?: Record<string, string>;
-  ip?: string;
-  headers: Record<string, string | string[] | undefined>;
-  id?: string;
-}
-interface UiReply {
-  view(template: string, data: Record<string, unknown>): unknown;
-  redirect(url: string, status?: number): unknown;
-  setCookie(name: string, value: string, options: object): unknown;
-  clearCookie(name: string, options: object): unknown;
-}
+type UiRequest = HttpRequest;
+type UiReply = HttpReply;
 
 const ANON_COOKIE = 'idp_csrf';
 
@@ -120,9 +111,6 @@ export class UiController {
     @Query('token') token = '',
   ) {
     return this.form(req, reply, 'reset.eta', { title: 'Choose a new password', token });
-  }
-  @Get('/consent') consent(@Req() req: UiRequest, @Res() reply: UiReply) {
-    return this.form(req, reply, 'consent.eta', { title: 'Consent' });
   }
   @Get('/logout') logoutForm(@Req() req: UiRequest, @Res() reply: UiReply) {
     return this.form(req, reply, 'logout.eta', { title: 'Sign out' });

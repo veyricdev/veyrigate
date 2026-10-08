@@ -1,1 +1,12 @@
-<h1><%= it.title %></h1><p>The authorization consent flow will appear here when an application requests access.</p>
+﻿<h1><%= it.title %></h1>
+<p><strong><%= it.clientId %></strong> is requesting access to your account<% if (it.resource) { %> for <code><%= it.resource %></code><% } %>.</p>
+<p>The application is requesting the following scopes:</p>
+<ul>
+<% it.scopes.forEach(function (scope) { %><li><code><%= scope %></code></li><% }) %>
+</ul>
+<form method="post" action="/authorize/consent">
+<input type="hidden" name="_csrf" value="<%= it.csrf %>">
+<input type="hidden" name="request_id" value="<%= it.requestId %>">
+<button type="submit" name="approve" value="true">Allow</button>
+<button type="submit" name="approve" value="false">Deny</button>
+</form>
