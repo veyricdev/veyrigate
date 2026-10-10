@@ -45,3 +45,7 @@
 - Kết quả: **PASS** — chạy thật (Git Bash, containers vg-test-mongo@27117 rs0 / vg-test-redis@6479): typecheck sạch, lint sạch, `pnpm test` **94/94**, `pnpm test:int` **311/311** (18 suites, +7 so 304). Tổng **405**. Không FAIL. Mọi acceptance + security invariant/risk-matrix có ≥1 test; fail-closed (DB fault→500, không nuốt thành active) và negative actor (IDOR/confused-deputy) đã phủ.
 - test-report.md: `runs/15-B4.6/test-report.md` (bảng acceptance→test→PASS, lệnh + output thực tế).
 - Bàn giao: **orchestrator** — đóng run 15 (cổng tester PASS). Code chưa commit.
+
+## [2026-10-10] orchestrator
+- Đã làm: commit code B4.6 `d513348`; viết `summary.md`; cập nhật `STATUS.md` (đóng run 15, thêm dòng Tiến độ).
+- Kết quả: DONE — run 15 đóng.

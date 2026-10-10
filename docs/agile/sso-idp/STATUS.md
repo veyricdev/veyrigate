@@ -2,12 +2,10 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `15-B4.6` — cổng: **tester PASS** → chờ orchestrator đóng. 405/405 test (unit 94 + int 311; tester +7 int lấp khe fold). Xem `runs/15-B4.6/test-report.md`.
-- **Run vừa đóng**: `14-B4.5` ✅ 5/5 task — 342/342 test (unit 80 + int 262). Xem `runs/14-B4.5/summary.md`.
-- **Senior run 15**: lượt 1 REJECT (liveness `/introspect`, thiếu test `at+jwt`/`verifyAccessToken`) → lượt 2 **PASS**; 🟡 còn mở → DEBT-040..042. Xem `runs/15-B4.6/review-senior.md`.
+- **Run hiện tại**: không có (15-B4.6 đã đóng, commit `d513348`).
+- **Run vừa đóng**: `15-B4.6` ✅ 4/4 task — 405/405 test (unit 94 + int 311). Xem `runs/15-B4.6/summary.md`.
 - **Vòng lặp (run 15)**: analyst=1, tech-lead=1 (PASS), dev=2 (DONE, DONE retry1), senior=2 (REJECT, PASS), tester=1 (PASS)
-- **Vòng lặp (run 14)**: analyst=1, tech-lead=1, dev=3, senior=3 (REJECT, REJECT, PASS), tester=1 (PASS)
-- **Việc tiếp theo**: **orchestrator** đóng run 15 (tester PASS). Sau đó B4.7 (logout; DEBT-034/037/038/040/041) → run consent-hardening (DEBT-026/027/028). Hoàn tất M3 cần thêm T2 (fe-sso-test) + X1.
+- **Việc tiếp theo**: **B4.7** (logout local/global + RP-initiated + front-channel; kéo DEBT-034/037/038/040/041) → run consent-hardening (DEBT-026/027/028). Hoàn tất M3 cần thêm T2 (fe-sso-test) + X1.
   Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`; full suite = `pnpm test` (94) + `pnpm test:int` (311) = **405**.
 
 ## Tiến độ
@@ -28,6 +26,7 @@
 | [12](runs/12-B4.2/summary.md) | M4 | B4.2 | ✅ 269/269 | `b89ca9e` |
 | [13](runs/13-B4.4/summary.md) | M3 | B4.4 | ✅ 310/310 | `c6a8026` |
 | [14](runs/14-B4.5/summary.md) | M4 | B4.5 | ✅ 342/342 | `b529c35` |
+| [15](runs/15-B4.6/summary.md) | M4 | B4.6 | ✅ 405/405 | `d513348` |
 
 ## Chặn / cần người quyết định
 
