@@ -75,3 +75,6 @@
 - INV-10/11/12/14 đều có ≥1 test đo được; /revoke RFC 7009 (enumeration/IDOR/idempotent/fail-closed) phủ đủ; fail-closed Redis/Mongo/audit/signer assert 500 + body không leak token/secret (sentinel `SECRET-detail` chỉ ở server log, sink được phép).
 - Lưu ý KHÔNG chặn: DEBT-035 (test tất định nhánh "rotate re-read TRƯỚC stamp → revoke-pass bắt hậu duệ" + /revoke bằng con active) hoãn B4.6 — INV-11 hiện đã có 1 random + 2 deterministic + QA concurrent /revoke, đủ cho acceptance B4.5.
 - Output đầy đủ: `runs/14-B4.5/test-report.md`. Cổng: **tester ✅ PASS** → orchestrator đóng run (code chưa commit).
+## [2026-10-10] orchestrator
+- Đã làm: commit code B4.5 `b529c35`; viết `summary.md`; cập nhật `STATUS.md` (đóng run 14, thêm dòng Tiến độ 13 + 14). Dọn file rác `=1`/`=110`/`=60` ở gốc repo.
+- Kết quả: DONE — run 14 đóng.
