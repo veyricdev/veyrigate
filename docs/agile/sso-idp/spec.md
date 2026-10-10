@@ -211,7 +211,7 @@ Client {
 - Resource server bắt buộc validate `iss`, `aud`, `exp`, và chữ ký trước khi tin bất kỳ claim nào khác.
 - Access token sống ngắn hạn (khuyến nghị 15 phút).
 
-**Quyết định về revocation strategy** (chốt rõ ràng, không để mở): MVP dùng self-contained JWT access token, ngắn hạn. Logout hoặc revoke tác động ngay tới session và refresh-token family, **nhưng không đồng bộ vô hiệu hoá các access token đã phát hành trước đó** — độ trễ tối đa chấp nhận được bằng đúng thời gian sống của access token (15 phút). Resource server nào thực sự cần revoke tức thời thì gọi endpoint `/introspect` thay vì tự verify JWT.
+**Quyết định về revocation strategy** (chốt rõ ràng, không để mở): MVP dùng self-contained JWT access token, ngắn hạn. Logout hoặc revoke tác động ngay tới session và refresh-token family, **nhưng không đồng bộ vô hiệu hoá các access token đã phát hành trước đó** — độ trễ tối đa chấp nhận được bằng đúng thời gian sống của access token (15 phút). Giới hạn (OPEN-1, run 15): `/introspect` với access token CHỈ phản ánh chữ ký + `exp` + sự tồn tại hiện tại của client/user và `aud` còn được cấp — **không** phản ánh revoke refresh-family hay logout (vì access token không lưu DB, không có denylist `jti` ở MVP). Resource server cần tín hiệu "client/user đã bị gỡ" hoặc "token sắp hết hạn" thì gọi `/introspect`; còn nhu cầu revoke tức thời theo session/logout sẽ do claim `sid` + đối chiếu session đảm nhiệm (DEBT-037, B4.7).
 
 ## 9. Các luồng chính
 
@@ -412,7 +412,7 @@ Hiện tại access token dùng dạng bearer thông thường (`Authorization: 
 - **Resource**: `resourceId`, `identifier` (absolute URI, unique), `scopes[]`
 - **AuthorizationCode** (Redis, atomic consume+bind — mục 9.5): `clientId`, `redirectUri`, `codeChallenge`, `resource`, `scope`, `nonce`, `userId`, TTL 60s, single-use
 - **AuthorizeRequestContext** (Redis, TTL 5–10 phút, single-use): `clientId`, `redirectUri`, `codeChallenge`, `scope`, `resource`, `originalState`, `nonce`
-- **RefreshToken**: `tokenHash` (không lưu plaintext), `familyId`, `parentId`, `userId`, `clientId`, `scope[]`, `resource`, `issuedAt`, `expiresAt`, `revokedAt`, `replacedBy`, `reuseDetectedAt`, `deviceId`, `ip`, `userAgent`
+- **RefreshToken**: `tokenHash` (không lưu plaintext), `familyId`, `parentId`, `userId`, `clientId`, `scope[]`, `resource`, `issuedAt`, `expiresAt`, `revokedAt`, `replacedBy`, `reuseDetectedAt`, `familyRevokedAt` (đóng dấu bởi MỌI đường revoke family — reuse lẫn `/revoke` — trước khi revoke, để một `rotate` song song re-read thấy và tự revoke hậu duệ; INV-11 race close), `deviceId`, `ip`, `userAgent`
 - **PasswordResetToken / EmailVerificationToken**: `tokenHash`, `userId`, `expiresAt`, `usedAt`
 - **Consent**: `userId`, `clientId`, `grantedScopes[]`, `policyVersion`, `termsVersion`, `grantedAt`, `updatedAt`, `revokedAt`
 - **Tenant**: `id`, `name`

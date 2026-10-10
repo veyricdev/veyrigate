@@ -1,11 +1,18 @@
 import { Controller, HttpStatus, Logger, Post, Req, Res } from '@nestjs/common';
+import { FormParseError, assertFormContentType, parseForm } from '../../../common/http/form';
 import type { HttpRequest } from '../../../common/http/http.types';
 import { deriveS256Challenge } from '../../../common/crypto/pkce.util';
 import {
   ClientAuthenticationService,
   InvalidClientError,
 } from '../../clients/client-authentication.service';
-import type { TokenEndpointAuthMethod } from '../../clients/client.service';
+import {
+  ClientAuthRequestError,
+  basicAuthHeader,
+  resolveClientAuth,
+} from '../../clients/client-auth-request';
+import { applyCors, requestOrigin } from '../../clients/client-cors.helper';
+import { ClientCorsService } from '../../clients/client-cors.service';
 import { AuthorizationCodeService } from '../code/authorization-code.service';
 import { TokenError } from './token.errors';
 import { TokenService } from './token.service';
@@ -20,20 +27,6 @@ interface TokenReply {
 
 /** PKCE code_verifier charset/length (RFC 7636 ?4.1). */
 const CODE_VERIFIER_RE = /^[A-Za-z0-9\-._~]{43,128}$/;
-
-/** Collapse a possibly-array form value to a single string, or flag a repeated parameter. */
-function single(value: unknown): string | undefined | typeof DUPLICATE {
-  if (value === undefined || value === null) return undefined;
-  if (Array.isArray(value)) return DUPLICATE;
-  return String(value);
-}
-const DUPLICATE = Symbol('duplicate-param');
-
-interface ClientAuth {
-  clientId: string;
-  method: TokenEndpointAuthMethod;
-  secret?: string;
-}
 
 /**
  * `POST /token` grant `authorization_code` (B4.4, spec ?8/?9.3/?9.5).
@@ -53,6 +46,7 @@ export class TokenController {
     private readonly codes: AuthorizationCodeService,
     private readonly tokens: TokenService,
     private readonly refresh: RefreshTokenService,
+    private readonly cors: ClientCorsService,
   ) {}
 
   @Post('/token')
@@ -84,8 +78,7 @@ export class TokenController {
   }
 
   private async handle(req: HttpRequest, reply: TokenReply): Promise<unknown> {
-    this.assertFormContentType(req);
-    const body = this.parseForm(req);
+    const body = this.parseFormBody(req);
 
     // Only grants we actually support reach client auth; anything else is unsupported_grant_type
     // BEFORE touching credentials (B4.4 behaviour preserved for authorization_code).
@@ -96,6 +89,7 @@ export class TokenController {
 
     // Client authentication is shared by every grant, performed before any state change.
     const client = await this.authenticateClient(req, body);
+    await this.applyCors(req, reply, client.clientId);
 
     if (grantType === 'refresh_token') {
       return this.handleRefreshGrant(req, reply, body, client);
@@ -103,9 +97,29 @@ export class TokenController {
     return this.handleAuthorizationCodeGrant(req, reply, body, client);
   }
 
+  /**
+   * Dynamic CORS for `/token` and `/revoke` (DEBT-019, spec §9.7): a browser SPA (public client)
+   * calls `/token` directly, so the response echoes the Origin only when it is registered for the
+   * authenticated client. Applied AFTER client auth so the decision is bound to a real client.
+   */
+  private async applyCors(req: HttpRequest, reply: TokenReply, clientId: string): Promise<void> {
+    const origin = requestOrigin(req);
+    if (origin) {
+      applyCors(reply, origin, await this.cors.isOriginAllowedForClient(clientId, origin));
+    }
+  }
+
   /** Authenticate the client (RFC 6749 §2.3); InvalidClient => 401 invalid_client. */
   private async authenticateClient(req: HttpRequest, body: Map<string, string>) {
-    const auth = this.resolveClientAuth(req, body);
+    let auth;
+    try {
+      auth = resolveClientAuth(req, body);
+    } catch (e) {
+      if (e instanceof ClientAuthRequestError) {
+        throw new TokenError(e.code, e.status);
+      }
+      throw e;
+    }
     try {
       return await this.clientAuth.authenticate(auth);
     } catch (e) {
@@ -198,11 +212,11 @@ export class TokenController {
 
   /** `POST /revoke` body handler: parse + auth (shared with `/token`), then revoke the family. */
   private async handleRevoke(req: HttpRequest, reply: TokenReply): Promise<unknown> {
-    this.assertFormContentType(req);
-    const body = this.parseForm(req);
+    const body = this.parseFormBody(req);
 
     // Client auth is mandatory before any write (same path as /token).
     const client = await this.authenticateClient(req, body);
+    await this.applyCors(req, reply, client.clientId);
 
     // `token_type_hint` is accepted and ignored (RFC 7009 §2.1). A JWT access token cannot be
     // revoked before `exp` (spec §8), so a non-refresh value simply no-ops inside the service.
@@ -217,80 +231,16 @@ export class TokenController {
     return reply.status(HttpStatus.OK).send({});
   }
 
-  private assertFormContentType(req: HttpRequest): void {
-    const raw = req.headers['content-type'];
-    const contentType = Array.isArray(raw) ? raw[0] : raw;
-    const mediaType = contentType?.split(';')[0].trim().toLowerCase();
-    if (mediaType !== 'application/x-www-form-urlencoded') {
-      throw new TokenError('invalid_request');
-    }
-  }
-
-  /** Read the parsed form body; a repeated parameter (array value) => invalid_request. */
-  private parseForm(req: HttpRequest): Map<string, string> {
-    const source = (req.body ?? {}) as Record<string, unknown>;
-    const map = new Map<string, string>();
-    for (const key of Object.keys(source)) {
-      const value = single(source[key]);
-      if (value === DUPLICATE) {
+  /** Shared form parsing (`common/http/form`); a bad content-type / repeated param => invalid_request. */
+  private parseFormBody(req: HttpRequest): Map<string, string> {
+    try {
+      assertFormContentType(req);
+      return parseForm(req);
+    } catch (e) {
+      if (e instanceof FormParseError) {
         throw new TokenError('invalid_request');
       }
-      if (value !== undefined) {
-        map.set(key, value);
-      }
-    }
-    return map;
-  }
-
-  /**
-   * Decide the client authentication method (RFC 6749 ?2.3): Basic header => client_secret_basic;
-   * client_secret in body => client_secret_post; only client_id => none. Using more than one
-   * method is invalid_request; a client_id in the body that disagrees with Basic is invalid_client;
-   * a completely absent client_id is invalid_client.
-   */
-  private resolveClientAuth(req: HttpRequest, body: Map<string, string>): ClientAuth {
-    const basic = this.parseBasic(basicHeader(req));
-    const bodyClientId = body.get('client_id');
-    const bodySecret = body.get('client_secret');
-
-    if (basic && bodySecret !== undefined) {
-      throw new TokenError('invalid_request');
-    }
-
-    if (basic) {
-      if (bodyClientId !== undefined && bodyClientId !== basic.clientId) {
-        throw new TokenError('invalid_client', HttpStatus.UNAUTHORIZED);
-      }
-      return { clientId: basic.clientId, method: 'client_secret_basic', secret: basic.secret };
-    }
-
-    if (!bodyClientId) {
-      throw new TokenError('invalid_client', HttpStatus.UNAUTHORIZED);
-    }
-    if (bodySecret !== undefined) {
-      return { clientId: bodyClientId, method: 'client_secret_post', secret: bodySecret };
-    }
-    return { clientId: bodyClientId, method: 'none' };
-  }
-
-  /** Decode an HTTP Basic header into client credentials (RFC 6749 ?2.3.1). */
-  private parseBasic(header: string | undefined): { clientId: string; secret: string } | null {
-    if (!header) {
-      return null;
-    }
-    const decoded = Buffer.from(header.slice(6).trim(), 'base64').toString('utf8');
-    const sep = decoded.indexOf(':');
-    if (sep < 0) {
-      throw new TokenError('invalid_client', HttpStatus.UNAUTHORIZED);
-    }
-    // Credentials are form-urlencoded before base64 (RFC 6749 ?2.3.1 Appendix B).
-    // A malformed percent-encoding (e.g. `%ZZ`) throws URIError => treat as bad credentials.
-    try {
-      const clientId = decodeURIComponent(decoded.slice(0, sep));
-      const secret = decodeURIComponent(decoded.slice(sep + 1));
-      return { clientId, secret };
-    } catch {
-      throw new TokenError('invalid_client', HttpStatus.UNAUTHORIZED);
+      throw e;
     }
   }
 
@@ -304,7 +254,7 @@ export class TokenController {
       this.logger.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
     }
     // RFC 6749 §5.2: a 401 to a client authenticating via Basic must include WWW-Authenticate.
-    if (tokenError.code === 'invalid_client' && basicHeader(req) !== undefined) {
+    if (tokenError.code === 'invalid_client' && basicAuthHeader(req) !== undefined) {
       reply.header('WWW-Authenticate', 'Basic realm="token"');
     }
     return reply.status(tokenError.status).send({
@@ -318,13 +268,6 @@ export class TokenController {
 function userAgentHeader(req: HttpRequest): string | undefined {
   const raw = req.headers['user-agent'];
   return Array.isArray(raw) ? raw[0] : raw;
-}
-
-/** The `Authorization: Basic …` header (first value) if present, else undefined. */
-function basicHeader(req: HttpRequest): string | undefined {
-  const raw = req.headers['authorization'];
-  const header = Array.isArray(raw) ? raw[0] : raw;
-  return header && /^Basic /i.test(header) ? header : undefined;
 }
 
 /** Static, non-leaking descriptions (never echo client input). */

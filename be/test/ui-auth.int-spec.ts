@@ -74,7 +74,10 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
         CsrfGuard,
         HtmlExceptionFilter,
         { provide: RedisService, useValue: new RedisService(redis) },
-        { provide: MAILER, useValue: { send: async (message: MailMessage) => void messages.push(message) } },
+        {
+          provide: MAILER,
+          useValue: { send: async (message: MailMessage) => void messages.push(message) },
+        },
         { provide: ConfigService, useValue: config },
       ],
     }).compile();
@@ -128,7 +131,11 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
       ['/login', 302, '/'],
       ['/register', 302, '/'],
     ] as const) {
-      const response = await app.inject({ method: 'GET', url: path, headers: { cookie: liveCookie } });
+      const response = await app.inject({
+        method: 'GET',
+        url: path,
+        headers: { cookie: liveCookie },
+      });
       expect(response.statusCode).toBe(status);
       expect(response.headers.location).toBe(location);
       expect(String(response.headers['set-cookie'] ?? '')).not.toContain('idp_session=');
@@ -152,7 +159,10 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
   });
 
   it('sends ten concurrent login requests through the controller and RateLimitService', async () => {
-    const user = await users.create({ email: 'http-lock@example.com', password: 'correct password' });
+    const user = await users.create({
+      email: 'http-lock@example.com',
+      password: 'correct password',
+    });
     await users.verifyEmail(user.sub);
     const page = await form('/login');
     const responses = await Promise.all(

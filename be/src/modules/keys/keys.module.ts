@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { ClientsModule } from '../clients/clients.module';
 import type { AppConfig, KeysConfig } from '../../config/configuration';
 import { KEY_PROVIDER, type KeyProvider } from './key-provider';
 import { KeyRotationService } from './key-rotation.service';
@@ -10,6 +11,7 @@ import { TokenVerifier } from './token-verifier';
 
 /** Key management (B1.9): KeyProvider, JWKS, token sign/verify, rotation. */
 @Module({
+  imports: [ClientsModule],
   controllers: [KeysController],
   providers: [
     {

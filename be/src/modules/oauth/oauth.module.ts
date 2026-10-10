@@ -8,9 +8,12 @@ import { AuthorizeRequestContextService } from './authorize/authorize-request-co
 import { AuthorizeService } from './authorize/authorize.service';
 import { AuthorizationCodeService } from './code/authorization-code.service';
 import { ConsentService } from './consent/consent.service';
+import { DiscoveryController } from './discovery/discovery.controller';
+import { IntrospectController } from './introspect/introspect.controller';
 import { TokenController } from './token/token.controller';
 import { TokenService } from './token/token.service';
 import { RefreshTokenService } from './token/refresh-token.service';
+import { UserinfoController } from './userinfo/userinfo.controller';
 import { HtmlExceptionFilter } from '../ui/html-exception.filter';
 import { CsrfGuard, CsrfService } from '../ui/csrf.service';
 
@@ -24,7 +27,13 @@ import { CsrfGuard, CsrfService } from '../ui/csrf.service';
  */
 @Module({
   imports: [ClientsModule, ResourcesModule, SessionsModule, KeysModule],
-  controllers: [AuthorizeController, TokenController],
+  controllers: [
+    AuthorizeController,
+    TokenController,
+    DiscoveryController,
+    UserinfoController,
+    IntrospectController,
+  ],
   providers: [
     AuthorizeService,
     AuthorizeRequestContextService,

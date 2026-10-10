@@ -199,6 +199,9 @@ export class TokenService {
       audience: resource,
       subject: userId,
       expiresInSec: this.accessTokenTtl,
+      // RFC 9068 §2.1: access tokens carry `typ: at+jwt` so `/userinfo` and `/introspect` can
+      // distinguish them from ID tokens (same signer, both would otherwise be `typ: JWT`).
+      typ: 'at+jwt',
     });
   }
 

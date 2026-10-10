@@ -11,6 +11,7 @@ import type { AuditService } from '../security/audit/audit.service';
 import { KEY_PROVIDER } from './key-provider';
 import { KeyRotationService } from './key-rotation.service';
 import { KeysController } from './keys.controller';
+import { ClientCorsService } from '../clients/client-cors.service';
 import { LocalKeyProvider } from './local-key-provider';
 import { TokenSigner } from './token-signer';
 import { TokenVerifier } from './token-verifier';
@@ -48,7 +49,15 @@ describe('Keys (B1.9, INV-19)', () => {
   it('GET /jwks.json returns only public RSA members (no d/p/q/dp/dq/qi)', async () => {
     const moduleRef = await Test.createTestingModule({
       controllers: [KeysController],
-      providers: [{ provide: KEY_PROVIDER, useValue: provider }],
+      providers: [
+        { provide: KEY_PROVIDER, useValue: provider },
+        // CORS is only exercised when the browser sends an `Origin`; this request sends none, so a
+        // stub that always denies is enough to satisfy the controller's DI dependency.
+        {
+          provide: ClientCorsService,
+          useValue: { isOriginRegisteredForAnyClient: async () => false },
+        },
+      ],
     }).compile();
     const app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
     await app.init();
@@ -122,6 +131,111 @@ describe('Keys (B1.9, INV-19)', () => {
       .setExpirationTime('1m')
       .sign(new TextEncoder().encode('x'.repeat(32)));
     await expect(verifier.verify(hs, AUD)).rejects.toThrow();
+  });
+
+  describe('verifyAccessToken (RFC 9068, token confusion)', () => {
+    /** Mint an access-token-shaped JWT, then override the protected header / payload / signing key. */
+    async function mint(
+      over: {
+        header?: Record<string, unknown>;
+        claims?: Record<string, unknown>;
+        issuer?: string;
+        audience?: string | string[];
+        omitExp?: boolean;
+        key?: Uint8Array;
+      } = {},
+    ): Promise<string> {
+      const { kid, privateKey } = await provider.getSigningKey();
+      const jwt = new SignJWT({
+        sub: 'usr_1',
+        jti: 'jti_1',
+        client_id: 'app_1',
+        scope: 'openid',
+        ...over.claims,
+      })
+        .setProtectedHeader({ alg: 'RS256', kid, typ: 'at+jwt', ...over.header })
+        .setIssuer(over.issuer ?? ISSUER)
+        .setAudience(over.audience ?? AUD)
+        .setIssuedAt();
+      if (!over.omitExp) jwt.setExpirationTime('1m');
+      return jwt.sign(over.key ?? privateKey);
+    }
+
+    it('accepts a genuine access token (typ at+jwt, all required claims, single aud)', async () => {
+      const claims = await verifier.verifyAccessToken(await mint());
+      expect(claims).toMatchObject({
+        iss: ISSUER,
+        aud: AUD,
+        sub: 'usr_1',
+        jti: 'jti_1',
+        client_id: 'app_1',
+        scope: 'openid',
+      });
+    });
+
+    it('rejects a non-RS256 alg (HS256)', async () => {
+      const { kid } = await provider.getSigningKey();
+      const hs = await mint({
+        header: { alg: 'HS256', kid },
+        key: new TextEncoder().encode('x'.repeat(32)),
+      });
+      await expect(verifier.verifyAccessToken(hs)).rejects.toThrow();
+    });
+
+    it('rejects a wrong issuer', async () => {
+      await expect(
+        verifier.verifyAccessToken(await mint({ issuer: 'https://evil.example' })),
+      ).rejects.toThrow();
+    });
+
+    it('rejects a token missing exp', async () => {
+      await expect(verifier.verifyAccessToken(await mint({ omitExp: true }))).rejects.toThrow();
+    });
+
+    it.each(['sub', 'jti', 'client_id', 'scope'])(
+      'rejects a token missing the required claim %s',
+      async (claim) => {
+        const claims: Record<string, unknown> = {
+          sub: 'usr_1',
+          jti: 'jti_1',
+          client_id: 'app_1',
+          scope: 'openid',
+        };
+        delete claims[claim];
+        // Replace the whole payload so the dropped claim is actually absent (spread cannot remove it).
+        const { kid, privateKey } = await provider.getSigningKey();
+        const token = await new SignJWT(claims)
+          .setProtectedHeader({ alg: 'RS256', kid, typ: 'at+jwt' })
+          .setIssuer(ISSUER)
+          .setAudience(AUD)
+          .setIssuedAt()
+          .setExpirationTime('1m')
+          .sign(privateKey);
+        await expect(verifier.verifyAccessToken(token)).rejects.toThrow();
+      },
+    );
+
+    it('rejects a multi-valued aud (array)', async () => {
+      await expect(
+        verifier.verifyAccessToken(await mint({ audience: [AUD, 'https://b.example/'] })),
+      ).rejects.toThrow(/aud/);
+    });
+
+    it('rejects an ID token (typ JWT) presented as an access token (token confusion)', async () => {
+      // Same signer, same required claims, but `typ: JWT` — the defining difference an RP/RS relies
+      // on. Must fail so an ID token can never be replayed at `/userinfo` or `/introspect`.
+      const idToken = await mint({ header: { typ: 'JWT' } });
+      await expect(verifier.verifyAccessToken(idToken)).rejects.toThrow();
+    });
+
+    it.each(['sub', 'client_id', 'scope', 'jti'])(
+      'rejects a non-string %s (would otherwise 500, not 401)',
+      async (claim) => {
+        await expect(
+          verifier.verifyAccessToken(await mint({ claims: { [claim]: 123 } })),
+        ).rejects.toThrow();
+      },
+    );
   });
 
   it('normal rotation: old token still verifies, JWKS keeps old key, new tokens use new kid; audited', async () => {

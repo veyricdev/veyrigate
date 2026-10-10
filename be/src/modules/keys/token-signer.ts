@@ -9,6 +9,12 @@ export interface SignOptions {
   audience: string;
   subject?: string;
   expiresInSec: number;
+  /**
+   * JWT `typ` header. Defaults to `JWT` (ID tokens keep the OIDC default). Access tokens pass
+   * `at+jwt` (RFC 9068 §2.1) so `/userinfo` and `/introspect` can reject an ID token presented as
+   * an access token (token confusion) — same signer, same `aud`-less distinction otherwise.
+   */
+  typ?: string;
 }
 
 /** Signs JWTs with the active key: RS256, header `kid`, `iss` = configured issuer (INV-9). */
@@ -26,7 +32,7 @@ export class TokenSigner {
   async sign(claims: JWTPayload, options: SignOptions): Promise<string> {
     const { kid, privateKey } = await this.keys.getSigningKey();
     const jwt = new SignJWT(claims)
-      .setProtectedHeader({ alg: 'RS256', kid, typ: 'JWT' })
+      .setProtectedHeader({ alg: 'RS256', kid, typ: options.typ ?? 'JWT' })
       .setIssuer(this.issuer)
       .setAudience(options.audience)
       .setIssuedAt()

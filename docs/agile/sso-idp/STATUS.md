@@ -2,11 +2,13 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: không có (14-B4.5 đã đóng, commit `b529c35`).
+- **Run hiện tại**: `15-B4.6` — cổng: **tester PASS** → chờ orchestrator đóng. 405/405 test (unit 94 + int 311; tester +7 int lấp khe fold). Xem `runs/15-B4.6/test-report.md`.
 - **Run vừa đóng**: `14-B4.5` ✅ 5/5 task — 342/342 test (unit 80 + int 262). Xem `runs/14-B4.5/summary.md`.
+- **Senior run 15**: lượt 1 REJECT (liveness `/introspect`, thiếu test `at+jwt`/`verifyAccessToken`) → lượt 2 **PASS**; 🟡 còn mở → DEBT-040..042. Xem `runs/15-B4.6/review-senior.md`.
+- **Vòng lặp (run 15)**: analyst=1, tech-lead=1 (PASS), dev=2 (DONE, DONE retry1), senior=2 (REJECT, PASS), tester=1 (PASS)
 - **Vòng lặp (run 14)**: analyst=1, tech-lead=1, dev=3, senior=3 (REJECT, REJECT, PASS), tester=1 (PASS)
-- **Việc tiếp theo**: **B4.6** (`/userinfo` + discovery + `/introspect`; kéo DEBT-019/020/026/027/033/035) → B4.7 (logout; xử lý DEBT-034 trước). Hoàn tất M3 cần thêm T2 (fe-sso-test) + X1.
-  Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`; full suite = `pnpm test` (80) + `pnpm test:int` (262) = **342**.
+- **Việc tiếp theo**: **orchestrator** đóng run 15 (tester PASS). Sau đó B4.7 (logout; DEBT-034/037/038/040/041) → run consent-hardening (DEBT-026/027/028). Hoàn tất M3 cần thêm T2 (fe-sso-test) + X1.
+  Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`; full suite = `pnpm test` (94) + `pnpm test:int` (311) = **405**.
 
 ## Tiến độ
 
@@ -33,4 +35,4 @@ Xem `plan.md` §12. Còn mở: **Q3, Q5, Q7–Q9**. **Q1, Q4, Q6 đã chốt** (
 
 ## Backlog mở
 
-25 mục — xem [backlog.md](backlog.md) (mới run 14: DEBT-031 device-revoke → B4.7/B6.3, DEBT-032 transaction rotation → B7, DEBT-033 discovery revocation_endpoint → B4.6, DEBT-034 gom API revoke → trước B4.7, DEBT-035 test race → B4.6, DEBT-036 docs/ponytail).
+26 mục mở — xem [backlog.md](backlog.md) (run 15 dev đóng DEBT-019/020/033/035/036; còn DEBT-037/038 → B4.7, DEBT-039 → B7.1, DEBT-040/041 → B4.7, DEBT-042 → B7, DEBT-026/027 → consent-hardening).

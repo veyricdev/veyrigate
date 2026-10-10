@@ -11,6 +11,8 @@ import { Eta } from 'eta';
 import { join } from 'node:path';
 import { AppModule } from './app.module';
 import type { AppConfig } from './config/configuration';
+import { ClientCorsService } from './modules/clients/client-cors.service';
+import { registerCorsPreflight } from './modules/clients/client-cors.helper';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter(), {
@@ -43,6 +45,10 @@ async function bootstrap(): Promise<void> {
     root: join(__dirname, 'views'),
     layout: 'layout.eta',
   });
+
+  // Dynamic per-client CORS preflight (DEBT-019, spec §9.7). Shared with the integration tests so
+  // the production wiring is the exact code under test (see `registerCorsPreflight`).
+  registerCorsPreflight(app.getHttpAdapter().getInstance(), app.get(ClientCorsService));
 
   // Reject unknown/extra fields on all DTOs.
   app.useGlobalPipes(

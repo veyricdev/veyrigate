@@ -4,6 +4,7 @@ import { MongooseModule, getModelToken } from '@nestjs/mongoose';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import IORedis from 'ioredis';
+import { decodeProtectedHeader } from 'jose';
 import { Types, type Model } from 'mongoose';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -20,6 +21,7 @@ import { TokenVerifier } from '../src/modules/keys/token-verifier';
 import { ClientService, type Client } from '../src/modules/clients/client.service';
 import { ClientCredentialService } from '../src/modules/clients/client-credential.service';
 import { ClientAuthenticationService } from '../src/modules/clients/client-authentication.service';
+import { ClientCorsService } from '../src/modules/clients/client-cors.service';
 import { AuditService } from '../src/modules/security/audit/audit.service';
 import { AuditAction } from '../src/modules/security/audit/audit-action.enum';
 import type { AuditEvent } from '../src/modules/security/audit/audit.types';
@@ -116,6 +118,7 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
         ClientService,
         ClientCredentialService,
         ClientAuthenticationService,
+        ClientCorsService,
         AuditService,
         TokenSigner,
         TokenVerifier,
@@ -209,6 +212,26 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
 
     const docs = await refreshModel.find({ tokenHash: sha256(body.refresh_token) }).lean();
     expect(docs).toHaveLength(1);
+  });
+
+  it('access token header is typ=at+jwt, id token header is typ=JWT (RFC 9068, token confusion)', async () => {
+    // Decode the protected header of the tokens the REAL `/token` endpoint emits (not a signer unit
+    // double): the access token MUST carry `typ: at+jwt` so `/userinfo`/`/introspect` can reject an
+    // ID token (`typ: JWT`) replayed as an access token. Both are RS256 from the same signer.
+    const { code } = await mintCode({ scope: 'openid' });
+    const res = await post(
+      form({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: REDIRECT,
+        client_id: `${RUN}-public`,
+        code_verifier: VERIFIER,
+      }),
+    );
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(decodeProtectedHeader(body.access_token)).toMatchObject({ alg: 'RS256', typ: 'at+jwt' });
+    expect(decodeProtectedHeader(body.id_token)).toMatchObject({ alg: 'RS256', typ: 'JWT' });
   });
 
   it('grant_type != authorization_code => 400 unsupported_grant_type', async () => {

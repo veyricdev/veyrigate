@@ -28,3 +28,6 @@ export const ClientSchema = new Schema(
   { timestamps: true },
 );
 ClientSchema.index({ clientId: 1 }, { unique: true });
+// DEBT-020: `isOriginRegisteredForAnyClient` (discovery/jwks/preflight CORS) queries by
+// `allowedCorsOrigins`; a multikey index avoids a full collection scan per preflight/metadata hit.
+ClientSchema.index({ allowedCorsOrigins: 1 });

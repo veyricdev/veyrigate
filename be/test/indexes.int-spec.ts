@@ -14,7 +14,11 @@ const EXPECTED: Record<string, { key: Record<string, number>; unique?: boolean; 
     FederatedIdentity: [{ key: { provider: 1, providerId: 1 }, unique: true }],
     Tenant: [{ key: { id: 1 }, unique: true }],
     UserTenant: [{ key: { userId: 1, tenantId: 1 }, unique: true }],
-    Client: [{ key: { clientId: 1 }, unique: true }],
+    Client: [
+      { key: { clientId: 1 }, unique: true },
+      // DEBT-020: supports `isOriginRegisteredForAnyClient` (CORS preflight / metadata) lookups.
+      { key: { allowedCorsOrigins: 1 } },
+    ],
     ClientCredential: [{ key: { clientId: 1, version: 1 } }],
     Resource: [{ key: { identifier: 1 }, unique: true }],
     Consent: [{ key: { userId: 1, clientId: 1, resource: 1 }, unique: true }],

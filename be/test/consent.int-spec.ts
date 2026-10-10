@@ -71,7 +71,11 @@ describe('ConsentService on real Mongo (B4.2a, spec Â§9.4/Â§10, Q1 user Ã�
       service.grant(u, CLIENT, RES_A, ['openid'], versions(), ALLOWED),
       service.grant(u, CLIENT, RES_A, ['profile'], versions(), ALLOWED),
     ]);
-    const count = await model.countDocuments({ userId: new Types.ObjectId(u), clientId: CLIENT, resource: RES_A });
+    const count = await model.countDocuments({
+      userId: new Types.ObjectId(u),
+      clientId: CLIENT,
+      resource: RES_A,
+    });
     expect(count).toBe(1);
   });
 
@@ -98,7 +102,9 @@ describe('ConsentService on real Mongo (B4.2a, spec Â§9.4/Â§10, Q1 user Ã�
   it('public client (no resource) grants/covers on the "" sentinel record', async () => {
     const u = user();
     await service.grant(u, CLIENT, undefined, ['openid'], versions(), ALLOWED);
-    const stored = await model.findOne({ userId: new Types.ObjectId(u), clientId: CLIENT }).lean<Consent>();
+    const stored = await model
+      .findOne({ userId: new Types.ObjectId(u), clientId: CLIENT })
+      .lean<Consent>();
     expect(stored!.resource).toBe('');
     const c = await service.find(u, CLIENT, undefined);
     expect(service.isCovered(c, ['openid'], versions())).toBe(true);
@@ -159,7 +165,9 @@ describe('ConsentService on real Mongo (B4.2a, spec Â§9.4/Â§10, Q1 user Ã�
       ['profile', 'openid'],
       ['email', 'profile'],
     ];
-    await Promise.all(asks.map((scopes) => service.grant(u, CLIENT, RES_A, scopes, versions(), ALLOW)));
+    await Promise.all(
+      asks.map((scopes) => service.grant(u, CLIENT, RES_A, scopes, versions(), ALLOW)),
+    );
 
     const count = await model.countDocuments({
       userId: new Types.ObjectId(u),
@@ -186,7 +194,9 @@ describe('ConsentService on real Mongo (B4.2a, spec Â§9.4/Â§10, Q1 user Ã�
     await service.grant(a, CLIENT, RES_A, ['openid', 'profile'], versions(), ALLOWED);
     // B has granted nothing.
     expect(await service.find(b, CLIENT, RES_A)).toBeNull();
-    expect(service.isCovered(await service.find(b, CLIENT, RES_A), ['openid'], versions())).toBe(false);
+    expect(service.isCovered(await service.find(b, CLIENT, RES_A), ['openid'], versions())).toBe(
+      false,
+    );
     // A's grant is intact and only visible to A.
     const ca = await service.find(a, CLIENT, RES_A);
     expect(ca).not.toBeNull();
@@ -200,11 +210,19 @@ describe('ConsentService on real Mongo (B4.2a, spec Â§9.4/Â§10, Q1 user Ã�
     await service.grant(u, CLIENT, RES_A, ['openid'], versions(), ALLOWED);
     const bumped = new ConsentService(model, config('2', '3'));
     // Not covered yet under the new versions.
-    expect(bumped.isCovered(await bumped.find(u, CLIENT, RES_A), ['openid'], bumped.currentVersions())).toBe(false);
+    expect(
+      bumped.isCovered(await bumped.find(u, CLIENT, RES_A), ['openid'], bumped.currentVersions()),
+    ).toBe(false);
     // User re-consents under the new versions.
     await bumped.grant(u, CLIENT, RES_A, ['openid'], bumped.currentVersions(), ALLOWED);
-    const count = await model.countDocuments({ userId: new Types.ObjectId(u), clientId: CLIENT, resource: RES_A });
+    const count = await model.countDocuments({
+      userId: new Types.ObjectId(u),
+      clientId: CLIENT,
+      resource: RES_A,
+    });
     expect(count).toBe(1); // updated in place, not duplicated
-    expect(bumped.isCovered(await bumped.find(u, CLIENT, RES_A), ['openid'], bumped.currentVersions())).toBe(true);
+    expect(
+      bumped.isCovered(await bumped.find(u, CLIENT, RES_A), ['openid'], bumped.currentVersions()),
+    ).toBe(true);
   });
 });

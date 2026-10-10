@@ -47,7 +47,10 @@ describe('Authentication races on real Mongo (B2.4, C2-C6, C13)', () => {
         UserTenantService,
         { provide: SessionService, useValue: sessions },
         { provide: AuditService, useValue: audit },
-        { provide: MAILER, useValue: { send: async (message: MailMessage) => void messages.push(message) } },
+        {
+          provide: MAILER,
+          useValue: { send: async (message: MailMessage) => void messages.push(message) },
+        },
         {
           provide: ConfigService,
           useValue: { getOrThrow: () => ({ issuer: 'https://issuer.example' }) },

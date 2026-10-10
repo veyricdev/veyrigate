@@ -20,6 +20,7 @@ import { TokenVerifier } from '../src/modules/keys/token-verifier';
 import { ClientService, type Client } from '../src/modules/clients/client.service';
 import { ClientCredentialService } from '../src/modules/clients/client-credential.service';
 import { ClientAuthenticationService } from '../src/modules/clients/client-authentication.service';
+import { ClientCorsService } from '../src/modules/clients/client-cors.service';
 import { AuditService } from '../src/modules/security/audit/audit.service';
 import { AuditAction } from '../src/modules/security/audit/audit-action.enum';
 import type { AuditEvent } from '../src/modules/security/audit/audit.types';
@@ -123,7 +124,52 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
   }
 
   const refreshReq = (token: string, extra: Record<string, string> = {}) =>
-    post('/token', form({ grant_type: 'refresh_token', client_id: CLIENT, refresh_token: token, ...extra }));
+    post(
+      '/token',
+      form({ grant_type: 'refresh_token', client_id: CLIENT, refresh_token: token, ...extra }),
+    );
+
+  /**
+   * DEBT-035/036 shared setup for the two deterministic INV-11 race tests: mint a first refresh,
+   * then gate `insertRefreshToken` so the winning rotate (A) really creates its successor S and
+   * then parks before returning. `inserted` resolves the instant S exists (so the concurrent
+   * revoker B runs strictly after S, no timers); `release()` lets A finish; `restore()` removes the
+   * spy. Forcing this order proves the mark-then-check guard self-revokes S for ANY interleaving.
+   */
+  async function gateInsert(): Promise<{
+    rt: string;
+    familyId: string;
+    inserted: Promise<void>;
+    release: () => void;
+    restore: () => void;
+  }> {
+    const rt = await firstRefresh();
+    const familyDoc = await refreshModel
+      .findOne({ tokenHash: sha256(rt) })
+      .lean<Record<string, unknown>>();
+    const familyId = familyDoc!.familyId as string;
+
+    const real = tokenSvc.insertRefreshToken.bind(tokenSvc);
+    let release!: () => void;
+    let signalInserted!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const inserted = new Promise<void>((resolve) => {
+      signalInserted = resolve;
+    });
+    const spy = jest
+      .spyOn(tokenSvc, 'insertRefreshToken')
+      .mockImplementationOnce(async (input: Parameters<TokenService['insertRefreshToken']>[0]) => {
+        // A has won the swap; do the real insert so S exists, signal it, then block before returning.
+        const minted = await real(input);
+        signalInserted();
+        await gate;
+        return minted;
+      });
+
+    return { rt, familyId, inserted, release, restore: () => spy.mockRestore() };
+  }
 
   beforeAll(async () => {
     redis = new IORedis(REDIS_URL, { maxRetriesPerRequest: 1 });
@@ -148,6 +194,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
         ClientService,
         ClientCredentialService,
         ClientAuthenticationService,
+        ClientCorsService,
         AuditService,
         TokenSigner,
         TokenVerifier,
@@ -226,17 +273,19 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
     const payload = await verifier.verify(body.access_token, RESOURCE);
     expect(payload.aud).toBe(RESOURCE);
 
-    const audits = await auditModel
-      .find({ action: AuditAction.TOKEN_REFRESHED })
-      .lean();
+    const audits = await auditModel.find({ action: AuditAction.TOKEN_REFRESHED }).lean();
     expect(audits.length).toBeGreaterThanOrEqual(1);
     const meta = audits[audits.length - 1].metadata as Record<string, unknown>;
     expect(JSON.stringify(meta)).not.toContain(rt);
     expect(JSON.stringify(meta)).not.toContain(sha256(rt));
 
     // old doc revoked + replacedBy is the successor _id; descendant active, same family.
-    const oldDoc = await refreshModel.findOne({ tokenHash: sha256(rt) }).lean<Record<string, unknown>>();
-    const newDoc = await refreshModel.findOne({ tokenHash: sha256(body.refresh_token) }).lean<Record<string, unknown>>();
+    const oldDoc = await refreshModel
+      .findOne({ tokenHash: sha256(rt) })
+      .lean<Record<string, unknown>>();
+    const newDoc = await refreshModel
+      .findOne({ tokenHash: sha256(body.refresh_token) })
+      .lean<Record<string, unknown>>();
     expect(oldDoc!.revokedAt).toBeTruthy();
     expect(String(oldDoc!.replacedBy)).toBe(String(newDoc!._id));
     expect(String(newDoc!.parentId)).toBe(String(oldDoc!._id));
@@ -266,7 +315,9 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
     expect(body.scope).toBe('profile');
     expect(body.id_token).toBeUndefined();
     // descendant refresh keeps the ORIGINAL grant scope (INV-12).
-    const newDoc = await refreshModel.findOne({ tokenHash: sha256(body.refresh_token) }).lean<Record<string, unknown>>();
+    const newDoc = await refreshModel
+      .findOne({ tokenHash: sha256(body.refresh_token) })
+      .lean<Record<string, unknown>>();
     expect((newDoc!.scope as string[]).sort()).toEqual(['offline_access', 'openid', 'profile']);
   });
 
@@ -276,7 +327,9 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('invalid_scope');
     // token untouched.
-    const doc = await refreshModel.findOne({ tokenHash: sha256(rt) }).lean<Record<string, unknown>>();
+    const doc = await refreshModel
+      .findOne({ tokenHash: sha256(rt) })
+      .lean<Record<string, unknown>>();
     expect(doc!.revokedAt).toBeFalsy();
     expect(doc!.replacedBy).toBeFalsy();
     // still usable afterwards.
@@ -303,8 +356,9 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
     // triggers reuse detection even if the body carries an out-of-scope value (no silenced alarm).
     const rt = await firstRefresh();
     await refreshReq(rt); // rotate once → rt is now revoked+replaced.
-    const familyId = (await refreshModel.findOne({ tokenHash: sha256(rt) }).lean<Record<string, unknown>>())!
-      .familyId as string;
+    const familyId = (await refreshModel
+      .findOne({ tokenHash: sha256(rt) })
+      .lean<Record<string, unknown>>())!.familyId as string;
     const before = await auditModel.countDocuments({
       action: AuditAction.TOKEN_REUSE_DETECTED,
       'metadata.familyId': familyId,
@@ -328,16 +382,23 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
     const res = await refreshReq(rt, { resource: 'https://other.example.com/' });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('invalid_target');
-    const doc = await refreshModel.findOne({ tokenHash: sha256(rt) }).lean<Record<string, unknown>>();
+    const doc = await refreshModel
+      .findOne({ tokenHash: sha256(rt) })
+      .lean<Record<string, unknown>>();
     expect(doc!.revokedAt).toBeFalsy();
   });
 
   it('cross-client: refresh of client A used by client B => invalid_grant, A untouched, A family NOT revoked', async () => {
     const rt = await firstRefresh(CLIENT);
-    const res = await post('/token', form({ grant_type: 'refresh_token', client_id: CLIENT_B, refresh_token: rt }));
+    const res = await post(
+      '/token',
+      form({ grant_type: 'refresh_token', client_id: CLIENT_B, refresh_token: rt }),
+    );
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('invalid_grant');
-    const doc = await refreshModel.findOne({ tokenHash: sha256(rt) }).lean<Record<string, unknown>>();
+    const doc = await refreshModel
+      .findOne({ tokenHash: sha256(rt) })
+      .lean<Record<string, unknown>>();
     expect(doc!.revokedAt).toBeFalsy();
     expect(doc!.replacedBy).toBeFalsy();
     // A can still use it (family not torn down by a foreign client's probe).
@@ -348,7 +409,9 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
   it('reuse: replay a rotated refresh => 400 invalid_grant + whole family revoked + TOKEN_REUSE_DETECTED', async () => {
     const rt = await firstRefresh();
     const first = await refreshReq(rt);
-    const familyDoc = await refreshModel.findOne({ tokenHash: sha256(rt) }).lean<Record<string, unknown>>();
+    const familyDoc = await refreshModel
+      .findOne({ tokenHash: sha256(rt) })
+      .lean<Record<string, unknown>>();
     const familyId = familyDoc!.familyId as string;
 
     const replay = await refreshReq(rt);
@@ -372,7 +435,9 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       { tokenHash: sha256(rt) },
       { $set: { expiresAt: new Date(Date.now() - 1000) } },
     );
-    const doc = await refreshModel.findOne({ tokenHash: sha256(rt) }).lean<Record<string, unknown>>();
+    const doc = await refreshModel
+      .findOne({ tokenHash: sha256(rt) })
+      .lean<Record<string, unknown>>();
     const familyId = doc!.familyId as string;
     const before = await auditModel.countDocuments({
       action: AuditAction.TOKEN_REUSE_DETECTED,
@@ -407,7 +472,9 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       const res = await refreshReq(rt);
       expect(res.statusCode).toBe(400);
       expect(res.json().error).toBe('invalid_grant');
-      const doc = await refreshModel.findOne({ tokenHash: sha256(rt) }).lean<Record<string, unknown>>();
+      const doc = await refreshModel
+        .findOne({ tokenHash: sha256(rt) })
+        .lean<Record<string, unknown>>();
       expect(doc!.revokedAt).toBeFalsy();
     } finally {
       await clientModel.updateOne({ clientId: CLIENT }, { $set: { allowedResources: [RESOURCE] } });
@@ -427,59 +494,16 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
     expect(missing.json().error).toBe('invalid_request');
   });
 
-  it('CONCURRENT refresh of the same value => at most one 200, at most one descendant, family fully revoked', async () => {
-    const rt = await firstRefresh();
-    const familyDoc = await refreshModel.findOne({ tokenHash: sha256(rt) }).lean<Record<string, unknown>>();
-    const familyId = familyDoc!.familyId as string;
-
-    const [a, b] = await Promise.all([refreshReq(rt), refreshReq(rt)]);
-    const codes = [a.statusCode, b.statusCode].sort();
-    // At least one loses the atomic swap => 400. Strict rotation: the swap winner may ALSO fail
-    // closed (400) when the concurrent reuse revoke stamped the family before it finished — either
-    // [200,400] or [400,400] is correct, never two successes.
-    expect(codes[0]).toBe(400);
-    expect(codes).not.toContain(500);
-    expect(codes.filter((c) => c === 200).length).toBeLessThanOrEqual(1);
-
-    // at most one descendant minted (parentId === the original _id); never two.
-    const descendants = await refreshModel
-      .find({ familyId, parentId: familyDoc!._id })
-      .lean<Record<string, unknown>[]>();
-    expect(descendants.length).toBeLessThanOrEqual(1);
-    // INV-11: the whole family is revoked after the race (loser counted as reuse), no survivor.
-    const all = await refreshModel.find({ familyId }).lean<Record<string, unknown>[]>();
-    expect(all.every((d) => d.revokedAt)).toBe(true);
-  });
+  // DEBT-035: the former non-deterministic `CONCURRENT refresh` test is replaced by the two
+  // deterministic race tests below (reuse + /revoke), which force the exact losing interleaving
+  // the mark-then-check guard must handle and assert every family doc ends up revoked.
 
   it('DETERMINISTIC race (INV-11): descendant minted during reuse revoke cannot survive', async () => {
     // Force the losing order the race-close must handle: the winning rotate (A) has already done
     // its atomic swap and is blocked INSIDE insertRefreshToken; while blocked we run the losing
     // reuse request (B) to completion (it stamps + revokes the family) and only then let A finish.
     // Without the mark-then-check guard, A's successor S would be born AFTER B's revoke and live on.
-    const rt = await firstRefresh();
-    const familyDoc = await refreshModel.findOne({ tokenHash: sha256(rt) }).lean<Record<string, unknown>>();
-    const familyId = familyDoc!.familyId as string;
-
-    const real = tokenSvc.insertRefreshToken.bind(tokenSvc);
-    let release!: () => void;
-    let signalInserted!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    // Resolves the instant A's real insert returns, so B runs AFTER S exists without a timer.
-    const inserted = new Promise<void>((resolve) => {
-      signalInserted = resolve;
-    });
-    const spy = jest
-      .spyOn(tokenSvc, 'insertRefreshToken')
-      .mockImplementationOnce(async (input: Parameters<TokenService['insertRefreshToken']>[0]) => {
-        // A has won the swap; do the real insert so S exists, signal it, then block before returning.
-        const minted = await real(input);
-        signalInserted();
-        await gate;
-        return minted;
-      });
-
+    const { rt, familyId, inserted, release, restore } = await gateInsert();
     try {
       // A: wins the swap, mints S, then parks on the gate (not yet returned).
       const aPromise = refreshReq(rt);
@@ -503,7 +527,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       expect(all.length).toBeGreaterThanOrEqual(2); // parent + successor S
       expect(all.every((d) => d.revokedAt)).toBe(true);
     } finally {
-      spy.mockRestore();
+      restore();
     }
   });
 
@@ -512,28 +536,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
     // is the regression the senior flagged: /revoke's revokeFamily must also stamp familyRevokedAt
     // so A's post-insert re-read self-revokes S. Without that stamp S would be born after /revoke's
     // revoke updateMany (A parked on the gate) and survive even though /revoke returned 200.
-    const rt = await firstRefresh();
-    const familyDoc = await refreshModel.findOne({ tokenHash: sha256(rt) }).lean<Record<string, unknown>>();
-    const familyId = familyDoc!.familyId as string;
-
-    const real = tokenSvc.insertRefreshToken.bind(tokenSvc);
-    let release!: () => void;
-    let signalInserted!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const inserted = new Promise<void>((resolve) => {
-      signalInserted = resolve;
-    });
-    const spy = jest
-      .spyOn(tokenSvc, 'insertRefreshToken')
-      .mockImplementationOnce(async (input: Parameters<TokenService['insertRefreshToken']>[0]) => {
-        const minted = await real(input);
-        signalInserted();
-        await gate;
-        return minted;
-      });
-
+    const { rt, familyId, inserted, release, restore } = await gateInsert();
     try {
       // A: wins the swap on rt, mints S, then parks on the gate (not yet returned).
       const aPromise = refreshReq(rt);
@@ -554,7 +557,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       expect(all.length).toBeGreaterThanOrEqual(2); // parent + successor S
       expect(all.every((d) => d.revokedAt)).toBe(true);
     } finally {
-      spy.mockRestore();
+      restore();
     }
   });
 
@@ -578,8 +581,9 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
     // Consequence of strict rotation (acceptance Task 5): the atomic swap already consumed rt, so
     // retrying the SAME value fails with invalid_grant (reuse) and tears the family down. The
     // client MUST re-login — this is the intended fail-closed behaviour, not a regression.
-    const familyId = (await refreshModel.findOne({ tokenHash: sha256(rt) }).lean<Record<string, unknown>>())!
-      .familyId as string;
+    const familyId = (await refreshModel
+      .findOne({ tokenHash: sha256(rt) })
+      .lean<Record<string, unknown>>())!.familyId as string;
     const retry = await refreshReq(rt);
     expect(retry.statusCode).toBe(400);
     expect(retry.json().error).toBe('invalid_grant');
@@ -591,7 +595,9 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
 
   it('revoke a valid refresh => 200, doc revoked, audit TOKEN_REVOKED; reuse at /token => invalid_grant (no reuse audit)', async () => {
     const rt = await firstRefresh();
-    const doc0 = await refreshModel.findOne({ tokenHash: sha256(rt) }).lean<Record<string, unknown>>();
+    const doc0 = await refreshModel
+      .findOne({ tokenHash: sha256(rt) })
+      .lean<Record<string, unknown>>();
     const familyId = doc0!.familyId as string;
     const reuseBefore = await auditModel.countDocuments({
       action: AuditAction.TOKEN_REUSE_DETECTED,
@@ -601,12 +607,16 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
     const res = await post('/revoke', form({ client_id: CLIENT, token: rt }));
     expect(res.statusCode).toBe(200);
     expect(res.headers['cache-control']).toBe('no-store');
-    const doc = await refreshModel.findOne({ tokenHash: sha256(rt) }).lean<Record<string, unknown>>();
+    const doc = await refreshModel
+      .findOne({ tokenHash: sha256(rt) })
+      .lean<Record<string, unknown>>();
     expect(doc!.revokedAt).toBeTruthy();
-    const revoked = await auditModel.find({
-      action: AuditAction.TOKEN_REVOKED,
-      'metadata.familyId': familyId,
-    }).lean();
+    const revoked = await auditModel
+      .find({
+        action: AuditAction.TOKEN_REVOKED,
+        'metadata.familyId': familyId,
+      })
+      .lean();
     expect(revoked).toHaveLength(1);
 
     const reuseRes = await refreshReq(rt);
@@ -622,7 +632,9 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
   it('revoke by active child (after one rotation) revokes the whole family; so does revoke by rotated parent', async () => {
     const rt = await firstRefresh();
     const child = (await refreshReq(rt)).json().refresh_token as string;
-    const doc = await refreshModel.findOne({ tokenHash: sha256(child) }).lean<Record<string, unknown>>();
+    const doc = await refreshModel
+      .findOne({ tokenHash: sha256(child) })
+      .lean<Record<string, unknown>>();
     const familyId = doc!.familyId as string;
 
     const res = await post('/revoke', form({ client_id: CLIENT, token: child }));
@@ -638,16 +650,19 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
 
   it('revoke twice => both 200, exactly one TOKEN_REVOKED audit', async () => {
     const rt = await firstRefresh();
-    const familyId = (await refreshModel.findOne({ tokenHash: sha256(rt) }).lean<Record<string, unknown>>())!
-      .familyId as string;
+    const familyId = (await refreshModel
+      .findOne({ tokenHash: sha256(rt) })
+      .lean<Record<string, unknown>>())!.familyId as string;
     const r1 = await post('/revoke', form({ client_id: CLIENT, token: rt }));
     const r2 = await post('/revoke', form({ client_id: CLIENT, token: rt }));
     expect(r1.statusCode).toBe(200);
     expect(r2.statusCode).toBe(200);
-    const audits = await auditModel.find({
-      action: AuditAction.TOKEN_REVOKED,
-      'metadata.familyId': familyId,
-    }).lean();
+    const audits = await auditModel
+      .find({
+        action: AuditAction.TOKEN_REVOKED,
+        'metadata.familyId': familyId,
+      })
+      .lean();
     expect(audits).toHaveLength(1);
   });
 
@@ -680,7 +695,9 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
     const rt = await firstRefresh(CLIENT);
     const res = await post('/revoke', form({ client_id: CLIENT_B, token: rt }));
     expect(res.statusCode).toBe(200);
-    const doc = await refreshModel.findOne({ tokenHash: sha256(rt) }).lean<Record<string, unknown>>();
+    const doc = await refreshModel
+      .findOne({ tokenHash: sha256(rt) })
+      .lean<Record<string, unknown>>();
     expect(doc!.revokedAt).toBeFalsy();
     // owner can still use it.
     const ok = await refreshReq(rt);
@@ -688,7 +705,10 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
   });
 
   it('revoke unknown token / wrong type => 200 no-op', async () => {
-    const res = await post('/revoke', form({ client_id: CLIENT, token: 'nope', token_type_hint: 'access_token' }));
+    const res = await post(
+      '/revoke',
+      form({ client_id: CLIENT, token: 'nope', token_type_hint: 'access_token' }),
+    );
     expect(res.statusCode).toBe(200);
   });
 
@@ -719,7 +739,10 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
   it('QA: grant_type=password and empty grant_type both => 400 unsupported_grant_type (dispatch, no rotation)', async () => {
     // tech-lead fold (Task 3 acceptance) names `password`/empty explicitly; token.int-spec only
     // exercises `client_credentials`. The dispatch must reject these BEFORE client auth / rotation.
-    const pwd = await post('/token', form({ grant_type: 'password', client_id: CLIENT, refresh_token: 'x' }));
+    const pwd = await post(
+      '/token',
+      form({ grant_type: 'password', client_id: CLIENT, refresh_token: 'x' }),
+    );
     expect(pwd.statusCode).toBe(400);
     expect(pwd.json().error).toBe('unsupported_grant_type');
     expect(pwd.headers['cache-control']).toBe('no-store');
@@ -737,8 +760,9 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
     // Guards the exposure/false-alarm budget: a scope-escalation attempt on an ACTIVE token is a
     // plain 400, never a TOKEN_REUSE_DETECTED alert, and leaves the token usable.
     const rt = await firstRefresh();
-    const familyId = (await refreshModel.findOne({ tokenHash: sha256(rt) }).lean<Record<string, unknown>>())!
-      .familyId as string;
+    const familyId = (await refreshModel
+      .findOne({ tokenHash: sha256(rt) })
+      .lean<Record<string, unknown>>())!.familyId as string;
     const before = await auditModel.countDocuments({
       action: AuditAction.TOKEN_REUSE_DETECTED,
       'metadata.familyId': familyId,
@@ -759,8 +783,9 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
     // dev only covers sequential double-revoke. The `familyRevokedAt: null` / `revokedAt: null`
     // filters must make the audit fire once even when two /revoke land at once (INV-11 spirit).
     const rt = await firstRefresh();
-    const familyId = (await refreshModel.findOne({ tokenHash: sha256(rt) }).lean<Record<string, unknown>>())!
-      .familyId as string;
+    const familyId = (await refreshModel
+      .findOne({ tokenHash: sha256(rt) })
+      .lean<Record<string, unknown>>())!.familyId as string;
     const [a, b] = await Promise.all([
       post('/revoke', form({ client_id: CLIENT, token: rt })),
       post('/revoke', form({ client_id: CLIENT, token: rt })),
@@ -769,10 +794,12 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
     expect(b.statusCode).toBe(200);
     const all = await refreshModel.find({ familyId }).lean<Record<string, unknown>[]>();
     expect(all.every((d) => d.revokedAt)).toBe(true);
-    const audits = await auditModel.find({
-      action: AuditAction.TOKEN_REVOKED,
-      'metadata.familyId': familyId,
-    }).lean();
+    const audits = await auditModel
+      .find({
+        action: AuditAction.TOKEN_REVOKED,
+        'metadata.familyId': familyId,
+      })
+      .lean();
     expect(audits).toHaveLength(1);
   });
 
@@ -794,7 +821,9 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
     const bad = await refreshReq(rt, { resource: 'https://evil.example.com/' });
     expect(bad.statusCode).toBe(400);
     expect(bad.json().error).toBe('invalid_target');
-    const doc = await refreshModel.findOne({ tokenHash: sha256(rt) }).lean<Record<string, unknown>>();
+    const doc = await refreshModel
+      .findOne({ tokenHash: sha256(rt) })
+      .lean<Record<string, unknown>>();
     expect(doc!.revokedAt).toBeFalsy();
     expect(doc!.replacedBy).toBeFalsy();
     expect((await refreshReq(rt)).statusCode).toBe(200);

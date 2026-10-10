@@ -273,7 +273,9 @@ export class RefreshTokenService {
       .findOne({ _id: old._id }, { familyRevokedAt: 1 })
       .lean()
       .exec()) as Pick<RefreshDoc, 'familyRevokedAt'> | null;
-    if (parent?.familyRevokedAt != null) {
+    // Fail-closed (DEBT-036): a missing parent (concurrently deleted — e.g. TTL expiry) is treated
+    // like a revoked family, so the just-minted successor never survives an ambiguous read.
+    if (!parent || parent.familyRevokedAt != null) {
       await this.refreshTokens
         .updateOne({ _id: successorId, revokedAt: null }, { $set: { revokedAt: now } })
         .exec();
