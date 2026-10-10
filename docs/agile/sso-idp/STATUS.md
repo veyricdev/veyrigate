@@ -2,11 +2,11 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: không có (13-B4.4 đã đóng, commit `c6a8026`).
+- **Run hiện tại**: `14-B4.5` — cổng: **tester ✅ PASS** → **orchestrator đóng run** (analyst ✅, tech-lead ✅, dev ✅ retry 2, senior ✅ lượt 3, tester ✅). **342/342 test** (80 unit + 262 int; tester +5 QA). typecheck+lint sạch. Mọi acceptance Task 1–5 + INV-10/11/12/14 có ≥1 test đo được; /revoke RFC 7009 + fail-closed phủ đủ. 🟡 còn mở → DEBT-034..036 (DEBT-035 hoãn B4.6, không chặn). Xem `runs/14-B4.5/test-report.md` + `review-senior.md`. **Code chưa commit.**
 - **Run vừa đóng**: `13-B4.4` ✅ 4/4 cổng — 310/310 test (unit 80 + int 230). Xem `runs/13-B4.4/summary.md`.
-- **Vòng lặp (run 13)**: analyst=1, tech-lead=1, dev=2, senior=2 (REJECT→PASS), tester=1
-- **Việc tiếp theo**: **B4.5** (refresh grant + rotation + reuse detection + `/revoke`) — hoàn tất M3 cần thêm T2 (fe-sso-test) + X1.
-  Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`; full suite = `pnpm test` (80) + `pnpm test:int` (230) = 310.
+- **Vòng lặp (run 14)**: analyst=1, tech-lead=1, dev=3, senior=3 (REJECT, REJECT, PASS), tester=1 (PASS)
+- **Việc tiếp theo**: orchestrator **đóng run 14** (commit + summary). Sau B4.5: hoàn tất M3/M4 cần thêm T2 (fe-sso-test) + X1.
+  Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`; full suite = `pnpm test` (80) + `pnpm test:int` (262) = **342**.
 
 ## Tiến độ
 
@@ -31,4 +31,4 @@ Xem `plan.md` §12. Còn mở: **Q3, Q5, Q7–Q9**. **Q1, Q4, Q6 đã chốt** (
 
 ## Backlog mở
 
-20 mục — xem [backlog.md](backlog.md) (mới: DEBT-029 rate-limit `/token` → B7, DEBT-030 amr/acr → B5).
+23 mục — xem [backlog.md](backlog.md) (mới run 14: DEBT-031 device-revoke → B4.7/B6.3, DEBT-032 transaction rotation → B7, DEBT-033 discovery revocation_endpoint → B4.6).

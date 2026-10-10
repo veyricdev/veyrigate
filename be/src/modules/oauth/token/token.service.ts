@@ -97,14 +97,32 @@ export class TokenService {
       authTimeSec,
     );
     const idToken = scopes.includes('openid')
-      ? await this.signIdToken(data, client.clientId, authTimeSec)
+      ? await this.signIdToken(
+          { userId: data.userId, nonce: data.nonce },
+          client.clientId,
+          authTimeSec,
+        )
       : undefined;
 
     const issueRefresh =
       client.grantTypes.includes('refresh_token') && scopes.includes('offline_access');
     let refreshToken: string | undefined;
     if (issueRefresh) {
-      refreshToken = await this.mintRefreshToken(data.userId, client.clientId, scopes, resource);
+      // First token of a new family (parentId=null); absolute lifetime now + refreshTokenTtl (Q6).
+      const now = new Date();
+      const minted = await this.insertRefreshToken({
+        userId: data.userId,
+        clientId: client.clientId,
+        scope: scopes,
+        resource,
+        familyId: randomUUID(),
+        parentId: null,
+        issuedAt: now,
+        expiresAt: new Date(now.getTime() + this.refreshTokenTtl * 1000),
+        ip: audit.ip,
+        userAgent: audit.userAgent,
+      });
+      refreshToken = minted.token;
     }
 
     // Audit before returning (INV-25): a failed write throws => no token reaches the client
@@ -131,6 +149,39 @@ export class TokenService {
     };
   }
 
+  /**
+   * Sign the access token (+ ID token when the effective scope contains `openid`) for a
+   * refresh-token grant (B4.5). `effectiveScope` is the already-validated scope for the access
+   * token (original scope, or a narrowed subset the client asked for); `resource` is bound to the
+   * original grant. A refresh-issued ID token has no `nonce`/`auth_time`, and an admin-resource
+   * access token has no `auth_time` either (the RefreshToken stores neither) — step-up stays
+   * fail-closed. `RefreshTokenService` owns the rotation/audit; this method only shapes claims.
+   */
+  async signTokensForRefresh(input: {
+    userId: string;
+    clientId: string;
+    resource: string;
+    effectiveScope: string[];
+  }): Promise<{ accessToken: string; idToken?: string }> {
+    const scope = input.effectiveScope.join(' ');
+    const accessToken = await this.signAccessToken(
+      input.userId,
+      input.resource,
+      scope,
+      input.clientId,
+      undefined,
+    );
+    const idToken = input.effectiveScope.includes('openid')
+      ? await this.signIdToken({ userId: input.userId }, input.clientId, undefined)
+      : undefined;
+    return { accessToken, ...(idToken ? { idToken } : {}) };
+  }
+
+  /** Access-token lifetime in seconds (for the refresh grant's `expires_in`). */
+  get accessTokenLifetime(): number {
+    return this.accessTokenTtl;
+  }
+
   private signAccessToken(
     userId: string,
     resource: string,
@@ -151,8 +202,14 @@ export class TokenService {
     });
   }
 
+  /**
+   * Sign an ID token. Takes only what the claims need (`userId`, optional `nonce`/`authTime`) so
+   * both the authorization_code grant and the refresh grant can call it. A refresh-issued ID
+   * token carries neither `nonce` nor `auth_time` (the RefreshToken document stores neither), so
+   * B6.2 step-up stays fail-closed — never fabricate `now` (OIDC Core §12.2).
+   */
   private signIdToken(
-    data: AuthorizationCodeData,
+    subject: { userId: string; nonce?: string },
     clientId: string,
     authTimeSec: number | undefined,
   ): Promise<string> {
@@ -161,38 +218,55 @@ export class TokenService {
       acr: DEFAULT_ACR,
     };
     // `nonce` is carried through byte-for-byte when present; never fabricated (RP owns it).
-    if (data.nonce !== undefined) {
-      claims.nonce = data.nonce;
+    if (subject.nonce !== undefined) {
+      claims.nonce = subject.nonce;
     }
     if (authTimeSec !== undefined) {
       claims.auth_time = authTimeSec;
     }
     return this.signer.sign(claims, {
       audience: clientId,
-      subject: data.userId,
+      subject: subject.userId,
       expiresInSec: this.accessTokenTtl,
     });
   }
 
-  private async mintRefreshToken(
-    userId: string,
-    clientId: string,
-    scopes: string[],
-    resource: string,
-  ): Promise<string> {
+  /**
+   * The single place that creates a RefreshToken document (B4.4 first token + B4.5 rotation
+   * descendant use the same path). The caller supplies `familyId`/`parentId`/`expiresAt` so the
+   * descendant inherits the family and the original absolute lifetime (no sliding, Q6). The
+   * caller may pass a pre-generated `_id` so a parent can link `replacedBy` to its successor. The
+   * plaintext token is returned once and only its sha256 hash is stored (INV-10).
+   */
+  async insertRefreshToken(input: {
+    userId: string;
+    clientId: string;
+    scope: string[];
+    resource: string;
+    familyId: string;
+    parentId: Types.ObjectId | null;
+    issuedAt: Date;
+    expiresAt: Date;
+    _id?: Types.ObjectId;
+    ip?: string;
+    userAgent?: string;
+  }): Promise<{ token: string; _id: Types.ObjectId }> {
     const token = generateToken();
-    const now = new Date();
+    const _id = input._id ?? new Types.ObjectId();
     await this.refreshTokens.create({
+      _id,
       tokenHash: sha256(token),
-      familyId: randomUUID(),
-      parentId: null,
-      userId: new Types.ObjectId(userId),
-      clientId,
-      scope: scopes,
-      resource,
-      issuedAt: now,
-      expiresAt: new Date(now.getTime() + this.refreshTokenTtl * 1000),
+      familyId: input.familyId,
+      parentId: input.parentId,
+      userId: new Types.ObjectId(input.userId),
+      clientId: input.clientId,
+      scope: input.scope,
+      resource: input.resource,
+      issuedAt: input.issuedAt,
+      expiresAt: input.expiresAt,
+      ...(input.ip !== undefined ? { ip: input.ip } : {}),
+      ...(input.userAgent !== undefined ? { userAgent: input.userAgent } : {}),
     });
-    return token;
+    return { token, _id };
   }
 }

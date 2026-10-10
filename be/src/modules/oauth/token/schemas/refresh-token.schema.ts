@@ -17,6 +17,9 @@ export const RefreshTokenSchema = new Schema({
   revokedAt: { type: Date },
   replacedBy: { type: Schema.Types.ObjectId },
   reuseDetectedAt: { type: Date },
+  // Stamped by EVERY family revoke (reuse AND /revoke) before the revoke updateMany, so a
+  // concurrent rotate can re-read it after minting its successor and self-revoke (INV-11 race close).
+  familyRevokedAt: { type: Date },
   deviceId: { type: String },
   ip: { type: String },
   userAgent: { type: String },

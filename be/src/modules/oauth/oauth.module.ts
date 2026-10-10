@@ -10,6 +10,7 @@ import { AuthorizationCodeService } from './code/authorization-code.service';
 import { ConsentService } from './consent/consent.service';
 import { TokenController } from './token/token.controller';
 import { TokenService } from './token/token.service';
+import { RefreshTokenService } from './token/refresh-token.service';
 import { HtmlExceptionFilter } from '../ui/html-exception.filter';
 import { CsrfGuard, CsrfService } from '../ui/csrf.service';
 
@@ -30,6 +31,7 @@ import { CsrfGuard, CsrfService } from '../ui/csrf.service';
     AuthorizationCodeService,
     ConsentService,
     TokenService,
+    RefreshTokenService,
     CsrfService,
     CsrfGuard,
     HtmlExceptionFilter,

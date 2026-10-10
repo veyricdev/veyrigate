@@ -26,6 +26,7 @@ import type { AuditEvent } from '../src/modules/security/audit/audit.types';
 import { AuthorizationCodeService } from '../src/modules/oauth/code/authorization-code.service';
 import { TokenController } from '../src/modules/oauth/token/token.controller';
 import { TokenService } from '../src/modules/oauth/token/token.service';
+import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -110,6 +111,7 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
       controllers: [TokenController],
       providers: [
         TokenService,
+        RefreshTokenService,
         AuthorizationCodeService,
         ClientService,
         ClientCredentialService,

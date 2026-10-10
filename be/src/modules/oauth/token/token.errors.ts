@@ -11,6 +11,7 @@ export type TokenErrorCode =
   | 'invalid_grant'
   | 'unauthorized_client'
   | 'unsupported_grant_type'
+  | 'invalid_scope'
   | 'invalid_target'
   | 'server_error';
 
