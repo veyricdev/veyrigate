@@ -2,10 +2,10 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `18-consent-session-hardening`, cổng: **tester ✅ PASS** → orchestrator đóng run. Tester thêm 3 int test (DEBT-056/057/058) lấp khe senior, mutation chứng minh load-bearing (revert nguyên trạng, KHÔNG sửa code sản phẩm). Full suite: typecheck/lint OK, unit 131 + int 400 = **531** xanh. Xem `runs/18-consent-session-hardening/test-report.md`.
-- **Vòng lặp (run 18)**: analyst=1, tech-lead=1 (PASS), dev=2 (retry 1), senior=2 (REJECT → PASS). **Vòng lặp (run 17)**: analyst=1, tech-lead=1 (PASS), dev=1, senior=1 (PASS), tester=1 (PASS)
-- **Run vừa đóng**: `17-introspect-hardening` ✅ 4/4 task — 506/506 test (unit 127 + int 379). Xem `runs/17-introspect-hardening/summary.md`.
-- **Việc tiếp theo**: orchestrator đóng run 18 (commit code dev + 3 int test tester). Sau đó hoàn tất M3/M4 còn cần T2 (fe-sso-test) + X1, T3–T5.
+- **Run hiện tại**: không có (18-consent-session-hardening đã đóng, commit `46da89a`).
+- **Vòng lặp (run 18)**: analyst=1, tech-lead=1 (PASS), dev=2 (retry 1), senior=2 (REJECT → PASS), tester=1 (PASS)
+- **Run vừa đóng**: `18-consent-session-hardening` ✅ 5/5 task — 531/531 test (unit 131 + int 400). Xem `runs/18-consent-session-hardening/summary.md`.
+- **Việc tiếp theo**: B4 (OAuth core BE) xong. Hoàn tất M3/M4 còn cần **T2** (fe-sso-test) + **X1**, rồi **T3–T5**; sau đó M5 (B5 federation, B6 admin API). Debt đáng chú ý: DEBT-059 (audit `TOKEN_ISSUED` trước re-check).
   Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`; full suite = `pnpm test` (unit 131) + `pnpm test:int` (int 400) = **531**.
 
 ## Tiến độ
@@ -29,6 +29,7 @@
 | [15](runs/15-B4.6/summary.md) | M4 | B4.6 | ✅ 405/405 | `d513348` |
 | [16](runs/16-B4.7/summary.md) | M4 | B4.7 | ✅ 473/473 | `8613b4f` |
 | [17](runs/17-introspect-hardening/summary.md) | M4 | introspect-hardening (DEBT-037/040/041/043/045/046) | ✅ 506/506 | `70842e0` |
+| [18](runs/18-consent-session-hardening/summary.md) | M4 | consent-session-hardening (DEBT-026/027/028/050/051/052) | ✅ 531/531 | `46da89a` |
 
 ## Chặn / cần người quyết định
 
@@ -36,4 +37,4 @@ Xem `plan.md` §12. Còn mở: **Q3, Q5, Q7–Q9**. **Q1, Q4, Q6 đã chốt** (
 
 ## Backlog mở
 
-43 mục mở (+DEBT-050…053 senior run 17, +DEBT-054 tester run 17, +DEBT-055 tech-lead run 18, +DEBT-059…062 senior run 18; DEBT-056/057/058 đã đóng ở run 18 bởi tester). Xem [backlog.md](backlog.md): DEBT-037/040/041/043/045/046 → introspect-hardening; DEBT-044 → consent-hardening/B7; DEBT-047/048/049 (run 17 tech-lead) → sau; DEBT-039 → B7.1; DEBT-042 → B7; DEBT-026/027 → consent-hardening.
+29 mục mở. Xem [backlog.md](backlog.md). Run 18 đóng DEBT-026/027/028/050/051/052/056/057/058 và dọn các mục đã xong ở run 16–17 (034/037/038/040/041/043/045/046). Mở mới: DEBT-055, 059–062.

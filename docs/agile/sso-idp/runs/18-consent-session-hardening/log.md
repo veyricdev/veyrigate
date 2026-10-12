@@ -75,3 +75,7 @@
 - File đổi: be/test/refresh-token.int-spec.ts (+3 test), runs/18-consent-session-hardening/test-report.md (mới), backlog.md (DEBT-056/057/058 → Đã đóng), STATUS.md, log.md. KHÔNG đụng .vscode/mcp.json/.mcp.json/.github/agents/*.
 - Kết quả: **PASS** 531/531. Đóng DEBT-056/057/058.
 - Bàn giao: **orchestrator** — đóng run 18.
+
+## [2026-10-12] orchestrator
+- Đã làm: commit code `46da89a`; viết `summary.md`; cập nhật `STATUS.md`; chuyển các DEBT đã xử lý ở run 16–18 sang bảng Đã đóng của `backlog.md`.
+- Kết quả: DONE — run 18 đóng.
