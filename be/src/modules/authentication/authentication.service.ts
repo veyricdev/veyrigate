@@ -23,6 +23,7 @@ import { resetPasswordMessage, verifyEmailMessage } from '../mailer/templates';
 import { AuditAction } from '../security/audit/audit-action.enum';
 import { AuditService } from '../security/audit/audit.service';
 import { SessionService } from '../sessions/session.service';
+import { RefreshTokenService } from '../oauth/token/refresh-token.service';
 import { DuplicateError } from '../identity/identity.errors';
 
 interface OneTimeTokenDoc {
@@ -53,6 +54,7 @@ export class AuthenticationService {
     private readonly users: UserService,
     private readonly memberships: UserTenantService,
     private readonly sessions: SessionService,
+    private readonly refreshTokens: RefreshTokenService,
     private readonly audit: AuditService,
     @Inject(MAILER) private readonly mailer: Mailer,
     @InjectModel('PasswordResetToken') private readonly resetTokens: Model<OneTimeTokenDoc>,
@@ -176,10 +178,22 @@ export class AuthenticationService {
     if (!consumed || !(await this.users.setPassword(String(consumed.userId), passwordHash))) {
       throw new BadRequestException('This link is invalid or expired.');
     }
-    await this.sessions.revokeAllForUser(String(consumed.userId));
+    // §9.8 / INV-11 / INV-28: terminate every session AND every refresh family of the user so a
+    // leaked/old credential cannot survive the reset. `setPassword` MUST run before any revoke: if
+    // we revoked first, an attacker who knows the old password could log in in between and keep a
+    // fresh session. Order (tech-lead fold): revoke families (stamp-first) → revoke sessions (MARK,
+    // writes tombstones) → revoke families again (SWEEP) so a family a concurrent `/token` created
+    // between the first revoke and the session tombstone cannot survive (§15 inv. 29). Any infra
+    // failure here propagates (5xx) — we do NOT swallow it, do NOT report success, and do NOT roll
+    // the password back (rollback would re-enable a possibly-leaked password).
+    const userId = String(consumed.userId);
+    const now = new Date();
+    await this.refreshTokens.revokeAllForUser(userId, now);
+    await this.sessions.revokeAllForUser(userId);
+    await this.refreshTokens.revokeAllForUser(userId, now);
     await this.audit.record({
       actorType: 'user',
-      actorId: String(consumed.userId),
+      actorId: userId,
       action: AuditAction.AUTH_PASSWORD_RESET,
       result: 'success',
     });

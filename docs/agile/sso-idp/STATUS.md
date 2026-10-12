@@ -2,11 +2,11 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: không có (17-introspect-hardening đã đóng, commit `70842e0`).
-- **Vòng lặp (run 17)**: analyst=1, tech-lead=1 (PASS), dev=1, senior=1 (PASS), tester=1 (PASS)
+- **Run hiện tại**: `18-consent-session-hardening`, cổng: **tester ✅ PASS** → orchestrator đóng run. Tester thêm 3 int test (DEBT-056/057/058) lấp khe senior, mutation chứng minh load-bearing (revert nguyên trạng, KHÔNG sửa code sản phẩm). Full suite: typecheck/lint OK, unit 131 + int 400 = **531** xanh. Xem `runs/18-consent-session-hardening/test-report.md`.
+- **Vòng lặp (run 18)**: analyst=1, tech-lead=1 (PASS), dev=2 (retry 1), senior=2 (REJECT → PASS). **Vòng lặp (run 17)**: analyst=1, tech-lead=1 (PASS), dev=1, senior=1 (PASS), tester=1 (PASS)
 - **Run vừa đóng**: `17-introspect-hardening` ✅ 4/4 task — 506/506 test (unit 127 + int 379). Xem `runs/17-introspect-hardening/summary.md`.
-- **Việc tiếp theo**: run **consent-hardening** (DEBT-026/027/028) — đề xuất gộp **DEBT-050** (ưu tiên cao: reset mật khẩu không thu hồi refresh family) + 051/052. Hoàn tất M3/M4 còn cần T2 (fe-sso-test) + X1, T3–T5.
-  Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`; full suite = `pnpm test` (127) + `pnpm test:int` (379) = **506**.
+- **Việc tiếp theo**: orchestrator đóng run 18 (commit code dev + 3 int test tester). Sau đó hoàn tất M3/M4 còn cần T2 (fe-sso-test) + X1, T3–T5.
+  Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`; full suite = `pnpm test` (unit 131) + `pnpm test:int` (int 400) = **531**.
 
 ## Tiến độ
 
@@ -36,4 +36,4 @@ Xem `plan.md` §12. Còn mở: **Q3, Q5, Q7–Q9**. **Q1, Q4, Q6 đã chốt** (
 
 ## Backlog mở
 
-38 mục mở (+DEBT-050…053 senior, +DEBT-054 tester run 17). Xem [backlog.md](backlog.md): DEBT-037/040/041/043/045/046 → introspect-hardening; DEBT-044 → consent-hardening/B7; DEBT-047/048/049 (run 17 tech-lead) → sau; DEBT-039 → B7.1; DEBT-042 → B7; DEBT-026/027 → consent-hardening.
+43 mục mở (+DEBT-050…053 senior run 17, +DEBT-054 tester run 17, +DEBT-055 tech-lead run 18, +DEBT-059…062 senior run 18; DEBT-056/057/058 đã đóng ở run 18 bởi tester). Xem [backlog.md](backlog.md): DEBT-037/040/041/043/045/046 → introspect-hardening; DEBT-044 → consent-hardening/B7; DEBT-047/048/049 (run 17 tech-lead) → sau; DEBT-039 → B7.1; DEBT-042 → B7; DEBT-026/027 → consent-hardening.

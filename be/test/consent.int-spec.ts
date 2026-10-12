@@ -65,18 +65,79 @@ describe('ConsentService on real Mongo (B4.2a, spec Â§9.4/Â§10, Q1 user Ã�
     expect(service.isCovered(null, ['openid'], versions())).toBe(false);
   });
 
-  it('grant is idempotent/atomic: two concurrent grants of the same key => exactly one record', async () => {
+  it('grant is idempotent/atomic: two concurrent grants of the same key => exactly one record, union preserved (DEBT-027)', async () => {
+    // Repeat the race many times: the single atomic update-pipeline means neither concurrent grant
+    // can lose the other's scope from the union, regardless of interleaving.
+    for (let i = 0; i < 20; i += 1) {
+      const u = user();
+      await Promise.all([
+        service.grant(u, CLIENT, RES_A, ['openid'], versions(), ALLOWED),
+        service.grant(u, CLIENT, RES_A, ['profile'], versions(), ALLOWED),
+      ]);
+      const count = await model.countDocuments({
+        userId: new Types.ObjectId(u),
+        clientId: CLIENT,
+        resource: RES_A,
+      });
+      expect(count).toBe(1);
+      const c = await service.find(u, CLIENT, RES_A);
+      // `$setUnion` does not preserve order; compare as a set.
+      expect([...c!.grantedScopes].sort()).toEqual(['openid', 'profile']);
+    }
+  });
+
+  it('grant intersects with allowedScopes: a scope dropped from the client never carries forward (DEBT-027)', async () => {
     const u = user();
-    await Promise.all([
-      service.grant(u, CLIENT, RES_A, ['openid'], versions(), ALLOWED),
-      service.grant(u, CLIENT, RES_A, ['profile'], versions(), ALLOWED),
+    await service.grant(u, CLIENT, RES_A, ['openid', 'profile'], versions(), ALLOWED);
+    // The client later loses `profile`; a re-grant must not keep `profile` in the union.
+    await service.grant(u, CLIENT, RES_A, ['email'], versions(), ['openid', 'email']);
+    const c = await service.find(u, CLIENT, RES_A);
+    expect([...c!.grantedScopes].sort()).toEqual(['email', 'openid']);
+    expect(c!.grantedScopes).not.toContain('profile');
+  });
+
+  it('grant requesting a scope outside allowedScopes is filtered out (no over-grant, fail-closed) (DEBT-027)', async () => {
+    const u = user();
+    await service.grant(u, CLIENT, RES_A, ['openid', 'admin:all'], versions(), [
+      'openid',
+      'profile',
     ]);
-    const count = await model.countDocuments({
-      userId: new Types.ObjectId(u),
-      clientId: CLIENT,
-      resource: RES_A,
-    });
-    expect(count).toBe(1);
+    const c = await service.find(u, CLIENT, RES_A);
+    expect(c!.grantedScopes).toEqual(['openid']);
+  });
+
+  it('a field-path-like scope ($grantedScopes) is treated as a literal value, not a Mongo path (DEBT-027)', async () => {
+    const u = user();
+    // Pre-grant a real scope; then request a malicious "$grantedScopes" that is NOT in allowed.
+    await service.grant(u, CLIENT, RES_A, ['openid'], versions(), ALLOWED);
+    await service.grant(u, CLIENT, RES_A, ['$grantedScopes'], versions(), ALLOWED);
+    const c = await service.find(u, CLIENT, RES_A);
+    // `$literal` means the string was compared as a plain value; it is not in `allowed`, so it is
+    // filtered out and the grant did NOT expand to echo the existing grantedScopes array.
+    expect(c!.grantedScopes).toEqual(['openid']);
+    expect(c!.grantedScopes).not.toContain('$grantedScopes');
+  });
+
+  it('a field-path-like scope present in allowed is stored as the literal string, not resolved (DEBT-027 $literal)', async () => {
+    const u = user();
+    // Both requested AND allowed are `['$policyVersion']`. With `$literal`, each side is a plain
+    // string array, so the intersection is the literal `['$policyVersion']`. WITHOUT `$literal`,
+    // the aggregation would read `$policyVersion` in the allowed array as a FIELD PATH resolving to
+    // the document's policyVersion value ('1'), so the intersection would be [] (or ['1']) — this
+    // assertion fails. This distinguishes the two behaviours (removing `$literal` must break it).
+    await service.grant(u, CLIENT, RES_A, ['$policyVersion'], versions(), ['$policyVersion']);
+    const c = await service.find(u, CLIENT, RES_A);
+    expect(c!.grantedScopes).toEqual(['$policyVersion']);
+  });
+
+  it('grantedAt is set on insert and never changed by a later grant; updatedAt advances (DEBT-027)', async () => {
+    const u = user();
+    const first = await service.grant(u, CLIENT, RES_A, ['openid'], versions(), ALLOWED);
+    const grantedAt = first.grantedAt.getTime();
+    await new Promise((r) => setTimeout(r, 5));
+    const second = await service.grant(u, CLIENT, RES_A, ['profile'], versions(), ALLOWED);
+    expect(second.grantedAt.getTime()).toBe(grantedAt); // unchanged on update
+    expect(second.updatedAt.getTime()).toBeGreaterThanOrEqual(first.updatedAt.getTime());
   });
 
   it('two resources of the same user Ã— client are independent records', async () => {

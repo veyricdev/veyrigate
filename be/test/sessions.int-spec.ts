@@ -321,5 +321,37 @@ describe('SessionService on real Redis (B2.3, INV-16/17)', () => {
       await expect(broken.exists('a'.repeat(64))).rejects.toThrow();
       dead.disconnect();
     });
+
+    it('re-login (establish) deletes the old session but writes NO tombstone (DEBT-052, §8 limit 1)', async () => {
+      const u = user('tomb-relogin');
+      const { id: oldId } = await tomb.create(u, 'tenant-A');
+      const oldRef = sha256(oldId);
+      expect(await tomb.exists(oldRef)).toBe(true);
+
+      const { id: newId, session: newSession } = await tomb.establish(oldId, u, 'tenant-A');
+
+      expect(await tomb.exists(oldRef)).toBe(false); // old session gone
+      expect(await tomb.isEnded(oldRef)).toBe(false); // but NOT actively ended => no tombstone
+      expect(newId).not.toBe(oldId);
+      // The new session is live and tracked under the user index.
+      expect(await tomb.exists(newSession.ref)).toBe(true);
+      expect(await redis.sismember(`user_sess:${u}`, oldRef)).toBe(0);
+    });
+
+    it('absolute-lifetime expiry via get() deletes the session with NO tombstone (DEBT-052)', async () => {
+      // Use the injected-clock `svc` (idle 8h / absolute 30d) so we can jump past the deadline
+      // deterministically and drive get() into the `deadline <= now` branch (no sleep).
+      const u = user('tomb-absolute');
+      const { id, session } = await svc.create(u, 'tenant-A');
+      expect(await svc.get(id)).not.toBeNull();
+
+      clock += 2592000_000 + 1000; // jump just past the 30d absolute lifetime
+      expect(await svc.get(id)).toBeNull(); // expired => null
+
+      expect(await svc.exists(session.ref)).toBe(false); // sess:{ref} deleted
+      expect(await svc.isEnded(session.ref)).toBe(false); // NO tombstone (natural expiry)
+      expect(await redis.sismember(`user_sess:${u}`, session.ref)).toBe(0); // index pruned
+      clock = Date.now();
+    });
   });
 });

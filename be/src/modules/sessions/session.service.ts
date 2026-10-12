@@ -149,7 +149,12 @@ export class SessionService {
     opts: CreateSessionOptions = {},
   ): Promise<{ id: string; session: Session }> {
     if (oldId) {
-      await this.revoke(oldId);
+      // Re-login (session fixation rotate, §9.6) is NOT an active termination (§8 limit 1): only
+      // rotate the cookie. Do NOT write a tombstone (would make the old `sid` access token inactive)
+      // and do NOT revoke the old session's refresh families (would break `offline_access`, which
+      // lives independently of the browser session). Only global logout / password reset / device
+      // revoke / `/revoke` / reuse detection tear a family down.
+      await this.revoke(oldId, { tombstone: false });
     }
     return this.create(userId, tenantId, opts);
   }
@@ -164,7 +169,10 @@ export class SessionService {
     const now = this.now();
     const deadline = data.createdAt + this.absoluteMs;
     if (deadline <= now) {
-      await this.revokeRef(ref, data.userId);
+      // Absolute-lifetime expiry is natural expiry (§8 limit 1), NOT an active termination: delete
+      // the session but do NOT write a tombstone and do NOT revoke refresh families — an
+      // `offline_access` token keeps working like it would after idle expiry.
+      await this.revokeRef(ref, data.userId, false);
       return null;
     }
     const next: SessionData = { ...data, lastSeenAt: now };
@@ -174,11 +182,16 @@ export class SessionService {
     return ok === 'OK' ? { ref, ...next } : null;
   }
 
-  /** Revoke by raw ID (logout / pre-login ID replacement). No-op if already gone. */
-  async revoke(id: string): Promise<void> {
+  /**
+   * Revoke by raw ID (logout / pre-login ID replacement). No-op if already gone. By default this
+   * is an active termination and writes the `sess_end:{ref}` tombstone; `establish` passes
+   * `tombstone: false` so a pre-login ID replacement (re-login) only rotates the cookie (§8 limit
+   * 1): no tombstone, no refresh-family revoke.
+   */
+  async revoke(id: string, opts: { tombstone?: boolean } = {}): Promise<void> {
     const ref = sha256(id);
     const data = await this.read(ref);
-    await this.revokeRef(ref, data?.userId);
+    await this.revokeRef(ref, data?.userId, opts.tombstone ?? true);
   }
 
   /** Live sessions of a user (for "your devices"); prunes index entries whose session expired. */
@@ -239,10 +252,11 @@ export class SessionService {
   }
 
   /**
-   * Whether the session `ref` was actively ended (logout / device revoke / password reset /
-   * absolute-lifetime expiry), i.e. a `sess_end:{ref}` tombstone exists (DEBT-037). A session that
-   * merely expired naturally has NO tombstone, so this returns `false`. Redis errors propagate so a
-   * caller fails closed (never silently "not ended"). `ref` is not validated here — the caller
+   * Whether the session `ref` was actively ended (logout / device revoke / password reset), i.e. a
+   * `sess_end:{ref}` tombstone exists (DEBT-037). A session that merely expired naturally (idle or
+   * absolute lifetime) or was replaced by a re-login (§8 limit 1) has NO tombstone, so this returns
+   * `false`. Redis errors propagate so a caller fails closed (never silently "not ended"). `ref` is
+   * not validated here — the caller
    * (`isAccessTokenLive`) already rejects a malformed `sid` before calling.
    */
   async isEnded(ref: string): Promise<boolean> {
@@ -254,16 +268,18 @@ export class SessionService {
     return raw ? (JSON.parse(raw) as SessionData) : null;
   }
 
-  private async revokeRef(ref: string, userId: string | undefined): Promise<void> {
+  private async revokeRef(
+    ref: string,
+    userId: string | undefined,
+    tombstone = true,
+  ): Promise<void> {
     // Write the `sess_end:{ref}` tombstone (DEBT-037) in the same atomic MULTI as the deletes so
-    // every active-termination path (logout, device revoke, password reset, absolute expiry via
-    // `get`) makes a `sid=ref` access token inactive immediately. A natural TTL expiry (idle) never
-    // comes through here, so `offline_access` tokens survive it.
-    const multi = this.redis.client
-      .multi()
-      .del(sessKey(ref))
-      .del(sessRpKey(ref))
-      .set(sessEndKey(ref), '1', 'PX', this.endTtlMs);
+    // every ACTIVE-termination path (logout, device revoke, password reset) makes a `sid=ref`
+    // access token inactive immediately. Natural TTL expiry (idle) never comes through here, and
+    // re-login / absolute-lifetime expiry (DEBT-052, §8 limit 1) pass `tombstone=false` so they
+    // only delete the session — `offline_access` tokens survive them like idle expiry.
+    const multi = this.redis.client.multi().del(sessKey(ref)).del(sessRpKey(ref));
+    if (tombstone) multi.set(sessEndKey(ref), '1', 'PX', this.endTtlMs);
     if (userId) multi.srem(userKey(userId), ref);
     await execOrThrow(multi);
   }

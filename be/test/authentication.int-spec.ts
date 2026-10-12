@@ -13,6 +13,7 @@ import { MAILER, type MailMessage } from '../src/modules/mailer/mailer';
 import { AuditAction } from '../src/modules/security/audit/audit-action.enum';
 import { AuditService } from '../src/modules/security/audit/audit.service';
 import { SessionService } from '../src/modules/sessions/session.service';
+import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -27,6 +28,9 @@ describe('Authentication races on real Mongo (B2.4, C2-C6, C13)', () => {
   const audit = { record: jest.fn(async (_event: unknown) => undefined) };
   const sessions = {
     establish: jest.fn(),
+    revokeAllForUser: jest.fn(async () => 0),
+  };
+  const refreshTokens = {
     revokeAllForUser: jest.fn(async () => 0),
   };
   const messages: MailMessage[] = [];
@@ -46,6 +50,7 @@ describe('Authentication races on real Mongo (B2.4, C2-C6, C13)', () => {
         UserService,
         UserTenantService,
         { provide: SessionService, useValue: sessions },
+        { provide: RefreshTokenService, useValue: refreshTokens },
         { provide: AuditService, useValue: audit },
         {
           provide: MAILER,

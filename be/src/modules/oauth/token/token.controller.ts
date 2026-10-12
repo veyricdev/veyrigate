@@ -181,7 +181,38 @@ export class TokenController {
     }
 
     const audit = { ip: req.ip, requestId: req.id };
-    const response = await this.tokens.issueForAuthorizationCode(client, data, audit);
+    const { response, familyId } = await this.tokens.issueForAuthorizationCode(client, data, audit);
+
+    // DEBT-051 / INV-29: the `exists` check above is a fail-fast read; a logout can still slip in
+    // between it and the family insert (TOCTOU). Re-check AFTER the insert for EVERY code grant —
+    // even one that minted no refresh family (no `offline_access`) must not hand a logged-out
+    // session a fresh access/id token. If the session is gone now, refuse to return any token; and
+    // if a family WAS minted, revoke it first. Only `revokeFamilyForEndedSession` (scoped to the
+    // just-minted `familyId` + this client) — NOT `revokeForSession`, which would also kill an
+    // older `offline_access` family of a session that merely idle-expired in the window (§8
+    // limit 1). A Redis error on the re-check still fails closed (500): the family is revoked
+    // best-effort first so no orphan grant survives, then the original error propagates. Combined
+    // with the SWEEP in logout/reset (§9.8) no family survives bound to an actively-ended session.
+    let live: boolean;
+    try {
+      live = await this.sessions.exists(data.sessionRef);
+    } catch (err) {
+      if (familyId) {
+        await this.refresh
+          .revokeFamily(familyId, client.clientId, new Date())
+          .catch(() => undefined);
+      }
+      throw err;
+    }
+    if (!live) {
+      if (familyId) {
+        await this.refresh.revokeFamilyForEndedSession(familyId, client.clientId, new Date(), {
+          ip: req.ip,
+          requestId: req.id,
+        });
+      }
+      throw new TokenError('invalid_grant');
+    }
     return reply.status(HttpStatus.OK).send(response);
   }
 

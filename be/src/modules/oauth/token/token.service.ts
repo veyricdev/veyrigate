@@ -72,12 +72,17 @@ export class TokenService {
    * is the context the code was bound to (resource/scope/userId/nonce/authTime). Throws
    * `TokenError` for domain failures; lets infrastructure errors (sign/DB/audit) propagate so the
    * controller returns a fail-closed 500 without a partially issued token.
+   *
+   * Returns the signed `response` plus the `familyId` of any refresh family just minted (undefined
+   * when none). The controller uses `familyId` to re-check session liveness AFTER the insert and
+   * revoke the family if the browser session was terminated during the code's exchange window
+   * (DEBT-051, §15 inv. 29). `familyId` stays server-side (never in the HTTP body / logs).
    */
   async issueForAuthorizationCode(
     client: Client,
     data: AuthorizationCodeData,
     audit: { ip?: string; userAgent?: string; requestId?: string } = {},
-  ): Promise<TokenResponse> {
+  ): Promise<{ response: TokenResponse; familyId?: string }> {
     // An access token must target a concrete resource; a code with no bound resource (the public
     // client case) cannot mint one, and RefreshToken.resource is schema-required (fail-closed).
     if (!data.resource) {
@@ -108,15 +113,17 @@ export class TokenService {
     const issueRefresh =
       client.grantTypes.includes('refresh_token') && scopes.includes('offline_access');
     let refreshToken: string | undefined;
+    let familyId: string | undefined;
     if (issueRefresh) {
       // First token of a new family (parentId=null); absolute lifetime now + refreshTokenTtl (Q6).
       const now = new Date();
+      familyId = randomUUID();
       const minted = await this.insertRefreshToken({
         userId: data.userId,
         clientId: client.clientId,
         scope: scopes,
         resource,
-        familyId: randomUUID(),
+        familyId,
         parentId: null,
         issuedAt: now,
         expiresAt: new Date(now.getTime() + this.refreshTokenTtl * 1000),
@@ -142,12 +149,15 @@ export class TokenService {
     });
 
     return {
-      access_token: accessToken,
-      token_type: 'Bearer',
-      expires_in: this.accessTokenTtl,
-      scope,
-      ...(idToken ? { id_token: idToken } : {}),
-      ...(refreshToken ? { refresh_token: refreshToken } : {}),
+      response: {
+        access_token: accessToken,
+        token_type: 'Bearer',
+        expires_in: this.accessTokenTtl,
+        scope,
+        ...(idToken ? { id_token: idToken } : {}),
+        ...(refreshToken ? { refresh_token: refreshToken } : {}),
+      },
+      ...(familyId ? { familyId } : {}),
     };
   }
 

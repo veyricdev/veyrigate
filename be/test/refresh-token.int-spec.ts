@@ -29,6 +29,11 @@ import { TokenController } from '../src/modules/oauth/token/token.controller';
 import { TokenService } from '../src/modules/oauth/token/token.service';
 import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
 import { SessionService } from '../src/modules/sessions/session.service';
+import { AuthenticationService } from '../src/modules/authentication/authentication.service';
+import { UserService } from '../src/modules/identity/user.service';
+import { UserTenantService } from '../src/modules/identity/user-tenant.service';
+import { MAILER, type MailMessage } from '../src/modules/mailer/mailer';
+import { isAccessTokenLive } from '../src/modules/oauth/access-token-liveness';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -83,7 +88,10 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
   let sessionSvc: SessionService;
   let tokenSvc: TokenService;
   let verifier: TokenVerifier;
+  let authSvc: AuthenticationService;
+  let userSvc: UserService;
   let refreshModel: Model<Record<string, unknown>>;
+  let resetModel: Model<Record<string, unknown>>;
   let auditModel: Model<AuditEvent>;
   let clientModel: Model<Client>;
 
@@ -306,6 +314,12 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
         AuditService,
         TokenSigner,
         TokenVerifier,
+        // DEBT-050: a real AuthenticationService so `resetPassword` drives the real refresh-family
+        // + session revoke (no mocks) end to end against Mongo/Redis.
+        AuthenticationService,
+        UserService,
+        UserTenantService,
+        { provide: MAILER, useValue: { send: async (_m: MailMessage) => undefined } },
         { provide: KEY_PROVIDER, useValue: provider },
         { provide: RedisService, useValue: new RedisService(redis) },
         { provide: ConfigService, useValue: cfg },
@@ -321,7 +335,10 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
     sessionSvc = moduleRef.get(SessionService);
     tokenSvc = moduleRef.get(TokenService);
     verifier = moduleRef.get(TokenVerifier);
+    authSvc = moduleRef.get(AuthenticationService);
+    userSvc = moduleRef.get(UserService);
     refreshModel = app.get<Model<Record<string, unknown>>>(getModelToken('RefreshToken'));
+    resetModel = app.get<Model<Record<string, unknown>>>(getModelToken('PasswordResetToken'));
     auditModel = app.get<Model<AuditEvent>>(getModelToken('AuditLog'));
     await syncAllIndexes(refreshModel.db);
 
@@ -1244,6 +1261,537 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       await sessionSvc.revoke(sessionId);
       expect(await sessionSvc.get(sessionId)).toBeNull();
       expect(await sessionSvc.clientsForSession(session.ref)).toEqual([]);
+    });
+  });
+
+  describe('DEBT-050 password reset revokes every refresh family + session of the user', () => {
+    /** Create a user, a live session, and a refresh family bound to that session via /token. */
+    async function seedUserSessionAndFamily(): Promise<{
+      userId: string;
+      sessionRef: string;
+      refreshToken: string;
+      accessToken: string;
+    }> {
+      const email = `reset-${Date.now()}-${Math.random()}@example.com`;
+      const user = await userSvc.createWithPasswordHash(email, 'x'.repeat(10));
+      const userId = user.sub;
+      const { session } = await sessionSvc.create(userId, 'tenant-A');
+      const { code } = await codes.create({
+        clientId: CLIENT,
+        redirectUri: REDIRECT,
+        codeChallenge: CHALLENGE,
+        resource: RESOURCE,
+        scope: 'openid profile offline_access',
+        nonce: 'rp-nonce',
+        userId,
+        authTime: session.authTime,
+        sessionRef: session.ref,
+      } as never);
+      const res = await post(
+        '/token',
+        form({
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: REDIRECT,
+          client_id: CLIENT,
+          code_verifier: VERIFIER,
+        }),
+      );
+      expect(res.statusCode).toBe(200);
+      return {
+        userId,
+        sessionRef: session.ref,
+        refreshToken: res.json().refresh_token as string,
+        accessToken: res.json().access_token as string,
+      };
+    }
+
+    /** Seed a valid one-time reset token for `userId` and return the plaintext token. */
+    async function seedResetToken(userId: string): Promise<string> {
+      const token = `rst-${Date.now()}-${Math.random()}`;
+      await resetModel.create({
+        tokenHash: sha256(token),
+        userId: new Types.ObjectId(userId),
+        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+        usedAt: null,
+      });
+      return token;
+    }
+
+    it('after resetPassword the old refresh token is invalid_grant and the family is revoked', async () => {
+      const { userId, refreshToken } = await seedUserSessionAndFamily();
+      const token = await seedResetToken(userId);
+
+      await authSvc.resetPassword(token, 'a-brand-new-password');
+
+      const after = await refreshReq(refreshToken);
+      expect(after.statusCode).toBe(400);
+      expect(after.json().error).toBe('invalid_grant');
+
+      const doc = await refreshModel.findOne({ tokenHash: sha256(refreshToken) }).lean<{
+        familyRevokedAt?: Date | null;
+        revokedAt?: Date | null;
+      }>();
+      expect(doc!.familyRevokedAt).not.toBeNull();
+      expect(doc!.revokedAt).not.toBeNull();
+
+      // Exactly one AUTH_PASSWORD_RESET audit event for this user.
+      const resets = await auditModel.countDocuments({
+        action: AuditAction.AUTH_PASSWORD_RESET,
+        actorId: userId,
+      });
+      expect(resets).toBe(1);
+    });
+
+    it('the old access token (sid=session) is inactive after reset and stays inactive', async () => {
+      const { userId, sessionRef, accessToken } = await seedUserSessionAndFamily();
+      const token = await seedResetToken(userId);
+
+      await authSvc.resetPassword(token, 'another-strong-password');
+
+      // The session is actively ended (tombstone written by sessions.revokeAllForUser).
+      expect(await sessionSvc.isEnded(sessionRef)).toBe(true);
+
+      const claims = decodeJwt(accessToken) as {
+        sub: string;
+        client_id: string;
+        aud: string;
+        sid?: string;
+      };
+      expect(claims.sid).toBe(sessionRef);
+      const clients = { findByClientId: async () => ({ allowedResources: [RESOURCE] }) };
+      const users = { exists: async () => true };
+      const live = await isAccessTokenLive(claims, clients, users, sessionSvc);
+      expect(live).toBe(false);
+    });
+
+    // DEBT-056: the real threat the reset-family-revoke closes is an attacker who holds the old
+    // refresh token and simply WAITS for the `sess_end:{ref}` tombstone to expire (TTL = accessTTL
+    // + 60s ≈ 16'). The AT's `sid` goes live again once the tombstone is gone, so if the family
+    // were NOT revoked the old refresh could rotate into a FRESH access token whose `sid` passes
+    // `isEnded` → the attacker regains access for up to the 30d refresh lifetime. We force the TTL
+    // to expire deterministically (`redis.del('sess_end:'+ref)`, no sleep) and prove the old
+    // refresh is still refused and no new active AT can be minted.
+    it('after the sess_end tombstone expires, the old refresh is STILL invalid_grant (family revoked, not tombstone-gated)', async () => {
+      const { userId, sessionRef, refreshToken } = await seedUserSessionAndFamily();
+      const token = await seedResetToken(userId);
+
+      await authSvc.resetPassword(token, 'post-reset-strong-password');
+
+      // Simulate the tombstone's TTL elapsing: the `sid` liveness gate now passes again.
+      await redis.del(`sess_end:${sessionRef}`);
+      expect(await sessionSvc.isEnded(sessionRef)).toBe(false); // tombstone really gone
+
+      // The old refresh token still cannot rotate: the family was revoked at reset, independent of
+      // the (now-expired) tombstone. No fresh access token is minted.
+      const after = await refreshReq(refreshToken);
+      expect(after.statusCode).toBe(400);
+      expect(after.json().error).toBe('invalid_grant');
+      expect(after.json().access_token).toBeUndefined();
+      expect(after.json().refresh_token).toBeUndefined();
+
+      // The family row is still stamped revoked (the revoke, not the ephemeral tombstone, is what
+      // holds — `familyRevokedAt`/`revokedAt` survive long after `sess_end:` is gone).
+      const doc = await refreshModel.findOne({ tokenHash: sha256(refreshToken) }).lean<{
+        familyRevokedAt?: Date | null;
+        revokedAt?: Date | null;
+      }>();
+      expect(doc!.familyRevokedAt).not.toBeNull();
+      expect(doc!.revokedAt).not.toBeNull();
+    });
+  });
+
+  // DEBT-057: a REAL interleaving race for password reset (not just a unit `invocationCallOrder`
+  // assertion). Reset runs revoke-families (pre-revoke) → revoke-sessions (MARK/tombstone) →
+  // revoke-families again (SWEEP). A concurrent `/token` code grant can insert a brand-new family
+  // bound to the user's still-live session AFTER pre-revoke already ran and BEFORE the session
+  // tombstone exists — so pre-revoke misses it and `/token`'s own re-check sees a live session and
+  // keeps it. Only the SWEEP (second family revoke, after the session is gone) kills it. We gate
+  // `sessions.revokeAllForUser` so the concurrent `/token` runs to completion inside that exact
+  // window, then assert the family ends up revoked. This fails RED if the SWEEP step is dropped.
+  describe('DEBT-057 password reset SWEEP closes the /token-inserts-family race (real interleaving)', () => {
+    async function seedUser(): Promise<{ userId: string; sessionId: string; sessionRef: string }> {
+      const email = `sweep-${Date.now()}-${Math.random()}@example.com`;
+      const user = await userSvc.createWithPasswordHash(email, 'x'.repeat(10));
+      const { id: sessionId, session } = await sessionSvc.create(user.sub, 'tenant-A');
+      return { userId: user.sub, sessionId, sessionRef: session.ref };
+    }
+
+    async function seedResetToken(userId: string): Promise<string> {
+      const token = `rst-sweep-${Date.now()}-${Math.random()}`;
+      await resetModel.create({
+        tokenHash: sha256(token),
+        userId: new Types.ObjectId(userId),
+        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+        usedAt: null,
+      });
+      return token;
+    }
+
+    function codeGrantForm(code: string): string {
+      return form({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: REDIRECT,
+        client_id: CLIENT,
+        code_verifier: VERIFIER,
+      });
+    }
+
+    it('a /token family inserted during the reset window is revoked by the SWEEP (dies RED without SWEEP)', async () => {
+      const { userId, sessionRef } = await seedUser();
+      const resetToken = await seedResetToken(userId);
+      const { code } = await codes.create({
+        clientId: CLIENT,
+        redirectUri: REDIRECT,
+        codeChallenge: CHALLENGE,
+        resource: RESOURCE,
+        scope: 'openid profile offline_access',
+        nonce: 'rp-nonce',
+        userId,
+        authTime: Date.now(),
+        sessionRef,
+      } as never);
+
+      // Gate the SESSION revoke step (MARK) of reset: park it so the concurrent `/token` can finish
+      // while the session is still live, then release it so the tombstone is written and the SWEEP
+      // (which runs AFTER this) can sweep the new family.
+      const realSessRevokeAll = sessionSvc.revokeAllForUser.bind(sessionSvc);
+      let releaseSession!: () => void;
+      let signalParked!: () => void;
+      const sessionGate = new Promise<void>((r) => (releaseSession = r));
+      const parked = new Promise<void>((r) => (signalParked = r));
+      const sessSpy = jest
+        .spyOn(sessionSvc, 'revokeAllForUser')
+        .mockImplementationOnce(async (uid: string) => {
+          signalParked();
+          await sessionGate;
+          return realSessRevokeAll(uid);
+        });
+
+      // Start reset; it will park at the gated session-revoke step (families already pre-revoked).
+      const resetP = authSvc.resetPassword(resetToken, 'sweep-new-password');
+      await parked;
+
+      // The session is STILL live here (tombstone not yet written) → the /token re-check keeps the
+      // family. This is the family that only the SWEEP can catch.
+      const tokenRes = await post('/token', codeGrantForm(code));
+      expect(tokenRes.statusCode).toBe(200);
+      const insertedRt = tokenRes.json().refresh_token as string;
+      expect(insertedRt).toBeDefined();
+
+      // Release the session revoke; reset proceeds to write the tombstone then run the SWEEP.
+      releaseSession();
+      await resetP;
+      sessSpy.mockRestore();
+
+      // The family inserted during the window MUST be revoked by the SWEEP. Without the SWEEP it
+      // would still be rotatable (pre-revoke ran before it existed, session-MARK does not touch
+      // refresh families) → this assertion turns RED.
+      const doc = await refreshModel
+        .findOne({ tokenHash: sha256(insertedRt) })
+        .lean<{ familyRevokedAt?: Date | null; revokedAt?: Date | null }>();
+      expect(doc).not.toBeNull();
+      expect(doc!.familyRevokedAt).not.toBeNull();
+      expect(doc!.revokedAt).not.toBeNull();
+
+      // And the end-to-end invariant: the refresh token minted in the window cannot rotate.
+      const rotate = await refreshReq(insertedRt);
+      expect(rotate.statusCode).toBe(400);
+      expect(rotate.json().error).toBe('invalid_grant');
+    });
+  });
+
+  describe('DEBT-051 /token code grant re-checks session liveness AFTER inserting the family', () => {
+    /** Create a user + live session and a bound code; return the code-grant request params. */
+    async function codeForLiveSession(): Promise<{
+      sessionId: string;
+      sessionRef: string;
+      userId: string;
+      form: string;
+    }> {
+      const userId = new Types.ObjectId().toHexString();
+      const { id: sessionId, session } = await sessionSvc.create(userId, 'tenant-A');
+      const { code } = await codes.create({
+        clientId: CLIENT,
+        redirectUri: REDIRECT,
+        codeChallenge: CHALLENGE,
+        resource: RESOURCE,
+        scope: 'openid profile offline_access',
+        nonce: 'rp-nonce',
+        userId,
+        authTime: session.authTime,
+        sessionRef: session.ref,
+      } as never);
+      return {
+        sessionId,
+        sessionRef: session.ref,
+        userId,
+        form: form({
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: REDIRECT,
+          client_id: CLIENT,
+          code_verifier: VERIFIER,
+        }),
+      };
+    }
+
+    it('logout slipping in AFTER the family insert ⇒ invalid_grant, family revoked, no token (TOCTOU)', async () => {
+      const { sessionId, sessionRef, form: payload } = await codeForLiveSession();
+
+      // Park the request right after the real family insert (S exists) but before the controller's
+      // post-insert re-check runs. `inserted` resolves the instant the family row exists.
+      const real = tokenSvc.insertRefreshToken.bind(tokenSvc);
+      let release!: () => void;
+      let signalInserted!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      const inserted = new Promise<void>((r) => (signalInserted = r));
+      const spy = jest
+        .spyOn(tokenSvc, 'insertRefreshToken')
+        .mockImplementationOnce(
+          async (input: Parameters<TokenService['insertRefreshToken']>[0]) => {
+            const minted = await real(input);
+            signalInserted();
+            await gate;
+            return minted;
+          },
+        );
+
+      const resP = post('/token', payload);
+      await inserted;
+      // Logout the session while the request is parked (DEL sess + tombstone).
+      await sessionSvc.revoke(sessionId);
+      release();
+      const res = await resP;
+      spy.mockRestore();
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('invalid_grant');
+      expect(res.json().refresh_token).toBeUndefined();
+      expect(res.json().access_token).toBeUndefined();
+
+      // The family created in the window exists but is revoked (familyRevokedAt + revokedAt set).
+      const doc = await refreshModel
+        .findOne({ sessionRef })
+        .lean<{ familyRevokedAt?: Date | null; revokedAt?: Date | null }>();
+      expect(doc).not.toBeNull();
+      expect(doc!.familyRevokedAt).not.toBeNull();
+      expect(doc!.revokedAt).not.toBeNull();
+
+      // Security event is audited exactly once: TOKEN_REVOKED reason=session_ended (§9.8 / Task 2).
+      // Metadata must NOT leak correlatable identifiers (familyId / sessionRef / token).
+      const revokedEvents = await auditModel
+        .find({ action: AuditAction.TOKEN_REVOKED, clientId: CLIENT })
+        .lean<AuditEvent[]>();
+      const ended = revokedEvents.filter(
+        (e) => (e.metadata as { reason?: string } | undefined)?.reason === 'session_ended',
+      );
+      expect(ended).toHaveLength(1);
+      const meta = ended[0].metadata as Record<string, unknown>;
+      expect(meta.count).toBe(1);
+      expect(meta.familyId).toBeUndefined();
+      expect(meta.sessionRef).toBeUndefined();
+    });
+
+    it('session still live ⇒ 200 + token (no regression)', async () => {
+      const { form: payload } = await codeForLiveSession();
+      const res = await post('/token', payload);
+      expect(res.statusCode).toBe(200);
+      const rt = res.json().refresh_token as string;
+      expect(rt).toBeDefined();
+      const doc = await refreshModel
+        .findOne({ tokenHash: sha256(rt) })
+        .lean<{ familyRevokedAt?: Date | null }>();
+      expect(doc!.familyRevokedAt ?? null).toBeNull(); // unset on a live family
+    });
+
+    it('Redis error on the post-insert re-check ⇒ 500, no usable grant minted (fail-closed)', async () => {
+      const { form: payload } = await codeForLiveSession();
+      // Fail the SECOND `exists` (the re-check); the first fail-fast `exists` must still pass.
+      let calls = 0;
+      const existsSpy = jest.spyOn(sessionSvc, 'exists').mockImplementation(async (ref: string) => {
+        calls += 1;
+        if (calls >= 2) throw new Error('redis down');
+        return (
+          (await (
+            sessionSvc as unknown as {
+              redis: { client: { exists: (k: string) => Promise<number> } };
+            }
+          ).redis.client.exists(`sess:${ref}`)) === 1
+        );
+      });
+
+      const res = await post('/token', payload);
+      existsSpy.mockRestore();
+
+      expect(res.statusCode).toBe(500);
+      // The refresh grant for the just-minted family must not be usable: a 500 means the controller
+      // threw before `send`, so no token reached the RP.
+      expect(res.json().refresh_token).toBeUndefined();
+    });
+
+    // DEBT-058: when the re-check throws (Redis down) the controller still best-effort revokes the
+    // family it just minted before propagating the 500. Without that best-effort revoke, a live
+    // `familyRevokedAt == null` row would sit in Mongo for 30d (dead-but-rotatable once Redis
+    // recovers). The refresh VALUE never reached the RP, but the row MUST be stamped revoked so no
+    // orphan grant can ever be exercised. This is the assertion mutation M10 (drop best-effort
+    // revoke) was missing — here it turns RED.
+    it('Redis error on the re-check ⇒ 500 AND the just-minted family is best-effort revoked (familyRevokedAt set)', async () => {
+      const { sessionRef, form: payload } = await codeForLiveSession();
+      let calls = 0;
+      const existsSpy = jest.spyOn(sessionSvc, 'exists').mockImplementation(async (ref: string) => {
+        calls += 1;
+        if (calls >= 2) throw new Error('redis down');
+        return (
+          (await (
+            sessionSvc as unknown as {
+              redis: { client: { exists: (k: string) => Promise<number> } };
+            }
+          ).redis.client.exists(`sess:${ref}`)) === 1
+        );
+      });
+
+      const res = await post('/token', payload);
+      existsSpy.mockRestore();
+
+      expect(res.statusCode).toBe(500);
+      expect(res.json().refresh_token).toBeUndefined();
+      expect(res.json().access_token).toBeUndefined();
+
+      // The family the controller inserted before the re-check threw must be stamped revoked
+      // (best-effort revoke on the catch path), so it can never be rotated even after Redis heals.
+      const doc = await refreshModel
+        .findOne({ sessionRef })
+        .lean<{ familyRevokedAt?: Date | null; revokedAt?: Date | null }>();
+      expect(doc).not.toBeNull();
+      expect(doc!.familyRevokedAt).not.toBeNull();
+      expect(doc!.revokedAt).not.toBeNull();
+    });
+
+    it('non-refresh code grant (no offline_access) whose session ends in the window ⇒ invalid_grant, no access/id token', async () => {
+      // A public client without `refresh_token` grant mints NO family, so the post-insert re-check
+      // must still run (§15 inv. 29 covers EVERY code grant, not only refresh-minting ones).
+      const userId = new Types.ObjectId().toHexString();
+      const { session } = await sessionSvc.create(userId, 'tenant-A');
+      const { code } = await codes.create({
+        clientId: CLIENT_NO_REFRESH,
+        redirectUri: REDIRECT,
+        codeChallenge: CHALLENGE,
+        resource: RESOURCE,
+        scope: 'openid profile',
+        nonce: 'rp-nonce',
+        userId,
+        authTime: session.authTime,
+        sessionRef: session.ref,
+      } as never);
+      const payload = form({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: REDIRECT,
+        client_id: CLIENT_NO_REFRESH,
+        code_verifier: VERIFIER,
+      });
+
+      // Deterministic: first `exists` (fail-fast) sees the live session, second `exists` (post-issue
+      // re-check) sees it gone — exactly the TOCTOU window without any family to gate the insert on.
+      let calls = 0;
+      const existsSpy = jest
+        .spyOn(sessionSvc, 'exists')
+        .mockImplementation(async () => ++calls === 1);
+      const res = await post('/token', payload);
+      existsSpy.mockRestore();
+
+      expect(calls).toBe(2); // the re-check ran even though no family was minted
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('invalid_grant');
+      expect(res.json().access_token).toBeUndefined();
+      expect(res.json().id_token).toBeUndefined();
+    });
+
+    it('session merely idle-expires in the window ⇒ the OLD offline_access family of that session is NOT revoked', async () => {
+      // §8 limit 1: a session that idle-expires (no tombstone) must not kill its still-valid
+      // `offline_access` family. Mint F1 from session S, then exchange a SECOND code from the same S
+      // while F1 lives; drop `sess:S` (idle expiry) in the exchange window. F2 must die (its session
+      // is gone) but F1 must survive — proven by F1.revokedAt==null AND F1's refresh still rotating.
+      const userId = new Types.ObjectId().toHexString();
+      const { session } = await sessionSvc.create(userId, 'tenant-A');
+      const mintCodeForSession = async () =>
+        (
+          await codes.create({
+            clientId: CLIENT,
+            redirectUri: REDIRECT,
+            codeChallenge: CHALLENGE,
+            resource: RESOURCE,
+            scope: 'openid profile offline_access',
+            nonce: 'rp-nonce',
+            userId,
+            authTime: session.authTime,
+            sessionRef: session.ref,
+          } as never)
+        ).code;
+      const payloadFor = (code: string) =>
+        form({
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: REDIRECT,
+          client_id: CLIENT,
+          code_verifier: VERIFIER,
+        });
+
+      // F1: first family of session S (live, kept).
+      const f1Res = await post('/token', payloadFor(await mintCodeForSession()));
+      expect(f1Res.statusCode).toBe(200);
+      const f1Refresh = f1Res.json().refresh_token as string;
+      const f1Doc = await refreshModel
+        .findOne({ tokenHash: sha256(f1Refresh) })
+        .lean<{ familyId: string }>();
+      const f1Family = f1Doc!.familyId;
+
+      // F2: second exchange from the same session; park after its family insert, then idle-expire
+      // the session (DEL sess:S, NO tombstone) before the post-insert re-check.
+      const real = tokenSvc.insertRefreshToken.bind(tokenSvc);
+      let release!: () => void;
+      let signalInserted!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      const inserted = new Promise<void>((r) => (signalInserted = r));
+      const spy = jest
+        .spyOn(tokenSvc, 'insertRefreshToken')
+        .mockImplementationOnce(
+          async (input: Parameters<TokenService['insertRefreshToken']>[0]) => {
+            const minted = await real(input);
+            signalInserted();
+            await gate;
+            return minted;
+          },
+        );
+
+      const resP = post('/token', payloadFor(await mintCodeForSession()));
+      await inserted;
+      await redis.del(`sess:${session.ref}`); // idle expiry: NO tombstone, NO family revoke
+      release();
+      const res = await resP;
+      spy.mockRestore();
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('invalid_grant');
+
+      // F2 died; F1 is untouched (would FAIL if the re-check used revokeForSession instead of
+      // revokeFamily — that would also revoke F1, the still-valid family of the same session).
+      const f1After = await refreshModel
+        .findOne({ familyId: f1Family })
+        .lean<{ revokedAt?: Date | null; familyRevokedAt?: Date | null }>();
+      expect(f1After!.revokedAt ?? null).toBeNull();
+      expect(f1After!.familyRevokedAt ?? null).toBeNull();
+
+      // Proof F1 is genuinely alive: its refresh token still rotates (200).
+      const rotate = await refreshSvc.issueForRefresh(
+        f1Refresh,
+        { clientId: CLIENT, allowedResources: [RESOURCE] },
+        {},
+        {},
+      );
+      expect(rotate.access_token).toBeDefined();
     });
   });
 });

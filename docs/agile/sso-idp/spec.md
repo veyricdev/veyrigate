@@ -215,7 +215,7 @@ Client {
 
 **Quyết định về revocation strategy** (chốt rõ ràng, không để mở): MVP dùng self-contained JWT access token, ngắn hạn (15 phút), không denylist `jti`. Logout hoặc revoke tác động ngay tới session và refresh-token family. Với access token, **resource server tự verify JWT offline vẫn chấp nhận token tới `exp`** (độ trễ tối đa = TTL access token); resource server cần tín hiệu tức thời phải gọi `/introspect`.
 `/introspect` (access token) và `/userinfo` trả inactive / `401 invalid_token` khi: chữ ký/`iss`/`exp`/`typ` sai; client phát hành không còn hoặc không còn được cấp `aud`; user `sub` không còn; **hoặc phiên `sid` đã bị chấm dứt chủ động** (local/global logout, thu hồi thiết bị, đổi/reset mật khẩu) — hiệu lực ngay, qua tombstone `sess_end:{sid}` sống `TTL access token + 60s`. Caller `/introspect` không phải client của token và không giữ `aud` nhận `{active:false}` **trước** mọi tra cứu phụ thuộc nội dung token.
-Giới hạn có chủ đích: (1) phiên **hết hạn tự nhiên** (idle/absolute) KHÔNG làm access token inactive — refresh token `offline_access` sống độc lập với phiên trình duyệt; (2) access token không có `sid` (family phát hành trước B4.7) chỉ theo quy tắc client/aud/user; (3) mất dữ liệu Redis ⇒ quay về baseline ≤ TTL access token. Lỗi Redis/DB khi kiểm ⇒ 500, không bao giờ `active:true`/200.
+Giới hạn có chủ đích: (1) phiên **hết hạn tự nhiên** (idle/absolute) hoặc **bị thay khi đăng nhập lại** (re-login, `prompt=login`, `max_age`) KHÔNG ghi tombstone, KHÔNG revoke refresh family và KHÔNG làm access token inactive — refresh token `offline_access` sống độc lập với phiên trình duyệt; family đó chỉ bị thu hồi bởi logout toàn cục, reset mật khẩu, `/revoke` hoặc reuse detection; (2) access token không có `sid` (family phát hành trước B4.7) chỉ theo quy tắc client/aud/user; (3) mất dữ liệu Redis ⇒ quay về baseline ≤ TTL access token. Lỗi Redis/DB khi kiểm ⇒ 500, không bao giờ `active:true`/200.
 
 ## 9. Các luồng chính
 
@@ -362,7 +362,9 @@ Global logout (POST /logout?scope=all):
 - `GET /logout`: chỉ hiển thị màn hình xác nhận hoặc bắt đầu luồng RP-initiated logout theo chuẩn OIDC, **không** tự huỷ session ngay lập tức — tránh trường hợp CSRF-triggered logout thông qua một thẻ `<img>` hay link ẩn trỏ tới `/logout`.
 - `POST /logout` (được bảo vệ bằng CSRF token hoặc same-site cookie enforcement): mới thực sự thực hiện hành động huỷ — đây là destructive action.
 - 4 lớp logout đầy đủ: (1) local session logout tại IdP, (2) RP-initiated logout (`/logout` nhận `id_token_hint`, redirect về client sau khi huỷ session), (3) front-channel logout (thông báo các RP khác qua iframe), (4) back-channel logout (server-to-server notify RP để RP tự huỷ session cục bộ — có thể triển khai sau, xếp P1).
-- Mọi đường chấm dứt phiên (local/global logout, thu hồi thiết bị, reset mật khẩu) ghi tombstone `sess_end:{ref}` cùng thao tác xoá `sess:{ref}` ⇒ access token mang `sid` đó inactive ngay tại `/introspect`/`/userinfo`; authorization code đã mint của phiên đó không còn đổi được (§15).
+- Mọi đường **chấm dứt phiên chủ động** (local/global logout, thu hồi thiết bị, reset mật khẩu) ghi tombstone `sess_end:{ref}` cùng thao tác xoá `sess:{ref}` ⇒ access token mang `sid` đó inactive ngay tại `/introspect`/`/userinfo`. Thứ tự bắt buộc: revoke refresh family → xoá phiên + tombstone → revoke refresh family lần 2 (sweep, idempotent) — để family được `/token` tạo song song không sống sót (§15 inv. 29). Lỗi hạ tầng ở bất kỳ bước nào ⇒ thao tác báo thất bại (5xx), không báo thành công; reset mật khẩu không rollback mật khẩu mới.
+- Phiên **hết hạn tự nhiên** (idle/absolute) và phiên cũ **bị thay khi đăng nhập lại** (session fixation, §9.6) chỉ bị xoá, KHÔNG tombstone, KHÔNG revoke family (§8 giới hạn 1).
+- Reset mật khẩu thu hồi toàn bộ session **và** toàn bộ refresh family của user.
 - Front-channel hiện chỉ gửi `iss` (chưa `sid`, DEBT-044).
 
 ### 9.9 Identity Broker (Google/GitHub) & account linking an toàn
@@ -535,7 +537,8 @@ Session:
   local logout không ảnh hưởng session của thiết bị khác; global logout revoke toàn bộ ·
   access token có sid inactive ngay sau logout/revoke phiên tại /introspect & /userinfo ·
   phiên idle-expire không chặn refresh/offline_access ·
-  code mint trước logout bị từ chối ở /token
+  code mint trước logout bị từ chối ở /token ·
+  reset mật khẩu ⇒ refresh token cũ `invalid_grant` · re-login/absolute-expiry không làm AT/refresh `offline_access` inactive · logout chen giữa lúc `/token` đổi code ⇒ không family nào sống sót
 
 Account & enumeration:
   duplicate email · social account linking yêu cầu re-auth · unverified email ·
@@ -586,8 +589,8 @@ Cookie & bảo mật chung:
 25. Mọi thao tác nhạy cảm về bảo mật (đăng nhập, revoke, đổi cấu hình client, rotate key...) đều phải sinh audit event, không log giá trị bí mật trong event đó.
 26. Thao tác quản trị nhạy cảm (đổi `redirect_uris`, rotate client secret, đổi quyền truy cập resource) bắt buộc step-up re-authentication trước khi thực hiện, ngoài audit thông thường.
 27. `/login`, `/register`, `/password/reset`, `/password/verify-email` không được trả response khác biệt giữa "tài khoản không tồn tại" và các trường hợp khác, nhằm chống account enumeration.
-28. Access token mang `sid` của một phiên đã bị chấm dứt chủ động phải bị `/introspect` và `/userinfo` coi là không hợp lệ ngay lập tức; lỗi hạ tầng khi kiểm là fail-closed.
-29. (Task 3) `/token` chỉ đổi authorization code khi phiên `sessionRef` gắn với code còn sống; code không mang `sessionRef` hoặc phiên đã kết thúc ⇒ `invalid_grant`, không mint token.
+28. Access token mang `sid` của một phiên đã bị **chấm dứt chủ động** (logout, thu hồi thiết bị, reset mật khẩu) phải bị `/introspect` và `/userinfo` coi là không hợp lệ ngay lập tức; phiên hết hạn tự nhiên hoặc bị thay khi đăng nhập lại không thuộc diện này. Lỗi hạ tầng khi kiểm là fail-closed.
+29. `/token` chỉ đổi authorization code khi phiên `sessionRef` gắn với code còn sống, kiểm **cả trước và sau** khi tạo refresh family; code không mang `sessionRef` hoặc phiên đã kết thúc ⇒ `invalid_grant`, không trả token, và family vừa tạo (nếu có) bị revoke ngay. Kết hợp sweep ở §9.8, không tồn tại refresh family sống gắn với phiên đã bị chấm dứt chủ động.
 
 ## 16. Ưu tiên triển khai
 

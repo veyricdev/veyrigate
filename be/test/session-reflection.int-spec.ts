@@ -319,4 +319,47 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
     // Belt-and-suspenders: the raw JSON string must not leak the session ref either.
     expect(JSON.stringify(body)).not.toContain(g.sessionId);
   });
+
+  // DEBT-052: re-login (session fixation rotate, §9.6) must NOT tombstone the old session and must
+  // NOT revoke its `offline_access` family (§8 limit 1). Only active termination (logout / device
+  // revoke / reset / /revoke / reuse) tears a family down.
+  it('DEBT-052: re-login keeps the old offline_access family alive (refresh rotates, AT active)', async () => {
+    const u = userId;
+    const { id: oldId, session } = await sessions.create(u, 'tenant-A');
+    const { code } = await codes.create({
+      clientId: APP_CLIENT,
+      redirectUri: REDIRECT,
+      codeChallenge: CHALLENGE,
+      resource: RESOURCE,
+      scope: 'openid profile offline_access',
+      userId: u,
+      authTime: session.authTime,
+      sessionRef: session.ref,
+    } as never);
+    const granted = await token(
+      form({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: REDIRECT,
+        client_id: APP_CLIENT,
+        code_verifier: VERIFIER,
+      }),
+      { authorization: basic(APP_CLIENT, appSecret) },
+    );
+    expect(granted.statusCode).toBe(200);
+    const refresh = granted.json().refresh_token as string;
+
+    // Re-login with the old cookie id: rotates the session cookie only (no tombstone, no revoke).
+    await sessions.establish(oldId, u, 'tenant-A');
+    expect(await sessions.isEnded(session.ref)).toBe(false); // NOT actively ended
+
+    // The offline_access family still rotates and the new AT is active (not killed by a tombstone).
+    const rotated = await token(
+      form({ grant_type: 'refresh_token', refresh_token: refresh, client_id: APP_CLIENT }),
+      { authorization: basic(APP_CLIENT, appSecret) },
+    );
+    expect(rotated.statusCode).toBe(200);
+    const at2 = rotated.json().access_token as string;
+    expect((await introspect(at2)).json().active).toBe(true);
+  });
 });

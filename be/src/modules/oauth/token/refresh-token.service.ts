@@ -349,6 +349,35 @@ export class RefreshTokenService {
    * a `TOKEN_REUSE_DETECTED` alert is recorded; the audit metadata never carries the hash or
    * token value (exposure budget). Returns the number of documents actually revoked.
    */
+  /**
+   * Revoke the family just minted for an authorization-code grant whose browser session was
+   * terminated during the code's exchange window (DEBT-051, §15 inv. 29). Audits `TOKEN_REVOKED`
+   * with `reason:'session_ended'` and the revoked `count` — a client-driven security event (the
+   * code was exchanged after a logout). The metadata carries NO `familyId`/`sessionRef`/token
+   * (correlatable identifiers stay out of the audit log). Errors propagate so the controller
+   * fails closed. Returns the number of family members revoked.
+   */
+  async revokeFamilyForEndedSession(
+    familyId: string,
+    clientId: string,
+    now: Date,
+    audit: AuditCtx = {},
+  ): Promise<number> {
+    const modified = await this.revokeFamily(familyId, clientId, now);
+    await this.audit.record({
+      actorType: 'client',
+      actorId: clientId,
+      clientId,
+      action: AuditAction.TOKEN_REVOKED,
+      result: 'success',
+      ip: audit.ip,
+      userAgent: audit.userAgent,
+      requestId: audit.requestId,
+      metadata: { reason: 'session_ended', count: modified },
+    });
+    return modified;
+  }
+
   async revokeFamily(
     familyId: string,
     clientId: string,

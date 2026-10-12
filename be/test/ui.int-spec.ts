@@ -547,8 +547,10 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
     expect(sessionSetCookie(response.headers['set-cookie'])).toContain('Max-Age=0');
     expect(sessions.get).toHaveBeenCalledTimes(1);
     expect(sessions.get).toHaveBeenCalledWith('session-a');
-    // Local logout revokes the refresh family of THIS session only.
-    expect(refreshTokens.revokeForSession).toHaveBeenCalledTimes(1);
+    // Local logout revokes the refresh family of THIS session only, MARK then SWEEP (DEBT-051):
+    // once before and once after the session is revoked+tombstoned, so a /token exchange racing the
+    // logout cannot leave a live family (§9.8 / §15 inv. 29). Both calls use the same scope.
+    expect(refreshTokens.revokeForSession).toHaveBeenCalledTimes(2);
     expect(refreshTokens.revokeForSession).toHaveBeenCalledWith(
       'user-1',
       'session-ref',
@@ -568,11 +570,14 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
       result: 'success',
       metadata: { scope: 'session' },
     });
-    // Order: token revoke -> session revoke -> audit.
+    // Order: token revoke (MARK) -> session revoke -> token revoke (SWEEP) -> audit.
     expect(refreshTokens.revokeForSession.mock.invocationCallOrder[0]).toBeLessThan(
       sessions.revoke.mock.invocationCallOrder[0],
     );
     expect(sessions.revoke.mock.invocationCallOrder[0]).toBeLessThan(
+      refreshTokens.revokeForSession.mock.invocationCallOrder[1],
+    );
+    expect(refreshTokens.revokeForSession.mock.invocationCallOrder[1]).toBeLessThan(
       audit.record.mock.invocationCallOrder[0],
     );
 
@@ -750,7 +755,10 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
 
     it('POST local logout revokes only this session family and audits TOKEN_REVOKED when > 0', async () => {
       sessions.get.mockResolvedValue(liveSession);
-      refreshTokens.revokeForSession.mockResolvedValue(2);
+      // First revoke kills the family (2); the SWEEP (DEBT-051) re-runs after the session MARK and
+      // is idempotent — it revokes nothing more (0) in the no-race case. The audited count is the
+      // sum (2 + 0), i.e. everything actually revoked across both passes (fold 🟡: cộng dồn).
+      refreshTokens.revokeForSession.mockResolvedValueOnce(2).mockResolvedValueOnce(0);
 
       const response = await app.inject({
         method: 'POST',
@@ -765,6 +773,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
         'session-ref',
         expect.any(Date),
       );
+      expect(refreshTokens.revokeForSession).toHaveBeenCalledTimes(2); // first revoke + sweep
       expect(sessions.revokeAllForUser).not.toHaveBeenCalled();
       expect(audit.record).toHaveBeenCalledWith({
         actorType: 'user',
@@ -775,10 +784,36 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
       });
     });
 
+    it('SWEEP catches a family inserted after the first revoke (P=0, S=1) ⇒ count reflects the sweep, TOKEN_REVOKED still audited', async () => {
+      // Race (fold 🟡#4): a `/token` exchange inserts a family AFTER the first family revoke but
+      // before the session MARK, so the first revoke returns 0 and only the SWEEP revokes it (1).
+      // The summed count must be 1 (not 0) so the TOKEN_REVOKED audit is written at all.
+      sessions.get.mockResolvedValue(liveSession);
+      refreshTokens.revokeForSession.mockResolvedValueOnce(0).mockResolvedValueOnce(1);
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/logout',
+        headers: { cookie: 'idp_session=session-a' },
+        payload: { _csrf: csrfFor('session-a') },
+      });
+
+      expect(response.statusCode).toBe(302);
+      expect(refreshTokens.revokeForSession).toHaveBeenCalledTimes(2);
+      expect(audit.record).toHaveBeenCalledWith({
+        actorType: 'user',
+        actorId: 'user-1',
+        action: AuditAction.TOKEN_REVOKED,
+        result: 'success',
+        metadata: { scope: 'session', count: 1 },
+      });
+    });
+
     it('POST ?scope=all revokes every session + family and audits scope:all', async () => {
       sessions.get.mockResolvedValue(liveSession);
       sessions.revokeAllForUser.mockResolvedValue(3);
-      refreshTokens.revokeAllForUser.mockResolvedValue(5);
+      // First revoke (5) + idempotent SWEEP (0): the audited count is the sum (fold 🟡: cộng dồn).
+      refreshTokens.revokeAllForUser.mockResolvedValueOnce(5).mockResolvedValueOnce(0);
 
       const response = await app.inject({
         method: 'POST',

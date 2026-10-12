@@ -666,6 +666,9 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
       ['openid', 'profile'],
     );
     const { id } = await sessionSvc.create(userId, 'tenant-A');
+    // DEBT-026: the covered branch issues the code directly (no AuthorizeRequestContext), so it
+    // must NOT write an `authz_ctx:*` key. Snapshot the count before/after to prove nothing leaks.
+    const ctxBefore = (await httpRedis.keys('authz_ctx:*')).length;
     const res = await httpApp.inject({
       method: 'GET',
       url: fullQuery(),
@@ -676,6 +679,8 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
     expect(url.searchParams.get('code')).toBeTruthy();
     expect(url.searchParams.get('state')).toBe('rp-state');
     expect(url.searchParams.get('iss')).toBe(ISSUER);
+    const ctxAfter = (await httpRedis.keys('authz_ctx:*')).length;
+    expect(ctxAfter).toBe(ctxBefore); // no extra round-trip context written (DEBT-026)
     await sessionSvc.revoke(id);
   });
 

@@ -91,11 +91,13 @@ export class ConsentService {
   }
 
   /**
-   * Record consent for an owner + client + resource. Atomic upsert on the unique composite key:
-   * two concurrent grants for the same key can never produce a duplicate (the unique index plus
-   * `upsert` collapse them into one document). `grantedScopes` is the union of the already-granted
-   * scopes and the newly requested ones, bounded by `allowedScopes` (the client's *current* scopes)
-   * so a scope the client has since lost can never be carried forward. Clears `revokedAt`.
+   * Record consent for an owner + client + resource. ONE atomic update-pipeline round-trip on the
+   * unique composite key (DEBT-027): two concurrent grants for the same key can never produce a
+   * duplicate (the unique index plus `upsert` collapse them into one document) and never lose a
+   * scope (the union is recomputed server-side from the document's current value). `grantedScopes`
+   * is the union of the already-granted scopes and the newly requested ones, bounded by
+   * `allowedScopes` (the client's *current* scopes) so a scope the client has since lost can never
+   * be carried forward. Clears `revokedAt`; `grantedAt` is only set on insert.
    */
   async grant(
     userId: string,
@@ -106,33 +108,40 @@ export class ConsentService {
     allowedScopes: string[],
   ): Promise<Consent> {
     const normResource = ConsentService.normalizeResource(resource);
-    const allowed = new Set(allowedScopes);
-    const existing = await this.consents
-      .findOne({
-        userId: new Types.ObjectId(userId),
-        clientId,
-        resource: normResource,
-      })
-      .lean<Consent>()
-      .exec();
-    const union = new Set<string>();
-    for (const s of existing?.grantedScopes ?? []) if (allowed.has(s)) union.add(s);
-    for (const s of requestedScopes) if (allowed.has(s)) union.add(s);
     const now = new Date();
+    // Single atomic update-pipeline round-trip (DEBT-027): two concurrent grants for the same key
+    // converge on one document (unique index + upsert) and the new `grantedScopes` is computed
+    // server-side from the document's CURRENT value, so neither write loses a scope the other
+    // added. The union is bounded by `allowedScopes` (`$setIntersection`) so a scope the client has
+    // since lost can never carry forward (fail-closed over-grant guard). `requestedScopes` and
+    // `allowedScopes` are wrapped in `$literal`: an aggregation pipeline treats a string starting
+    // with `$` as a field path, so without `$literal` a scope like `"$grantedScopes"` would be
+    // interpreted as a path (field-path injection) — `$literal` forces it to a plain value array.
+    // mongoose 9 requires `{ updatePipeline: true }` for an array update, and the pipeline is NOT
+    // schema-cast, so the `userId` filter is still cast to ObjectId explicitly.
     const doc = await this.consents
       .findOneAndUpdate(
         { userId: new Types.ObjectId(userId), clientId, resource: normResource },
-        {
-          $set: {
-            grantedScopes: [...union],
-            policyVersion: versions.policyVersion,
-            termsVersion: versions.termsVersion,
-            updatedAt: now,
-            revokedAt: null,
+        [
+          {
+            $set: {
+              grantedScopes: {
+                $setIntersection: [
+                  {
+                    $setUnion: [{ $ifNull: ['$grantedScopes', []] }, { $literal: requestedScopes }],
+                  },
+                  { $literal: allowedScopes },
+                ],
+              },
+              policyVersion: { $literal: versions.policyVersion },
+              termsVersion: { $literal: versions.termsVersion },
+              grantedAt: { $ifNull: ['$grantedAt', now] },
+              updatedAt: now,
+              revokedAt: null,
+            },
           },
-          $setOnInsert: { grantedAt: now },
-        },
-        { upsert: true, returnDocument: 'after' },
+        ],
+        { upsert: true, returnDocument: 'after', updatePipeline: true },
       )
       .lean<Consent>()
       .exec();

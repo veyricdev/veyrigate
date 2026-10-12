@@ -7,6 +7,7 @@ import { AuthenticationService } from './authentication.service';
 import { UserService } from '../identity/user.service';
 import { UserTenantService } from '../identity/user-tenant.service';
 import { SessionService } from '../sessions/session.service';
+import { RefreshTokenService } from '../oauth/token/refresh-token.service';
 import { AuditService } from '../security/audit/audit.service';
 import { MAILER } from '../mailer/mailer';
 import { DuplicateError } from '../identity/identity.errors';
@@ -39,6 +40,9 @@ describe('AuthenticationService', () => {
     establish: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
     revokeAllForUser: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
   };
+  const refreshTokens = {
+    revokeAllForUser: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
+  };
   const memberships = { addMembership: jest.fn<(...args: unknown[]) => Promise<unknown>>() };
   const audit = { record: jest.fn<(...args: unknown[]) => Promise<unknown>>() };
   let service: AuthenticationService;
@@ -52,6 +56,7 @@ describe('AuthenticationService', () => {
         { provide: UserService, useValue: users },
         { provide: UserTenantService, useValue: memberships },
         { provide: SessionService, useValue: sessions },
+        { provide: RefreshTokenService, useValue: refreshTokens },
         { provide: AuditService, useValue: audit },
         {
           provide: MAILER,
@@ -74,6 +79,7 @@ describe('AuthenticationService', () => {
     });
     users.setPassword.mockResolvedValue(user);
     sessions.revokeAllForUser.mockResolvedValue(2);
+    refreshTokens.revokeAllForUser.mockResolvedValue(1);
     await service.resetPassword('secret-token', 'new password');
     expect(tokenModel.findOneAndUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -88,6 +94,76 @@ describe('AuthenticationService', () => {
       BadRequestException,
     );
     expect(tokenModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('reset revokes refresh families AND sessions in order: family -> session -> family(sweep) -> audit (DEBT-050)', async () => {
+    tokenModel.findOneAndUpdate.mockReturnValue({
+      lean: () => ({ exec: async () => ({ userId: user.sub }) }),
+    });
+    users.setPassword.mockResolvedValue(user);
+    sessions.revokeAllForUser.mockResolvedValue(3);
+    refreshTokens.revokeAllForUser.mockResolvedValue(2);
+    audit.record.mockResolvedValue(undefined);
+
+    await service.resetPassword('secret-token', 'new password');
+
+    expect(refreshTokens.revokeAllForUser).toHaveBeenCalledTimes(2);
+    expect(sessions.revokeAllForUser).toHaveBeenCalledTimes(1);
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: AuditAction.AUTH_PASSWORD_RESET, actorId: user.sub }),
+    );
+    // Stamp-first + sweep: family(1) < session < family(2) < audit.
+    const firstFamily = refreshTokens.revokeAllForUser.mock.invocationCallOrder[0];
+    const session = sessions.revokeAllForUser.mock.invocationCallOrder[0];
+    const sweepFamily = refreshTokens.revokeAllForUser.mock.invocationCallOrder[1];
+    const auditOrder = audit.record.mock.invocationCallOrder[0];
+    expect(firstFamily).toBeLessThan(session);
+    expect(session).toBeLessThan(sweepFamily);
+    expect(sweepFamily).toBeLessThan(auditOrder);
+  });
+
+  it('reset fails closed when refresh revoke throws: no session revoke, no audit, password not rolled back (DEBT-050)', async () => {
+    tokenModel.findOneAndUpdate.mockReturnValue({
+      lean: () => ({ exec: async () => ({ userId: user.sub }) }),
+    });
+    users.setPassword.mockResolvedValue(user);
+    refreshTokens.revokeAllForUser.mockRejectedValueOnce(new Error('mongo down'));
+    audit.record.mockResolvedValue(undefined);
+
+    await expect(service.resetPassword('secret-token', 'new password')).rejects.toThrow(
+      'mongo down',
+    );
+    expect(users.setPassword).toHaveBeenCalledTimes(1); // password already changed, not rolled back
+    expect(sessions.revokeAllForUser).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('reset fails closed when session revoke throws: no sweep, no audit (DEBT-050)', async () => {
+    tokenModel.findOneAndUpdate.mockReturnValue({
+      lean: () => ({ exec: async () => ({ userId: user.sub }) }),
+    });
+    users.setPassword.mockResolvedValue(user);
+    refreshTokens.revokeAllForUser.mockResolvedValue(1);
+    sessions.revokeAllForUser.mockRejectedValueOnce(new Error('redis down'));
+    audit.record.mockResolvedValue(undefined);
+
+    await expect(service.resetPassword('secret-token', 'new password')).rejects.toThrow(
+      'redis down',
+    );
+    expect(refreshTokens.revokeAllForUser).toHaveBeenCalledTimes(1); // only the pre-revoke, no sweep
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('reset does not revoke anything when the link is invalid (fail-closed) (DEBT-050)', async () => {
+    tokenModel.findOneAndUpdate.mockReturnValue({
+      lean: () => ({ exec: async () => null }),
+    });
+    await expect(service.resetPassword('secret-token', 'new password')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
+    expect(sessions.revokeAllForUser).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
   });
 
   it('treats a duplicate created by a concurrent registration as the generic success path', async () => {

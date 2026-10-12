@@ -99,7 +99,7 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
   });
 
   it('access token: iss/aud/sub/scope/client_id/jti present, exp-iat === 900', async () => {
-    const res = await buildService().issueForAuthorizationCode(client(), codeData());
+    const { response: res } = await buildService().issueForAuthorizationCode(client(), codeData());
     const payload = await verifier.verify(res.access_token, RESOURCE);
     expect(payload.iss).toBe(ISSUER);
     expect(payload.aud).toBe(RESOURCE);
@@ -112,7 +112,7 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
   });
 
   it('id token: aud=client_id, nonce byte-for-byte, auth_time floor(ms/1000), amr/acr defaults', async () => {
-    const res = await buildService().issueForAuthorizationCode(client(), codeData());
+    const { response: res } = await buildService().issueForAuthorizationCode(client(), codeData());
     expect(res.id_token).toBeDefined();
     const payload = await verifier.verify(res.id_token!, 'rp-client');
     expect(payload.aud).toBe('rp-client');
@@ -124,20 +124,23 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
   });
 
   it('auth_time in access token only when resource is the admin identifier (D3)', async () => {
-    const admin = await buildService().issueForAuthorizationCode(
+    const { response: admin } = await buildService().issueForAuthorizationCode(
       client(),
       codeData({ resource: ADMIN_RESOURCE }),
     );
     const adminAt = await verifier.verify(admin.access_token, ADMIN_RESOURCE);
     expect(adminAt.auth_time).toBe(1_700_000_000);
 
-    const normal = await buildService().issueForAuthorizationCode(client(), codeData());
+    const { response: normal } = await buildService().issueForAuthorizationCode(
+      client(),
+      codeData(),
+    );
     const normalAt = await verifier.verify(normal.access_token, RESOURCE);
     expect(normalAt).not.toHaveProperty('auth_time');
   });
 
   it('no nonce in code => id token has no nonce claim (not null/empty)', async () => {
-    const res = await buildService().issueForAuthorizationCode(
+    const { response: res } = await buildService().issueForAuthorizationCode(
       client(),
       codeData({ nonce: undefined }),
     );
@@ -146,7 +149,7 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
   });
 
   it('id token only when scope has openid', async () => {
-    const res = await buildService().issueForAuthorizationCode(
+    const { response: res } = await buildService().issueForAuthorizationCode(
       client(),
       codeData({ scope: 'profile email' }),
     );
@@ -154,7 +157,7 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
   });
 
   it('authTime absent => no auth_time claim fabricated (fail-closed for step-up)', async () => {
-    const res = await buildService().issueForAuthorizationCode(
+    const { response: res } = await buildService().issueForAuthorizationCode(
       client(),
       codeData({ resource: ADMIN_RESOURCE, authTime: undefined }),
     );
@@ -176,7 +179,7 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
   });
 
   it('D7: refresh minted (hash only) when grant refresh_token AND scope offline_access', async () => {
-    const res = await buildService().issueForAuthorizationCode(
+    const { response: res } = await buildService().issueForAuthorizationCode(
       client({ grantTypes: ['authorization_code', 'refresh_token'] }),
       codeData({ scope: 'openid offline_access' }),
     );
@@ -197,7 +200,7 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
   });
 
   it('D7 fail-closed: no refresh grant => no refresh_token, no DB doc', async () => {
-    const res = await buildService().issueForAuthorizationCode(
+    const { response: res } = await buildService().issueForAuthorizationCode(
       client({ grantTypes: ['authorization_code'] }),
       codeData({ scope: 'openid offline_access' }),
     );
@@ -206,7 +209,7 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
   });
 
   it('D7 fail-closed: no offline_access scope => no refresh_token, no DB doc', async () => {
-    const res = await buildService().issueForAuthorizationCode(
+    const { response: res } = await buildService().issueForAuthorizationCode(
       client({ grantTypes: ['authorization_code', 'refresh_token'] }),
       codeData({ scope: 'openid profile' }),
     );
@@ -215,7 +218,7 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
   });
 
   it('audit TOKEN_ISSUED recorded with no secret/token in metadata (INV-25)', async () => {
-    const res = await buildService().issueForAuthorizationCode(
+    const { response: res } = await buildService().issueForAuthorizationCode(
       client({ grantTypes: ['authorization_code', 'refresh_token'] }),
       codeData({ scope: 'openid offline_access' }),
     );

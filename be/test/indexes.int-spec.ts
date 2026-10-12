@@ -92,3 +92,68 @@ describe('Mongo indexes after explicit sync (B1.6, spec §10)', () => {
     await expect(RT.create({ ...doc, familyId: 'f2' })).rejects.toMatchObject({ code: 11000 });
   });
 });
+
+/**
+ * DEBT-028: an environment deployed before Q1 (user × client × resource) carries the OLD unique
+ * index `{userId:1, clientId:1}` on `consents`. A deploy must run `syncAllIndexes` so the old index
+ * is DROPPED and the new `{userId:1, clientId:1, resource:1}` unique index is built. These tests
+ * simulate that upgrade on a FRESH database (the suite above asserts the clean-slate shape).
+ */
+describe('Consent index migration M3→M4 (DEBT-028)', () => {
+  const OLD_INDEX = 'userId_1_clientId_1';
+  let conn: Connection;
+
+  beforeAll(async () => {
+    // Insert a distinct DB-name suffix BEFORE the query string so `?directConnection=true` stays
+    // intact (appending to the whole URI would corrupt the query).
+    const migrationUri = MONGO_URI.replace(/(\/[^/?]+)(\?|$)/, '$1-consent-migration$2');
+    conn = await mongoose
+      .createConnection(migrationUri, {
+        autoIndex: false,
+        serverSelectionTimeoutMS: 5000,
+      })
+      .asPromise();
+  }, 30_000);
+
+  afterEach(async () => {
+    await conn.dropDatabase();
+  });
+
+  afterAll(async () => {
+    await conn.close();
+  });
+
+  it('syncAllIndexes drops the old {userId,clientId} unique index and builds {userId,clientId,resource}', async () => {
+    // Simulate the already-deployed state: create the OLD unique index before syncing.
+    await conn.db!.collection('consents').createIndex({ userId: 1, clientId: 1 }, { unique: true });
+
+    const dropped = await syncAllIndexes(conn);
+    expect(dropped.Consent).toContain(OLD_INDEX);
+
+    const indexes = (await conn.models.Consent.collection.indexes()) as IndexInfo[];
+    const nonId = indexes
+      .filter((i) => !('_id' in i.key))
+      .map((i) => ({ key: i.key, unique: !!i.unique }));
+    expect(nonId).toEqual([{ key: { userId: 1, clientId: 1, resource: 1 }, unique: true }]);
+    // The old index is gone.
+    expect(
+      nonId.some((i) => i.key.userId === 1 && i.key.clientId === 1 && !('resource' in i.key)),
+    ).toBe(false);
+  });
+
+  it('fails closed (no data deleted) when legacy data violates the NEW unique key', async () => {
+    // Legacy collection with NO unique index (e.g. one hand-dropped during ops) carrying two docs
+    // that collide under the new key {userId,clientId,resource} (same triple). Building the new
+    // unique index must FAIL (E11000) and MUST NOT delete the operator's data.
+    const userId = new Types.ObjectId();
+    await conn.db!.collection('consents').insertMany([
+      { userId, clientId: 'c1', resource: '', grantedScopes: ['openid'] },
+      { userId, clientId: 'c1', resource: '', grantedScopes: ['profile'] },
+    ]);
+
+    await expect(syncAllIndexes(conn)).rejects.toMatchObject({ code: 11000 });
+    // No user data was removed by the failed build (fail-closed; operator cleans up per runbook).
+    const count = await conn.db!.collection('consents').countDocuments({ userId });
+    expect(count).toBe(2);
+  });
+});
