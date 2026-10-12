@@ -3,7 +3,6 @@ import {
   Body,
   Controller,
   Get,
-  HttpCode,
   HttpException,
   HttpStatus,
   Post,
@@ -25,6 +24,8 @@ import { AuditService } from '../security/audit/audit.service';
 import { RateLimitService } from '../security/rate-limit/rate-limit.service';
 import { SESSION_COOKIE, SessionCookie } from '../sessions/session.cookie';
 import { SessionService } from '../sessions/session.service';
+import { RefreshTokenService } from '../oauth/token/refresh-token.service';
+import { LogoutService, type LogoutParams } from '../oauth/logout/logout.service';
 import { CsrfGuard, CsrfService } from './csrf.service';
 import { HtmlExceptionFilter } from './html-exception.filter';
 import { safeReturnTo } from './return-to';
@@ -47,6 +48,16 @@ class TokenDto extends FormDto {
 class ResetDto extends TokenDto {
   @IsString() @Length(8, 128) password!: string;
 }
+/** Raw RP-initiated logout fields carried by the confirmation form. All re-validated on POST. */
+class LogoutDto extends FormDto {
+  @IsOptional() @IsString() @Length(0, 4096) id_token_hint?: string;
+  @IsOptional() @IsString() @Length(0, 2048) post_logout_redirect_uri?: string;
+  // No length cap here: an over-long `state` must NOT 400 the logout (the user still needs to sign
+  // out). `LogoutService.appendState` drops a `state` longer than its own cap (fold #8). Still
+  // bounded by @Length(0, 4096) to keep the request body sane (pino truncates query, not body).
+  @IsOptional() @IsString() @Length(0, 4096) state?: string;
+  @IsOptional() @IsString() @Length(0, 256) client_id?: string;
+}
 
 type UiRequest = HttpRequest;
 type UiReply = HttpReply;
@@ -65,6 +76,8 @@ export class UiController {
     private readonly sessionCookie: SessionCookie,
     private readonly audit: AuditService,
     private readonly rateLimit: RateLimitService,
+    private readonly refreshTokens: RefreshTokenService,
+    private readonly logoutRp: LogoutService,
     config: ConfigService,
   ) {
     this.issuer = config.getOrThrow<AppConfig>('app').issuer;
@@ -112,8 +125,36 @@ export class UiController {
   ) {
     return this.form(req, reply, 'reset.eta', { title: 'Choose a new password', token });
   }
-  @Get('/logout') logoutForm(@Req() req: UiRequest, @Res() reply: UiReply) {
-    return this.form(req, reply, 'logout.eta', { title: 'Sign out' });
+  @Get('/logout') async logoutForm(
+    @Req() req: UiRequest,
+    @Res() reply: UiReply,
+    @Query('id_token_hint') idTokenHint?: string,
+    @Query('post_logout_redirect_uri') postLogoutRedirectUri?: string,
+    @Query('state') state?: string,
+    @Query('client_id') clientId?: string,
+  ) {
+    // GET NEVER destroys state (spec §9.8, anti-CSRF): render the confirmation form only. The raw
+    // RP-initiated params ride along as hidden fields; the POST re-validates them (never trusted).
+    // The page carries a JWT hint (user PII) and a CSRF token, so it must never be cached.
+    reply.header('Cache-Control', 'no-store');
+
+    // Do NOT reflect a `post_logout_redirect_uri` that would not survive validation into the form
+    // (exposure budget: no unvalidated URI in a response). Resolve it with no session user (the
+    // same decision the no-session POST path makes); only reflect the raw URI when it validates.
+    const resolved = await this.logoutRp.resolvePostLogoutRedirect(
+      { idTokenHint, postLogoutRedirectUri, state, clientId },
+      undefined,
+    );
+    const reflectUri =
+      resolved === this.logoutRp.defaultRedirect ? undefined : postLogoutRedirectUri;
+
+    return this.form(req, reply, 'logout.eta', {
+      title: 'Sign out',
+      idTokenHint,
+      postLogoutRedirectUri: reflectUri,
+      state,
+      clientId,
+    });
   }
 
   @Post('/register')
@@ -169,25 +210,146 @@ export class UiController {
     });
   }
   @Post('/logout')
-  @HttpCode(302)
   @UseGuards(CsrfGuard)
-  async logout(@Body() _body: FormDto, @Req() req: UiRequest, @Res() reply: UiReply) {
+  async logout(
+    @Body() body: LogoutDto,
+    @Req() req: UiRequest,
+    @Res() reply: UiReply,
+    @Query('scope') scope?: string,
+  ) {
     const id = this.sessionCookie.read(req);
-    if (id) {
-      const session = await this.sessions.get(id);
-      await this.sessions.revoke(id);
-      if (session)
-        await this.audit.record({
-          actorType: 'user',
-          actorId: session.userId,
-          action: AuditAction.SESSION_REVOKED,
-          targetType: 'session',
-          targetId: session.ref,
-          result: 'success',
-        });
+    const global = scope === 'all';
+    const session = id ? await this.sessions.get(id) : null;
+
+    // No live session: nothing to revoke. Still clear the cookie and redirect (idempotent). The
+    // redirect is resolved from the raw params with no session user (hint sub check is skipped).
+    if (!session) {
+      this.sessionCookie.clear(reply);
+      // Fail-open, same as the post-revoke branch below: the cookie is already cleared so there is
+      // nothing left to protect, and a transient fault resolving the redirect (e.g. a Mongo read in
+      // `findByClientId`, or legacy/hand-edited post-logout URI data) must not surface as a 5xx that
+      // implies logout failed. No hint/token is logged.
+      try {
+        const target = await this.logoutRp.resolvePostLogoutRedirect(
+          this.logoutParams(body),
+          undefined,
+        );
+        return reply.redirect(target, 302);
+      } catch {
+        return reply.redirect(this.logoutRp.defaultRedirect, 302);
+      }
     }
+
+    // Collect front-channel RP candidates BEFORE revoking (the sets are deleted by revoke).
+    const rpCandidates = global
+      ? await this.sessions.clientsForUser(session.userId)
+      : await this.sessions.clientsForSession(session.ref);
+
+    const now = new Date();
+    // Order (tech-lead fold): revoke token -> revoke session -> audit -> clear cookie -> redirect.
+    // A fault at any step throws (5xx via HtmlExceptionFilter) and never presents success; every
+    // revoke is idempotent so a retry is safe.
+    const tokenCount = global
+      ? await this.refreshTokens.revokeAllForUser(session.userId, now)
+      : await this.refreshTokens.revokeForSession(session.userId, session.ref, now);
+
+    let sessionCount = 1;
+    if (global) {
+      sessionCount = await this.sessions.revokeAllForUser(session.userId);
+    } else {
+      await this.sessions.revoke(id!);
+    }
+
+    await this.audit.record({
+      actorType: 'user',
+      actorId: session.userId,
+      action: AuditAction.SESSION_REVOKED,
+      targetType: 'session',
+      targetId: session.ref,
+      result: 'success',
+      metadata: global ? { scope: 'all', count: sessionCount } : { scope: 'session' },
+    });
+    if (tokenCount > 0) {
+      await this.audit.record({
+        actorType: 'user',
+        actorId: session.userId,
+        action: AuditAction.TOKEN_REVOKED,
+        result: 'success',
+        metadata: { scope: global ? 'all' : 'session', count: tokenCount },
+      });
+    }
+
     this.sessionCookie.clear(reply);
-    return reply.redirect('/login?loggedOut=1', 302);
+
+    // Everything below runs AFTER the destructive state change (token + session revoked). The user
+    // IS logged out, so a fault here must NOT turn into a 5xx that implies logout failed: fall back
+    // to the default redirect with no front-channel iframes (fail-open, Task 4 invariant). The
+    // revoke/audit/clear steps above still fail CLOSED (they throw before we reach here).
+    try {
+      // Re-validate the redirect from the RAW params against this session user (never the hidden
+      // field as "already validated"); non-match / bad hint -> default (/login?loggedOut=1).
+      const target = await this.logoutRp.resolvePostLogoutRedirect(
+        this.logoutParams(body),
+        session.userId,
+      );
+
+      // Front-channel: notify every RP that received a code in the logged-out session(s). If none,
+      // redirect straight away (no intermediate page).
+      const iframes = await this.logoutRp.frontchannelIframes(rpCandidates);
+      if (iframes.length > 0) {
+        return this.renderFrontchannel(reply, iframes, target);
+      }
+      return reply.redirect(target, 302);
+    } catch {
+      // Legacy/hand-edited client data (bad redirect URI, un-parseable front-channel URI) or a
+      // transient Mongo read must not block an already-completed logout. No hint/token is logged.
+      return reply.redirect(this.logoutRp.defaultRedirect, 302);
+    }
+  }
+
+  /** Map the form body to the raw RP-initiated params the LogoutService validates. */
+  private logoutParams(body: LogoutDto): LogoutParams {
+    return {
+      idTokenHint: body.id_token_hint,
+      postLogoutRedirectUri: body.post_logout_redirect_uri,
+      state: body.state,
+      clientId: body.client_id,
+    };
+  }
+
+  /**
+   * Render the front-channel intermediate page (B4.7): one hidden iframe per RP, then auto-redirect
+   * to `target` via a static script. Only THIS response relaxes CSP `frame-src` to the registered
+   * iframe origins (allowlist); `default-src`/`script-src` stay `'self'`, `frame-ancestors 'none'`.
+   * `Cache-Control: no-store` so the intermediate page is never cached.
+   */
+  private renderFrontchannel(reply: UiReply, iframes: string[], target: string): unknown {
+    const frameSrc = this.logoutRp.frameSrcOrigins(iframes).join(' ');
+    // Keep the SAME hardening directives helmet applies globally (main.ts + its defaults:
+    // base-uri/object-src/script-src-attr/upgrade-insecure-requests) and ONLY relax `frame-src` to
+    // the registered RP origins. Dropping those defaults here would silently weaken this one page.
+    reply.header(
+      'Content-Security-Policy',
+      [
+        "default-src 'self'",
+        "base-uri 'self'",
+        "script-src 'self'",
+        "script-src-attr 'none'",
+        "style-src 'self'",
+        "object-src 'none'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+        `frame-src ${frameSrc}`,
+        'upgrade-insecure-requests',
+      ].join('; '),
+    );
+    reply.header('Cache-Control', 'no-store');
+    reply.status(200);
+    return reply.view('logout-frontchannel.eta', {
+      title: 'Signing out',
+      iframes,
+      target,
+    });
   }
 
   private form(req: UiRequest, reply: UiReply, template: string, data: Record<string, unknown>) {

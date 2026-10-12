@@ -24,6 +24,8 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { UiController } from '../src/modules/ui/ui.controller';
+import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
+import { LogoutService } from '../src/modules/oauth/logout/logout.service';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -73,6 +75,24 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
         CsrfService,
         CsrfGuard,
         HtmlExceptionFilter,
+        // This suite exercises the auth flow, not RP-initiated logout; stub the B4.7 collaborators
+        // so the plain (no-hint) local logout path still works end to end.
+        {
+          provide: RefreshTokenService,
+          useValue: {
+            revokeForSession: async () => 0,
+            revokeAllForUser: async () => 0,
+          },
+        },
+        {
+          provide: LogoutService,
+          useValue: {
+            defaultRedirect: '/login?loggedOut=1',
+            resolvePostLogoutRedirect: async () => '/login?loggedOut=1',
+            frontchannelIframes: async () => [],
+            frameSrcOrigins: () => [],
+          },
+        },
         { provide: RedisService, useValue: new RedisService(redis) },
         {
           provide: MAILER,

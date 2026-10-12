@@ -30,14 +30,25 @@ export interface CreateSessionOptions {
 
 const sessKey = (ref: string): string => `sess:${ref}`;
 const userKey = (userId: string): string => `user_sess:${userId}`;
+// Set of client ids that received an authorization code during this session (B4.7 front-channel):
+// used to pick which RPs to notify on logout. Lives on the same node as `sess:{ref}` (same ref →
+// same Cluster slot) so DEL in the revoke paths is Cluster-safe (DEBT-013, no worse than today).
+const sessRpKey = (ref: string): string => `sess_rp:${ref}`;
 
-/** Deletes every session in a user's index plus the index itself, atomically. */
+/**
+ * Deletes every session in a user's index (plus its `sess_rp` set) and the index itself,
+ * atomically. Clearing `sess_rp:{ref}` here keeps the front-channel RP set from outliving the
+ * sessions it belongs to (B4.7).
+ */
 const REVOKE_ALL_SCRIPT = {
   name: 'sessionRevokeAll',
   numberOfKeys: 1,
   lua: `
 local refs = redis.call('SMEMBERS', KEYS[1])
-for _, ref in ipairs(refs) do redis.call('DEL', 'sess:' .. ref) end
+for _, ref in ipairs(refs) do
+  redis.call('DEL', 'sess:' .. ref)
+  redis.call('DEL', 'sess_rp:' .. ref)
+end
 redis.call('DEL', KEYS[1])
 return #refs`,
 };
@@ -205,8 +216,34 @@ export class SessionService {
   }
 
   private async revokeRef(ref: string, userId: string | undefined): Promise<void> {
-    const multi = this.redis.client.multi().del(sessKey(ref));
+    const multi = this.redis.client.multi().del(sessKey(ref)).del(sessRpKey(ref));
     if (userId) multi.srem(userKey(userId), ref);
     await execOrThrow(multi);
+  }
+
+  /**
+   * Record that a client received an authorization code in this session (B4.7 front-channel).
+   * Idempotent `SADD`; the set expires with the session's absolute lifetime so it never outlives
+   * the sessions it tracks. Best-effort: used only to pick front-channel RPs, never for auth.
+   */
+  async recordClientForSession(ref: string, clientId: string): Promise<void> {
+    await this.redis.client
+      .multi()
+      .sadd(sessRpKey(ref), clientId)
+      .pexpire(sessRpKey(ref), this.absoluteMs)
+      .exec();
+  }
+
+  /** Client ids that received a code in this session (front-channel RP candidates). */
+  async clientsForSession(ref: string): Promise<string[]> {
+    return this.redis.client.smembers(sessRpKey(ref));
+  }
+
+  /** Union of front-channel RP candidates across every live session of a user (global logout). */
+  async clientsForUser(userId: string): Promise<string[]> {
+    const sessions = await this.listByUser(userId);
+    if (sessions.length === 0) return [];
+    const sets = await Promise.all(sessions.map((s) => this.clientsForSession(s.ref)));
+    return [...new Set(sets.flat())];
   }
 }

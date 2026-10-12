@@ -28,6 +28,7 @@ import { AuthorizationCodeService } from '../src/modules/oauth/code/authorizatio
 import { TokenController } from '../src/modules/oauth/token/token.controller';
 import { TokenService } from '../src/modules/oauth/token/token.service';
 import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
+import { SessionService } from '../src/modules/sessions/session.service';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -45,7 +46,14 @@ const CHALLENGE = deriveS256Challenge(VERIFIER);
 const cfg = {
   getOrThrow: (ns: string) => {
     if (ns === 'app') return { nodeEnv: 'production', issuer: ISSUER };
-    if (ns === 'token') return { accessTokenTtl: ACCESS_TTL, refreshTokenTtl: REFRESH_TTL };
+    if (ns === 'token')
+      return {
+        accessTokenTtl: ACCESS_TTL,
+        refreshTokenTtl: REFRESH_TTL,
+        // SessionService (B4.7 e2e chain) reads idle/absolute TTLs from the same namespace.
+        sessionIdleTtl: 3600,
+        sessionAbsoluteTtl: 86400,
+      };
     if (ns === 'client') return { secretGraceTtl: 3600 };
     throw new Error(`unexpected ns ${ns}`);
   },
@@ -72,6 +80,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
   let keyDir: string;
   let codes: AuthorizationCodeService;
   let refreshSvc: RefreshTokenService;
+  let sessionSvc: SessionService;
   let tokenSvc: TokenService;
   let verifier: TokenVerifier;
   let refreshModel: Model<Record<string, unknown>>;
@@ -136,14 +145,16 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
    * revoker B runs strictly after S, no timers); `release()` lets A finish; `restore()` removes the
    * spy. Forcing this order proves the mark-then-check guard self-revokes S for ANY interleaving.
    */
-  async function gateInsert(): Promise<{
+  async function gateInsert(
+    mint: () => Promise<string> = firstRefresh,
+  ): Promise<{
     rt: string;
     familyId: string;
     inserted: Promise<void>;
     release: () => void;
     restore: () => void;
   }> {
-    const rt = await firstRefresh();
+    const rt = await mint();
     const familyDoc = await refreshModel
       .findOne({ tokenHash: sha256(rt) })
       .lean<Record<string, unknown>>();
@@ -171,6 +182,90 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
     return { rt, familyId, inserted, release, restore: () => spy.mockRestore() };
   }
 
+  /**
+   * Stronger INV-11 harness that proves the stamp-FIRST ORDER, not just "S can't survive".
+   * Unlike `gateInsert` (which parks A *after* S exists, so B always sees S regardless of order),
+   * this forces the one interleaving that only stamp-first survives:
+   *   1. A wins the atomic swap, then parks BEFORE inserting S (`insertRefreshToken` signals
+   *      `aParked` and blocks on `releaseA` *before* the real insert, so S does NOT exist yet).
+   *   2. B's revoke runs its FIRST `updateMany`, and we park right after that write completes
+   *      (spy on `refreshModel.updateMany` once: real exec → signal `bParked` → block on `releaseB`).
+   * With the correct order B's first write is `familyRevokedAt`, so when A later inserts S and
+   * re-reads the parent it sees the stamp and self-revokes S (A → 400). If the two stamps are
+   * swapped, B's first write is `revokedAt` (misses the not-yet-born S) and A's re-read sees a null
+   * `familyRevokedAt` → S survives → A returns 200: the test FAILS. That is the regression guard.
+   */
+  async function gateInsertBeforeAndFirstUpdate(mint: () => Promise<string>): Promise<{
+    rt: string;
+    familyId: string;
+    aParked: Promise<void>;
+    bParked: Promise<void>;
+    releaseA: () => void;
+    releaseB: () => void;
+    restore: () => void;
+  }> {
+    const rt = await mint();
+    const familyDoc = await refreshModel
+      .findOne({ tokenHash: sha256(rt) })
+      .lean<Record<string, unknown>>();
+    const familyId = familyDoc!.familyId as string;
+
+    const realInsert = tokenSvc.insertRefreshToken.bind(tokenSvc);
+    let releaseA!: () => void;
+    let signalAParked!: () => void;
+    const gateA = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    const aParked = new Promise<void>((resolve) => {
+      signalAParked = resolve;
+    });
+    const insertSpy = jest
+      .spyOn(tokenSvc, 'insertRefreshToken')
+      .mockImplementationOnce(async (input: Parameters<TokenService['insertRefreshToken']>[0]) => {
+        // A has won the swap but has NOT inserted S yet: park HERE, before the real insert.
+        signalAParked();
+        await gateA;
+        return realInsert(input);
+      });
+
+    const realUpdateMany = refreshModel.updateMany.bind(refreshModel);
+    let releaseB!: () => void;
+    let signalBParked!: () => void;
+    const gateB = new Promise<void>((resolve) => {
+      releaseB = resolve;
+    });
+    const bParked = new Promise<void>((resolve) => {
+      signalBParked = resolve;
+    });
+    const updateSpy = jest
+      .spyOn(refreshModel, 'updateMany')
+      .mockImplementationOnce((...args: Parameters<typeof refreshModel.updateMany>) => {
+        // Intercept B's FIRST updateMany; wrap its exec() so we can park right after the write lands.
+        const query = realUpdateMany(...args);
+        const realExec = query.exec.bind(query);
+        query.exec = (async () => {
+          const result = await realExec();
+          signalBParked();
+          await gateB;
+          return result;
+        }) as typeof query.exec;
+        return query;
+      });
+
+    return {
+      rt,
+      familyId,
+      aParked,
+      bParked,
+      releaseA,
+      releaseB,
+      restore: () => {
+        insertSpy.mockRestore();
+        updateSpy.mockRestore();
+      },
+    };
+  }
+
   beforeAll(async () => {
     redis = new IORedis(REDIS_URL, { maxRetriesPerRequest: 1 });
     keyDir = await mkdtemp(join(tmpdir(), 'vg-refresh-int-'));
@@ -190,6 +285,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       providers: [
         TokenService,
         RefreshTokenService,
+        SessionService,
         AuthorizationCodeService,
         ClientService,
         ClientCredentialService,
@@ -210,6 +306,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
 
     codes = moduleRef.get(AuthorizationCodeService);
     refreshSvc = moduleRef.get(RefreshTokenService);
+    sessionSvc = moduleRef.get(SessionService);
     tokenSvc = moduleRef.get(TokenService);
     verifier = moduleRef.get(TokenVerifier);
     refreshModel = app.get<Model<Record<string, unknown>>>(getModelToken('RefreshToken'));
@@ -827,5 +924,302 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
     expect(doc!.revokedAt).toBeFalsy();
     expect(doc!.replacedBy).toBeFalsy();
     expect((await refreshReq(rt)).statusCode).toBe(200);
+  });
+
+  describe('B4.7 revokeWhere / sessionRef (local + global logout)', () => {
+    /** Mint a first refresh token for a given user + sessionRef (via the authorization_code flow). */
+    async function refreshForSession(userId: string, sessionRef: string): Promise<string> {
+      const { code } = await mintCode({ userId, sessionRef });
+      const res = await post(
+        '/token',
+        form({
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: REDIRECT,
+          client_id: CLIENT,
+          code_verifier: VERIFIER,
+        }),
+      );
+      expect(res.statusCode).toBe(200);
+      return res.json().refresh_token as string;
+    }
+    const docFor = (rt: string) =>
+      refreshModel.findOne({ tokenHash: sha256(rt) }).lean<Record<string, unknown>>();
+
+    it('binds sessionRef onto the minted family and inherits it through rotation', async () => {
+      const userId = new Types.ObjectId().toHexString();
+      const rt = await refreshForSession(userId, 'sref-A');
+      const doc = await docFor(rt);
+      expect(doc!.sessionRef).toBe('sref-A');
+
+      // Rotate once; the successor keeps the same sessionRef.
+      const rotated = await refreshReq(rt);
+      expect(rotated.statusCode).toBe(200);
+      const next = rotated.json().refresh_token as string;
+      const nextDoc = await docFor(next);
+      expect(nextDoc!.sessionRef).toBe('sref-A');
+    });
+
+    it('revokeForSession revokes only the matching session family; other devices survive', async () => {
+      const userId = new Types.ObjectId().toHexString();
+      const rtA = await refreshForSession(userId, 'sref-A');
+      const rtB = await refreshForSession(userId, 'sref-B');
+
+      const count = await refreshSvc.revokeForSession(userId, 'sref-A', new Date());
+      expect(count).toBe(1);
+
+      const a = await docFor(rtA);
+      const b = await docFor(rtB);
+      expect(a!.familyRevokedAt).toBeTruthy();
+      expect(a!.revokedAt).toBeTruthy();
+      // Other device of the SAME user (same client) is untouched.
+      expect(b!.familyRevokedAt).toBeFalsy();
+      expect(b!.revokedAt).toBeFalsy();
+    });
+
+    it('revokeAllForUser revokes every family of the user but never another user', async () => {
+      const userId = new Types.ObjectId().toHexString();
+      const other = new Types.ObjectId().toHexString();
+      const rt1 = await refreshForSession(userId, 'sref-A');
+      const rt2 = await refreshForSession(userId, 'sref-B');
+      const rtOther = await refreshForSession(other, 'sref-X');
+
+      const count = await refreshSvc.revokeAllForUser(userId, new Date());
+      expect(count).toBe(2);
+
+      expect((await docFor(rt1))!.revokedAt).toBeTruthy();
+      expect((await docFor(rt2))!.revokedAt).toBeTruthy();
+      // Different user is unaffected.
+      expect((await docFor(rtOther))!.revokedAt).toBeFalsy();
+    });
+
+    it('revokeForSession sets both familyRevokedAt and revokedAt stamps', async () => {
+      const userId = new Types.ObjectId().toHexString();
+      const rt = await refreshForSession(userId, 'sref-A');
+      await refreshSvc.revokeForSession(userId, 'sref-A', new Date());
+      const doc = await docFor(rt);
+      // This only asserts both stamps land. The stamp-BEFORE-revoke ORDER is proven separately by
+      // the "ordering" race tests below (they fail if the two writes are swapped).
+      expect(doc!.familyRevokedAt).toBeTruthy();
+      expect(doc!.revokedAt).toBeTruthy();
+    });
+
+    it('a rotated-then-local-logout family cannot be rotated again (fail-closed)', async () => {
+      const userId = new Types.ObjectId().toHexString();
+      const rt = await refreshForSession(userId, 'sref-A');
+      const rotated = await refreshReq(rt);
+      const live = rotated.json().refresh_token as string;
+
+      await refreshSvc.revokeForSession(userId, 'sref-A', new Date());
+      // The still-live descendant is now revoked too → invalid_grant.
+      const after = await refreshReq(live);
+      expect(after.statusCode).toBe(400);
+      expect(after.json().error).toBe('invalid_grant');
+    });
+
+    // The two tests below prove INV-11 holds for the NEW scopes (`{userId}` and `{userId,
+    // sessionRef}`), not just `{familyId, clientId}`. A bug here (a dropped `sessionRef` on the
+    // successor S, or a `userId` cast that silently misses) would let S survive a logout that the
+    // original `{familyId}` race test could never catch. Same forced order as the /revoke race:
+    // the winning rotate A mints S and parks INSIDE insertRefreshToken; the global/local revoke
+    // (B) runs to completion; only then does A's post-insert re-read run and self-revoke S.
+    it('DETERMINISTIC race (INV-11): descendant minted during revokeAllForUser cannot survive', async () => {
+      const userId = new Types.ObjectId().toHexString();
+      const { rt, familyId, inserted, release, restore } = await gateInsert(() =>
+        refreshForSession(userId, 'sref-A'),
+      );
+      try {
+        const aPromise = refreshReq(rt);
+        await inserted; // S now exists; A parked on the gate.
+
+        // B: global logout for this user. Must stamp familyRevokedAt before revokedAt.
+        const revoked = await refreshSvc.revokeAllForUser(userId, new Date());
+        expect(revoked).toBeGreaterThanOrEqual(1);
+
+        release();
+        const a = await aPromise;
+        expect(a.statusCode).toBe(400);
+        expect(a.json().error).toBe('invalid_grant');
+
+        const all = await refreshModel.find({ familyId }).lean<Record<string, unknown>[]>();
+        expect(all.length).toBeGreaterThanOrEqual(2); // parent + successor S
+        expect(all.every((d) => d.revokedAt)).toBe(true);
+      } finally {
+        restore();
+      }
+    });
+
+    it('DETERMINISTIC race (INV-11): descendant minted during revokeForSession cannot survive', async () => {
+      const userId = new Types.ObjectId().toHexString();
+      const { rt, familyId, inserted, release, restore } = await gateInsert(() =>
+        refreshForSession(userId, 'sref-A'),
+      );
+      try {
+        const aPromise = refreshReq(rt);
+        await inserted; // S now exists; A parked on the gate.
+
+        // B: local logout scoped to this exact session (userId + sessionRef). The successor S must
+        // inherit sessionRef='sref-A' so this scope reaches it.
+        const revoked = await refreshSvc.revokeForSession(userId, 'sref-A', new Date());
+        expect(revoked).toBeGreaterThanOrEqual(1);
+
+        release();
+        const a = await aPromise;
+        expect(a.statusCode).toBe(400);
+        expect(a.json().error).toBe('invalid_grant');
+
+        const all = await refreshModel.find({ familyId }).lean<Record<string, unknown>[]>();
+        expect(all.length).toBeGreaterThanOrEqual(2); // parent + successor S
+        expect(all.every((d) => d.revokedAt)).toBe(true);
+      } finally {
+        restore();
+      }
+    });
+
+    // The two tests below PROVE the stamp-FIRST order of INV-11 (not merely that S dies). They force
+    // the one interleaving where order matters: A parks BEFORE inserting S, B parks right AFTER its
+    // first `updateMany`. If `revokeWhere` stamps `familyRevokedAt` first (correct), B's first write
+    // stamps the parent; A then inserts S, re-reads the parent, sees the stamp and self-revokes S
+    // (→ 400). If the two writes are swapped, B's first write is `revokedAt` (misses the unborn S)
+    // and A's re-read sees a null stamp → S survives → A returns 200 and these tests FAIL. Mutation
+    // (ship `familyRevokedAt` after `revokedAt` in revokeWhere) was confirmed to turn them RED.
+    it('ordering (INV-11): revokeAllForUser stamps familyRevokedAt BEFORE revokedAt (scope {userId})', async () => {
+      const userId = new Types.ObjectId().toHexString();
+      const { rt, familyId, aParked, bParked, releaseA, releaseB, restore } =
+        await gateInsertBeforeAndFirstUpdate(() => refreshForSession(userId, 'sref-A'));
+      try {
+        const aPromise = refreshReq(rt);
+        await aParked; // A won the swap and parked BEFORE inserting S (S does not exist yet).
+
+        // B: global logout for this user. Its FIRST updateMany must be the familyRevokedAt stamp.
+        const bPromise = refreshSvc.revokeAllForUser(userId, new Date());
+        await bParked; // B's first updateMany has landed; B parks before its remaining writes.
+
+        releaseA(); // A now inserts S and re-reads the parent's familyRevokedAt (set by B above).
+        const a = await aPromise;
+        expect(a.statusCode).toBe(400);
+        expect(a.json().error).toBe('invalid_grant');
+
+        releaseB(); // B finishes (its revokedAt write sweeps the now-existing S too).
+        await bPromise;
+
+        const all = await refreshModel.find({ familyId }).lean<Record<string, unknown>[]>();
+        expect(all.length).toBeGreaterThanOrEqual(2); // parent + successor S
+        expect(all.every((d) => d.revokedAt)).toBe(true);
+        // The parent was stamped by B's FIRST updateMany (the familyRevokedAt write) — that stamp is
+        // exactly what A's re-read observed to self-revoke S. (S itself is only swept by B's later
+        // revokedAt write / A's self-revoke, so it need not carry a familyRevokedAt stamp.)
+        const parent = await docFor(rt);
+        expect(parent!.familyRevokedAt).toBeTruthy();
+      } finally {
+        restore();
+      }
+    });
+
+    it('ordering (INV-11): revokeForSession stamps familyRevokedAt BEFORE revokedAt (scope {userId,sessionRef})', async () => {
+      const userId = new Types.ObjectId().toHexString();
+      const { rt, familyId, aParked, bParked, releaseA, releaseB, restore } =
+        await gateInsertBeforeAndFirstUpdate(() => refreshForSession(userId, 'sref-A'));
+      try {
+        const aPromise = refreshReq(rt);
+        await aParked; // A won the swap and parked BEFORE inserting S (S does not exist yet).
+
+        // B: local logout scoped to this exact session. S must inherit sessionRef='sref-A' to be hit.
+        const bPromise = refreshSvc.revokeForSession(userId, 'sref-A', new Date());
+        await bParked; // B's first updateMany has landed; B parks before its remaining writes.
+
+        releaseA(); // A now inserts S and re-reads the parent's familyRevokedAt (set by B above).
+        const a = await aPromise;
+        expect(a.statusCode).toBe(400);
+        expect(a.json().error).toBe('invalid_grant');
+
+        releaseB(); // B finishes (its revokedAt write sweeps the now-existing S too).
+        await bPromise;
+
+        const all = await refreshModel.find({ familyId }).lean<Record<string, unknown>[]>();
+        expect(all.length).toBeGreaterThanOrEqual(2); // parent + successor S
+        expect(all.every((d) => d.revokedAt)).toBe(true);
+        // The parent was stamped by B's FIRST updateMany (the familyRevokedAt write) — that stamp is
+        // exactly what A's re-read observed to self-revoke S. (S itself is only swept by B's later
+        // revokedAt write / A's self-revoke, so it need not carry a familyRevokedAt stamp.)
+        const parent = await docFor(rt);
+        expect(parent!.familyRevokedAt).toBeTruthy();
+      } finally {
+        restore();
+      }
+    });
+
+    /**
+     * End-to-end with the REAL SessionService + /token + RefreshTokenService (no stubs): a code
+     * minted with a live session's ref (exactly what AuthorizeService.issueCode writes — proven
+     * separately in authorize.int-spec) flows code → /token → rotate, then a LOCAL logout
+     * (`revokeForSession(userId, session.ref)`, the exact call UiController makes) kills that
+     * session's family while another device of the same user keeps working, and the logged-out
+     * session no longer resolves (cookie must re-login).
+     */
+    it('e2e: live session → code → /token → rotate → local logout kills the family; other device survives', async () => {
+      const { id: sessionId, session } = await sessionSvc.create(
+        new Types.ObjectId().toHexString(),
+        'tenant-A',
+      );
+      const userId = session.userId;
+      // Track the RP against the session (what issueCode does) so we can prove the set is wiped.
+      await sessionSvc.recordClientForSession(session.ref, CLIENT);
+
+      // Device A: mint a code bound to THIS session (same fields issueCode sets), then exchange it.
+      const { code } = await codes.create({
+        clientId: CLIENT,
+        redirectUri: REDIRECT,
+        codeChallenge: CHALLENGE,
+        resource: RESOURCE,
+        scope: 'openid profile offline_access',
+        nonce: 'rp-nonce',
+        userId,
+        authTime: session.authTime,
+        sessionRef: session.ref,
+      } as never);
+      const tokenRes = await post(
+        '/token',
+        form({
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: REDIRECT,
+          client_id: CLIENT,
+          code_verifier: VERIFIER,
+        }),
+      );
+      expect(tokenRes.statusCode).toBe(200);
+      const rtA = tokenRes.json().refresh_token as string;
+      expect((await docFor(rtA))!.sessionRef).toBe(session.ref);
+
+      // Rotate A once; the live descendant inherits the same sessionRef.
+      const rotated = await refreshReq(rtA);
+      expect(rotated.statusCode).toBe(200);
+      const liveA = rotated.json().refresh_token as string;
+      expect((await docFor(liveA))!.sessionRef).toBe(session.ref);
+
+      // Device B: a DIFFERENT session of the SAME user (different ref) — must survive A's logout.
+      const rtB = await refreshForSession(userId, 'sref-other-device');
+
+      // Local logout = the exact RefreshTokenService call the controller makes for this session.
+      const killed = await refreshSvc.revokeForSession(userId, session.ref, new Date());
+      expect(killed).toBeGreaterThanOrEqual(1);
+
+      // A's still-live descendant is now dead → refresh fails invalid_grant.
+      const afterLogout = await refreshReq(liveA);
+      expect(afterLogout.statusCode).toBe(400);
+      expect(afterLogout.json().error).toBe('invalid_grant');
+
+      // Device B keeps working (its family was scoped out by sessionRef).
+      const bStillWorks = await refreshReq(rtB);
+      expect(bStillWorks.statusCode).toBe(200);
+
+      // The controller also revokes the session itself (`sessions.revoke(id)`): afterwards the old
+      // cookie no longer resolves to a live session (must re-login) and the RP index is wiped.
+      expect(await sessionSvc.get(sessionId)).not.toBeNull();
+      await sessionSvc.revoke(sessionId);
+      expect(await sessionSvc.get(sessionId)).toBeNull();
+      expect(await sessionSvc.clientsForSession(session.ref)).toEqual([]);
+    });
   });
 });

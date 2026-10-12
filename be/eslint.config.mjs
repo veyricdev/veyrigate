@@ -5,7 +5,9 @@ import prettierRecommended from 'eslint-plugin-prettier/recommended';
 
 export default tseslint.config(
   {
-    ignores: ['dist/**', 'node_modules/**', 'coverage/**'],
+    // `src/public/**` is static browser assets served as-is (not part of the TS build); they run
+    // in the browser (window/document/setTimeout), not Node, so the Node/TS lint rules don't apply.
+    ignores: ['dist/**', 'node_modules/**', 'coverage/**', 'src/public/**'],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,

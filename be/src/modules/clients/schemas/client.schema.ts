@@ -20,6 +20,10 @@ export const ClientSchema = new Schema(
     redirectUris: { type: [String], default: [] },
     // RP-initiated logout target(s) (D4). Same validation rule as redirectUris (INV-4).
     postLogoutRedirectUris: { type: [String], default: [] },
+    // OIDC front-channel logout endpoint (spec §9.8, B4.7). The IdP loads this in a hidden
+    // iframe on logout so the RP clears its own session. Same format rule as redirectUris
+    // (https/absolute/no fragment/no wildcard, INV-4); optional (absent → not notified).
+    frontchannelLogoutUri: { type: String },
     allowedCorsOrigins: { type: [String], default: [] },
     allowedResources: { type: [String], default: [] },
     scopes: { type: [String], default: [] },

@@ -238,6 +238,74 @@ describe('Keys (B1.9, INV-19)', () => {
     );
   });
 
+  describe('verifyIdTokenHint (B4.7 RP-initiated logout)', () => {
+    /** Mint an ID-token-shaped JWT (typ JWT, aud=clientId). */
+    async function mintId(
+      over: {
+        header?: Record<string, unknown>;
+        claims?: Record<string, unknown>;
+        issuer?: string;
+        audience?: string | string[];
+        expiresInSec?: number;
+        subject?: string;
+        key?: Uint8Array;
+      } = {},
+    ): Promise<string> {
+      const { kid, privateKey } = await provider.getSigningKey();
+      const exp = Math.floor(Date.now() / 1000) + (over.expiresInSec ?? 60);
+      const jwt = new SignJWT({ ...over.claims })
+        .setProtectedHeader({ alg: 'RS256', kid, ...over.header })
+        .setIssuer(over.issuer ?? ISSUER)
+        .setAudience(over.audience ?? 'app_1')
+        .setSubject(over.subject ?? 'usr_1')
+        .setIssuedAt()
+        .setExpirationTime(exp);
+      return jwt.sign(over.key ?? privateKey);
+    }
+
+    it('accepts a valid ID token and returns { sub, aud }', async () => {
+      const result = await verifier.verifyIdTokenHint(await mintId());
+      expect(result).toEqual({ sub: 'usr_1', aud: 'app_1' });
+    });
+
+    it('accepts an EXPIRED ID token (logout after the session died)', async () => {
+      const result = await verifier.verifyIdTokenHint(await mintId({ expiresInSec: -3600 }));
+      expect(result).toEqual({ sub: 'usr_1', aud: 'app_1' });
+    });
+
+    it('accepts a single-element aud array', async () => {
+      const result = await verifier.verifyIdTokenHint(await mintId({ audience: ['app_1'] }));
+      expect(result.aud).toBe('app_1');
+    });
+
+    it('rejects a wrong issuer', async () => {
+      await expect(
+        verifier.verifyIdTokenHint(await mintId({ issuer: 'https://evil.example' })),
+      ).rejects.toThrow();
+    });
+
+    it('rejects an access token (typ at+jwt) presented as a hint (token confusion)', async () => {
+      await expect(
+        verifier.verifyIdTokenHint(await mintId({ header: { typ: 'at+jwt' } })),
+      ).rejects.toThrow(/access token/);
+    });
+
+    it('rejects a multi-valued aud', async () => {
+      await expect(
+        verifier.verifyIdTokenHint(await mintId({ audience: ['app_1', 'app_2'] })),
+      ).rejects.toThrow(/aud/);
+    });
+
+    it('rejects a non-RS256 alg (HS256)', async () => {
+      const { kid } = await provider.getSigningKey();
+      const hs = await mintId({
+        header: { alg: 'HS256', kid },
+        key: new TextEncoder().encode('x'.repeat(32)),
+      });
+      await expect(verifier.verifyIdTokenHint(hs)).rejects.toThrow();
+    });
+  });
+
   it('normal rotation: old token still verifies, JWKS keeps old key, new tokens use new kid; audited', async () => {
     const [{ kid: oldKid }] = await provider.getPublicKeys();
     const oldToken = await signer.sign({}, { audience: AUD, expiresInSec: 60 });

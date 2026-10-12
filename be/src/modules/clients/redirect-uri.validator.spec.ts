@@ -49,6 +49,38 @@ describe('redirect-uri.validator (B3.1, INV-4/INV-21, tech-lead C1)', () => {
         InvalidRedirectUriError,
       );
     });
+
+    // B4.7 hardening: a stored redirect/post-logout URI is later reflected into a CSP front-channel
+    // `frame-src` allowlist, where `;` / `,` terminate or inject a directive. WHATWG URL happily keeps
+    // these characters (and `%3B`, which decodes to `;`) inside the host, so reject them here — at
+    // the one registration-time gate — so no stored URI can ever carry a CSP-splitting character.
+    it('rejects a literal semicolon in the host (CSP directive terminator)', () => {
+      expect(() => validateRedirectUriFormat('https://a;b.com/cb', opts)).toThrow(
+        InvalidRedirectUriError,
+      );
+    });
+
+    it('rejects a literal comma in the host (CSP source-list separator)', () => {
+      expect(() => validateRedirectUriFormat('https://a,b.com/cb', opts)).toThrow(
+        InvalidRedirectUriError,
+      );
+    });
+
+    it('rejects a percent-encoded semicolon (%3B) that decodes into the host', () => {
+      // `new URL` decodes `%3B` back to `;` in the host, so this must be rejected like a literal `;`.
+      expect(() => validateRedirectUriFormat('https://a%3Bb.com/cb', opts)).toThrow(
+        InvalidRedirectUriError,
+      );
+    });
+
+    it('still accepts hosts with no CSP-splitting characters (IPv6 literal, IDN punycode)', () => {
+      // Positive lock: the host-character guard must not reject legitimate hosts. IPv6 literals carry
+      // `:` inside brackets and punycode IDN hosts carry `-`; neither is `;` / `,` / whitespace.
+      expect(() => validateRedirectUriFormat('https://[2001:db8::1]/cb', opts)).not.toThrow();
+      expect(() =>
+        validateRedirectUriFormat('https://xn--80akhbyknj4f.example/cb', opts),
+      ).not.toThrow();
+    });
   });
 
   describe('validateRedirectUriFormat — dev (allowHttpLocalhost=true)', () => {

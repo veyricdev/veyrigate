@@ -95,6 +95,7 @@ describe('/.well-known/openid-configuration discovery (B4.6 Task 1)', () => {
     expect(body.jwks_uri).toBe(`${ISSUER}/jwks.json`);
     expect(body.revocation_endpoint).toBe(`${ISSUER}/revoke`);
     expect(body.introspection_endpoint).toBe(`${ISSUER}/introspect`);
+    expect(body.end_session_endpoint).toBe(`${ISSUER}/logout`);
 
     // The advertised jwks_uri must actually serve keys (no drift).
     const jwks = await get('/jwks.json');
@@ -113,6 +114,7 @@ describe('/.well-known/openid-configuration discovery (B4.6 Task 1)', () => {
       jwks_uri: `${ISSUER}/jwks.json`,
       revocation_endpoint: `${ISSUER}/revoke`,
       introspection_endpoint: `${ISSUER}/introspect`,
+      end_session_endpoint: `${ISSUER}/logout`,
       response_types_supported: ['code'],
       grant_types_supported: ['authorization_code', 'refresh_token'],
       subject_types_supported: ['public'],
@@ -152,9 +154,9 @@ describe('/.well-known/openid-configuration discovery (B4.6 Task 1)', () => {
     });
   });
 
-  it('does NOT advertise end_session_endpoint yet (GET /logout is a form, not RP-initiated) ? DEBT-038', async () => {
+  it('advertises end_session_endpoint = {issuer}/logout (RP-initiated logout, B4.7 DEBT-038)', async () => {
     const body = (await get('/.well-known/openid-configuration')).json();
-    expect(body).not.toHaveProperty('end_session_endpoint');
+    expect(body.end_session_endpoint).toBe(`${ISSUER}/logout`);
   });
 
   it('leaks no private key material / non-RS256 alg / `plain` PKCE method', async () => {

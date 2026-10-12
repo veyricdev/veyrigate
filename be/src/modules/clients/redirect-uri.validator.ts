@@ -44,6 +44,14 @@ export function validateRedirectUriFormat(uri: string, opts: RedirectUriValidati
     throw new InvalidRedirectUriError(`redirect_uri must not contain a fragment: ${uri}`);
   }
 
+  // WHATWG URL accepts `;`, `,` and (encoded) whitespace inside the host, so `new URL(...).origin`
+  // for `https://a;b.com` is `https://a;b.com`. That origin is later used to build a CSP
+  // `frame-src` allowlist for front-channel logout, where those characters would terminate/inject a
+  // directive. Reject them at registration so no stored URI can ever carry them (B4.7 hardening).
+  if (/[;,\s]/.test(parsed.host)) {
+    throw new InvalidRedirectUriError(`redirect_uri host contains an invalid character: ${uri}`);
+  }
+
   const isDevLocalhost =
     opts.allowHttpLocalhost && parsed.protocol === 'http:' && parsed.hostname === 'localhost';
   if (parsed.protocol !== 'https:' && !isDevLocalhost) {

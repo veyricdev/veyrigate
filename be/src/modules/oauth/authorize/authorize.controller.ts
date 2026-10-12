@@ -131,7 +131,7 @@ export class AuthorizeController {
   private async liveSession(req: HttpRequest): Promise<SessionView | null> {
     const sessionId = this.sessionCookie.read(req);
     const live = sessionId ? await this.sessions.get(sessionId) : null;
-    return live ? { userId: live.userId, authTime: live.authTime } : null;
+    return live ? { userId: live.userId, authTime: live.authTime, ref: live.ref } : null;
   }
 
   /** Turn a validated-request outcome into an HTTP response (shared by fresh + resumed paths). */

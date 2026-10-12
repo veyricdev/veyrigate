@@ -15,6 +15,8 @@ import { AuditService } from '../src/modules/security/audit/audit.service';
 import { RateLimitService } from '../src/modules/security/rate-limit/rate-limit.service';
 import { SessionCookie } from '../src/modules/sessions/session.cookie';
 import { SessionService } from '../src/modules/sessions/session.service';
+import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
+import { LogoutService } from '../src/modules/oauth/logout/logout.service';
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { UiController } from '../src/modules/ui/ui.controller';
@@ -39,6 +41,21 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
   const sessions = {
     get: jest.fn<SessionService['get']>(async () => null),
     revoke: jest.fn<SessionService['revoke']>(async () => undefined),
+    revokeAllForUser: jest.fn<SessionService['revokeAllForUser']>(async () => 0),
+    clientsForSession: jest.fn<SessionService['clientsForSession']>(async () => []),
+    clientsForUser: jest.fn<SessionService['clientsForUser']>(async () => []),
+  };
+  const refreshTokens = {
+    revokeForSession: jest.fn(async () => 0),
+    revokeAllForUser: jest.fn(async () => 0),
+  };
+  const logoutRp = {
+    defaultRedirect: '/login?loggedOut=1',
+    resolvePostLogoutRedirect: jest.fn(async () => '/login?loggedOut=1'),
+    frontchannelIframes: jest.fn(async () => [] as string[]),
+    frameSrcOrigins: jest.fn((srcs: readonly string[]) => [
+      ...new Set(srcs.map((s) => new URL(s).origin)),
+    ]),
   };
   const audit = { record: jest.fn(async () => undefined) };
 
@@ -61,6 +78,8 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
         SessionCookie,
         { provide: AuthenticationService, useValue: auth },
         { provide: SessionService, useValue: sessions },
+        { provide: RefreshTokenService, useValue: refreshTokens },
+        { provide: LogoutService, useValue: logoutRp },
         { provide: AuditService, useValue: audit },
         {
           provide: RateLimitService,
@@ -99,6 +118,13 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
     jest.clearAllMocks();
     sessions.get.mockResolvedValue(null);
     sessions.revoke.mockResolvedValue(undefined);
+    sessions.revokeAllForUser.mockResolvedValue(0);
+    sessions.clientsForSession.mockResolvedValue([]);
+    sessions.clientsForUser.mockResolvedValue([]);
+    refreshTokens.revokeForSession.mockResolvedValue(0);
+    refreshTokens.revokeAllForUser.mockResolvedValue(0);
+    logoutRp.resolvePostLogoutRedirect.mockResolvedValue('/login?loggedOut=1');
+    logoutRp.frontchannelIframes.mockResolvedValue([]);
     audit.record.mockResolvedValue(undefined);
   });
   afterAll(() => app.close());
@@ -521,8 +547,17 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
     expect(sessionSetCookie(response.headers['set-cookie'])).toContain('Max-Age=0');
     expect(sessions.get).toHaveBeenCalledTimes(1);
     expect(sessions.get).toHaveBeenCalledWith('session-a');
+    // Local logout revokes the refresh family of THIS session only.
+    expect(refreshTokens.revokeForSession).toHaveBeenCalledTimes(1);
+    expect(refreshTokens.revokeForSession).toHaveBeenCalledWith(
+      'user-1',
+      'session-ref',
+      expect.any(Date),
+    );
+    expect(refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
     expect(sessions.revoke).toHaveBeenCalledTimes(1);
     expect(sessions.revoke).toHaveBeenCalledWith('session-a');
+    // No TOKEN_REVOKED audit when zero refresh tokens were revoked.
     expect(audit.record).toHaveBeenCalledTimes(1);
     expect(audit.record).toHaveBeenCalledWith({
       actorType: 'user',
@@ -531,8 +566,10 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
       targetType: 'session',
       targetId: 'session-ref',
       result: 'success',
+      metadata: { scope: 'session' },
     });
-    expect(sessions.get.mock.invocationCallOrder[0]).toBeLessThan(
+    // Order: token revoke -> session revoke -> audit.
+    expect(refreshTokens.revokeForSession.mock.invocationCallOrder[0]).toBeLessThan(
       sessions.revoke.mock.invocationCallOrder[0],
     );
     expect(sessions.revoke.mock.invocationCallOrder[0]).toBeLessThan(
@@ -548,7 +585,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
     expect(next.headers.location).toBe('/login');
   });
 
-  it.each(['get', 'revoke', 'audit'] as const)(
+  it.each(['get', 'token', 'revoke', 'audit'] as const)(
     'POST logout dependency failure at %s does not present success',
     async (failure) => {
       let live = true;
@@ -564,6 +601,10 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
       sessions.get.mockImplementation(async () => {
         if (failure === 'get') throw new Error('session lookup failed');
         return live ? session : null;
+      });
+      refreshTokens.revokeForSession.mockImplementation(async () => {
+        if (failure === 'token') throw new Error('token revoke failed');
+        return 0;
       });
       sessions.revoke.mockImplementation(async () => {
         if (failure === 'revoke') throw new Error('session revoke failed');
@@ -587,8 +628,14 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
       expect(response.headers.location).toBeUndefined();
       expect(sessionSetCookie(response.headers['set-cookie'])).toBeUndefined();
       expect(response.body).not.toContain('loggedOut=1');
+      // Token revoke runs before session revoke; a fault there never kills the session.
       expect(live).toBe(failure === 'audit' ? false : true);
       if (failure === 'get') {
+        expect(refreshTokens.revokeForSession).not.toHaveBeenCalled();
+        expect(sessions.revoke).not.toHaveBeenCalled();
+        expect(audit.record).not.toHaveBeenCalled();
+      }
+      if (failure === 'token') {
         expect(sessions.revoke).not.toHaveBeenCalled();
         expect(audit.record).not.toHaveBeenCalled();
       }
@@ -629,8 +676,358 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
     expect(sessionSetCookie(first.headers['set-cookie'])).toContain('Max-Age=0');
     expect(sessionSetCookie(retry.headers['set-cookie'])).toContain('Max-Age=0');
     expect(live).toBe(false);
-    expect(sessions.revoke).toHaveBeenCalledTimes(2);
+    // First POST revokes; the retry sees no live session (session already gone) so it only clears
+    // the cookie + redirects — no second destructive revoke, no duplicate success audit.
+    expect(sessions.revoke).toHaveBeenCalledTimes(1);
     expect(audit.record).toHaveBeenCalledTimes(1);
+  });
+
+  describe('B4.7 RP-initiated / global / front-channel logout', () => {
+    const liveSession = {
+      ref: 'session-ref',
+      userId: 'user-1',
+      tenantId: 'tenant-1',
+      authTime: 1,
+      createdAt: 1,
+      lastSeenAt: 1,
+      device: {},
+    };
+    const csrfFor = (identity: string) =>
+      new CsrfService({
+        getOrThrow: () => ({ csrfSecret: 'test-csrf-secret' }),
+      } as never).token(identity);
+
+    it('GET /logout renders the hidden RP params (validated URI) + no-store without destroying session state', async () => {
+      // The GET only reflects a `post_logout_redirect_uri` that WOULD validate on POST (resolve
+      // returns a non-default target); this mock stands in for that validated outcome.
+      logoutRp.resolvePostLogoutRedirect.mockResolvedValue('https://rp.example/out?state=xyz');
+      const response = await app.inject({
+        method: 'GET',
+        url: '/logout?id_token_hint=HINT&post_logout_redirect_uri=https%3A%2F%2Frp.example%2Fout&state=xyz&client_id=rp1',
+        headers: { cookie: 'idp_session=session-a' },
+      });
+      expect(response.statusCode).toBe(200);
+      // The page carries a JWT hint (PII) + CSRF token → must never be cached.
+      expect(response.headers['cache-control']).toBe('no-store');
+      expect(response.body).toContain('name="id_token_hint" value="HINT"');
+      expect(response.body).toContain(
+        'name="post_logout_redirect_uri" value="https://rp.example/out"',
+      );
+      expect(response.body).toContain('name="state" value="xyz"');
+      expect(response.body).toContain('name="client_id" value="rp1"');
+      // GET resolves with NO session user (does not trust the cookie as the hint subject here).
+      expect(logoutRp.resolvePostLogoutRedirect).toHaveBeenCalledWith(
+        {
+          idTokenHint: 'HINT',
+          postLogoutRedirectUri: 'https://rp.example/out',
+          state: 'xyz',
+          clientId: 'rp1',
+        },
+        undefined,
+      );
+      // GET never touches session/token state.
+      expect(sessions.revoke).not.toHaveBeenCalled();
+      expect(refreshTokens.revokeForSession).not.toHaveBeenCalled();
+    });
+
+    it('GET /logout does NOT reflect a post_logout_redirect_uri that would fail validation', async () => {
+      // resolve returns the default → the URI would be dropped on POST, so it must not appear in the
+      // form (exposure budget: no unvalidated URI echoed into a response). Other params still ride.
+      logoutRp.resolvePostLogoutRedirect.mockResolvedValue('/login?loggedOut=1');
+      const response = await app.inject({
+        method: 'GET',
+        url: '/logout?id_token_hint=HINT&post_logout_redirect_uri=https%3A%2F%2Fevil.example%2Fsteal&state=xyz',
+        headers: { cookie: 'idp_session=session-a' },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['cache-control']).toBe('no-store');
+      expect(response.body).not.toContain('evil.example');
+      expect(response.body).not.toContain('name="post_logout_redirect_uri"');
+      // The benign params (hint/state) still ride along for the POST to re-validate.
+      expect(response.body).toContain('name="id_token_hint" value="HINT"');
+      expect(response.body).toContain('name="state" value="xyz"');
+    });
+
+    it('POST local logout revokes only this session family and audits TOKEN_REVOKED when > 0', async () => {
+      sessions.get.mockResolvedValue(liveSession);
+      refreshTokens.revokeForSession.mockResolvedValue(2);
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/logout',
+        headers: { cookie: 'idp_session=session-a' },
+        payload: { _csrf: csrfFor('session-a') },
+      });
+
+      expect(response.statusCode).toBe(302);
+      expect(refreshTokens.revokeForSession).toHaveBeenCalledWith(
+        'user-1',
+        'session-ref',
+        expect.any(Date),
+      );
+      expect(sessions.revokeAllForUser).not.toHaveBeenCalled();
+      expect(audit.record).toHaveBeenCalledWith({
+        actorType: 'user',
+        actorId: 'user-1',
+        action: AuditAction.TOKEN_REVOKED,
+        result: 'success',
+        metadata: { scope: 'session', count: 2 },
+      });
+    });
+
+    it('POST ?scope=all revokes every session + family and audits scope:all', async () => {
+      sessions.get.mockResolvedValue(liveSession);
+      sessions.revokeAllForUser.mockResolvedValue(3);
+      refreshTokens.revokeAllForUser.mockResolvedValue(5);
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/logout?scope=all',
+        headers: { cookie: 'idp_session=session-a' },
+        payload: { _csrf: csrfFor('session-a') },
+      });
+
+      expect(response.statusCode).toBe(302);
+      expect(refreshTokens.revokeAllForUser).toHaveBeenCalledWith('user-1', expect.any(Date));
+      expect(sessions.revokeAllForUser).toHaveBeenCalledWith('user-1');
+      expect(refreshTokens.revokeForSession).not.toHaveBeenCalled();
+      expect(sessions.revoke).not.toHaveBeenCalled();
+      expect(audit.record).toHaveBeenCalledWith({
+        actorType: 'user',
+        actorId: 'user-1',
+        action: AuditAction.SESSION_REVOKED,
+        targetType: 'session',
+        targetId: 'session-ref',
+        result: 'success',
+        // Global scope records how many sessions were revoked (fold Task 3).
+        metadata: { scope: 'all', count: 3 },
+      });
+      expect(audit.record).toHaveBeenCalledWith({
+        actorType: 'user',
+        actorId: 'user-1',
+        action: AuditAction.TOKEN_REVOKED,
+        result: 'success',
+        metadata: { scope: 'all', count: 5 },
+      });
+    });
+
+    it('fail-closed ordering: refreshTokens.revokeForSession throws → 5xx, session alive, no clear/audit; retry → 302', async () => {
+      let live = true;
+      sessions.get.mockImplementation(async () => (live ? liveSession : null));
+      sessions.revoke.mockImplementation(async () => void (live = false));
+      // Token revoke is the FIRST destructive step; a fault there must throw before the session is
+      // touched, before any audit, and before the cookie is cleared (fold Task 3 ordering).
+      refreshTokens.revokeForSession.mockRejectedValueOnce(new Error('token revoke failed'));
+
+      const req = {
+        method: 'POST' as const,
+        url: '/logout',
+        headers: { cookie: 'idp_session=session-a' },
+        payload: { _csrf: csrfFor('session-a') },
+      };
+      const failed = await app.inject(req);
+
+      expect(failed.statusCode).toBeGreaterThanOrEqual(500);
+      expect(failed.headers.location).toBeUndefined();
+      expect(sessionSetCookie(failed.headers['set-cookie'])).toBeUndefined();
+      expect(failed.body).not.toContain('loggedOut=1');
+      expect(live).toBe(true); // session still alive — token revoke ran first and failed
+      expect(sessions.revoke).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+
+      // Retry: the once-rejection is spent, so the whole sequence completes idempotently.
+      const retry = await app.inject(req);
+      expect(retry.statusCode).toBe(302);
+      expect(retry.headers.location).toBe('/login?loggedOut=1');
+      expect(sessionSetCookie(retry.headers['set-cookie'])).toContain('Max-Age=0');
+      expect(live).toBe(false);
+    });
+
+    it('fail-closed ordering: sessions.revoke throws → 5xx, no audit/cookie clear; retry → 302', async () => {
+      let revokeCalls = 0;
+      let live = true;
+      sessions.get.mockImplementation(async () => (live ? liveSession : null));
+      // Session revoke runs AFTER token revoke; first attempt throws, so no audit + no cookie clear.
+      sessions.revoke.mockImplementation(async () => {
+        revokeCalls += 1;
+        if (revokeCalls === 1) throw new Error('session revoke failed');
+        live = false;
+      });
+
+      const req = {
+        method: 'POST' as const,
+        url: '/logout',
+        headers: { cookie: 'idp_session=session-a' },
+        payload: { _csrf: csrfFor('session-a') },
+      };
+      const failed = await app.inject(req);
+
+      expect(failed.statusCode).toBeGreaterThanOrEqual(500);
+      expect(failed.headers.location).toBeUndefined();
+      expect(sessionSetCookie(failed.headers['set-cookie'])).toBeUndefined();
+      expect(failed.body).not.toContain('loggedOut=1');
+      expect(audit.record).not.toHaveBeenCalled(); // audit is strictly after session revoke
+
+      const retry = await app.inject(req);
+      expect(retry.statusCode).toBe(302);
+      expect(retry.headers.location).toBe('/login?loggedOut=1');
+      expect(sessionSetCookie(retry.headers['set-cookie'])).toContain('Max-Age=0');
+      expect(live).toBe(false);
+    });
+
+    it('fail-OPEN after revoke: a fault resolving the redirect / iframes still logs the user out (default redirect)', async () => {
+      sessions.get.mockResolvedValue(liveSession);
+      // The destructive steps succeed; a fault in the POST-revoke resolve (legacy client data) must
+      // NOT 5xx — the user is already logged out, so fall back to the default redirect, no iframe.
+      logoutRp.resolvePostLogoutRedirect.mockRejectedValueOnce(new Error('bad stored redirect uri'));
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/logout',
+        headers: { cookie: 'idp_session=session-a' },
+        payload: { _csrf: csrfFor('session-a') },
+      });
+
+      expect(response.statusCode).toBe(302);
+      expect(response.headers.location).toBe('/login?loggedOut=1');
+      expect(sessionSetCookie(response.headers['set-cookie'])).toContain('Max-Age=0');
+      expect(sessions.revoke).toHaveBeenCalled(); // revoke already happened (fail-open is post-revoke)
+    });
+
+    it('fail-OPEN with no session: a fault resolving the redirect still clears the cookie (default redirect, no 5xx)', async () => {
+      // The cookie was already cleared, so a transient fault resolving the redirect (e.g. a Mongo
+      // read in findByClientId) must NOT surface as a 5xx — fall back to the default redirect.
+      logoutRp.resolvePostLogoutRedirect.mockRejectedValueOnce(new Error('transient mongo read'));
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/logout',
+        headers: { cookie: 'idp_session=session-a' },
+        payload: { _csrf: csrfFor('session-a') },
+      });
+
+      expect(response.statusCode).toBe(302);
+      expect(response.headers.location).toBe('/login?loggedOut=1');
+      expect(sessionSetCookie(response.headers['set-cookie'])).toContain('Max-Age=0');
+      expect(sessions.revoke).not.toHaveBeenCalled();
+    });
+
+    it('POST redirects to a resolved post-logout URI with state', async () => {
+      sessions.get.mockResolvedValue(liveSession);
+      logoutRp.resolvePostLogoutRedirect.mockResolvedValue('https://rp.example/out?state=xyz');
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/logout',
+        headers: { cookie: 'idp_session=session-a' },
+        payload: {
+          _csrf: csrfFor('session-a'),
+          id_token_hint: 'HINT',
+          post_logout_redirect_uri: 'https://rp.example/out',
+          state: 'xyz',
+        },
+      });
+
+      expect(response.statusCode).toBe(302);
+      expect(response.headers.location).toBe('https://rp.example/out?state=xyz');
+      // POST re-resolves from the RAW params + the session user (never trusts the hidden field).
+      expect(logoutRp.resolvePostLogoutRedirect).toHaveBeenCalledWith(
+        {
+          idTokenHint: 'HINT',
+          postLogoutRedirectUri: 'https://rp.example/out',
+          state: 'xyz',
+          clientId: undefined,
+        },
+        'user-1',
+      );
+    });
+
+    it('POST with a non-matching redirect falls back to the default (no open redirect)', async () => {
+      sessions.get.mockResolvedValue(liveSession);
+      logoutRp.resolvePostLogoutRedirect.mockResolvedValue('/login?loggedOut=1');
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/logout',
+        headers: { cookie: 'idp_session=session-a' },
+        payload: {
+          _csrf: csrfFor('session-a'),
+          id_token_hint: 'FORGED',
+          post_logout_redirect_uri: 'https://evil.example/steal',
+        },
+      });
+
+      expect(response.statusCode).toBe(302);
+      expect(response.headers.location).toBe('/login?loggedOut=1');
+      expect(response.headers.location).not.toContain('evil.example');
+    });
+
+    it('renders the front-channel page with iframes + relaxed frame-src only on that response', async () => {
+      sessions.get.mockResolvedValue(liveSession);
+      sessions.clientsForSession.mockResolvedValue(['rp1', 'rp2']);
+      logoutRp.frontchannelIframes.mockResolvedValue([
+        'https://rp1.example/fc?iss=https%3A%2F%2Fissuer.example',
+        'https://rp2.example/fc?iss=https%3A%2F%2Fissuer.example',
+      ]);
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/logout',
+        headers: { cookie: 'idp_session=session-a' },
+        payload: { _csrf: csrfFor('session-a') },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toContain('<iframe src="https://rp1.example/fc');
+      expect(response.body).toContain('<iframe src="https://rp2.example/fc');
+      expect(response.body).toContain('/assets/logout-redirect.js');
+      expect(response.body).not.toMatch(/<script>[^<]/); // no inline script body
+      const csp = response.headers['content-security-policy'];
+      expect(csp).toContain('frame-src https://rp1.example https://rp2.example');
+      expect(csp).toContain("default-src 'self'");
+      expect(csp).toContain("script-src 'self'");
+      expect(csp).toContain("frame-ancestors 'none'");
+      expect(response.headers['cache-control']).toBe('no-store');
+
+      // A later ordinary page keeps the default (iframe-free) CSP.
+      const other = await app.inject({ method: 'GET', url: '/login' });
+      expect(other.headers['content-security-policy']).not.toContain('frame-src https://rp1');
+    });
+
+    it('no front-channel RP → redirects straight through without the intermediate page', async () => {
+      sessions.get.mockResolvedValue(liveSession);
+      sessions.clientsForSession.mockResolvedValue([]);
+      logoutRp.frontchannelIframes.mockResolvedValue([]);
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/logout',
+        headers: { cookie: 'idp_session=session-a' },
+        payload: { _csrf: csrfFor('session-a') },
+      });
+
+      expect(response.statusCode).toBe(302);
+      expect(response.body).not.toContain('<iframe');
+    });
+
+    it('POST with no live session only clears the cookie and redirects (idempotent)', async () => {
+      sessions.get.mockResolvedValue(null);
+
+      const response = await app.inject({
+        method: 'POST',
+        url: '/logout',
+        headers: { cookie: 'idp_session=gone' },
+        payload: { _csrf: csrfFor('gone') },
+      });
+
+      expect(response.statusCode).toBe(302);
+      expect(response.headers.location).toBe('/login?loggedOut=1');
+      expect(sessionSetCookie(response.headers['set-cookie'])).toContain('Max-Age=0');
+      expect(refreshTokens.revokeForSession).not.toHaveBeenCalled();
+      expect(refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
+      expect(sessions.revoke).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+    });
   });
 
   it('renders HTML validation errors without leaking field details', async () => {

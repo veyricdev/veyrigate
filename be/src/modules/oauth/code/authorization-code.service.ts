@@ -22,6 +22,9 @@ export interface AuthorizationCodeData {
   nonce?: string;
   userId: string;
   authTime?: number;
+  /** sha256 of the session cookie id that authorized this code; bound onto the RefreshToken so a
+   * local logout can revoke only this browser session's refresh family (B4.7, OPEN-1). */
+  sessionRef?: string;
 }
 
 /** Redis key is sha256(code), never the raw code (tech-lead C1) — mirrors `sess:{sha256(id)}`. */

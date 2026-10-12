@@ -14,6 +14,7 @@ import {
 } from './authorize-request-context.service';
 import { AuthorizationCodeService } from '../code/authorization-code.service';
 import { ConsentService } from '../consent/consent.service';
+import { SessionService } from '../../sessions/session.service';
 
 /** Raw `/authorize` query parameters (already string-typed by the HTTP layer). */
 export interface AuthorizeParams {
@@ -37,6 +38,9 @@ export interface SessionView {
   userId: string;
   /** ms epoch of the authentication that established the session. */
   authTime: number;
+  /** sha256 of the session cookie id (`Session.ref`); bound onto any RefreshToken this session
+   * mints so a local logout can target exactly this browser session (B4.7). */
+  ref: string;
 }
 
 /**
@@ -84,6 +88,7 @@ export class AuthorizeService {
     private readonly audit: AuditService,
     private readonly consents: ConsentService,
     private readonly codes: AuthorizationCodeService,
+    private readonly sessions: SessionService,
     config: ConfigService,
   ) {
     this.issuer = config.getOrThrow<AppConfig>('app').issuer;
@@ -298,7 +303,10 @@ export class AuthorizeService {
       nonce: params.nonce,
       userId: session.userId,
       authTime: session.authTime,
+      sessionRef: session.ref,
     });
+    // Track this RP against the session so a later logout can notify it (front-channel, B4.7).
+    await this.sessions.recordClientForSession(session.ref, client.clientId);
     return code;
   }
 
@@ -316,7 +324,10 @@ export class AuthorizeService {
       nonce: ctx.nonce,
       userId: session.userId,
       authTime: session.authTime,
+      sessionRef: session.ref,
     });
+    // Track this RP against the session so a later logout can notify it (front-channel, B4.7).
+    await this.sessions.recordClientForSession(session.ref, ctx.clientId);
     return code;
   }
 

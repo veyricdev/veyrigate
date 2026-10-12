@@ -45,7 +45,20 @@ interface RefreshDoc {
   replacedBy?: Types.ObjectId | null;
   reuseDetectedAt?: Date | null;
   familyRevokedAt?: Date | null;
+  sessionRef?: string | null;
 }
+
+/**
+ * Closed union of filters `revokeWhere` accepts. Every variant pins at least one scoping key so
+ * the shared revoke core can NEVER run `updateMany({})` (would revoke every family of every user).
+ * - `{familyId, clientId}` — reuse detection / `/revoke` (one family of one client).
+ * - `{userId}` — global "log out everywhere": all families of the user.
+ * - `{userId, sessionRef}` — local logout: only the families minted by this browser session.
+ */
+type RevokeFilter =
+  | { familyId: string; clientId: string }
+  | { userId: string }
+  | { userId: string; sessionRef: string };
 
 /**
  * Refresh-token rotation, reuse detection and family revocation (spec §9.5, INV-10/11/12).
@@ -258,6 +271,9 @@ export class RefreshTokenService {
       parentId: old._id,
       issuedAt: now,
       expiresAt: old.expiresAt,
+      // Inherit the session binding (like familyId) so a local logout keeps reaching the family
+      // after any number of rotations (B4.7). Undefined for pre-B4.7 families (no binding).
+      sessionRef: old.sessionRef ?? undefined,
       ip: audit.ip,
       userAgent: audit.userAgent,
     });
@@ -333,32 +349,7 @@ export class RefreshTokenService {
     now: Date,
     opts: { reuse?: boolean; audit?: AuditCtx } = {},
   ): Promise<number> {
-    // Stamp `familyRevokedAt` FIRST on EVERY revoke path (reuse AND /revoke), before the revoke
-    // `updateMany`. INV-11 race close with a concurrent `rotate` A (swap → insert S → re-read):
-    //   - if A's re-read of `familyRevokedAt` runs AFTER this stamp → A observes it and self-revokes S;
-    //   - if A's re-read runs BEFORE this stamp, then this stamp (hence the revoke updateMany below,
-    //     which runs strictly after the stamp) runs after A's re-read, which runs after A inserted S,
-    //     so the revoke updateMany sees S (revokedAt:null) and revokes it.
-    // Either way no descendant survives a revoked family — true for ANY interleaving, no transaction.
-    // Idempotent via the `familyRevokedAt: null` filter so a second /revoke is a no-op here.
-    await this.refreshTokens
-      .updateMany({ familyId, clientId, familyRevokedAt: null }, { $set: { familyRevokedAt: now } })
-      .exec();
-
-    if (opts.reuse) {
-      // Reuse additionally records the detection timestamp (idempotent); drives TOKEN_REUSE_DETECTED.
-      await this.refreshTokens
-        .updateMany(
-          { familyId, clientId, reuseDetectedAt: null },
-          { $set: { reuseDetectedAt: now } },
-        )
-        .exec();
-    }
-
-    const res = await this.refreshTokens
-      .updateMany({ familyId, clientId, revokedAt: null }, { $set: { revokedAt: now } })
-      .exec();
-    const modified = (res as { modifiedCount?: number }).modifiedCount ?? 0;
+    const modified = await this.revokeWhere({ familyId, clientId }, now, { reuse: opts.reuse });
 
     if (opts.reuse) {
       await this.audit.record({
@@ -374,5 +365,79 @@ export class RefreshTokenService {
       });
     }
     return modified;
+  }
+
+  /**
+   * Revoke every still-active member of ALL families a user owns (global "log out everywhere",
+   * B4.7). Scoped to `userId` only — the destructive scope is decided by the caller's
+   * authenticated session, never by client input. Returns the number of documents revoked.
+   */
+  async revokeAllForUser(userId: string, now: Date): Promise<number> {
+    return this.revokeWhere({ userId }, now);
+  }
+
+  /**
+   * Revoke every still-active member of the families minted by a single browser session (local
+   * logout, B4.7). `sessionRef` = sha256(cookie id) carried on each RefreshToken; another device
+   * of the same user has a different `sessionRef` so its tokens survive. Returns documents revoked.
+   */
+  async revokeForSession(userId: string, sessionRef: string, now: Date): Promise<number> {
+    return this.revokeWhere({ userId, sessionRef }, now);
+  }
+
+  /**
+   * The ONE place that revokes RefreshToken documents (DEBT-034). Enforces INV-11 stamp-first
+   * ordering for ANY revoke path: stamp `familyRevokedAt` on every still-live match BEFORE the
+   * `revokedAt` write, so a concurrent `rotate` that re-reads the stamp after minting its
+   * successor self-revokes it (see `rotate`/`revokeFamily` comments). Idempotent via the
+   * `familyRevokedAt:null` / `revokedAt:null` filters. Returns the number of docs revoked.
+   *
+   * Guard (tech-lead fold #5): the filter is a closed union that always carries a scoping key, so
+   * an empty-filter `updateMany({})` is impossible; we still assert at runtime and cast `userId`
+   * to `ObjectId` (stored type) so a string userId never silently matches nothing.
+   */
+  private async revokeWhere(
+    filter: RevokeFilter,
+    now: Date,
+    opts: { reuse?: boolean } = {},
+  ): Promise<number> {
+    const scope = this.buildRevokeScope(filter);
+
+    await this.refreshTokens
+      .updateMany({ ...scope, familyRevokedAt: null }, { $set: { familyRevokedAt: now } })
+      .exec();
+
+    if (opts.reuse) {
+      // Reuse additionally records the detection timestamp (idempotent); drives TOKEN_REUSE_DETECTED.
+      await this.refreshTokens
+        .updateMany({ ...scope, reuseDetectedAt: null }, { $set: { reuseDetectedAt: now } })
+        .exec();
+    }
+
+    const res = await this.refreshTokens
+      .updateMany({ ...scope, revokedAt: null }, { $set: { revokedAt: now } })
+      .exec();
+    return (res as { modifiedCount?: number }).modifiedCount ?? 0;
+  }
+
+  /** Turn a `RevokeFilter` into a concrete Mongo query, failing closed on any empty/invalid scope. */
+  private buildRevokeScope(filter: RevokeFilter): Record<string, unknown> {
+    if ('familyId' in filter) {
+      if (!filter.familyId || !filter.clientId) {
+        throw new Error('revokeWhere requires both familyId and clientId');
+      }
+      return { familyId: filter.familyId, clientId: filter.clientId };
+    }
+    if (!filter.userId) {
+      throw new Error('revokeWhere requires a userId');
+    }
+    const scope: Record<string, unknown> = { userId: new Types.ObjectId(filter.userId) };
+    if ('sessionRef' in filter) {
+      if (!filter.sessionRef) {
+        throw new Error('revokeWhere requires a non-empty sessionRef');
+      }
+      scope.sessionRef = filter.sessionRef;
+    }
+    return scope;
   }
 }

@@ -31,6 +31,36 @@ export class TokenVerifier {
     this.issuer = config.getOrThrow<AppConfig>('app').issuer;
   }
 
+  /**
+   * Verify an `id_token_hint` for RP-initiated logout (B4.7, OIDC RP-Initiated Logout §2). Unlike
+   * {@link verify} this ACCEPTS an expired token (the session is usually already dead at logout)
+   * but still fails closed on everything else: RS256 + current JWKS signature, `iss` must match,
+   * and the header `typ` must NOT be `at+jwt` (an access token — same signer — is rejected here to
+   * close token confusion). `aud` must be a single string or a one-element array = the hinted
+   * client id. `sub` is required. Returns `{ sub, aud }`; throws on any failure so the caller can
+   * fail closed (ignore the hint, fall back to the default redirect) — never 500.
+   */
+  async verifyIdTokenHint(token: string): Promise<{ sub: string; aud: string }> {
+    const jwks = createLocalJWKSet({ keys: await this.keys.getPublicKeys() });
+    const { payload, protectedHeader } = await jwtVerify(token, jwks, {
+      issuer: this.issuer,
+      algorithms: ['RS256'],
+      // Accept an expired hint: do not pin `maxTokenAge`/require a live `exp`.
+      clockTolerance: Number.MAX_SAFE_INTEGER,
+    });
+    if (protectedHeader.typ === 'at+jwt') {
+      throw new Error('id_token_hint must not be an access token');
+    }
+    const aud = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+    if (aud.length !== 1 || typeof aud[0] !== 'string') {
+      throw new Error('id_token_hint aud must be a single client id');
+    }
+    if (typeof payload.sub !== 'string') {
+      throw new Error('id_token_hint sub must be a string');
+    }
+    return { sub: payload.sub, aud: aud[0] };
+  }
+
   async verify(token: string, audience: string): Promise<JWTPayload> {
     const jwks = createLocalJWKSet({ keys: await this.keys.getPublicKeys() });
     const { payload } = await jwtVerify(token, jwks, {

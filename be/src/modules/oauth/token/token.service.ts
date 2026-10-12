@@ -119,6 +119,7 @@ export class TokenService {
         parentId: null,
         issuedAt: now,
         expiresAt: new Date(now.getTime() + this.refreshTokenTtl * 1000),
+        ...(data.sessionRef !== undefined ? { sessionRef: data.sessionRef } : {}),
         ip: audit.ip,
         userAgent: audit.userAgent,
       });
@@ -251,6 +252,7 @@ export class TokenService {
     issuedAt: Date;
     expiresAt: Date;
     _id?: Types.ObjectId;
+    sessionRef?: string;
     ip?: string;
     userAgent?: string;
   }): Promise<{ token: string; _id: Types.ObjectId }> {
@@ -267,6 +269,7 @@ export class TokenService {
       resource: input.resource,
       issuedAt: input.issuedAt,
       expiresAt: input.expiresAt,
+      ...(input.sessionRef !== undefined ? { sessionRef: input.sessionRef } : {}),
       ...(input.ip !== undefined ? { ip: input.ip } : {}),
       ...(input.userAgent !== undefined ? { userAgent: input.userAgent } : {}),
     });

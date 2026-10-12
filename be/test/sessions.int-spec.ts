@@ -189,6 +189,55 @@ describe('SessionService on real Redis (B2.3, INV-16/17)', () => {
     expect(await svc.get(other.id)).not.toBeNull();
   });
 
+  describe('B4.7 sess_rp front-channel RP index', () => {
+    it('recordClientForSession SADDs (idempotent) and clientsForSession reads the set + TTL', async () => {
+      const { id, session } = await svc.create(user('rp'), 'tenant-A');
+      await svc.recordClientForSession(session.ref, 'rp1');
+      await svc.recordClientForSession(session.ref, 'rp2');
+      await svc.recordClientForSession(session.ref, 'rp1'); // duplicate → no growth
+
+      expect((await svc.clientsForSession(session.ref)).sort()).toEqual(['rp1', 'rp2']);
+      // The set carries a TTL bounded by the session's absolute lifetime (never outlives it).
+      const pttl = await redis.pttl(`sess_rp:${session.ref}`);
+      expect(pttl).toBeGreaterThan(0);
+      expect(pttl).toBeLessThanOrEqual(2_592_000_000);
+      await svc.revoke(id);
+    });
+
+    it('revoke(id) deletes the session AND its sess_rp set', async () => {
+      const { id, session } = await svc.create(user('rp-del'), 'tenant-A');
+      await svc.recordClientForSession(session.ref, 'rp1');
+      expect(await redis.exists(`sess_rp:${session.ref}`)).toBe(1);
+
+      await svc.revoke(id);
+      expect(await redis.exists(`sess_rp:${session.ref}`)).toBe(0);
+      expect(await svc.clientsForSession(session.ref)).toEqual([]);
+    });
+
+    it('revokeAllForUser deletes every sess_rp set of the user (Lua)', async () => {
+      const s1 = await svc.create(user('rp-all'), 'tenant-A');
+      const s2 = await svc.create(user('rp-all'), 'tenant-B');
+      await svc.recordClientForSession(s1.session.ref, 'rp1');
+      await svc.recordClientForSession(s2.session.ref, 'rp2');
+
+      await svc.revokeAllForUser(user('rp-all'));
+      expect(await redis.exists(`sess_rp:${s1.session.ref}`)).toBe(0);
+      expect(await redis.exists(`sess_rp:${s2.session.ref}`)).toBe(0);
+    });
+
+    it('clientsForUser returns the de-duplicated union across all live sessions', async () => {
+      const s1 = await svc.create(user('rp-union'), 'tenant-A');
+      const s2 = await svc.create(user('rp-union'), 'tenant-B');
+      await svc.recordClientForSession(s1.session.ref, 'rp1');
+      await svc.recordClientForSession(s1.session.ref, 'rp2');
+      await svc.recordClientForSession(s2.session.ref, 'rp2'); // overlaps → deduped
+      await svc.recordClientForSession(s2.session.ref, 'rp3');
+
+      expect((await svc.clientsForUser(user('rp-union'))).sort()).toEqual(['rp1', 'rp2', 'rp3']);
+      await svc.revokeAllForUser(user('rp-union'));
+    });
+  });
+
   it('Redis errors propagate instead of reading as "no session" (C9)', async () => {
     const dead = new IORedis('redis://127.0.0.1:1', {
       lazyConnect: true,

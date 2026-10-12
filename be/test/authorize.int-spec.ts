@@ -47,6 +47,7 @@ function config(): ConfigService {
   const base: Record<string, unknown> = {
     app: { nodeEnv: 'production', issuer: ISSUER },
     consent: { policyVersion: '1', termsVersion: '1' },
+    token: { sessionIdleTtl: 3600, sessionAbsoluteTtl: 86400 },
   };
   return { getOrThrow: (ns: string) => base[ns] } as unknown as ConfigService;
 }
@@ -80,12 +81,14 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
   let contexts: AuthorizeRequestContextService;
   let consents: ConsentService;
   let codes: AuthorizationCodeService;
+  let sessionsRp: SessionService;
   let ctxClock: number;
   let service: AuthorizeService;
 
   const signedIn: SessionView = {
     userId: new Types.ObjectId().toHexString(),
     authTime: Date.now(),
+    ref: 'session-ref-test',
   };
 
   beforeAll(async () => {
@@ -107,7 +110,17 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
     const consentModel = connection.model<Consent>('Consent');
     consents = new ConsentService(consentModel, config());
     codes = new AuthorizationCodeService(rs);
-    service = new AuthorizeService(clients, resources, contexts, audit, consents, codes, config());
+    sessionsRp = new SessionService(rs, config());
+    service = new AuthorizeService(
+      clients,
+      resources,
+      contexts,
+      audit,
+      consents,
+      codes,
+      sessionsRp,
+      config(),
+    );
 
     await clients.create({
       clientId: `${RUN}-client`,
@@ -253,6 +266,35 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
       const serialized = JSON.stringify(events);
       expect(serialized).not.toContain(VALID_CHALLENGE);
       expect(serialized).not.toContain('rp-nonce');
+    });
+
+    it('B4.7: issueCode stamps the LIVE session ref onto the minted code (consent approve path)', async () => {
+      // A fresh session so this test owns its own consent/ref; proves AuthorizeService.issueCode
+      // carries session.ref into the code (the binding local/global logout later revokes against).
+      const sess: SessionView = {
+        userId: new Types.ObjectId().toHexString(),
+        authTime: Date.now(),
+        ref: `sref-${Date.now()}`,
+      };
+      const outcome = await service.handle(params(), sess);
+      expect(outcome.kind).toBe('consent_required');
+      const requestId = (outcome as { requestId: string }).requestId;
+
+      const decision = await service.decideConsent(requestId, true, sess);
+      expect(decision?.code).toBeTruthy();
+
+      // Read the minted code (single-use consume with the exact client/redirect/challenge).
+      const data = await codes.consume(
+        decision!.code!,
+        `${RUN}-client`,
+        'https://app.example.com/callback',
+        VALID_CHALLENGE,
+      );
+      expect(data).not.toBeNull();
+      expect(data!.sessionRef).toBe(sess.ref);
+      expect(data!.userId).toBe(sess.userId);
+      // The RP was recorded against the session for later front-channel logout.
+      expect(await sessionsRp.clientsForSession(sess.ref)).toContain(`${RUN}-client`);
     });
   });
 

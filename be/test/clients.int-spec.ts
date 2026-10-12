@@ -132,6 +132,40 @@ describe('Clients + Resources on real Mongo (B3.1–B3.3)', () => {
       expect(c.redirectUris).toEqual(['http://localhost:5173/callback']);
       build(config()); // reset for subsequent describe blocks (production, matches other suites)
     });
+
+    it('accepts a valid https frontchannelLogoutUri at registration (B4.7)', async () => {
+      const c = await clients.create({
+        clientId: 'client-fc-ok',
+        clientType: 'confidential',
+        tokenEndpointAuthMethod: 'client_secret_basic',
+        redirectUris: ['https://app.example.com/callback'],
+        frontchannelLogoutUri: 'https://app.example.com/frontchannel',
+        tenantId: 'default-tenant',
+      });
+      expect(c.frontchannelLogoutUri).toBe('https://app.example.com/frontchannel');
+    });
+
+    // frontchannelLogoutUri follows the same INV-4 format rule as redirect URIs, PLUS it rejects
+    // hosts carrying CSP-breaking characters (`;`, `,`, whitespace) — that origin later builds a
+    // `frame-src` allowlist, where those characters would inject/terminate a directive (B4.7).
+    it.each([
+      ['non-https in production', 'http://evil.example/fc'],
+      ['wildcard path', 'https://app.example.com/*'],
+      ['fragment', 'https://app.example.com/fc#f'],
+      ['relative URI', '/frontchannel'],
+      ['CSP-injecting host (semicolon)', 'https://a;b.example.com/fc'],
+    ])('rejects frontchannelLogoutUri variant: %s (%s)', async (_label, uri) => {
+      await expect(
+        clients.create({
+          clientId: `client-fc-bad-${Buffer.from(uri).toString('hex').slice(0, 8)}`,
+          clientType: 'confidential',
+          tokenEndpointAuthMethod: 'client_secret_basic',
+          redirectUris: ['https://app.example.com/callback'],
+          frontchannelLogoutUri: uri,
+          tenantId: 'default-tenant',
+        }),
+      ).rejects.toBeInstanceOf(InvalidRedirectUriError);
+    });
   });
 
   describe('B3.2 — Resources + allowedResources mapping (tech-lead C3)', () => {

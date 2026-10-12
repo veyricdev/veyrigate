@@ -13,6 +13,7 @@ import { IntrospectController } from './introspect/introspect.controller';
 import { TokenController } from './token/token.controller';
 import { TokenService } from './token/token.service';
 import { RefreshTokenService } from './token/refresh-token.service';
+import { LogoutService } from './logout/logout.service';
 import { UserinfoController } from './userinfo/userinfo.controller';
 import { HtmlExceptionFilter } from '../ui/html-exception.filter';
 import { CsrfGuard, CsrfService } from '../ui/csrf.service';
@@ -41,10 +42,17 @@ import { CsrfGuard, CsrfService } from '../ui/csrf.service';
     ConsentService,
     TokenService,
     RefreshTokenService,
+    LogoutService,
     CsrfService,
     CsrfGuard,
     HtmlExceptionFilter,
   ],
-  exports: [AuthorizeRequestContextService, AuthorizationCodeService, ConsentService],
+  exports: [
+    AuthorizeRequestContextService,
+    AuthorizationCodeService,
+    ConsentService,
+    RefreshTokenService,
+    LogoutService,
+  ],
 })
 export class OauthModule {}

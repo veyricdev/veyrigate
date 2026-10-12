@@ -4,7 +4,7 @@ import type { Model } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
 import type { AppConfig } from '../../config/configuration';
 import { mapDuplicate } from '../identity/identity.errors';
-import { validateRedirectUriList } from './redirect-uri.validator';
+import { validateRedirectUriFormat, validateRedirectUriList } from './redirect-uri.validator';
 
 export type ClientType = 'public' | 'confidential';
 export type TokenEndpointAuthMethod = 'client_secret_basic' | 'client_secret_post' | 'none';
@@ -17,6 +17,8 @@ export interface Client {
   grantTypes: GrantType[];
   redirectUris: string[];
   postLogoutRedirectUris: string[];
+  /** OIDC front-channel logout endpoint (B4.7); absent when the RP opts out. */
+  frontchannelLogoutUri?: string;
   allowedCorsOrigins: string[];
   allowedResources: string[];
   scopes: string[];
@@ -30,6 +32,7 @@ export interface CreateClientInput {
   grantTypes?: GrantType[];
   redirectUris?: string[];
   postLogoutRedirectUris?: string[];
+  frontchannelLogoutUri?: string;
   allowedCorsOrigins?: string[];
   allowedResources?: string[];
   scopes?: string[];
@@ -62,6 +65,12 @@ export class ClientService {
     validateRedirectUriList(postLogoutRedirectUris, {
       allowHttpLocalhost: this.allowHttpLocalhost,
     });
+    // Front-channel logout URI follows the same INV-4 format rule as redirect URIs (B4.7).
+    if (input.frontchannelLogoutUri !== undefined) {
+      validateRedirectUriFormat(input.frontchannelLogoutUri, {
+        allowHttpLocalhost: this.allowHttpLocalhost,
+      });
+    }
 
     const doc = await mapDuplicate('Client', () =>
       this.clients.create({
@@ -71,6 +80,9 @@ export class ClientService {
         ...(input.grantTypes ? { grantTypes: input.grantTypes } : {}),
         redirectUris,
         postLogoutRedirectUris,
+        ...(input.frontchannelLogoutUri !== undefined
+          ? { frontchannelLogoutUri: input.frontchannelLogoutUri }
+          : {}),
         allowedCorsOrigins: input.allowedCorsOrigins ?? [],
         allowedResources: input.allowedResources ?? [],
         scopes: input.scopes ?? [],

@@ -22,6 +22,7 @@ export interface HttpRequest {
 /** Members of a Fastify reply the HTML/OAuth controllers call. */
 export interface HttpReply {
   status(code: number): HttpReply;
+  header(name: string, value: string): HttpReply;
   view(template: string, data: Record<string, unknown>): unknown;
   redirect(url: string, status?: number): unknown;
   setCookie(name: string, value: string, options: object): unknown;

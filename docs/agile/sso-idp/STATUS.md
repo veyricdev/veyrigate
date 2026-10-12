@@ -2,11 +2,12 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: không có (15-B4.6 đã đóng, commit `d513348`).
+- **Run hiện tại**: `16-B4.7`. Cổng: **tester PASS** (lượt 1, 2026-10-12) — orchestrator đóng run. Tester thêm 4 test unit QA (`logout.service.spec`: `verifyHint` fail-closed khi client bị xoá; `frameSrcOrigins` injection-safe CSP sink). Full suite **473/473** (unit 127 + int 346), tsc+lint(src) sạch. Xem `runs/16-B4.7/test-report.md`. 🔴 cuối đã đóng: senior tự chạy mutation đảo `familyRevokedAt`↔`revokedAt` trong `revokeWhere` → đúng 2 test `ordering (INV-11)` FAIL (A nhận 200), đã khôi phục byte-identical. 🟡 lượt 2 đã sửa: validator spec +4 case; POST /logout nhánh no-session fail-open. 🟡 còn lại đã vào backlog: DEBT-043 (mở rộng cho local logout), DEBT-045 (lint chưa phủ `test/`), DEBT-046 (ponytail/nit). Xem `runs/16-B4.7/review-senior.md` (lượt 3).
+- **Vòng lặp (run 16)**: analyst=1, tech-lead=1 (PASS), dev=3 (DONE, DONE retry1, DONE retry2), senior=3 (REJECT, REJECT, PASS), tester=1 (PASS)
 - **Run vừa đóng**: `15-B4.6` ✅ 4/4 task — 405/405 test (unit 94 + int 311). Xem `runs/15-B4.6/summary.md`.
 - **Vòng lặp (run 15)**: analyst=1, tech-lead=1 (PASS), dev=2 (DONE, DONE retry1), senior=2 (REJECT, PASS), tester=1 (PASS)
-- **Việc tiếp theo**: **B4.7** (logout local/global + RP-initiated + front-channel; kéo DEBT-034/037/038/040/041) → run consent-hardening (DEBT-026/027/028). Hoàn tất M3 cần thêm T2 (fe-sso-test) + X1.
-  Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`; full suite = `pnpm test` (94) + `pnpm test:int` (311) = **405**.
+- **Việc tiếp theo**: **tester** (run 16) → micro-run introspect-hardening (DEBT-037/040/041/043/045/046) → run consent-hardening (DEBT-026/027/028). Muốn hoàn tất M3 còn cần T2 (fe-sso-test) + X1.
+  Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`; full suite = `pnpm test` (**127**, +4 QA) + `pnpm test:int` (**346**) = **473** (baseline 405 + 68 mới). Race+ordering chạy 3 lần đều 6/6. CHƯA commit.
 
 ## Tiến độ
 
@@ -34,4 +35,4 @@ Xem `plan.md` §12. Còn mở: **Q3, Q5, Q7–Q9**. **Q1, Q4, Q6 đã chốt** (
 
 ## Backlog mở
 
-26 mục mở — xem [backlog.md](backlog.md) (run 15 dev đóng DEBT-019/020/033/035/036; còn DEBT-037/038 → B4.7, DEBT-039 → B7.1, DEBT-040/041 → B4.7, DEBT-042 → B7, DEBT-026/027 → consent-hardening).
+30 mục mở. Xem [backlog.md](backlog.md): DEBT-037/040/041/043/045/046 → introspect-hardening; DEBT-044 → sau DEBT-037; DEBT-039 → B7.1; DEBT-042 → B7; DEBT-026/027 → consent-hardening.

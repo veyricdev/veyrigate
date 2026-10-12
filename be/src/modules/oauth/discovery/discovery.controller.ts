@@ -18,9 +18,9 @@ interface DiscoveryReply {
  * anonymous-readable metadata only - never a secret, private key, or internal URL (INV-19).
  *
  * Deviations from spec 12 (recorded here, approved by tech-lead run 15):
- * - `end_session_endpoint` is NOT advertised yet: `GET /logout` is a confirmation form, not an
- *   RP-initiated logout endpoint (no `id_token_hint`/`post_logout_redirect_uri` handling). Added
- *   in B4.7 (DEBT-038).
+ * - `end_session_endpoint` = `{issuer}/logout` (B4.7, DEBT-038): RP-initiated logout with
+ *   `id_token_hint`/`post_logout_redirect_uri`/`state`; `GET` renders the confirmation form, the
+ *   `POST` (CSRF-protected) performs the logout (spec §9.8).
  * - `token_endpoint_auth_methods_supported` includes `client_secret_post` (the `/token`
  *   controller accepts it) in addition to spec 12's `client_secret_basic`/`none`.
  * - `grant_types_supported` includes `refresh_token`; `revocation_endpoint`/`introspection_endpoint`
@@ -62,6 +62,7 @@ export class DiscoveryController {
       jwks_uri: this.url('/jwks.json'),
       revocation_endpoint: this.url('/revoke'),
       introspection_endpoint: this.url('/introspect'),
+      end_session_endpoint: this.url('/logout'),
       response_types_supported: ['code'],
       grant_types_supported: ['authorization_code', 'refresh_token'],
       subject_types_supported: ['public'],
