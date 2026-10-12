@@ -99,8 +99,8 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       payload,
     });
 
-  const mintCode = (overrides: Record<string, unknown> = {}) =>
-    codes.create({
+  const mintCode = async (overrides: Record<string, unknown> = {}) => {
+    const base: Record<string, unknown> = {
       clientId: CLIENT,
       redirectUri: REDIRECT,
       codeChallenge: CHALLENGE,
@@ -109,8 +109,21 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       nonce: 'rp-nonce',
       userId: new Types.ObjectId().toHexString(),
       authTime: 1_700_000_000_000,
-      ...overrides,
-    } as never);
+    };
+    const data = { ...base, ...overrides };
+    // DEBT-043: `/token` now requires a live `sess:{sessionRef}`. Default to a freshly-seeded live
+    // session so every exchange-based test keeps working; `refreshForSession` seeds its own ref.
+    if (data.sessionRef === undefined) {
+      data.sessionRef = sha256(`mc-${Date.now()}-${Math.random()}`);
+    }
+    await redis.set(
+      `sess:${data.sessionRef as string}`,
+      JSON.stringify({ userId: data.userId, tenantId: 'tenant-A', createdAt: Date.now() }),
+      'EX',
+      3600,
+    );
+    return codes.create(data as never);
+  };
 
   /** Run the authorization_code flow once and return the first refresh token of a fresh family. */
   async function firstRefresh(
@@ -143,11 +156,10 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
    * then gate `insertRefreshToken` so the winning rotate (A) really creates its successor S and
    * then parks before returning. `inserted` resolves the instant S exists (so the concurrent
    * revoker B runs strictly after S, no timers); `release()` lets A finish; `restore()` removes the
-   * spy. Forcing this order proves the mark-then-check guard self-revokes S for ANY interleaving.
+   * spy. Forcing this specific order deterministically exercises the mark-then-check guard's
+   * race-close path (S born before B's revoke updateMany, then self-revoked on re-read).
    */
-  async function gateInsert(
-    mint: () => Promise<string> = firstRefresh,
-  ): Promise<{
+  async function gateInsert(mint: () => Promise<string> = firstRefresh): Promise<{
     rt: string;
     familyId: string;
     inserted: Promise<void>;
@@ -927,8 +939,20 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
   });
 
   describe('B4.7 revokeWhere / sessionRef (local + global logout)', () => {
+    // Seed a live `sess:{ref}` directly so `/token` (DEBT-043) accepts a code bound to a chosen
+    // ref. These tests assert sessionRef *scoping* of the refresh family, not session liveness —
+    // the dedicated liveness/logout gate is covered in token.int-spec.
+    const seedSession = (ref: string, userId: string) =>
+      redis.set(
+        `sess:${ref}`,
+        JSON.stringify({ userId, tenantId: 'tenant-A', createdAt: Date.now() }),
+        'EX',
+        3600,
+      );
+
     /** Mint a first refresh token for a given user + sessionRef (via the authorization_code flow). */
     async function refreshForSession(userId: string, sessionRef: string): Promise<string> {
+      await seedSession(sessionRef, userId);
       const { code } = await mintCode({ userId, sessionRef });
       const res = await post(
         '/token',

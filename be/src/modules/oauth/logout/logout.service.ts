@@ -13,14 +13,17 @@ export interface LogoutParams {
   clientId?: string;
 }
 
-/** A verified logout hint: the client it points at and the subject it asserted. */
+/** A verified logout hint: the client it points at (already looked up), and the subject it asserted. */
 interface VerifiedHint {
   clientId: string;
   sub: string;
+  client: NonNullable<Awaited<ReturnType<ClientService['findByClientId']>>>;
 }
 
 /** `state` echoed back to the RP is capped so a hostile hint cannot blow up the redirect URL. */
 const MAX_STATE_LENGTH = 512;
+/** Default post-logout redirect: every untrusted input fails closed here (GET and POST agree). */
+const DEFAULT_REDIRECT = '/login?loggedOut=1';
 
 /**
  * RP-initiated + front-channel logout helpers (B4.7, spec §9.8). It verifies the `id_token_hint`,
@@ -31,7 +34,7 @@ const MAX_STATE_LENGTH = 512;
  */
 @Injectable()
 export class LogoutService {
-  readonly defaultRedirect = '/login?loggedOut=1';
+  readonly defaultRedirect = DEFAULT_REDIRECT;
   private readonly issuer: string;
 
   constructor(
@@ -54,18 +57,18 @@ export class LogoutService {
     sessionUserId: string | undefined,
   ): Promise<string> {
     const uri = params.postLogoutRedirectUri;
-    if (!uri || !params.idTokenHint) return this.defaultRedirect;
+    if (!uri || !params.idTokenHint) return DEFAULT_REDIRECT;
 
     const hint = await this.verifyHint(params.idTokenHint);
-    if (!hint) return this.defaultRedirect;
+    if (!hint) return DEFAULT_REDIRECT;
     // A query `client_id` that disagrees with the hint `aud` is a mismatched request -> ignore.
-    if (params.clientId && params.clientId !== hint.clientId) return this.defaultRedirect;
+    if (params.clientId && params.clientId !== hint.clientId) return DEFAULT_REDIRECT;
     // A live session whose user is not the hint subject must not drive another user's redirect.
-    if (sessionUserId && hint.sub !== sessionUserId) return this.defaultRedirect;
+    if (sessionUserId && hint.sub !== sessionUserId) return DEFAULT_REDIRECT;
 
-    const client = await this.clients.findByClientId(hint.clientId);
-    if (!client) return this.defaultRedirect;
-    if (!isRegisteredRedirectUri(client.postLogoutRedirectUris, uri)) return this.defaultRedirect;
+    // `verifyHint` already loaded (and non-null-checked) the client — reuse it, no second lookup.
+    const client = hint.client;
+    if (!isRegisteredRedirectUri(client.postLogoutRedirectUris, uri)) return DEFAULT_REDIRECT;
 
     return this.appendState(uri, params.state);
   }
@@ -76,7 +79,7 @@ export class LogoutService {
       const { sub, aud } = await this.verifier.verifyIdTokenHint(idTokenHint);
       const client = await this.clients.findByClientId(aud);
       if (!client) return null;
-      return { clientId: aud, sub };
+      return { clientId: aud, sub, client };
     } catch {
       return null;
     }

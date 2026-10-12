@@ -17,6 +17,7 @@ const dataFor = (userId: string): AuthorizationCodeData => ({
   scope: 'openid profile',
   nonce: 'rp-nonce',
   userId,
+  sessionRef: sha256(`${RUN}-session`),
 });
 
 describe('AuthorizationCodeService on real Redis (B4.3, spec §9.1 step 3 / §9.5)', () => {

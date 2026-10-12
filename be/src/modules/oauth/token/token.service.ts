@@ -95,6 +95,7 @@ export class TokenService {
       scope,
       client.clientId,
       authTimeSec,
+      data.sessionRef,
     );
     const idToken = scopes.includes('openid')
       ? await this.signIdToken(
@@ -163,6 +164,7 @@ export class TokenService {
     clientId: string;
     resource: string;
     effectiveScope: string[];
+    sessionRef?: string;
   }): Promise<{ accessToken: string; idToken?: string }> {
     const scope = input.effectiveScope.join(' ');
     const accessToken = await this.signAccessToken(
@@ -171,6 +173,7 @@ export class TokenService {
       scope,
       input.clientId,
       undefined,
+      input.sessionRef,
     );
     const idToken = input.effectiveScope.includes('openid')
       ? await this.signIdToken({ userId: input.userId }, input.clientId, undefined)
@@ -189,12 +192,20 @@ export class TokenService {
     scope: string,
     clientId: string,
     authTimeSec: number | undefined,
+    sessionRef: string | undefined,
   ): Promise<string> {
     const claims: Record<string, unknown> = { scope, client_id: clientId };
     // auth_time only when the resource is the admin API (D3) AND the code carried it (B6.2 step-up
     // stays fail-closed when it is absent ? never fabricate `now`).
     if (resource === this.adminResource && authTimeSec !== undefined) {
       claims.auth_time = authTimeSec;
+    }
+    // `sid` (DEBT-037) = sessionRef of the issuing IdP session; carried on access tokens minted
+    // from the authorization code and inherited by tokens minted from the refresh family. Absent
+    // for pre-B4.7 families (no `sessionRef`). A public identifier (one-way hash), never a
+    // credential — `/introspect` + `/userinfo` use it only to reflect an active session end.
+    if (sessionRef !== undefined) {
+      claims.sid = sessionRef;
     }
     return this.signer.sign(claims, {
       audience: resource,

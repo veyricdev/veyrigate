@@ -12,9 +12,10 @@ export const RefreshTokenSchema = new Schema({
   clientId: { type: String, required: true },
   // sha256 of the session cookie id (= `Session.ref`) that minted this family. Lets a local
   // logout revoke only the refresh tokens of THIS browser session (B4.7, tech-lead OPEN-1). Not
-  // reversible, never exposed in token/response. Filter `{userId, sessionRef}` is a prefix of the
-  // `{userId:1, clientId:1}` index (no new index). Tokens minted before B4.7 have none and are
-  // only reachable by global logout / `/revoke` / TTL.
+  // reversible. Since DEBT-037 it IS surfaced as the access token `sid` claim (a JWT the RP/RS can
+  // read) — a public identifier, never a credential, and never in the `/introspect` response body.
+  // Filter `{userId, sessionRef}` is a prefix of the `{userId:1, clientId:1}` index (no new index).
+  // Tokens minted before B4.7 have none and are only reachable by global logout / `/revoke` / TTL.
   sessionRef: { type: String },
   scope: { type: [String], default: [] },
   resource: { type: String, required: true },

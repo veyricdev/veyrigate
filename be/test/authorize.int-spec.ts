@@ -47,7 +47,7 @@ function config(): ConfigService {
   const base: Record<string, unknown> = {
     app: { nodeEnv: 'production', issuer: ISSUER },
     consent: { policyVersion: '1', termsVersion: '1' },
-    token: { sessionIdleTtl: 3600, sessionAbsoluteTtl: 86400 },
+    token: { accessTokenTtl: 900, sessionIdleTtl: 3600, sessionAbsoluteTtl: 86400 },
   };
   return { getOrThrow: (ns: string) => base[ns] } as unknown as ConfigService;
 }
@@ -357,7 +357,8 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
     getOrThrow: (ns: string) => {
       if (ns === 'app') return { nodeEnv: 'production', issuer: ISSUER };
       if (ns === 'session') return { cookieSecure: false };
-      if (ns === 'token') return { sessionIdleTtl: 3600, sessionAbsoluteTtl: 86400 };
+      if (ns === 'token')
+        return { accessTokenTtl: 900, sessionIdleTtl: 3600, sessionAbsoluteTtl: 86400 };
       if (ns === 'security') return { csrfSecret: 'test-csrf-secret' };
       if (ns === 'consent') return { policyVersion: '1', termsVersion: '1' };
       throw new Error(`Unexpected config namespace: ${ns}`);

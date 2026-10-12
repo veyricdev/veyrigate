@@ -57,6 +57,7 @@ function codeData(overrides: Partial<AuthorizationCodeData> = {}): Authorization
     nonce: 'rp-nonce',
     userId: USER_ID,
     authTime: 1_700_000_000_000,
+    sessionRef: 'a'.repeat(64),
     ...overrides,
   };
 }

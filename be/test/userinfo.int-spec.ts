@@ -10,13 +10,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MODELS } from '../src/database/mongo/models';
 import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
+import { sha256 } from '../src/common/crypto/crypto.util';
 import { KEY_PROVIDER } from '../src/modules/keys/key-provider';
 import { LocalKeyProvider } from '../src/modules/keys/local-key-provider';
 import { TokenSigner } from '../src/modules/keys/token-signer';
 import { TokenVerifier } from '../src/modules/keys/token-verifier';
 import { ClientService, type Client } from '../src/modules/clients/client.service';
+import { jest } from '@jest/globals';
 import { ClientCorsService } from '../src/modules/clients/client-cors.service';
 import { registerCorsPreflight } from '../src/modules/clients/client-cors.helper';
+import { SessionService } from '../src/modules/sessions/session.service';
 import { UserinfoController } from '../src/modules/oauth/userinfo/userinfo.controller';
 
 const MONGO_URI =
@@ -37,6 +40,11 @@ const cfg = {
   },
 } as unknown as ConfigService;
 
+// Session-end lookup double (DEBT-037): spy-able so a test can assert call counts and drive
+// specific outcomes (tombstone present/absent, Redis fault). Only `isEnded` is used by /userinfo.
+const isEnded = jest.fn<(ref: string) => Promise<boolean>>().mockResolvedValue(false);
+const sessionsStub = { isEnded } as unknown as SessionService;
+
 describe('/userinfo (B4.6 Task 2) on real Mongo', () => {
   let app: NestFastifyApplication;
   let keyDir: string;
@@ -51,10 +59,20 @@ describe('/userinfo (B4.6 Task 2) on real Mongo', () => {
 
   /** Sign an access token (RFC 9068 `typ: at+jwt`) with controlled claims. */
   const accessToken = (
-    over: { scope?: string; sub?: string; aud?: string; clientId?: string } = {},
+    over: {
+      scope?: string;
+      sub?: string;
+      aud?: string;
+      clientId?: string;
+      sid?: string | number;
+    } = {},
   ) =>
     signer.sign(
-      { scope: over.scope ?? 'openid email profile', client_id: over.clientId ?? CLIENT },
+      {
+        scope: over.scope ?? 'openid email profile',
+        client_id: over.clientId ?? CLIENT,
+        ...(over.sid !== undefined ? { sid: over.sid } : {}),
+      },
       {
         audience: over.aud ?? RESOURCE,
         subject: over.sub ?? userId,
@@ -88,6 +106,7 @@ describe('/userinfo (B4.6 Task 2) on real Mongo', () => {
         TokenVerifier,
         { provide: KEY_PROVIDER, useValue: provider },
         { provide: ConfigService, useValue: cfg },
+        { provide: SessionService, useValue: sessionsStub },
       ],
     }).compile();
 
@@ -138,6 +157,11 @@ describe('/userinfo (B4.6 Task 2) on real Mongo', () => {
     if (clientModel) await clientModel.db.dropDatabase();
     if (app) await app.close();
     if (keyDir) await rm(keyDir, { recursive: true, force: true });
+  });
+
+  beforeEach(() => {
+    isEnded.mockReset();
+    isEnded.mockResolvedValue(false);
   });
 
   it('valid token (openid email profile) => 200 with sub/email/email_verified/profile, no-store', async () => {
@@ -355,5 +379,51 @@ describe('/userinfo (B4.6 Task 2) on real Mongo', () => {
     });
     expect(res.statusCode).toBe(401);
     expect(res.headers['access-control-allow-origin']).toBeUndefined();
+  });
+
+  it('DEBT-037: token whose session is ENDED (tombstone) => 401 invalid_token', async () => {
+    isEnded.mockResolvedValueOnce(true);
+    const sid = sha256('ended');
+    const res = await get({ authorization: `Bearer ${await accessToken({ sid })}` });
+    expect(res.statusCode).toBe(401);
+    expect(res.json().error).toBe('invalid_token');
+    expect(isEnded).toHaveBeenCalledWith(sid);
+  });
+
+  it('DEBT-037: token whose session is NOT ended => 200', async () => {
+    isEnded.mockResolvedValueOnce(false);
+    const sid = sha256('live');
+    const res = await get({ authorization: `Bearer ${await accessToken({ sid })}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().sub).toBe(userId);
+    expect(isEnded).toHaveBeenCalledWith(sid);
+  });
+
+  it('DEBT-037: token with NO sid => 200 (legacy), Redis never consulted', async () => {
+    const res = await get({ authorization: `Bearer ${await accessToken()}` });
+    expect(res.statusCode).toBe(200);
+    expect(isEnded).not.toHaveBeenCalled();
+  });
+
+  it('DEBT-037: a malformed sid => 401, Redis never called', async () => {
+    const res = await get({ authorization: `Bearer ${await accessToken({ sid: 'bad-sid' })}` });
+    expect(res.statusCode).toBe(401);
+    expect(res.json().error).toBe('invalid_token');
+    expect(isEnded).not.toHaveBeenCalled();
+  });
+
+  it('DEBT-037: a non-string sid (number) => verifier rejects => 401, Redis never called', async () => {
+    const res = await get({ authorization: `Bearer ${await accessToken({ sid: 42 })}` });
+    expect(res.statusCode).toBe(401);
+    expect(isEnded).not.toHaveBeenCalled();
+  });
+
+  it('DEBT-037 fail-closed: a Redis error in isEnded => 500, NOT 401/200', async () => {
+    // 401 would make the RP treat the token as revoked/logged-out and mask an infra outage; a 200
+    // would leak data past a possibly-ended session. A Redis fault must surface as a 5xx.
+    isEnded.mockRejectedValueOnce(new Error('redis down'));
+    const res = await get({ authorization: `Bearer ${await accessToken({ sid: sha256('x') })}` });
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).not.toHaveProperty('sub');
   });
 });

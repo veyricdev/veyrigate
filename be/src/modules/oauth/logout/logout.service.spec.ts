@@ -134,9 +134,13 @@ describe('LogoutService (B4.7)', () => {
   // `resolvePostLogoutRedirect`. Cover it directly, including the fail-closed branch where the hint
   // verifies but the asserted client no longer exists (deleted client → null, no redirect).
   describe('verifyHint (QA — direct)', () => {
-    it('returns { clientId, sub } when the hint verifies and the client still exists', async () => {
+    it('returns { clientId, sub, client } when the hint verifies and the client still exists', async () => {
       hintOf('rp1', 'user-9');
-      expect(await service.verifyHint('HINT')).toEqual({ clientId: 'rp1', sub: 'user-9' });
+      expect(await service.verifyHint('HINT')).toEqual({
+        clientId: 'rp1',
+        sub: 'user-9',
+        client: clientsByEoId.rp1,
+      });
     });
 
     it('returns null when the hint verifies but the asserted client was deleted (fail-closed)', async () => {

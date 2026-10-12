@@ -27,6 +27,9 @@ export interface RotationResult {
   scope: string[];
   resource: string;
   newRefreshToken: string;
+  /** Session binding inherited by the family (DEBT-037): set as `sid` on the minted access token so
+   * an active logout of the originating session makes it inactive. Undefined for pre-B4.7 families. */
+  sessionRef?: string;
 }
 
 /** Request-level context carried into audit records (never contains hash/token). */
@@ -148,6 +151,7 @@ export class RefreshTokenService {
       clientId: result.clientId,
       resource: result.resource,
       effectiveScope: accessScope,
+      sessionRef: result.sessionRef,
     });
 
     await this.audit.record({
@@ -305,6 +309,8 @@ export class RefreshTokenService {
       scope: old.scope,
       resource: old.resource,
       newRefreshToken: minted.token,
+      // Carry the family's session binding out so the minted access token gets `sid` (DEBT-037).
+      sessionRef: old.sessionRef ?? undefined,
     };
   }
 
@@ -393,8 +399,9 @@ export class RefreshTokenService {
    * `familyRevokedAt:null` / `revokedAt:null` filters. Returns the number of docs revoked.
    *
    * Guard (tech-lead fold #5): the filter is a closed union that always carries a scoping key, so
-   * an empty-filter `updateMany({})` is impossible; we still assert at runtime and cast `userId`
-   * to `ObjectId` (stored type) so a string userId never silently matches nothing.
+   * an empty-filter `updateMany({})` is impossible; we still assert at runtime. `userId` is cast to
+   * `ObjectId` because `updateMany` does not run Mongoose's schema casting on the raw filter, so a
+   * string `userId` would match zero docs (stored as `ObjectId`) and silently revoke nothing.
    */
   private async revokeWhere(
     filter: RevokeFilter,

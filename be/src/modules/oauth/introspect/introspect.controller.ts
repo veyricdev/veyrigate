@@ -15,6 +15,7 @@ import {
 } from '../../clients/client-auth-request';
 import { ClientService, type Client } from '../../clients/client.service';
 import { TokenVerifier } from '../../keys/token-verifier';
+import { SessionService } from '../../sessions/session.service';
 import { isAccessTokenLive } from '../access-token-liveness';
 
 /** Reply members the `/introspect` controller needs (Fastify, structural). */
@@ -48,16 +49,21 @@ const INACTIVE = { active: false } as const;
  * registers as a confidential client (the `Resource` schema carries no secret).
  *
  * Branch by token SHAPE (the `token_type_hint` is accepted but not trusted, RFC 7662 2.1): a
- * three-part JWT is verified as an access token (`verifyAccessToken` + liveness: client still
- * exists, `aud` still allowed, user still exists); anything else is looked up by `sha256` as a
- * refresh token. Authorization (confused-deputy / IDOR guard): a refresh token is `active` only
- * for its owning client; an access token only when the caller is its `client_id` OR holds its
- * `aud` in `allowedResources`. Every other outcome is the identical `{active:false}` (200).
+ * three-part JWT is verified as an access token (`verifyAccessToken`), then AUTHORIZED, then its
+ * liveness is checked; anything else is looked up by `sha256` as a refresh token. Authorization
+ * (confused-deputy / IDOR guard): a refresh token is `active` only for its owning client; an
+ * access token only when the caller is its `client_id` OR holds its `aud` in `allowedResources`.
+ * The access-token authorization runs BEFORE any content-dependent liveness I/O (DEBT-040) so an
+ * unrelated caller never drives a DB/session lookup keyed by someone else's token. Every other
+ * outcome is the identical `{active:false}` (200).
  *
- * Liveness note (214, OPEN-1 phuong an A): an access token is self-contained and NOT revocable
- * before `exp`; `/introspect` reflects signature + `exp` + client/user existence, but NOT a
- * refresh-family revoke or logout (max staleness = access TTL, 15m). `sid`-based reflection is
- * DEBT-037 (B4.7).
+ * Liveness note (spec §214, DEBT-037): an access token is self-contained and not denylisted by
+ * `jti`, but `/introspect` reflects signature + `exp` + client/`aud`/user existence AND — when the
+ * token carries a `sid` — whether that session was actively ended (local/global logout, device
+ * revoke, password reset) via the `sess_end:{sid}` tombstone. A session that merely expired
+ * naturally does NOT make the access token inactive (offline_access survives); a token with no
+ * `sid` keeps the pre-B4.7 behaviour (client/`aud`/user only). Max staleness for an actively ended
+ * session is ~0; otherwise ≤ access TTL (15m).
  *
  * Failure semantics: a JOSE/format failure is `{active:false}`; an infrastructure failure
  * (DB/KeyProvider) is 500 `server_error` and NEVER `active:true` (fail-closed). A missing/repeated
@@ -73,6 +79,7 @@ export class IntrospectController {
     private readonly clientAuth: ClientAuthenticationService,
     private readonly clients: ClientService,
     private readonly verifier: TokenVerifier,
+    private readonly sessions: SessionService,
   ) {}
 
   @Post('/introspect')
@@ -128,7 +135,7 @@ export class IntrospectController {
     }
   }
 
-  /** Access token: verify (JOSE failure => inactive), liveness, then caller authorization. */
+  /** Access token: verify (JOSE failure => inactive), caller authorization, THEN liveness. */
   private async introspectAccessToken(
     token: string,
     caller: Client,
@@ -140,22 +147,29 @@ export class IntrospectController {
       return INACTIVE; // bad signature / wrong iss / expired / ID token / malformed => inactive.
     }
 
-    // Liveness (OPEN-1 -> A, spec §214): an access token has no denylist before `exp`, so the only
-    // live-state signal is current existence — the issuing client still exists AND still allows the
-    // token's `aud`, and the `sub` user still exists (well-formed `sub`). Shared with `/userinfo`
-    // (`isAccessTokenLive`) so the two cannot drift. A DB fault here propagates => 500 (fail-closed).
-    const live = await isAccessTokenLive(claims, this.clients, {
-      exists: async (id) => (await this.users.exists({ _id: id })) !== null,
-    });
-    if (!live) {
-      return INACTIVE;
-    }
-
-    // Caller authorization (confused-deputy guard): the caller must be the token's client, or a
-    // resource server that still holds the token's `aud` in its `allowedResources`.
+    // Caller authorization FIRST (confused-deputy / anti-oracle, DEBT-040): the caller must be the
+    // token's client, or a resource server that still holds the token's `aud` in `allowedResources`.
+    // A caller with no stake in this token gets the identical `{active:false}` WITHOUT any
+    // content-dependent I/O — so it cannot use `/introspect` as a timing/DB-load oracle for "does
+    // this user/client/session still exist". Liveness only runs once the caller is authorized.
     const authorized =
       claims.client_id === caller.clientId || caller.allowedResources.includes(claims.aud);
     if (!authorized) {
+      return INACTIVE;
+    }
+
+    // Liveness (spec §214): an access token has no denylist before `exp`, so the live-state signals
+    // are current existence — the issuing client still exists AND still allows the token's `aud`,
+    // the `sub` user still exists (well-formed `sub`), and the issuing session `sid` (when present)
+    // has not been actively ended (tombstone). Shared with `/userinfo` (`isAccessTokenLive`) so the
+    // two cannot drift. An infrastructure fault here propagates => 500 (fail-closed).
+    const live = await isAccessTokenLive(
+      claims,
+      this.clients,
+      { exists: async (id) => (await this.users.exists({ _id: id })) !== null },
+      { isEnded: (ref) => this.sessions.isEnded(ref) },
+    );
+    if (!live) {
       return INACTIVE;
     }
 

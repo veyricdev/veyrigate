@@ -30,6 +30,12 @@ export interface CreateSessionOptions {
 
 const sessKey = (ref: string): string => `sess:${ref}`;
 const userKey = (userId: string): string => `user_sess:${userId}`;
+// Tombstone written by every active session-termination path (logout, device revoke, password
+// reset, absolute-lifetime expiry via `get`). While it lives, an access token carrying `sid=ref`
+// is inactive at `/introspect` + `/userinfo` (DEBT-037). TTL = access TTL + 60s so it outlives
+// every access token that could still carry that `sid`, with a small race/skew margin. Same ref →
+// same Cluster slot as `sess:{ref}` (DEBT-013, no worse than today).
+const sessEndKey = (ref: string): string => `sess_end:${ref}`;
 // Set of client ids that received an authorization code during this session (B4.7 front-channel):
 // used to pick which RPs to notify on logout. Lives on the same node as `sess:{ref}` (same ref →
 // same Cluster slot) so DEL in the revoke paths is Cluster-safe (DEBT-013, no worse than today).
@@ -38,7 +44,10 @@ const sessRpKey = (ref: string): string => `sess_rp:${ref}`;
 /**
  * Deletes every session in a user's index (plus its `sess_rp` set) and the index itself,
  * atomically. Clearing `sess_rp:{ref}` here keeps the front-channel RP set from outliving the
- * sessions it belongs to (B4.7).
+ * sessions it belongs to (B4.7). For each revoked session it also writes the `sess_end:{ref}`
+ * tombstone (TTL = ARGV[1] ms) so access tokens carrying that `sid` go inactive immediately
+ * (DEBT-037). `sess_end`/`sess_rp` keys are not declared in KEYS (same slot as `sess:{ref}`,
+ * DEBT-013) — no worse than the existing DELs.
  */
 const REVOKE_ALL_SCRIPT = {
   name: 'sessionRevokeAll',
@@ -48,12 +57,13 @@ local refs = redis.call('SMEMBERS', KEYS[1])
 for _, ref in ipairs(refs) do
   redis.call('DEL', 'sess:' .. ref)
   redis.call('DEL', 'sess_rp:' .. ref)
+  redis.call('SET', 'sess_end:' .. ref, '1', 'PX', ARGV[1])
 end
 redis.call('DEL', KEYS[1])
 return #refs`,
 };
 
-type SessionRedis = { sessionRevokeAll(key: string): Promise<number> };
+type SessionRedis = { sessionRevokeAll(key: string, endTtlMs: number): Promise<number> };
 
 async function execOrThrow(multi: ChainableCommander): Promise<unknown[]> {
   const results = await multi.exec();
@@ -79,6 +89,8 @@ async function execOrThrow(multi: ChainableCommander): Promise<unknown[]> {
 export class SessionService {
   private readonly idleMs: number;
   private readonly absoluteMs: number;
+  /** TTL (ms) of a `sess_end` tombstone: access TTL + 60s so it outlives every `sid`-bearing AT. */
+  private readonly endTtlMs: number;
   private readonly now: () => number;
 
   constructor(
@@ -86,9 +98,11 @@ export class SessionService {
     config: ConfigService,
     @Optional() @Inject(SESSION_CLOCK) now?: () => number,
   ) {
-    const { sessionIdleTtl, sessionAbsoluteTtl } = config.getOrThrow<TokenConfig>('token');
+    const { sessionIdleTtl, sessionAbsoluteTtl, accessTokenTtl } =
+      config.getOrThrow<TokenConfig>('token');
     this.idleMs = sessionIdleTtl * 1000;
     this.absoluteMs = sessionAbsoluteTtl * 1000;
+    this.endTtlMs = accessTokenTtl * 1000 + 60_000;
     this.now = now ?? Date.now;
     loadLuaScripts(redis.client, [REVOKE_ALL_SCRIPT]);
   }
@@ -207,7 +221,32 @@ export class SessionService {
 
   /** Revoke every session of a user (password change, account lock, "log out everywhere"). */
   async revokeAllForUser(userId: string): Promise<number> {
-    return (this.redis.client as unknown as SessionRedis).sessionRevokeAll(userKey(userId));
+    return (this.redis.client as unknown as SessionRedis).sessionRevokeAll(
+      userKey(userId),
+      this.endTtlMs,
+    );
+  }
+
+  /**
+   * Whether the session `ref` is still live, i.e. `sess:{ref}` exists (DEBT-043). Unlike `get`
+   * this neither slides the idle TTL nor needs the raw cookie id — it is a pure read used by
+   * `/token` (authorization_code) to refuse minting a refresh family for a session that has been
+   * logged out (or idle-expired) within the code's ≤60s window. Redis errors propagate so the
+   * caller fails closed (never silently "alive"). `ref` must already be a session ref.
+   */
+  async exists(ref: string): Promise<boolean> {
+    return (await this.redis.client.exists(sessKey(ref))) === 1;
+  }
+
+  /**
+   * Whether the session `ref` was actively ended (logout / device revoke / password reset /
+   * absolute-lifetime expiry), i.e. a `sess_end:{ref}` tombstone exists (DEBT-037). A session that
+   * merely expired naturally has NO tombstone, so this returns `false`. Redis errors propagate so a
+   * caller fails closed (never silently "not ended"). `ref` is not validated here — the caller
+   * (`isAccessTokenLive`) already rejects a malformed `sid` before calling.
+   */
+  async isEnded(ref: string): Promise<boolean> {
+    return (await this.redis.client.exists(sessEndKey(ref))) === 1;
   }
 
   private async read(ref: string): Promise<SessionData | null> {
@@ -216,7 +255,15 @@ export class SessionService {
   }
 
   private async revokeRef(ref: string, userId: string | undefined): Promise<void> {
-    const multi = this.redis.client.multi().del(sessKey(ref)).del(sessRpKey(ref));
+    // Write the `sess_end:{ref}` tombstone (DEBT-037) in the same atomic MULTI as the deletes so
+    // every active-termination path (logout, device revoke, password reset, absolute expiry via
+    // `get`) makes a `sid=ref` access token inactive immediately. A natural TTL expiry (idle) never
+    // comes through here, so `offline_access` tokens survive it.
+    const multi = this.redis.client
+      .multi()
+      .del(sessKey(ref))
+      .del(sessRpKey(ref))
+      .set(sessEndKey(ref), '1', 'PX', this.endTtlMs);
     if (userId) multi.srem(userKey(userId), ref);
     await execOrThrow(multi);
   }
@@ -242,7 +289,6 @@ export class SessionService {
   /** Union of front-channel RP candidates across every live session of a user (global logout). */
   async clientsForUser(userId: string): Promise<string[]> {
     const sessions = await this.listByUser(userId);
-    if (sessions.length === 0) return [];
     const sets = await Promise.all(sessions.map((s) => this.clientsForSession(s.ref)));
     return [...new Set(sets.flat())];
   }

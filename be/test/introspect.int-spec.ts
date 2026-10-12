@@ -17,6 +17,7 @@ import { TokenVerifier } from '../src/modules/keys/token-verifier';
 import { ClientService, type Client } from '../src/modules/clients/client.service';
 import { ClientCredentialService } from '../src/modules/clients/client-credential.service';
 import { ClientAuthenticationService } from '../src/modules/clients/client-authentication.service';
+import { SessionService } from '../src/modules/sessions/session.service';
 import { IntrospectController } from '../src/modules/oauth/introspect/introspect.controller';
 
 const MONGO_URI =
@@ -37,6 +38,12 @@ const cfg = {
     throw new Error(`unexpected ns ${ns}`);
   },
 } as unknown as ConfigService;
+
+// A session-end lookup double (DEBT-037). `isEnded` is spy-able so a test can assert the exact
+// number of calls (Task 1: an unrelated caller must drive ZERO session lookups) and drive specific
+// outcomes (tombstone present/absent, Redis fault). Only the `isEnded` method is used.
+const isEnded = jest.fn<(ref: string) => Promise<boolean>>().mockResolvedValue(false);
+const sessionsStub = { isEnded } as unknown as SessionService;
 
 function basic(id: string, secret: string): string {
   return 'Basic ' + Buffer.from(`${id}:${secret}`).toString('base64');
@@ -68,9 +75,21 @@ describe('/introspect (B4.6 Task 3, RFC 7662) on real Mongo', () => {
       payload,
     });
 
-  const access = (over: { scope?: string; aud?: string; clientId?: string; sub?: string } = {}) =>
+  const access = (
+    over: {
+      scope?: string;
+      aud?: string;
+      clientId?: string;
+      sub?: string;
+      sid?: string | number;
+    } = {},
+  ) =>
     signer.sign(
-      { scope: over.scope ?? 'openid profile', client_id: over.clientId ?? TOKEN_CLIENT },
+      {
+        scope: over.scope ?? 'openid profile',
+        client_id: over.clientId ?? TOKEN_CLIENT,
+        ...(over.sid !== undefined ? { sid: over.sid } : {}),
+      },
       {
         audience: over.aud ?? RESOURCE,
         subject: over.sub ?? userId.toHexString(),
@@ -120,6 +139,7 @@ describe('/introspect (B4.6 Task 3, RFC 7662) on real Mongo', () => {
         TokenVerifier,
         { provide: KEY_PROVIDER, useValue: provider },
         { provide: ConfigService, useValue: cfg },
+        { provide: SessionService, useValue: sessionsStub },
       ],
     }).compile();
 
@@ -180,6 +200,11 @@ describe('/introspect (B4.6 Task 3, RFC 7662) on real Mongo', () => {
     if (keyDir) await rm(keyDir, { recursive: true, force: true });
   });
 
+  beforeEach(() => {
+    isEnded.mockReset();
+    isEnded.mockResolvedValue(false);
+  });
+
   it('no caller auth => 401 invalid_client, no introspection body', async () => {
     const res = await post(form({ token: await access() }));
     expect(res.statusCode).toBe(401);
@@ -232,6 +257,33 @@ describe('/introspect (B4.6 Task 3, RFC 7662) on real Mongo', () => {
     expect(res.json()).toEqual({ active: false });
   });
 
+  it('DEBT-040: an unrelated caller is rejected BEFORE any content-dependent lookup (spy proof)', async () => {
+    // Authorization runs before liveness: an unrelated confidential caller (not the token client,
+    // no claim on the aud) must get `active:false` WITHOUT the endpoint probing the token's
+    // subjects. Prove it with spies: the user-existence probe and the session-end lookup are never
+    // called, and `findByClientId` is never called for the TOKEN's client_id (only OTHER_CLIENT, to
+    // authenticate the caller). Otherwise `/introspect` would be an existence oracle for arbitrary
+    // tokens (timing + DB load) that an unrelated client could query.
+    const userSpy = jest.spyOn(userModel, 'exists');
+    const clients = app.get(ClientService);
+    const clientSpy = jest.spyOn(clients, 'findByClientId');
+    try {
+      const token = await access(); // client_id = TOKEN_CLIENT, aud = RESOURCE
+      const res = await post(form({ token }), { authorization: basic(OTHER_CLIENT, otherSecret) });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ active: false });
+      // No content-dependent I/O for someone else's token:
+      expect(userSpy).not.toHaveBeenCalled();
+      expect(isEnded).not.toHaveBeenCalled();
+      // `findByClientId` ran only to authenticate the caller — never for the token's client_id.
+      const lookedUp = clientSpy.mock.calls.map((c) => c[0]);
+      expect(lookedUp).not.toContain(TOKEN_CLIENT);
+    } finally {
+      userSpy.mockRestore();
+      clientSpy.mockRestore();
+    }
+  });
+
   it('expired access token => active:false', async () => {
     const expired = await signer.sign(
       { scope: 'openid', client_id: TOKEN_CLIENT },
@@ -268,14 +320,27 @@ describe('/introspect (B4.6 Task 3, RFC 7662) on real Mongo', () => {
     expect(res.json()).toEqual({ active: false });
   });
 
-  it('liveness: token aud no longer in the issuing client allowedResources => active:false', async () => {
-    // TOKEN_CLIENT currently allows RESOURCE; a token for an aud it does NOT allow is not live.
+  it('liveness: token aud no longer in the issuing client allowedResources => active:false (DEBT-041)', async () => {
+    // The caller is TOKEN_CLIENT itself, so authorization passes via `client_id === caller` — this
+    // isolates the `aud` branch of liveness (the token targets an aud TOKEN_CLIENT no longer holds).
+    // If we used RS_CLIENT the result would be active:false from the authz gate, not the aud branch.
+    const tokSecret = (await app.get(ClientCredentialService).createSecret(TOKEN_CLIENT)).secret;
     const token = await access({ aud: 'https://removed.example.com/' });
-    // RS allows RESOURCE only, not the removed aud — but liveness is checked FIRST (before caller
-    // authorization), so this is `active:false` regardless of who the RS is.
-    const res = await post(form({ token }), { authorization: basic(RS_CLIENT, rsSecret) });
+    const res = await post(form({ token }), { authorization: basic(TOKEN_CLIENT, tokSecret) });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ active: false });
+  });
+
+  it('DEBT-041 control: same caller (TOKEN_CLIENT) + a valid aud => active:true (authz really passed)', async () => {
+    // Companion to the test above: same confidential caller, but the token targets an aud the
+    // client still holds (RESOURCE). A live result proves the previous `active:false` came from the
+    // `aud` liveness branch, not from authorization failing.
+    const tokSecret = (await app.get(ClientCredentialService).createSecret(TOKEN_CLIENT)).secret;
+    const res = await post(form({ token: await access() }), {
+      authorization: basic(TOKEN_CLIENT, tokSecret),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().active).toBe(true);
   });
 
   it('liveness: user (sub) does not exist => active:false', async () => {
@@ -412,9 +477,10 @@ describe('/introspect (B4.6 Task 3, RFC 7662) on real Mongo', () => {
     expect(dup.statusCode).toBe(400);
   });
 
-  it('access token stays active:true even when a refresh family of the same session is revoked (?214 limit)', async () => {
-    // Access tokens are self-contained (no DB), so /introspect cannot reflect a family/logout
-    // revoke before exp ? this asserts the documented OPEN-1 (A) contract, not a bug.
+  it('access token with NO sid stays active:true even when a refresh family is revoked (?214 limit)', async () => {
+    // A legacy access token (no `sid`) is self-contained and only reflects client/aud/user; a
+    // refresh-family revoke it cannot see before exp. This is the documented limit for sid-less
+    // tokens (DEBT-037 Q-C), not a bug — sid-bearing tokens ARE reflected via the tombstone above.
     const token = await access();
     const res = await post(form({ token }), { authorization: basic(RS_CLIENT, rsSecret) });
     expect(res.json().active).toBe(true);
@@ -434,6 +500,76 @@ describe('/introspect (B4.6 Task 3, RFC 7662) on real Mongo', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it('DEBT-037: a token with a well-formed sid whose session is ENDED => active:false', async () => {
+    isEnded.mockResolvedValueOnce(true);
+    const sid = sha256('ended-session');
+    const res = await post(form({ token: await access({ sid }) }), {
+      authorization: basic(RS_CLIENT, rsSecret),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ active: false });
+    expect(isEnded).toHaveBeenCalledWith(sid);
+  });
+
+  it('DEBT-037: a token with a well-formed sid whose session is NOT ended => active:true (and sid is not echoed)', async () => {
+    isEnded.mockResolvedValueOnce(false);
+    const sid = sha256('live-session');
+    const res = await post(form({ token: await access({ sid }) }), {
+      authorization: basic(RS_CLIENT, rsSecret),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().active).toBe(true);
+    // The session identifier is never surfaced in the introspection body (minimised, not a cap).
+    expect(res.json()).not.toHaveProperty('sid');
+    expect(isEnded).toHaveBeenCalledWith(sid);
+  });
+
+  it('DEBT-037: token with NO sid keeps legacy behaviour (active:true, Redis never consulted)', async () => {
+    const res = await post(form({ token: await access() }), {
+      authorization: basic(RS_CLIENT, rsSecret),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().active).toBe(true);
+    expect(isEnded).not.toHaveBeenCalled();
+  });
+
+  it('DEBT-037: a malformed sid => active:false and Redis is NEVER called', async () => {
+    const res = await post(form({ token: await access({ sid: 'not-a-64-hex-ref' }) }), {
+      authorization: basic(RS_CLIENT, rsSecret),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ active: false });
+    expect(isEnded).not.toHaveBeenCalled();
+  });
+
+  it('DEBT-037: a non-string sid (number) => verifier throws => active:false, Redis never called', async () => {
+    const res = await post(form({ token: await access({ sid: 12345 }) }), {
+      authorization: basic(RS_CLIENT, rsSecret),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ active: false });
+    expect(isEnded).not.toHaveBeenCalled();
+  });
+
+  it('DEBT-037 fail-closed: a Redis error in isEnded => 500, never active:true', async () => {
+    isEnded.mockRejectedValueOnce(new Error('redis down'));
+    const res = await post(form({ token: await access({ sid: sha256('x-session') }) }), {
+      authorization: basic(RS_CLIENT, rsSecret),
+    });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toBe('server_error');
+    expect(res.json()).not.toHaveProperty('active');
+  });
+
+  it('DEBT-040+037: an unrelated caller never triggers isEnded even for a sid-bearing token', async () => {
+    const res = await post(form({ token: await access({ sid: sha256('any-session') }) }), {
+      authorization: basic(OTHER_CLIENT, otherSecret),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ active: false });
+    expect(isEnded).not.toHaveBeenCalled();
   });
 
   it('fail-closed: a DB error during access-token liveness => 500, never active:true', async () => {

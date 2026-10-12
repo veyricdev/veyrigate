@@ -52,9 +52,9 @@ class ResetDto extends TokenDto {
 class LogoutDto extends FormDto {
   @IsOptional() @IsString() @Length(0, 4096) id_token_hint?: string;
   @IsOptional() @IsString() @Length(0, 2048) post_logout_redirect_uri?: string;
-  // No length cap here: an over-long `state` must NOT 400 the logout (the user still needs to sign
-  // out). `LogoutService.appendState` drops a `state` longer than its own cap (fold #8). Still
-  // bounded by @Length(0, 4096) to keep the request body sane (pino truncates query, not body).
+  // Generous cap (4096): an over-long `state` must NOT 400 the logout (the user still needs to sign
+  // out). `LogoutService.appendState` drops a `state` longer than its own cap (fold #8). The
+  // @Length(0, 4096) only keeps the request body sane (pino truncates query, not body).
   @IsOptional() @IsString() @Length(0, 4096) state?: string;
   @IsOptional() @IsString() @Length(0, 256) client_id?: string;
 }

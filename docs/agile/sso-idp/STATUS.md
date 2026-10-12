@@ -2,7 +2,7 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: không có (16-B4.7 đã đóng, commit `8613b4f`).
+- **Run hiện tại**: `17-introspect-hardening` — cổng: **tester PASS** → bàn giao **orchestrator đóng run** (code chưa commit). Senior **PASS** lượt 1 (0 🔴; mutation M1–M5 đều bị bắt; 🟡 → DEBT-050…053). Backend-dev **DONE** 4/4 [BE]. Đã áp bản fold + spec §8/§9.8/§11/§14/§15. Chốt: Q-A `sid=sessionRef`; Q-B tombstone `sess_end:{ref}` TTL accessTTL+60s (idle-expire KHÔNG giết AT); Q-C token không `sid` giữ hành vi cũ; DEBT-044 hoãn. **Verify tester (thật)**: typecheck 0, lint (src+test) 0, `pnpm test` 127, `pnpm test:int` **379** (376 + **3 test QA** vào `session-reflection.int-spec`) ⇒ **506/506**. Flake hạ tầng (open-handle treo + nhiễu cross-run) → DEBT-054 (không chặn). KHÔNG commit.
 - **Vòng lặp (run 16)**: analyst=1, tech-lead=1 (PASS), dev=3 (DONE, DONE retry1, DONE retry2), senior=3 (REJECT, REJECT, PASS), tester=1 (PASS)
 - **Run vừa đóng**: `16-B4.7` ✅ 5/5 task — 473/473 test (unit 127 + int 346). Xem `runs/16-B4.7/summary.md`.
 - **Việc tiếp theo**: micro-run **introspect-hardening** (DEBT-037/040/041/043/045/046) → run consent-hardening (DEBT-026/027/028). Hoàn tất M3/M4 còn cần T2 (fe-sso-test) + X1, T3–T5.
@@ -35,4 +35,4 @@ Xem `plan.md` §12. Còn mở: **Q3, Q5, Q7–Q9**. **Q1, Q4, Q6 đã chốt** (
 
 ## Backlog mở
 
-30 mục mở. Xem [backlog.md](backlog.md): DEBT-037/040/041/043/045/046 → introspect-hardening; DEBT-044 → sau DEBT-037; DEBT-039 → B7.1; DEBT-042 → B7; DEBT-026/027 → consent-hardening.
+38 mục mở (+DEBT-050…053 senior, +DEBT-054 tester run 17). Xem [backlog.md](backlog.md): DEBT-037/040/041/043/045/046 → introspect-hardening; DEBT-044 → consent-hardening/B7; DEBT-047/048/049 (run 17 tech-lead) → sau; DEBT-039 → B7.1; DEBT-042 → B7; DEBT-026/027 → consent-hardening.

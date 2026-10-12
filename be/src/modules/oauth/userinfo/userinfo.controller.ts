@@ -6,6 +6,7 @@ import { applyCors, requestOrigin } from '../../clients/client-cors.helper';
 import { ClientCorsService } from '../../clients/client-cors.service';
 import { ClientService } from '../../clients/client.service';
 import { TokenVerifier } from '../../keys/token-verifier';
+import { SessionService } from '../../sessions/session.service';
 import { isAccessTokenLive } from '../access-token-liveness';
 
 /** Reply members the `/userinfo` controller needs (Fastify, structural like TokenReply). */
@@ -63,6 +64,7 @@ export class UserinfoController {
     private readonly verifier: TokenVerifier,
     private readonly clients: ClientService,
     private readonly cors: ClientCorsService,
+    private readonly sessions: SessionService,
   ) {}
 
   @Get('/userinfo')
@@ -89,21 +91,28 @@ export class UserinfoController {
       return this.unauthorized(req, reply, 'insufficient_scope', HttpStatus.FORBIDDEN);
     }
 
-    // Shared access-token liveness (same gate as `/introspect`): the issuing client still exists
-    // and is still allowed this `aud`, and the `sub` is a well-formed, still-existing user. The
-    // `exists` probe does the single projected read `/userinfo` needs, caching the document so the
-    // user is fetched exactly once. Any failure collapses to the opaque 401 `invalid_token`.
+    // Shared access-token liveness (same gate as `/introspect`): the issuing session `sid` (when
+    // present) has not been actively ended, the issuing client still exists and is still allowed
+    // this `aud`, and the `sub` is a well-formed, still-existing user. The `exists` probe does the
+    // single projected read `/userinfo` needs, caching the document so the user is fetched exactly
+    // once. A `false` result collapses to the opaque 401 `invalid_token`; an infrastructure error
+    // (Mongo/Redis) propagates to a 500 (fail-closed) — NEVER a 200 or a "token looks revoked" 401.
     const fetched: { user: UserDoc | null } = { user: null };
-    const live = await isAccessTokenLive(claims, this.clients, {
-      exists: async (id) => {
-        fetched.user = await this.users
-          .findById(id)
-          .select('email emailVerifiedAt profile updatedAt')
-          .lean<UserDoc>()
-          .exec();
-        return fetched.user !== null;
+    const live = await isAccessTokenLive(
+      claims,
+      this.clients,
+      {
+        exists: async (id) => {
+          fetched.user = await this.users
+            .findById(id)
+            .select('email emailVerifiedAt profile updatedAt')
+            .lean<UserDoc>()
+            .exec();
+          return fetched.user !== null;
+        },
       },
-    });
+      { isEnded: (ref) => this.sessions.isEnded(ref) },
+    );
     const user = fetched.user;
     if (!live || user === null) {
       return this.unauthorized(req, reply, 'invalid_token');

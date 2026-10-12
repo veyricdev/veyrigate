@@ -13,6 +13,9 @@ export interface AccessTokenClaims extends JWTPayload {
   scope: string;
   exp: number;
   iat: number;
+  /** sha256(session id) of the IdP session that issued the grant (DEBT-037). Absent for tokens of
+   * families minted before B4.7 (pre-`sessionRef`). A public identifier, never a credential. */
+  sid?: string;
 }
 
 /**
@@ -103,6 +106,12 @@ export class TokenVerifier {
       typeof payload.jti !== 'string'
     ) {
       throw new Error('access token aud/sub/client_id/scope/jti must each be a single string');
+    }
+    // `sid` is optional (pre-B4.7 tokens have none), but if present it must be a string: a non-string
+    // `sid` is malformed (same stance as `jti`) — fail HERE so the liveness check never receives a
+    // non-string into a Redis key and so a forged-shape token collapses to `active:false`/401.
+    if (payload.sid !== undefined && typeof payload.sid !== 'string') {
+      throw new Error('access token sid must be a string when present');
     }
     return payload as AccessTokenClaims;
   }

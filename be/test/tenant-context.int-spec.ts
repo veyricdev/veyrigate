@@ -60,7 +60,7 @@ describe('Tenant context + tenant-scoped repository (B2.1, INV-24)', () => {
       getOrThrow: (ns: string) =>
         ns === 'session'
           ? { cookieSecure: true }
-          : { sessionIdleTtl: 600, sessionAbsoluteTtl: 3600 },
+          : { accessTokenTtl: 900, sessionIdleTtl: 600, sessionAbsoluteTtl: 3600 },
     };
     const moduleRef = await Test.createTestingModule({
       imports: [

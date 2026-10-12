@@ -48,7 +48,8 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
       getOrThrow: (namespace: string) => {
         if (namespace === 'app') return { issuer: 'https://issuer.example' };
         if (namespace === 'session') return { cookieSecure: false };
-        if (namespace === 'token') return { sessionIdleTtl: 3600, sessionAbsoluteTtl: 86400 };
+        if (namespace === 'token')
+          return { accessTokenTtl: 900, sessionIdleTtl: 3600, sessionAbsoluteTtl: 86400 };
         if (namespace === 'security')
           return { csrfSecret: 'e2e-csrf-secret', rateLimitMax: 20, rateLimitWindow: 60 };
         throw new Error(`Unexpected config namespace: ${namespace}`);

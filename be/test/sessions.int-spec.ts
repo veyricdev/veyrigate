@@ -7,9 +7,13 @@ import { SessionService } from '../src/modules/sessions/session.service';
 const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://localhost:6479';
 const RUN = `t${Date.now()}`;
 
-const config = (idle: number, absolute: number) =>
+const config = (idle: number, absolute: number, accessTokenTtl = 900) =>
   ({
-    getOrThrow: () => ({ sessionIdleTtl: idle, sessionAbsoluteTtl: absolute }),
+    getOrThrow: () => ({
+      sessionIdleTtl: idle,
+      sessionAbsoluteTtl: absolute,
+      accessTokenTtl,
+    }),
   }) as unknown as ConfigService;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -250,5 +254,72 @@ describe('SessionService on real Redis (B2.3, INV-16/17)', () => {
     await expect(broken.get('some-id')).rejects.toThrow();
     await expect(broken.create(user('x'), 'tenant-A')).rejects.toThrow();
     dead.disconnect();
+  });
+
+  describe('session-end tombstone + liveness probes (DEBT-037/043)', () => {
+    // 150ms idle so a natural expiry happens fast; 60s absolute; access TTL 2s => tombstone ≈ 62s.
+    let tomb: SessionService;
+    const ACCESS_TTL = 2;
+    beforeAll(() => {
+      tomb = new SessionService(new RedisService(redis), config(60, 600, ACCESS_TTL));
+    });
+
+    it('local revoke writes sess_end:{ref} with TTL in (accessTTL, accessTTL+60s] and exists()=false', async () => {
+      const { id, session } = await tomb.create(user('tomb-local'), 'tenant-A');
+      expect(await tomb.exists(session.ref)).toBe(true);
+      expect(await tomb.isEnded(session.ref)).toBe(false);
+
+      await tomb.revoke(id);
+
+      expect(await tomb.exists(session.ref)).toBe(false); // sess:{ref} gone
+      expect(await tomb.isEnded(session.ref)).toBe(true); // sess_end:{ref} present
+      const pttl = await redis.pttl(`sess_end:${session.ref}`);
+      expect(pttl).toBeGreaterThan(ACCESS_TTL * 1000); // > accessTTL
+      expect(pttl).toBeLessThanOrEqual(ACCESS_TTL * 1000 + 60_000); // <= accessTTL + 60s
+    });
+
+    it('revokeAllForUser (global logout) writes a tombstone per session', async () => {
+      const u = user('tomb-global');
+      const a = await tomb.create(u, 'tenant-A');
+      const b = await tomb.create(u, 'tenant-A');
+      await tomb.revokeAllForUser(u);
+      expect(await tomb.isEnded(a.session.ref)).toBe(true);
+      expect(await tomb.isEnded(b.session.ref)).toBe(true);
+      const pttl = await redis.pttl(`sess_end:${a.session.ref}`);
+      expect(pttl).toBeGreaterThan(ACCESS_TTL * 1000);
+      expect(pttl).toBeLessThanOrEqual(ACCESS_TTL * 1000 + 60_000);
+    });
+
+    it('revokeByDevice writes a tombstone for the targeted session only', async () => {
+      const u = user('tomb-device');
+      const a = await tomb.create(u, 'tenant-A');
+      const b = await tomb.create(u, 'tenant-A');
+      expect(await tomb.revokeByDevice(u, a.session.ref)).toBe(true);
+      expect(await tomb.isEnded(a.session.ref)).toBe(true);
+      expect(await tomb.isEnded(b.session.ref)).toBe(false); // other device untouched
+    });
+
+    it('a NATURAL idle expiry writes NO tombstone (offline_access must survive)', async () => {
+      const fast = new SessionService(new RedisService(redis), config(1, 600, ACCESS_TTL));
+      const { session } = await fast.create(user('tomb-idle'), 'tenant-A');
+      // idle TTL is 1s (Math.min(idle, absolute) => 1s PX on the key). Wait it out.
+      await sleep(1200);
+      expect(await fast.exists(session.ref)).toBe(false); // sess:{ref} expired naturally
+      expect(await fast.isEnded(session.ref)).toBe(false); // but NO tombstone => AT survives
+    });
+
+    it('isEnded / exists propagate Redis errors (fail-closed, never "not ended"/"alive")', async () => {
+      const dead = new IORedis('redis://127.0.0.1:1', {
+        lazyConnect: true,
+        enableOfflineQueue: false,
+        maxRetriesPerRequest: 0,
+        retryStrategy: () => null,
+      });
+      dead.on('error', () => undefined);
+      const broken = new SessionService(new RedisService(dead), config(60, 600, ACCESS_TTL));
+      await expect(broken.isEnded('a'.repeat(64))).rejects.toThrow();
+      await expect(broken.exists('a'.repeat(64))).rejects.toThrow();
+      dead.disconnect();
+    });
   });
 });

@@ -879,7 +879,9 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
       sessions.get.mockResolvedValue(liveSession);
       // The destructive steps succeed; a fault in the POST-revoke resolve (legacy client data) must
       // NOT 5xx — the user is already logged out, so fall back to the default redirect, no iframe.
-      logoutRp.resolvePostLogoutRedirect.mockRejectedValueOnce(new Error('bad stored redirect uri'));
+      logoutRp.resolvePostLogoutRedirect.mockRejectedValueOnce(
+        new Error('bad stored redirect uri'),
+      );
 
       const response = await app.inject({
         method: 'POST',

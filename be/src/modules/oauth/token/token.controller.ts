@@ -13,6 +13,7 @@ import {
 } from '../../clients/client-auth-request';
 import { applyCors, requestOrigin } from '../../clients/client-cors.helper';
 import { ClientCorsService } from '../../clients/client-cors.service';
+import { SessionService } from '../../sessions/session.service';
 import { AuthorizationCodeService } from '../code/authorization-code.service';
 import { TokenError } from './token.errors';
 import { TokenService } from './token.service';
@@ -47,6 +48,7 @@ export class TokenController {
     private readonly tokens: TokenService,
     private readonly refresh: RefreshTokenService,
     private readonly cors: ClientCorsService,
+    private readonly sessions: SessionService,
   ) {}
 
   @Post('/token')
@@ -162,6 +164,20 @@ export class TokenController {
     const bodyResource = body.get('resource');
     if (bodyResource !== undefined && bodyResource !== data.resource) {
       throw new TokenError('invalid_target');
+    }
+
+    // 6) Session liveness (DEBT-043): the code was bound to the browser session that authorized it.
+    // The code is single-use and already consumed above, but it stays exchangeable for ≤60s — long
+    // enough for a logout (or idle expiry) to happen in between. Refuse to mint a refresh family for
+    // a session that is no longer live, so a logged-out session's code cannot be turned into a new
+    // long-lived grant. `sessionRef` is required on every minted code; a code without it (only
+    // possible for a code minted just before this deploy) fails closed. A Redis error propagates to
+    // a fail-closed 500 (no token minted). The code is gone either way (single-use preserved).
+    if (!data.sessionRef) {
+      throw new TokenError('invalid_grant');
+    }
+    if (!(await this.sessions.exists(data.sessionRef))) {
+      throw new TokenError('invalid_grant');
     }
 
     const audit = { ip: req.ip, requestId: req.id };

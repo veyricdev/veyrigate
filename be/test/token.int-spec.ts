@@ -26,6 +26,7 @@ import { AuditService } from '../src/modules/security/audit/audit.service';
 import { AuditAction } from '../src/modules/security/audit/audit-action.enum';
 import type { AuditEvent } from '../src/modules/security/audit/audit.types';
 import { AuthorizationCodeService } from '../src/modules/oauth/code/authorization-code.service';
+import { SessionService } from '../src/modules/sessions/session.service';
 import { TokenController } from '../src/modules/oauth/token/token.controller';
 import { TokenService } from '../src/modules/oauth/token/token.service';
 import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
@@ -43,10 +44,19 @@ const RESOURCE = 'https://api.example.com/';
 const VERIFIER = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk'; // 43 chars, RFC 7636 example
 const CHALLENGE = deriveS256Challenge(VERIFIER);
 
+const SESSION_IDLE_TTL = 28800;
+const SESSION_ABSOLUTE_TTL = 2592000;
+
 const cfg = {
   getOrThrow: (ns: string) => {
     if (ns === 'app') return { nodeEnv: 'production', issuer: ISSUER };
-    if (ns === 'token') return { accessTokenTtl: ACCESS_TTL, refreshTokenTtl: REFRESH_TTL };
+    if (ns === 'token')
+      return {
+        accessTokenTtl: ACCESS_TTL,
+        refreshTokenTtl: REFRESH_TTL,
+        sessionIdleTtl: SESSION_IDLE_TTL,
+        sessionAbsoluteTtl: SESSION_ABSOLUTE_TTL,
+      };
     if (ns === 'client') return { secretGraceTtl: 3600 };
     throw new Error(`unexpected ns ${ns}`);
   },
@@ -72,6 +82,7 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
   let auditModel: Model<AuditEvent>;
   let clientModel: Model<Client>;
   let clientService: ClientService;
+  let sessions: SessionService;
   let confSecret = '';
 
   const post = (payload: string, headers: Record<string, string> = {}) =>
@@ -82,8 +93,17 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
       payload,
     });
 
-  const mintCode = (overrides: Record<string, unknown> = {}) =>
-    codes.create({
+  /** Create a fresh, live IdP session and return its `ref` (sha256 of the raw id). */
+  const liveSessionRef = async (): Promise<string> =>
+    (await sessions.create(new Types.ObjectId().toHexString(), 'tenant-A')).session.ref;
+
+  /**
+   * Mint an authorization code bound to a LIVE session by default (DEBT-043: `/token` now refuses a
+   * code whose session is not live). Pass `sessionRef` in overrides to bind a specific/dead session,
+   * or `sessionRef: undefined` to simulate a pre-deploy code with no binding.
+   */
+  const mintCode = async (overrides: Record<string, unknown> = {}) => {
+    const base: Record<string, unknown> = {
       clientId: `${RUN}-public`,
       redirectUri: REDIRECT,
       codeChallenge: CHALLENGE,
@@ -92,8 +112,10 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
       nonce: 'rp-nonce',
       userId: new Types.ObjectId().toHexString(),
       authTime: 1_700_000_000_000,
-      ...overrides,
-    } as never);
+      sessionRef: await liveSessionRef(),
+    };
+    return codes.create({ ...base, ...overrides } as never);
+  };
 
   beforeAll(async () => {
     redis = new IORedis(REDIS_URL, { maxRetriesPerRequest: 1 });
@@ -115,6 +137,7 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
         TokenService,
         RefreshTokenService,
         AuthorizationCodeService,
+        SessionService,
         ClientService,
         ClientCredentialService,
         ClientAuthenticationService,
@@ -133,6 +156,7 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
     await app.getHttpAdapter().getInstance().ready();
 
     codes = moduleRef.get(AuthorizationCodeService);
+    sessions = moduleRef.get(SessionService);
     verifier = moduleRef.get(TokenVerifier);
     refreshModel = app.get<Model<Record<string, unknown>>>(getModelToken('RefreshToken'));
     auditModel = app.get<Model<AuditEvent>>(getModelToken('AuditLog'));
@@ -178,8 +202,10 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
   afterAll(async () => {
     if (refreshModel) await refreshModel.db.dropDatabase();
     if (redis) {
-      const keys = await redis.keys('authz_code:*');
-      if (keys.length) await redis.del(...keys);
+      for (const pattern of ['authz_code:*', 'sess:*', 'sess_end:*', 'user_sess:*', 'sess_rp:*']) {
+        const keys = await redis.keys(pattern);
+        if (keys.length) await redis.del(...keys);
+      }
       await redis.quit();
     }
     if (app) await app.close();
@@ -691,5 +717,78 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
     expect(body.access_token).toBeDefined();
     // grantTypes defaulted to ['authorization_code'] only => no refresh even though no offline_access.
     expect(body.refresh_token).toBeUndefined();
+  });
+
+  describe('session binding: sid on access token + logout gate (DEBT-037/043)', () => {
+    const exchange = (code: string) =>
+      post(
+        form({
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: REDIRECT,
+          client_id: `${RUN}-public`,
+          code_verifier: VERIFIER,
+        }),
+      );
+
+    const decodeSid = (jwt: string): unknown =>
+      JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString()).sid;
+
+    it('DEBT-037 (a): the minted access token carries sid === the code session ref', async () => {
+      const ref = (await sessions.create(new Types.ObjectId().toHexString(), 'tenant-A')).session
+        .ref;
+      const { code } = await mintCode({ scope: 'openid profile offline_access', sessionRef: ref });
+      const res = await exchange(code);
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(decodeSid(body.access_token)).toBe(ref);
+      // The refresh family also records the ref so a later rotation keeps the same sid.
+      const [doc] = await refreshModel
+        .find({ tokenHash: sha256(body.refresh_token) })
+        .lean<{ sessionRef?: string }[]>();
+      expect(doc.sessionRef).toBe(ref);
+    });
+
+    it('DEBT-043: global logout of the session => code no longer exchangeable (invalid_grant, no token)', async () => {
+      const u = new Types.ObjectId().toHexString();
+      const ref = (await sessions.create(u, 'tenant-A')).session.ref;
+      const { code } = await mintCode({ scope: 'openid offline_access', sessionRef: ref });
+      await sessions.revokeAllForUser(u); // "log out everywhere" before the code is redeemed
+
+      const res = await exchange(code);
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('invalid_grant');
+      // Nothing minted: no refresh family for this code's user.
+      const count = await refreshModel.countDocuments({ userId: new Types.ObjectId(u) });
+      expect(count).toBe(0);
+      // Single-use preserved: the code was consumed, so a retry is still invalid_grant.
+      expect((await exchange(code)).json().error).toBe('invalid_grant');
+    });
+
+    it('DEBT-043: a session idle-expired (sess key gone, NOT via revoke) => invalid_grant', async () => {
+      // Bind the code to a ref that has no live `sess:{ref}` (simulates idle/absolute expiry, which
+      // leaves no tombstone). The user must re-authenticate — the code cannot be redeemed.
+      const ref = sha256(`gone-${Date.now()}`);
+      const { code } = await mintCode({ scope: 'openid offline_access', sessionRef: ref });
+      const res = await exchange(code);
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('invalid_grant');
+    });
+
+    it('DEBT-043: a code with NO sessionRef (pre-deploy) => invalid_grant, fail-closed', async () => {
+      const { code } = await mintCode({ scope: 'openid', sessionRef: undefined });
+      const res = await exchange(code);
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('invalid_grant');
+    });
+
+    it('DEBT-043: a live session => the code still exchanges successfully (no regression)', async () => {
+      const ref = (await sessions.create(new Types.ObjectId().toHexString(), 'tenant-A')).session
+        .ref;
+      const { code } = await mintCode({ scope: 'openid profile', sessionRef: ref });
+      const res = await exchange(code);
+      expect(res.statusCode).toBe(200);
+      expect(res.json().access_token).toBeDefined();
+    });
   });
 });

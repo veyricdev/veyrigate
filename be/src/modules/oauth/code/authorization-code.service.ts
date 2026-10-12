@@ -23,8 +23,10 @@ export interface AuthorizationCodeData {
   userId: string;
   authTime?: number;
   /** sha256 of the session cookie id that authorized this code; bound onto the RefreshToken so a
-   * local logout can revoke only this browser session's refresh family (B4.7, OPEN-1). */
-  sessionRef?: string;
+   * local logout can revoke only this browser session's refresh family (B4.7, OPEN-1). REQUIRED
+   * (DEBT-043): every mint path sets it, and `/token` refuses a code whose session is no longer
+   * live, so a logged-out session's code cannot still be exchanged. */
+  sessionRef: string;
 }
 
 /** Redis key is sha256(code), never the raw code (tech-lead C1) — mirrors `sess:{sha256(id)}`. */

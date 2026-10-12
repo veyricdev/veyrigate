@@ -202,7 +202,8 @@ Client {
   "iat": 1790000000,
   "jti": "tok_xxx",
   "scope": "game.read",
-  "client_id": "client_web_123"
+  "client_id": "client_web_123",
+  "sid": "<sha256 hex 64 ký tự của session id>"
 }
 ```
 
@@ -210,8 +211,11 @@ Client {
 - `sub` là internal identifier bất biến, không dùng email làm `sub`.
 - Resource server bắt buộc validate `iss`, `aud`, `exp`, và chữ ký trước khi tin bất kỳ claim nào khác.
 - Access token sống ngắn hạn (khuyến nghị 15 phút).
+- `sid` (khi có) = `sessionRef` = sha256(session id) của phiên IdP đã phát hành grant; AT mint từ refresh mang `sid` của family. `sid` là định danh, không phải credential — không endpoint nào hành động theo `sid` do client gửi mà không kiểm ownership qua phiên đã xác thực.
 
-**Quyết định về revocation strategy** (chốt rõ ràng, không để mở): MVP dùng self-contained JWT access token, ngắn hạn. Logout hoặc revoke tác động ngay tới session và refresh-token family, **nhưng không đồng bộ vô hiệu hoá các access token đã phát hành trước đó** — độ trễ tối đa chấp nhận được bằng đúng thời gian sống của access token (15 phút). Giới hạn (OPEN-1, run 15): `/introspect` với access token CHỈ phản ánh chữ ký + `exp` + sự tồn tại hiện tại của client/user và `aud` còn được cấp — **không** phản ánh revoke refresh-family hay logout (vì access token không lưu DB, không có denylist `jti` ở MVP). Resource server cần tín hiệu "client/user đã bị gỡ" hoặc "token sắp hết hạn" thì gọi `/introspect`; còn nhu cầu revoke tức thời theo session/logout sẽ do claim `sid` + đối chiếu session đảm nhiệm (DEBT-037, B4.7).
+**Quyết định về revocation strategy** (chốt rõ ràng, không để mở): MVP dùng self-contained JWT access token, ngắn hạn (15 phút), không denylist `jti`. Logout hoặc revoke tác động ngay tới session và refresh-token family. Với access token, **resource server tự verify JWT offline vẫn chấp nhận token tới `exp`** (độ trễ tối đa = TTL access token); resource server cần tín hiệu tức thời phải gọi `/introspect`.
+`/introspect` (access token) và `/userinfo` trả inactive / `401 invalid_token` khi: chữ ký/`iss`/`exp`/`typ` sai; client phát hành không còn hoặc không còn được cấp `aud`; user `sub` không còn; **hoặc phiên `sid` đã bị chấm dứt chủ động** (local/global logout, thu hồi thiết bị, đổi/reset mật khẩu) — hiệu lực ngay, qua tombstone `sess_end:{sid}` sống `TTL access token + 60s`. Caller `/introspect` không phải client của token và không giữ `aud` nhận `{active:false}` **trước** mọi tra cứu phụ thuộc nội dung token.
+Giới hạn có chủ đích: (1) phiên **hết hạn tự nhiên** (idle/absolute) KHÔNG làm access token inactive — refresh token `offline_access` sống độc lập với phiên trình duyệt; (2) access token không có `sid` (family phát hành trước B4.7) chỉ theo quy tắc client/aud/user; (3) mất dữ liệu Redis ⇒ quay về baseline ≤ TTL access token. Lỗi Redis/DB khi kiểm ⇒ 500, không bao giờ `active:true`/200.
 
 ## 9. Các luồng chính
 
@@ -358,6 +362,8 @@ Global logout (POST /logout?scope=all):
 - `GET /logout`: chỉ hiển thị màn hình xác nhận hoặc bắt đầu luồng RP-initiated logout theo chuẩn OIDC, **không** tự huỷ session ngay lập tức — tránh trường hợp CSRF-triggered logout thông qua một thẻ `<img>` hay link ẩn trỏ tới `/logout`.
 - `POST /logout` (được bảo vệ bằng CSRF token hoặc same-site cookie enforcement): mới thực sự thực hiện hành động huỷ — đây là destructive action.
 - 4 lớp logout đầy đủ: (1) local session logout tại IdP, (2) RP-initiated logout (`/logout` nhận `id_token_hint`, redirect về client sau khi huỷ session), (3) front-channel logout (thông báo các RP khác qua iframe), (4) back-channel logout (server-to-server notify RP để RP tự huỷ session cục bộ — có thể triển khai sau, xếp P1).
+- Mọi đường chấm dứt phiên (local/global logout, thu hồi thiết bị, reset mật khẩu) ghi tombstone `sess_end:{ref}` cùng thao tác xoá `sess:{ref}` ⇒ access token mang `sid` đó inactive ngay tại `/introspect`/`/userinfo`; authorization code đã mint của phiên đó không còn đổi được (§15).
+- Front-channel hiện chỉ gửi `iss` (chưa `sid`, DEBT-044).
 
 ### 9.9 Identity Broker (Google/GitHub) & account linking an toàn
 
@@ -441,7 +447,8 @@ Nếu multi-tenant kích hoạt: thêm `unique(tenantId, email)`, `unique(tenant
 |---|---|---|
 | `/authorize` | GET | nonce carry, PKCE S256, redirect_uri exact match, resource binding, tạo AuthorizeRequestContext, `iss` trong redirect response |
 | `/token` | POST | atomic consume+bind cho authorization code; atomic rotation (hash-based) cho refresh token |
-| `/userinfo` | GET | trả claims theo scope, verify access token qua JWKS |
+| `/userinfo` | GET | trả claims theo scope, verify access token qua JWKS + liveness (client/aud/user, phiên sid chưa bị chấm dứt) |
+| `/introspect` | POST | kiểm tra token real-time (RFC 7662): authz caller trước, rồi liveness (client/aud/user, phiên sid chưa bị chấm dứt; refresh: family còn active) |
 | `/.well-known/openid-configuration` | GET | discovery, xem mục 12 |
 | `/jwks.json` | GET | public key, nguồn từ KMS |
 | `/consent` | GET/POST | hiển thị & xử lý quyết định consent, hỗ trợ `prompt` |
@@ -525,7 +532,10 @@ Session:
   fixation (session ID đổi sau login) · expired session ·
   GET /logout không có side-effect huỷ session ·
   CSRF trên POST /logout bị chặn ·
-  local logout không ảnh hưởng session của thiết bị khác; global logout revoke toàn bộ
+  local logout không ảnh hưởng session của thiết bị khác; global logout revoke toàn bộ ·
+  access token có sid inactive ngay sau logout/revoke phiên tại /introspect & /userinfo ·
+  phiên idle-expire không chặn refresh/offline_access ·
+  code mint trước logout bị từ chối ở /token
 
 Account & enumeration:
   duplicate email · social account linking yêu cầu re-auth · unverified email ·
@@ -576,6 +586,8 @@ Cookie & bảo mật chung:
 25. Mọi thao tác nhạy cảm về bảo mật (đăng nhập, revoke, đổi cấu hình client, rotate key...) đều phải sinh audit event, không log giá trị bí mật trong event đó.
 26. Thao tác quản trị nhạy cảm (đổi `redirect_uris`, rotate client secret, đổi quyền truy cập resource) bắt buộc step-up re-authentication trước khi thực hiện, ngoài audit thông thường.
 27. `/login`, `/register`, `/password/reset`, `/password/verify-email` không được trả response khác biệt giữa "tài khoản không tồn tại" và các trường hợp khác, nhằm chống account enumeration.
+28. Access token mang `sid` của một phiên đã bị chấm dứt chủ động phải bị `/introspect` và `/userinfo` coi là không hợp lệ ngay lập tức; lỗi hạ tầng khi kiểm là fail-closed.
+29. (Task 3) `/token` chỉ đổi authorization code khi phiên `sessionRef` gắn với code còn sống; code không mang `sessionRef` hoặc phiên đã kết thúc ⇒ `invalid_grant`, không mint token.
 
 ## 16. Ưu tiên triển khai
 
