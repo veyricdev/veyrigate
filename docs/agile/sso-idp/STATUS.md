@@ -2,11 +2,11 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `17-introspect-hardening` — cổng: **tester PASS** → bàn giao **orchestrator đóng run** (code chưa commit). Senior **PASS** lượt 1 (0 🔴; mutation M1–M5 đều bị bắt; 🟡 → DEBT-050…053). Backend-dev **DONE** 4/4 [BE]. Đã áp bản fold + spec §8/§9.8/§11/§14/§15. Chốt: Q-A `sid=sessionRef`; Q-B tombstone `sess_end:{ref}` TTL accessTTL+60s (idle-expire KHÔNG giết AT); Q-C token không `sid` giữ hành vi cũ; DEBT-044 hoãn. **Verify tester (thật)**: typecheck 0, lint (src+test) 0, `pnpm test` 127, `pnpm test:int` **379** (376 + **3 test QA** vào `session-reflection.int-spec`) ⇒ **506/506**. Flake hạ tầng (open-handle treo + nhiễu cross-run) → DEBT-054 (không chặn). KHÔNG commit.
-- **Vòng lặp (run 16)**: analyst=1, tech-lead=1 (PASS), dev=3 (DONE, DONE retry1, DONE retry2), senior=3 (REJECT, REJECT, PASS), tester=1 (PASS)
-- **Run vừa đóng**: `16-B4.7` ✅ 5/5 task — 473/473 test (unit 127 + int 346). Xem `runs/16-B4.7/summary.md`.
-- **Việc tiếp theo**: micro-run **introspect-hardening** (DEBT-037/040/041/043/045/046) → run consent-hardening (DEBT-026/027/028). Hoàn tất M3/M4 còn cần T2 (fe-sso-test) + X1, T3–T5.
-  Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`; full suite = `pnpm test` (127) + `pnpm test:int` (346) = **473**.
+- **Run hiện tại**: không có (17-introspect-hardening đã đóng, commit `70842e0`).
+- **Vòng lặp (run 17)**: analyst=1, tech-lead=1 (PASS), dev=1, senior=1 (PASS), tester=1 (PASS)
+- **Run vừa đóng**: `17-introspect-hardening` ✅ 4/4 task — 506/506 test (unit 127 + int 379). Xem `runs/17-introspect-hardening/summary.md`.
+- **Việc tiếp theo**: run **consent-hardening** (DEBT-026/027/028) — đề xuất gộp **DEBT-050** (ưu tiên cao: reset mật khẩu không thu hồi refresh family) + 051/052. Hoàn tất M3/M4 còn cần T2 (fe-sso-test) + X1, T3–T5.
+  Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`; full suite = `pnpm test` (127) + `pnpm test:int` (379) = **506**.
 
 ## Tiến độ
 
@@ -28,6 +28,7 @@
 | [14](runs/14-B4.5/summary.md) | M4 | B4.5 | ✅ 342/342 | `b529c35` |
 | [15](runs/15-B4.6/summary.md) | M4 | B4.6 | ✅ 405/405 | `d513348` |
 | [16](runs/16-B4.7/summary.md) | M4 | B4.7 | ✅ 473/473 | `8613b4f` |
+| [17](runs/17-introspect-hardening/summary.md) | M4 | introspect-hardening (DEBT-037/040/041/043/045/046) | ✅ 506/506 | `70842e0` |
 
 ## Chặn / cần người quyết định
 

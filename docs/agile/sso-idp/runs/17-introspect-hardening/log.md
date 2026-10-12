@@ -45,3 +45,7 @@
 - File đổi: runs/17-introspect-hardening/test-report.md (mới), be/test/session-reflection.int-spec.ts (+3 test), backlog.md (DEBT-054), STATUS.md, log.md.
 - Kết quả: **PASS — 506/506** (unit 127 + int 379). Mọi acceptance T1–T4 + spec §8/§9.8/§11/§14/§15 có ≥1 test; risk matrix (authz/credential/input/state/dependency/request-chain/exposure) phủ; fail-closed xác nhận; không bypass/cross-tenant/replay/rò secret ẩn.
 - Bàn giao: **orchestrator** — đóng run 17 (code chưa commit, chờ orchestrator).
+
+## [2026-10-12] orchestrator
+- Đã làm: commit code `70842e0`; viết `summary.md`; cập nhật `STATUS.md` (đóng run 17, thêm dòng Tiến độ).
+- Kết quả: DONE — run 17 đóng.
