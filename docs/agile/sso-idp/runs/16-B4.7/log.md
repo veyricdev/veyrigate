@@ -69,3 +69,6 @@
 - File đổi: `be/src/modules/oauth/logout/logout.service.spec.ts` (+4 test), `runs/16-B4.7/test-report.md`, `runs/16-B4.7/log.md`, `STATUS.md`. Dọn temp helper QA. KHÔNG sửa code sản phẩm; KHÔNG đụng `.vscode/mcp.json`/`.mcp.json`/`.github/agents/*`.
 - Ghi chú không chặn: stray file rỗng `=1` ở gốc repo tồn tại từ trước phiên (0-byte, untracked) — dev dọn trước commit; DEBT-045 (lint chưa phủ `test/`) đã trong backlog.
 - Kết quả: **PASS** (cổng tester). Bàn giao: **orchestrator** đóng run. Code CHƯA commit.
+## [2026-10-12] orchestrator
+- Đã làm: commit code B4.7 `8613b4f`; viết `summary.md`; cập nhật `STATUS.md` (đóng run 16, thêm dòng Tiến độ).
+- Kết quả: DONE — run 16 đóng.

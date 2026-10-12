@@ -2,12 +2,11 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `16-B4.7`. Cổng: **tester PASS** (lượt 1, 2026-10-12) — orchestrator đóng run. Tester thêm 4 test unit QA (`logout.service.spec`: `verifyHint` fail-closed khi client bị xoá; `frameSrcOrigins` injection-safe CSP sink). Full suite **473/473** (unit 127 + int 346), tsc+lint(src) sạch. Xem `runs/16-B4.7/test-report.md`. 🔴 cuối đã đóng: senior tự chạy mutation đảo `familyRevokedAt`↔`revokedAt` trong `revokeWhere` → đúng 2 test `ordering (INV-11)` FAIL (A nhận 200), đã khôi phục byte-identical. 🟡 lượt 2 đã sửa: validator spec +4 case; POST /logout nhánh no-session fail-open. 🟡 còn lại đã vào backlog: DEBT-043 (mở rộng cho local logout), DEBT-045 (lint chưa phủ `test/`), DEBT-046 (ponytail/nit). Xem `runs/16-B4.7/review-senior.md` (lượt 3).
+- **Run hiện tại**: không có (16-B4.7 đã đóng, commit `8613b4f`).
 - **Vòng lặp (run 16)**: analyst=1, tech-lead=1 (PASS), dev=3 (DONE, DONE retry1, DONE retry2), senior=3 (REJECT, REJECT, PASS), tester=1 (PASS)
-- **Run vừa đóng**: `15-B4.6` ✅ 4/4 task — 405/405 test (unit 94 + int 311). Xem `runs/15-B4.6/summary.md`.
-- **Vòng lặp (run 15)**: analyst=1, tech-lead=1 (PASS), dev=2 (DONE, DONE retry1), senior=2 (REJECT, PASS), tester=1 (PASS)
-- **Việc tiếp theo**: **tester** (run 16) → micro-run introspect-hardening (DEBT-037/040/041/043/045/046) → run consent-hardening (DEBT-026/027/028). Muốn hoàn tất M3 còn cần T2 (fe-sso-test) + X1.
-  Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`; full suite = `pnpm test` (**127**, +4 QA) + `pnpm test:int` (**346**) = **473** (baseline 405 + 68 mới). Race+ordering chạy 3 lần đều 6/6. CHƯA commit.
+- **Run vừa đóng**: `16-B4.7` ✅ 5/5 task — 473/473 test (unit 127 + int 346). Xem `runs/16-B4.7/summary.md`.
+- **Việc tiếp theo**: micro-run **introspect-hardening** (DEBT-037/040/041/043/045/046) → run consent-hardening (DEBT-026/027/028). Hoàn tất M3/M4 còn cần T2 (fe-sso-test) + X1, T3–T5.
+  Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`; full suite = `pnpm test` (127) + `pnpm test:int` (346) = **473**.
 
 ## Tiến độ
 
@@ -28,6 +27,7 @@
 | [13](runs/13-B4.4/summary.md) | M3 | B4.4 | ✅ 310/310 | `c6a8026` |
 | [14](runs/14-B4.5/summary.md) | M4 | B4.5 | ✅ 342/342 | `b529c35` |
 | [15](runs/15-B4.6/summary.md) | M4 | B4.6 | ✅ 405/405 | `d513348` |
+| [16](runs/16-B4.7/summary.md) | M4 | B4.7 | ✅ 473/473 | `8613b4f` |
 
 ## Chặn / cần người quyết định
 

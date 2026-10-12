@@ -1,0 +1,9 @@
+# Summary — B4.7 (M4 logout local/global + RP-initiated + front-channel) — ✅ PASS 5/5 task
+
+- **Phạm vi**: `revokeWhere(filter)` là cửa revoke RefreshToken duy nhất (INV-11 stamp-first, guard filter rỗng) + `revokeAllForUser`/`revokeForSession` (DEBT-034). `RefreshToken.sessionRef` lan session→code→token→rotate. `GET /logout` chỉ render form (`no-store`), `verifyIdTokenHint` (chấp nhận exp quá hạn, cấm `at+jwt`, aud/sub khớp). `POST /logout` (CSRF) local / `scope=all`, re-validate hint + `post_logout_redirect_uri` exact match (chống open-redirect), thứ tự token→session→audit→clear→redirect, fail-closed trước revoke / fail-open sau. Front-channel: `frontchannelLogoutUri`, Redis `sess_rp:{ref}`, trang trung gian CSP `frame-src` riêng, không inline script. Discovery `end_session_endpoint` (DEBT-038).
+- **Quyết định**: OPEN-1 — local logout revoke theo `{userId, sessionRef}` (token mint trước B4.7 không có `sessionRef` → không bị local logout đụng). OPEN-2 — GET luôn cần xác nhận POST. DEBT-037/040/041/043 dời sang micro-run introspect-hardening. Back-channel → P2.
+- **Bug/khe đã sửa (senior REJECT ×2)**: thiếu bằng chứng test cho INV-11 scope mới, guard filter rỗng, thứ tự fail-closed, chuỗi `sessionRef` e2e, `sess_rp`; thiếu `no-store`; CSP override mất directive + origin chứa `;`; `state` dài chặn logout; test ordering stamp-first (mutation đảo thứ tự → 2 test FAIL).
+- **Verify**: typecheck/lint PASS; unit 127/127; int 346/346 → **473/473**.
+- **Commit**: `8613b4f`.
+- **Vòng lặp**: analyst=1, tech-lead=1, dev=3, senior=3 (REJECT→REJECT→PASS), tester=1.
+- **Debt**: mở DEBT-043 (mở rộng), 044, 045, 046; introspect-hardening = DEBT-037/040/041/043/045/046.
