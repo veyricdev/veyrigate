@@ -2,11 +2,11 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `20-bugfix` — cổng: **tester PASS** (617/617: unit 175 + int 442; tsc 0, eslint 0). **CHƯA commit** → orchestrator đóng run rồi commit. Scaffold fe-sso-test vẫn chưa làm (FE sau).
-- **Vòng lặp (run 20)**: analyst=1, tech-lead=2 (PASS, PASS retry 1) + orchestrator chốt retry 3 (bỏ hop count), backend-dev=4 (lượt 1, retry 1/2/3), senior-reviewer=4 (REJECT ×3, PASS lượt 4)
+- **Run hiện tại**: không có (20-bugfix đã đóng, commit `08adee8`). **T1 (scaffold fe-sso-test) chưa làm.**
+- **Vòng lặp (run 20)**: analyst=3 (lỗi mạng ×2), tech-lead=2, dev=4, senior=4 (REJECT×3 → PASS, +1 lượt ngoài giới hạn), tester=1
 - **Run vừa đóng**: `19-bugfix` ✅ 5/5 task — 555/555 test (unit 141 + int 414). Xem `runs/19-bugfix/summary.md`.
 - **Run vừa đóng**: `18-consent-session-hardening` ✅ 5/5 task — 531/531 test (unit 131 + int 400). Xem `runs/18-consent-session-hardening/summary.md`.
-- **Việc tiếp theo**: **orchestrator** đóng run 20 (tester PASS 617/617; xem `runs/20-bugfix/test-report.md`) rồi commit. Tester xác minh 5 task [BE] qua code+test thật: reserve/refund atomic song song, 429 đúng ở /token+/revoke+/introspect, không khoá client hợp lệ ở IP khác (f), 429 không consume code, Redis→500, TRUST_PROXY qua FastifyAdapter+proxy-addr thật, DEBT-067 audit, key rotate atomic, insertNextVersion+unique index. Đóng **DEBT-074** (comment-only). Còn mở **DEBT-075** (`/introspect` 429 thiếu `error_description`, tech-lead hoãn — không chặn). Rồi FE: scaffold fe-sso-test → T2 → X1.
+- **Việc tiếp theo**: FE — **T1** scaffold fe-sso-test → **T2** OIDC client → **X1** walking skeleton (Playwright). Debt còn mở chủ yếu thuộc B5/B6/B7/deploy.
 
 ## Tiến độ
 
@@ -29,6 +29,7 @@
 | [17](runs/17-introspect-hardening/summary.md) | M4 | introspect-hardening (DEBT-037/040/041/043/045/046) | ✅ 506/506 | `70842e0` |
 | [18](runs/18-consent-session-hardening/summary.md) | M4 | consent-session-hardening (DEBT-026/027/028/050/051/052) | ✅ 531/531 | `46da89a` |
 | [19](runs/19-bugfix/summary.md) | M4 | bugfix (DEBT-059/055/060/001/005) | ✅ 555/555 | `8a58faa` |
+| [20](runs/20-bugfix/summary.md) | M4 | bugfix (DEBT-067/029/039/006/007/021/053/061) | ✅ 617/617 | `08adee8` |
 
 ## Chặn / cần người quyết định
 
@@ -36,4 +37,4 @@ Xem `plan.md` §12. Còn mở: **Q3, Q5, Q7–Q9**. **Q1, Q4, Q6 đã chốt** (
 
 ## Backlog mở
 
-33 mục mở (run 20: tech-lead mở DEBT-071/072/073; senior mở DEBT-075; **tester đóng DEBT-074**). Xem [backlog.md](backlog.md). Run 19 đóng DEBT-001/003/005/055/059/060/065/066; mở DEBT-063/064/067–070.
+24 mục mở. Xem [backlog.md](backlog.md). Run 20 đóng DEBT-006/007/021/029/039/053/061/067/068/074; mở DEBT-071–073, 075.

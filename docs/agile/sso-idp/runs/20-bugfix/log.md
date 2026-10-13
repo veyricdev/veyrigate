@@ -113,3 +113,7 @@ umber; type alse | string[]; bỏ cast ở main.ts + int-spec. configuration/va
 - File đổi: be/src/config/validation.schema.ts (comment), runs/20-bugfix/test-report.md (mới), backlog.md (DEBT-074→đóng), STATUS.md.
 - Kết quả: PASS — 617/617 (unit 175 + int 442), tsc 0, eslint 0. (int in [ELIFECYCLE] exit 1 = teardown jest --runInBand, 0 test fail.)
 - Bàn giao: orchestrator — đóng run 20, rồi commit.
+
+## [2026-10-13] orchestrator
+- Đã làm: chọn phương án 1 (cho thêm 1 lượt sửa ngoài giới hạn, bỏ hop count TRUST_PROXY); commit code `08adee8`; viết `summary.md`; cập nhật `STATUS.md`; chuyển DEBT đã xử lý sang bảng Đã đóng.
+- Kết quả: DONE — run 20 đóng.
