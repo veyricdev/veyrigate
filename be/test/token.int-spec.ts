@@ -791,4 +791,122 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
       expect(res.json().access_token).toBeDefined();
     });
   });
+
+  describe('DEBT-059: TOKEN_ISSUED audit reflects the post-insert re-check (INV-25/29)', () => {
+    const exchange = (code: string) =>
+      post(
+        form({
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: REDIRECT,
+          client_id: `${RUN}-public`,
+          code_verifier: VERIFIER,
+        }),
+      );
+
+    afterEach(() => jest.restoreAllMocks());
+
+    it('session ends between re-check (exists true=>false), offline_access => 0 success, 1 failure session_ended, family revoked', async () => {
+      const u = new Types.ObjectId().toHexString();
+      const ref = (await sessions.create(u, 'tenant-A')).session.ref;
+      const { code } = await mintCode({
+        scope: 'openid offline_access',
+        sessionRef: ref,
+        userId: u,
+      });
+      // exists(): first call (pre-mint) true, second call (post-insert re-check) false — a logout
+      // slipped into the exchange window (TOCTOU).
+      jest.spyOn(sessions, 'exists').mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+
+      const res = await exchange(code);
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('invalid_grant');
+      expect(res.json().access_token).toBeUndefined();
+
+      const issued = await auditModel.find({ action: AuditAction.TOKEN_ISSUED, actorId: u }).lean();
+      // Exactly one TOKEN_ISSUED, and it is a failure:session_ended (no false "success").
+      expect(issued.filter((e) => e.result === 'success')).toHaveLength(0);
+      const failures = issued.filter((e) => e.result === 'failure');
+      expect(failures).toHaveLength(1);
+      expect(failures[0].reason).toBe('session_ended');
+      // The family minted before the re-check is revoked (TOKEN_REVOKED session_ended), none orphaned.
+      const fams = await refreshModel
+        .find({ userId: new Types.ObjectId(u) })
+        .lean<{ familyRevokedAt?: Date | null }[]>();
+      expect(fams.length).toBeGreaterThan(0);
+      for (const f of fams) expect(f.familyRevokedAt).toBeTruthy();
+      const revoked = await auditModel
+        .find({ action: AuditAction.TOKEN_REVOKED, clientId: `${RUN}-public` })
+        .lean();
+      expect(
+        revoked.some((e) => (e.metadata as { reason?: string }).reason === 'session_ended'),
+      ).toBe(true);
+    });
+
+    it('session ends between re-check, NO offline_access => 0 success, 1 failure session_ended, no family/TOKEN_REVOKED', async () => {
+      const u = new Types.ObjectId().toHexString();
+      const ref = (await sessions.create(u, 'tenant-A')).session.ref;
+      const { code } = await mintCode({ scope: 'openid profile', sessionRef: ref, userId: u });
+      jest.spyOn(sessions, 'exists').mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+
+      const res = await exchange(code);
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('invalid_grant');
+
+      const issued = await auditModel.find({ action: AuditAction.TOKEN_ISSUED, actorId: u }).lean();
+      expect(issued.filter((e) => e.result === 'success')).toHaveLength(0);
+      const failures = issued.filter((e) => e.result === 'failure');
+      expect(failures).toHaveLength(1);
+      expect(failures[0].reason).toBe('session_ended');
+      // No family minted => no refresh doc and no TOKEN_REVOKED for this user.
+      expect(await refreshModel.countDocuments({ userId: new Types.ObjectId(u) })).toBe(0);
+    });
+
+    it('Redis error on the re-check => 500, 0 TOKEN_ISSUED success for the request', async () => {
+      const u = new Types.ObjectId().toHexString();
+      const ref = (await sessions.create(u, 'tenant-A')).session.ref;
+      const { code } = await mintCode({
+        scope: 'openid offline_access',
+        sessionRef: ref,
+        userId: u,
+      });
+      jest
+        .spyOn(sessions, 'exists')
+        .mockResolvedValueOnce(true)
+        .mockRejectedValueOnce(new Error('redis down'));
+
+      const res = await exchange(code);
+      expect(res.statusCode).toBe(500);
+      expect(res.json().error).toBe('server_error');
+      expect(res.json().access_token).toBeUndefined();
+
+      const issued = await auditModel.find({ action: AuditAction.TOKEN_ISSUED, actorId: u }).lean();
+      expect(issued.filter((e) => e.result === 'success')).toHaveLength(0);
+    });
+
+    it('audit of success fails after a live re-check => 500, no token, minted family revoked', async () => {
+      const u = new Types.ObjectId().toHexString();
+      const ref = (await sessions.create(u, 'tenant-A')).session.ref;
+      const { code } = await mintCode({
+        scope: 'openid offline_access',
+        sessionRef: ref,
+        userId: u,
+      });
+      // Session stays live through both reads; the TOKEN_ISSUED success write then fails.
+      jest.spyOn(sessions, 'exists').mockResolvedValue(true);
+      const tokens = app.get(TokenService);
+      jest.spyOn(tokens, 'recordIssued').mockRejectedValueOnce(new Error('audit mongo down'));
+
+      const res = await exchange(code);
+      expect(res.statusCode).toBe(500);
+      expect(res.json().error).toBe('server_error');
+      expect(res.json().access_token).toBeUndefined();
+
+      const fams = await refreshModel
+        .find({ userId: new Types.ObjectId(u) })
+        .lean<{ familyRevokedAt?: Date | null }[]>();
+      expect(fams.length).toBeGreaterThan(0);
+      for (const f of fams) expect(f.familyRevokedAt).toBeTruthy();
+    });
+  });
 });

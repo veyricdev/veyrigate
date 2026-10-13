@@ -2,11 +2,12 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: không có (18-consent-session-hardening đã đóng, commit `46da89a`).
-- **Vòng lặp (run 18)**: analyst=1, tech-lead=1 (PASS), dev=2 (retry 1), senior=2 (REJECT → PASS), tester=1 (PASS)
+- **Run hiện tại**: `19-bugfix` — cổng: **tester ✅ PASS** (analyst ✅, tech-lead ✅ PASS + fold, backend-dev ✅ 5/5, senior-reviewer ✅ PASS, tester ✅ PASS — `runs/19-bugfix/test-report.md`: **555/555** test, typecheck/lint 0). Tester đóng **DEBT-065** (sửa comment test) + **DEBT-066** (thêm case blackhole `net.createServer`, mutant-kill xác nhận chỉ `commandTimeout` cắt treo). **DEBT-067** = lỗi ordering code `token.controller` (!live revoke ném ⇒ mất audit `session_ended`) → **trả backend-dev run kế** (không chặn PASS). 5 task [BE] DEBT-059/055/060/001(+003)/005 đã `[x]`. **→ orchestrator đóng run.** Đề xuất run 20: DEBT-067, 029/039, 007, 021, 053, 061. FE (T1 scaffold fe-sso-test) hoãn tới sau bug-fix. **Không sửa** spec.md/plan.md.
+- **Vòng lặp (run 19)**: analyst=1, tech-lead=1 (PASS), dev=1, senior=1 (PASS), tester=1 (PASS) → orchestrator
+- **Test (run 19)**: `pnpm test` 141 (unit) + `pnpm test:int` 414 (int) = **555**, 0 fail (tester +1 case DEBT-066 blackhole; trước senior 554, không giảm).
 - **Run vừa đóng**: `18-consent-session-hardening` ✅ 5/5 task — 531/531 test (unit 131 + int 400). Xem `runs/18-consent-session-hardening/summary.md`.
-- **Việc tiếp theo**: B4 (OAuth core BE) xong. Hoàn tất M3/M4 còn cần **T2** (fe-sso-test) + **X1**, rồi **T3–T5**; sau đó M5 (B5 federation, B6 admin API). Debt đáng chú ý: DEBT-059 (audit `TOKEN_ISSUED` trước re-check).
-  Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`; full suite = `pnpm test` (unit 131) + `pnpm test:int` (int 400) = **531**.
+- **Việc tiếp theo**: tester kiểm run 19. B4 (OAuth core BE) xong. Hoàn tất M3/M4 còn cần **T2** (fe-sso-test) + **X1**; sau đó M5 (B5 federation, B6 admin API). Run 19 đóng DEBT-059/055/060/001/003/005.
+  Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`; full suite = `pnpm test` (unit 131) + `pnpm test:int` (int 413) = **554** (phải `docker start vg-test-mongo vg-test-redis` trước, xem DEBT-070).
 
 ## Tiến độ
 
@@ -37,4 +38,4 @@ Xem `plan.md` §12. Còn mở: **Q3, Q5, Q7–Q9**. **Q1, Q4, Q6 đã chốt** (
 
 ## Backlog mở
 
-29 mục mở. Xem [backlog.md](backlog.md). Run 18 đóng DEBT-026/027/028/050/051/052/056/057/058 và dọn các mục đã xong ở run 16–17 (034/037/038/040/041/043/045/046). Mở mới: DEBT-055, 059–062.
+37 mục mở (trước khi đóng run 19). Xem [backlog.md](backlog.md). Run 18 đóng DEBT-026/027/028/050/051/052/056/057/058 và dọn các mục đã xong ở run 16–17 (034/037/038/040/041/043/045/046). Mở mới: DEBT-055, 059–062; run 19 tech-lead thêm DEBT-063/064; senior thêm DEBT-065–070. **Run 19 nhắm**: 059, 055, 060, 001, 005 (lỗi thật).

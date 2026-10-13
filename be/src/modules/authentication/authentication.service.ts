@@ -188,9 +188,45 @@ export class AuthenticationService {
     // the password back (rollback would re-enable a possibly-leaked password).
     const userId = String(consumed.userId);
     const now = new Date();
-    await this.refreshTokens.revokeAllForUser(userId, now);
-    await this.sessions.revokeAllForUser(userId);
-    await this.refreshTokens.revokeAllForUser(userId, now);
+    // DEBT-055: the reset link is single-use and already consumed, so the user cannot retry. Run
+    // ALL three revoke steps even if an earlier one failed — skipping the session MARK just because
+    // Mongo failed in pre-revoke would leave a hijacked session alive. Each step is isolated;
+    // we keep the FIRST error and the step it came from, audit a failure (best-effort — a failed
+    // audit write must not mask the original revoke error), then rethrow. The password is NOT rolled
+    // back (DEBT-050: rollback could re-enable a possibly-leaked credential).
+    let firstError: unknown;
+    let failedStep: 'pre_revoke' | 'sessions' | 'sweep' | undefined;
+    const runStep = async (
+      step: 'pre_revoke' | 'sessions' | 'sweep',
+      op: () => Promise<unknown>,
+    ) => {
+      try {
+        await op();
+      } catch (err) {
+        if (firstError === undefined) {
+          firstError = err;
+          failedStep = step;
+        }
+      }
+    };
+    await runStep('pre_revoke', () => this.refreshTokens.revokeAllForUser(userId, now));
+    await runStep('sessions', () => this.sessions.revokeAllForUser(userId));
+    await runStep('sweep', () => this.refreshTokens.revokeAllForUser(userId, now));
+
+    if (firstError !== undefined) {
+      await this.audit
+        .record({
+          actorType: 'user',
+          actorId: userId,
+          action: AuditAction.AUTH_PASSWORD_RESET,
+          result: 'failure',
+          reason: 'revoke_failed',
+          metadata: { failedStep: failedStep as string },
+        })
+        .catch(() => undefined);
+      throw firstError;
+    }
+
     await this.audit.record({
       actorType: 'user',
       actorId: userId,

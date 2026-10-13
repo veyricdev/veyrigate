@@ -57,6 +57,32 @@ describe('SESSION_COOKIE_SECURE / session TTL validation (B2.3, C1/C2)', () => {
   });
 });
 
+describe('REDIS_COMMAND_TIMEOUT_MS (DEBT-005 fail-fast)', () => {
+  it('missing → defaults to 1000ms and maps to database.redisCommandTimeoutMs', () => {
+    const env = validateEnv(BASE);
+    expect(env.REDIS_COMMAND_TIMEOUT_MS).toBe(1000);
+    expect(buildConfig(env).database.redisCommandTimeoutMs).toBe(1000);
+  });
+
+  it('accepts a positive override', () => {
+    const env = validateEnv({ ...BASE, REDIS_COMMAND_TIMEOUT_MS: '1500' });
+    expect(env.REDIS_COMMAND_TIMEOUT_MS).toBe(1500);
+    expect(buildConfig(env).database.redisCommandTimeoutMs).toBe(1500);
+  });
+
+  it('rejects zero/negative and over-max values, naming the variable', () => {
+    expect(() => validateEnv({ ...BASE, REDIS_COMMAND_TIMEOUT_MS: '0' })).toThrow(
+      /REDIS_COMMAND_TIMEOUT_MS/,
+    );
+    expect(() => validateEnv({ ...BASE, REDIS_COMMAND_TIMEOUT_MS: '-1' })).toThrow(
+      /REDIS_COMMAND_TIMEOUT_MS/,
+    );
+    expect(() => validateEnv({ ...BASE, REDIS_COMMAND_TIMEOUT_MS: '20000' })).toThrow(
+      /REDIS_COMMAND_TIMEOUT_MS/,
+    );
+  });
+});
+
 describe('CLIENT_SECRET_GRACE_TTL (B3.1, tech-lead C2 — spec §17 still open)', () => {
   it('missing → defaults to 7 days (604800s), same pattern as session TTLs', () => {
     expect(validateEnv(BASE).CLIENT_SECRET_GRACE_TTL).toBe(604800);

@@ -21,6 +21,11 @@ export const envSchema = z
 
     MONGO_URI: z.string().min(1),
     REDIS_URL: z.string().min(1),
+    // Per-command timeout (ms) for the shared Redis client (DEBT-005). Bounds request-path Redis
+    // commands (rate-limit, session liveness, tombstones) so they fail fast instead of queuing
+    // forever when Redis is down/reconnecting. Kept below PING_TIMEOUT_MS (1500) so `/ready` is
+    // unaffected. Max 10s guards against a misconfiguration that would reintroduce the hang.
+    REDIS_COMMAND_TIMEOUT_MS: positiveInt.max(10000).default(1000),
 
     ACCESS_TOKEN_TTL: positiveInt,
     REFRESH_TOKEN_TTL: positiveInt,

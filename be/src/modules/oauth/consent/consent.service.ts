@@ -109,16 +109,60 @@ export class ConsentService {
   ): Promise<Consent> {
     const normResource = ConsentService.normalizeResource(resource);
     const now = new Date();
-    // Single atomic update-pipeline round-trip (DEBT-027): two concurrent grants for the same key
-    // converge on one document (unique index + upsert) and the new `grantedScopes` is computed
-    // server-side from the document's CURRENT value, so neither write loses a scope the other
-    // added. The union is bounded by `allowedScopes` (`$setIntersection`) so a scope the client has
-    // since lost can never carry forward (fail-closed over-grant guard). `requestedScopes` and
-    // `allowedScopes` are wrapped in `$literal`: an aggregation pipeline treats a string starting
-    // with `$` as a field path, so without `$literal` a scope like `"$grantedScopes"` would be
-    // interpreted as a path (field-path injection) — `$literal` forces it to a plain value array.
-    // mongoose 9 requires `{ updatePipeline: true }` for an array update, and the pipeline is NOT
-    // schema-cast, so the `userId` filter is still cast to ObjectId explicitly.
+    // DEBT-060 (defense in depth): a concurrent upsert on the unique composite key can, on some
+    // MongoDB versions/edge cases, surface as a transient `E11000 duplicate key`. (Mongo ≥4.2 — the
+    // compose target — already auto-retries this when the filter is equality on exactly the unique
+    // key, which is the case here.) Retry the identical write EXACTLY ONCE on `code === 11000`; the
+    // second attempt finds the row the racing writer created and updates it. Any other error, or a
+    // second 11000 (persistent), propagates unchanged — no silent swallow, no over-grant (the scope
+    // math is identical on both attempts, still `$setIntersection`-bounded by `allowedScopes`).
+    try {
+      return await this.upsertGrant(
+        userId,
+        clientId,
+        normResource,
+        requestedScopes,
+        versions,
+        allowedScopes,
+        now,
+      );
+    } catch (err) {
+      if ((err as { code?: unknown }).code !== 11000) {
+        throw err;
+      }
+      return this.upsertGrant(
+        userId,
+        clientId,
+        normResource,
+        requestedScopes,
+        versions,
+        allowedScopes,
+        now,
+      );
+    }
+  }
+
+  /**
+   * The atomic update-pipeline round-trip for `grant` (DEBT-027), extracted so the DEBT-060
+   * retry-once replays the EXACT same write. Two concurrent grants for the same key converge on one
+   * document (unique index + upsert): `grantedScopes` is recomputed server-side from the document's
+   * CURRENT value, so neither write loses a scope the other added. The union is bounded by
+   * `allowedScopes` (`$setIntersection`) so a scope the client has since lost can never carry forward
+   * (fail-closed over-grant guard). `requestedScopes`/`allowedScopes` are wrapped in `$literal`: a
+   * pipeline treats a string starting with `$` as a field path, so without `$literal` a scope like
+   * `"$grantedScopes"` would be a path (field-path injection). mongoose 9 requires
+   * `{ updatePipeline: true }` for an array update; the pipeline is NOT schema-cast, so the `userId`
+   * filter is still cast to ObjectId explicitly.
+   */
+  private async upsertGrant(
+    userId: string,
+    clientId: string,
+    normResource: string,
+    requestedScopes: string[],
+    versions: ConsentVersions,
+    allowedScopes: string[],
+    now: Date,
+  ): Promise<Consent> {
     const doc = await this.consents
       .findOneAndUpdate(
         { userId: new Types.ObjectId(userId), clientId, resource: normResource },

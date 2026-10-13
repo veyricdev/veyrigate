@@ -134,20 +134,12 @@ export class TokenService {
       refreshToken = minted.token;
     }
 
-    // Audit before returning (INV-25): a failed write throws => no token reaches the client
-    // (fail-closed, same pattern as SESSION_CREATED). Metadata carries no secret/token/code.
-    await this.audit.record({
-      actorType: 'user',
-      actorId: data.userId,
-      clientId: client.clientId,
-      action: AuditAction.TOKEN_ISSUED,
-      result: 'success',
-      ip: audit.ip,
-      userAgent: audit.userAgent,
-      requestId: audit.requestId,
-      metadata: { resource, scope, refresh: issueRefresh },
-    });
-
+    // Audit is NOT written here anymore (DEBT-059). The controller re-checks session liveness
+    // AFTER this insert (TOCTOU, INV-29) and may still refuse to return the token. Writing
+    // `TOKEN_ISSUED success` before that re-check would claim a token was issued even when the
+    // request ends in `invalid_grant`. The controller calls `recordIssued(...)` once the token is
+    // actually about to leave the server (success) or a refusal path is taken (failure). The event
+    // shape + metadata stay owned here for parity with the refresh grant.
     return {
       response: {
         access_token: accessToken,
@@ -159,6 +151,44 @@ export class TokenService {
       },
       ...(familyId ? { familyId } : {}),
     };
+  }
+
+  /**
+   * Record the `TOKEN_ISSUED` audit event for a code grant (DEBT-059, INV-25). The controller calls
+   * this AFTER the post-insert session re-check (INV-29), so the audit reflects the real outcome:
+   *
+   * - `result:'success'` is written only when the token is about to leave the server to the client.
+   *   A failing write throws so the controller fails closed (revokes any minted family, returns 500,
+   *   never hands out a token for which no `success` was recorded).
+   * - `result:'failure'` with `reason` ('session_ended' | 'session_check_failed') records a refusal
+   *   path; the controller writes it best-effort so it never masks the original error.
+   *
+   * The event shape + metadata (`{resource, scope, refresh}`) are owned here for parity with the
+   * refresh grant; metadata carries no secret/token/code.
+   */
+  async recordIssued(
+    client: Client,
+    data: AuthorizationCodeData,
+    result: 'success' | 'failure',
+    reason?: string,
+    audit: { ip?: string; userAgent?: string; requestId?: string } = {},
+  ): Promise<void> {
+    const scope = data.scope;
+    const scopes = scope.length ? scope.split(' ') : [];
+    const refresh =
+      client.grantTypes.includes('refresh_token') && scopes.includes('offline_access');
+    await this.audit.record({
+      actorType: 'user',
+      actorId: data.userId,
+      clientId: client.clientId,
+      action: AuditAction.TOKEN_ISSUED,
+      result,
+      ...(reason ? { reason } : {}),
+      ip: audit.ip,
+      userAgent: audit.userAgent,
+      requestId: audit.requestId,
+      metadata: { resource: data.resource ?? '', scope, refresh },
+    });
   }
 
   /**

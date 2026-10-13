@@ -217,14 +217,36 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
     expect(refreshModel.create).not.toHaveBeenCalled();
   });
 
-  it('audit TOKEN_ISSUED recorded with no secret/token in metadata (INV-25)', async () => {
-    const { response: res } = await buildService().issueForAuthorizationCode(
+  it('DEBT-059: issueForAuthorizationCode does NOT write audit (controller re-checks first)', async () => {
+    await buildService().issueForAuthorizationCode(
       client({ grantTypes: ['authorization_code', 'refresh_token'] }),
       codeData({ scope: 'openid offline_access' }),
+    );
+    // The `TOKEN_ISSUED success` audit is written by the controller via recordIssued(), AFTER the
+    // post-insert session re-check (INV-29) — never here, so a later refusal cannot leave a false
+    // `TOKEN_ISSUED success` behind.
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
+  it('recordIssued(success): TOKEN_ISSUED success, no secret/token in metadata (INV-25)', async () => {
+    const data = codeData({ scope: 'openid offline_access' });
+    const res = (
+      await buildService().issueForAuthorizationCode(
+        client({ grantTypes: ['authorization_code', 'refresh_token'] }),
+        data,
+      )
+    ).response;
+    audit.record.mockClear();
+    await buildService().recordIssued(
+      client({ grantTypes: ['authorization_code', 'refresh_token'] }),
+      data,
+      'success',
     );
     expect(audit.record).toHaveBeenCalledTimes(1);
     const event = audit.record.mock.calls[0][0] as unknown as Record<string, unknown>;
     expect(event.action).toBe(AuditAction.TOKEN_ISSUED);
+    expect(event.result).toBe('success');
+    expect(event.reason).toBeUndefined();
     expect(event.actorType).toBe('user');
     expect(event.actorId).toBe(USER_ID);
     expect(event.clientId).toBe('rp-client');
@@ -236,9 +258,28 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
     expect(flat).not.toContain(res.id_token);
   });
 
-  it('audit failure => error propagates, no token returned (fail-closed)', async () => {
+  it('recordIssued(failure, session_ended): refusal event with no family required', async () => {
+    await buildService().recordIssued(
+      client({ grantTypes: ['authorization_code'] }),
+      codeData({ scope: 'openid profile' }),
+      'failure',
+      'session_ended',
+    );
+    expect(audit.record).toHaveBeenCalledTimes(1);
+    const event = audit.record.mock.calls[0][0] as unknown as Record<string, unknown>;
+    expect(event.action).toBe(AuditAction.TOKEN_ISSUED);
+    expect(event.result).toBe('failure');
+    expect(event.reason).toBe('session_ended');
+    expect(event.metadata).toEqual({
+      resource: RESOURCE,
+      scope: 'openid profile',
+      refresh: false,
+    });
+  });
+
+  it('recordIssued audit failure => error propagates (fail-closed, controller revokes + 500)', async () => {
     audit.record.mockRejectedValueOnce(new Error('mongo down'));
-    await expect(buildService().issueForAuthorizationCode(client(), codeData())).rejects.toThrow(
+    await expect(buildService().recordIssued(client(), codeData(), 'success')).rejects.toThrow(
       'mongo down',
     );
   });

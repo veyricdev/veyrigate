@@ -1,13 +1,17 @@
-import {
-  Controller,
-  Get,
-  HttpCode,
-  HttpStatus,
-  Logger,
-  ServiceUnavailableException,
-} from '@nestjs/common';
+import { Controller, Get, HttpCode, HttpStatus, Logger, Res } from '@nestjs/common';
 import { MongoService } from '../../database/mongo/mongo.service';
 import { RedisService } from '../../database/redis/redis.service';
+
+/** Minimal structural view of the Fastify reply `/ready` needs (status + header). */
+interface HealthReply {
+  status(code: number): HealthReply;
+  header(name: string, value: string): HealthReply;
+}
+
+/** Per-dependency readiness status — a fixed enum, never a message/host/stack (exposure budget). */
+type ReadinessBody =
+  | { status: 'ok'; mongo: 'up'; redis: 'up' }
+  | { status: 'error'; mongo: 'up' | 'down'; redis: 'up' | 'down' };
 
 /**
  * Liveness and readiness probes (B1.3).
@@ -21,10 +25,10 @@ export class HealthController {
   private readonly logger = new Logger(HealthController.name);
 
   /**
-   * Max time to wait for a dependency ping before treating it as down. Needed
-   * because the shared ioredis client uses `maxRetriesPerRequest: null`, which
-   * queues commands while reconnecting instead of failing fast — without this
-   * bound `/ready` would hang until the client cancels instead of returning 503.
+   * Max time to wait for a dependency ping before treating it as down. The shared ioredis client
+   * now sets `commandTimeout` (DEBT-005), but that default (1000ms) is below this bound, so this
+   * `Promise.race` still decides `/ready`'s own timeout independently of the client's and never
+   * reports a slow dependency as up.
    */
   private static readonly PING_TIMEOUT_MS = 1500;
 
@@ -40,14 +44,23 @@ export class HealthController {
   }
 
   @Get('ready')
-  async readiness(): Promise<{ status: 'ok'; mongo: 'up'; redis: 'up' }> {
+  async readiness(@Res({ passthrough: true }) reply: HealthReply): Promise<ReadinessBody> {
+    // DEBT-001: return the 503 + per-dependency body DIRECTLY instead of throwing. The global
+    // `OAuthExceptionFilter` maps every exception by status, so a thrown 503 would be rewritten to
+    // `{error:'server_error'}` and the `mongo`/`redis` detail would be lost. Returning here keeps
+    // the OAuth filter untouched for every other route. The body is a fixed enum (`up`/`down`) with
+    // no message/host/stack (the only exposure is dependency up/down, per spec health); failure
+    // detail stays in the server log (`safePing`'s `logger.warn`). `no-store` so a probe result is
+    // never cached by an intermediary.
+    reply.header('Cache-Control', 'no-store');
     const [mongoUp, redisUp] = await Promise.all([this.safePing('mongo'), this.safePing('redis')]);
     if (!mongoUp || !redisUp) {
-      throw new ServiceUnavailableException({
+      reply.status(HttpStatus.SERVICE_UNAVAILABLE);
+      return {
         status: 'error',
         mongo: mongoUp ? 'up' : 'down',
         redis: redisUp ? 'up' : 'down',
-      });
+      };
     }
     return { status: 'ok', mongo: 'up', redis: 'up' };
   }

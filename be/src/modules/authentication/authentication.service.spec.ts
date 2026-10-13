@@ -122,23 +122,38 @@ describe('AuthenticationService', () => {
     expect(sweepFamily).toBeLessThan(auditOrder);
   });
 
-  it('reset fails closed when refresh revoke throws: no session revoke, no audit, password not rolled back (DEBT-050)', async () => {
+  it('DEBT-055: pre-revoke throws => sessions MARK still runs, sweep runs, failure audit (pre_revoke), rethrow first error, no rollback', async () => {
     tokenModel.findOneAndUpdate.mockReturnValue({
       lean: () => ({ exec: async () => ({ userId: user.sub }) }),
     });
     users.setPassword.mockResolvedValue(user);
-    refreshTokens.revokeAllForUser.mockRejectedValueOnce(new Error('mongo down'));
+    // Both refresh calls (pre-revoke + sweep) fail; the FIRST error (pre_revoke) must win.
+    refreshTokens.revokeAllForUser
+      .mockRejectedValueOnce(new Error('mongo down'))
+      .mockRejectedValueOnce(new Error('mongo still down'));
+    sessions.revokeAllForUser.mockResolvedValue(3);
     audit.record.mockResolvedValue(undefined);
 
     await expect(service.resetPassword('secret-token', 'new password')).rejects.toThrow(
       'mongo down',
     );
     expect(users.setPassword).toHaveBeenCalledTimes(1); // password already changed, not rolled back
-    expect(sessions.revokeAllForUser).not.toHaveBeenCalled();
-    expect(audit.record).not.toHaveBeenCalled();
+    // The session MARK is NOT skipped just because pre-revoke failed (would leave a hijacked
+    // session alive on a consumed, non-retryable link).
+    expect(sessions.revokeAllForUser).toHaveBeenCalledTimes(1);
+    expect(refreshTokens.revokeAllForUser).toHaveBeenCalledTimes(2); // pre-revoke + sweep both attempted
+    expect(audit.record).toHaveBeenCalledTimes(1);
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: AuditAction.AUTH_PASSWORD_RESET,
+        result: 'failure',
+        reason: 'revoke_failed',
+        metadata: { failedStep: 'pre_revoke' },
+      }),
+    );
   });
 
-  it('reset fails closed when session revoke throws: no sweep, no audit (DEBT-050)', async () => {
+  it('DEBT-055: session revoke throws => sweep still runs, failure audit (sessions), rethrow (DEBT-050 fail-closed kept)', async () => {
     tokenModel.findOneAndUpdate.mockReturnValue({
       lean: () => ({ exec: async () => ({ userId: user.sub }) }),
     });
@@ -150,8 +165,30 @@ describe('AuthenticationService', () => {
     await expect(service.resetPassword('secret-token', 'new password')).rejects.toThrow(
       'redis down',
     );
-    expect(refreshTokens.revokeAllForUser).toHaveBeenCalledTimes(1); // only the pre-revoke, no sweep
-    expect(audit.record).not.toHaveBeenCalled();
+    expect(refreshTokens.revokeAllForUser).toHaveBeenCalledTimes(2); // pre-revoke + sweep still run
+    expect(audit.record).toHaveBeenCalledTimes(1);
+    expect(audit.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: AuditAction.AUTH_PASSWORD_RESET,
+        result: 'failure',
+        reason: 'revoke_failed',
+        metadata: { failedStep: 'sessions' },
+      }),
+    );
+  });
+
+  it('DEBT-055: a failing failure-audit write never masks the original revoke error', async () => {
+    tokenModel.findOneAndUpdate.mockReturnValue({
+      lean: () => ({ exec: async () => ({ userId: user.sub }) }),
+    });
+    users.setPassword.mockResolvedValue(user);
+    sessions.revokeAllForUser.mockRejectedValueOnce(new Error('redis down'));
+    refreshTokens.revokeAllForUser.mockResolvedValue(1);
+    audit.record.mockRejectedValue(new Error('audit mongo down'));
+
+    await expect(service.resetPassword('secret-token', 'new password')).rejects.toThrow(
+      'redis down',
+    );
   });
 
   it('reset does not revoke anything when the link is invalid (fail-closed) (DEBT-050)', async () => {

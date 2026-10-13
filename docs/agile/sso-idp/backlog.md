@@ -35,12 +35,20 @@ Việc còn mở (🟡 từ review/test, debt, việc hoãn). **Nguồn duy nh�
 | DEBT-061 | run 18 senior 🟡#6 | Runbook §2b: `syncIndexes` drop index cũ trước khi build mới; build lỗi E11000 ⇒ Consent không còn unique nào, runbook chưa ghi trạng thái/phục hồi | Ghi rõ trạng thái sau lỗi + bước phục hồi (dọn duplicate → sync lại) | deploy M4 |
 | DEBT-062 | run 18 senior ponytail/nit (lượt 2) | Comment dài kể lại spec (token.controller re-check, ui.controller SWEEP, consent.service), ternary global/local lặp, `...(familyId ? {familyId} : {})`, spy chọc `redis` private | Theo mục ✂️ `runs/18-consent-session-hardening/review-senior.md` (net -28 dòng) | Gộp DEBT-053 |
 | DEBT-049 | run 17 tech-lead | Tombstone `sess_end:*` (DEBT-037) bị evict ⇒ fail-open về baseline ≤15' | Runbook: Redis session `maxmemory-policy noeviction` + cảnh báo memory | B7 (runbook deploy) |
+| DEBT-063 | run 19 tech-lead | Reset password: revoke lỗi sau `setPassword` ⇒ link đã consume, UI chỉ báo lỗi chung; `AUTH_PASSWORD_RESET failure` chưa là alert | Thông điệp + đường "yêu cầu link mới"; cân nhắc thêm vào `ALERT_ACTIONS` | B6 / X3 |
+| DEBT-064 | run 19 tech-lead | `/ready` public lộ trạng thái up/down từng dependency | Giới hạn `/ready` ở mạng nội bộ/ingress (runbook) | B7 |
 | DEBT-042 | run 15 senior | `KeysModule` import `ClientsModule` chỉ để JWKS có CORS → phụ thuộc ngược hạ tầng→nghiệp vụ, nguy cơ vòng import | Chuyển route `jwks.json` sang `oauth/` cạnh discovery (hoặc ADR ngắn) | B7 |
+| DEBT-067 | run 19 senior 🟡#3 | `/token` `!live`: `revokeFamilyForEndedSession` ném ⇒ không ghi `TOKEN_ISSUED failure session_ended` (vẫn fail-closed 500 nhưng thiếu audit từ chối) | try/finally hoặc ghi failure best-effort trước rethrow + int test stub reject. **Lỗi code (ordering), không phải thiếu test** — tester xác nhận ở run 19, trả lại backend-dev (xem `runs/19-bugfix/test-report.md` case T-067) | Run kế |
+| DEBT-068 | run 19 senior 🟡#4 | `TokenService.recordIssued` tính lại `refresh` trùng `issueRefresh` ⇒ nguy cơ audit lệch khi quy tắc đổi | Truyền `refresh` từ controller (`!!familyId`) | Gộp DEBT-062 |
+| DEBT-069 | run 19 senior 🟡#5 + ponytail | `HealthReply` riêng (→ `Pick<HttpReply,'status'\|'header'>`); `upsertGrant` gọi 2 lần 7 đối số; khối revoke family lặp ở token.controller; comment resetPassword chồng | Ponytail ≈ -24 dòng | Gộp DEBT-062 |
+| DEBT-070 | run 19 senior 🟡#6 | `pnpm test:int` cần `vg-test-mongo@27117`/`vg-test-redis@6479` đang chạy; nếu không suite treo ~10' và 328 fail timeout | Ghi runbook test / preflight check port trong jest globalSetup | Gộp DEBT-054 |
 
 ## Đã đóng
 
 | ID | Đóng ở run | Ghi chú |
 |---|---|---|
+| DEBT-065 | 19 | Comment trong 3 file test mới (`redis-fail-fast.int-spec.ts`, `health.int-spec.ts`, `consent.service.spec.ts`) đã khôi phục backtick + xoá byte `\x08`; xác minh 0 control byte, không BOM. Sửa bằng Node string-replace (tránh PowerShell escape backtick). |
+| DEBT-066 | 19 | Thêm case `net.createServer` accept-nhưng-im-lặng vào `redis-fail-fast.int-spec.ts` (`GREEN(DEBT-066)`). `get` reject `Command timed out` trong ~`commandTimeout` (1040ms thực đo). Mutant bỏ `commandTimeout` ⇒ case này FAIL (jest timeout 10s), chứng minh chỉ `commandTimeout` cắt treo blackhole; các case `127.0.0.1:1` cũ vẫn PASS khi bỏ timeout (đúng như senior nêu). Teardown sạch (`--detectOpenHandles` không cảnh báo). |
 | DEBT-026 | 18 | Đã xác nhận nhánh consent covered gọi thẳng `issueCode`, không ghi `authz_ctx:*`; đóng bằng test hồi quy (`authorize.int-spec.ts`). |
 | DEBT-027 | 18 | `ConsentService.grant` = 1 update-pipeline atomic (`$setUnion` ∩ allowed, `$literal`); test race union 20 vòng + test injection `$policyVersion`. |
 | DEBT-028 | 18 | `runbook-deploy.md` (backfill `resource`, kiểm duplicate, `db:sync-indexes` drop index cũ); test `indexes.int-spec.ts` tạo index cũ rồi sync. |

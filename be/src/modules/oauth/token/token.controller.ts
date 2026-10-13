@@ -197,21 +197,46 @@ export class TokenController {
     try {
       live = await this.sessions.exists(data.sessionRef);
     } catch (err) {
+      // Redis error on the re-check: revoke any minted family (best-effort) and record a
+      // `TOKEN_ISSUED failure reason:'session_check_failed'` (best-effort — never masks the
+      // original error), then fail closed (500). No token is returned, no audit claims success.
       if (familyId) {
         await this.refresh
           .revokeFamily(familyId, client.clientId, new Date())
           .catch(() => undefined);
       }
+      await this.tokens
+        .recordIssued(client, data, 'failure', 'session_check_failed', audit)
+        .catch(() => undefined);
       throw err;
     }
     if (!live) {
+      // Session ended during the exchange window: record exactly one
+      // `TOKEN_ISSUED failure reason:'session_ended'` for EVERY code grant (with or without a
+      // family). A family that WAS minted is additionally revoked via
+      // `revokeFamilyForEndedSession`, which records its own `TOKEN_REVOKED session_ended` (a real
+      // revoke). No `TOKEN_REVOKED` for the no-family branch (nothing is revoked).
       if (familyId) {
         await this.refresh.revokeFamilyForEndedSession(familyId, client.clientId, new Date(), {
           ip: req.ip,
           requestId: req.id,
         });
       }
+      await this.tokens.recordIssued(client, data, 'failure', 'session_ended', audit);
       throw new TokenError('invalid_grant');
+    }
+    // The session is live now: record `TOKEN_ISSUED success` right before the token leaves the
+    // server (INV-25). If the audit write fails, revoke any minted family best-effort and fail
+    // closed (500) — never return a token for which no `success` was recorded (no orphan grant).
+    try {
+      await this.tokens.recordIssued(client, data, 'success', undefined, audit);
+    } catch (err) {
+      if (familyId) {
+        await this.refresh
+          .revokeFamily(familyId, client.clientId, new Date())
+          .catch(() => undefined);
+      }
+      throw err;
     }
     return reply.status(HttpStatus.OK).send(response);
   }

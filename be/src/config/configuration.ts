@@ -20,6 +20,8 @@ export interface AppConfig {
 export interface DatabaseConfig {
   mongoUri: string;
   redisUrl: string;
+  /** Per-command timeout (ms) for the shared Redis client — fail-fast bound, see DEBT-005. */
+  redisCommandTimeoutMs: number;
 }
 
 export interface TokenConfig {
@@ -98,6 +100,7 @@ export function buildConfig(env: Env): Config {
     database: {
       mongoUri: env.MONGO_URI,
       redisUrl: env.REDIS_URL,
+      redisCommandTimeoutMs: env.REDIS_COMMAND_TIMEOUT_MS,
     },
     token: {
       accessTokenTtl: env.ACCESS_TOKEN_TTL,
