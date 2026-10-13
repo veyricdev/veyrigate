@@ -111,7 +111,7 @@ export class UserinfoController {
           return fetched.user !== null;
         },
       },
-      { isEnded: (ref) => this.sessions.isEnded(ref) },
+      this.sessions,
     );
     const user = fetched.user;
     if (!live || user === null) {

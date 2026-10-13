@@ -56,12 +56,17 @@ export class ClientCredentialService {
     this.graceMs = config.getOrThrow<ClientConfig>('client').secretGraceTtl * 1000;
   }
 
-  /** Issue the first credential (version 1) for a client. */
+  /**
+   * Issue the first credential for a client. DEBT-021: the version is `max(all versions) + 1`
+   * (via `insertNextVersion`), NOT a hard-coded 1 — so a second `createSecret` on the same client
+   * (e.g. a re-seed, or a test that creates a client twice) gets v2 instead of colliding with v1
+   * under the unique `(clientId, version)` index. It does NOT start any grace on older versions.
+   */
   async createSecret(clientId: string): Promise<IssuedSecret> {
     const secret = generateToken();
     const secretHash = await hashPassword(secret);
-    await this.credentials.create({ clientId, secretHash, version: 1 });
-    return { secret, version: 1 };
+    const version = await this.insertNextVersion(clientId, secretHash);
+    return { secret, version };
   }
 
   /**
@@ -70,12 +75,9 @@ export class ClientCredentialService {
    */
   async rotateSecret(clientId: string): Promise<IssuedSecret> {
     const now = new Date();
-    const active = await this.listActive(clientId, now);
-    const nextVersion = active.length ? Math.max(...active.map((c) => c.version)) + 1 : 1;
-
     const secret = generateToken();
     const secretHash = await hashPassword(secret);
-    await this.credentials.create({ clientId, secretHash, version: nextVersion });
+    const nextVersion = await this.insertNextVersion(clientId, secretHash);
 
     const graceDeadline = new Date(now.getTime() + this.graceMs);
     await this.credentials.updateMany(
@@ -88,6 +90,36 @@ export class ClientCredentialService {
       { $set: { expiresAt: graceDeadline } },
     );
     return { secret, version: nextVersion };
+  }
+
+  /**
+   * DEBT-021: insert a new credential whose version is `max(EVERY version of this client) + 1`
+   * (not just active ones — a revoked/expired highest version must not be reissued). Shared by
+   * `createSecret` and `rotateSecret`. The unique `(clientId, version)` index guarantees two
+   * concurrent callers (or a stale read) can never persist the same version: on E11000 we recompute
+   * the next version and retry EXACTLY once; a second collision rethrows (fail-closed, no loop). The
+   * raw secret is only ever returned after the insert succeeds — never logged/persisted in clear.
+   */
+  private async insertNextVersion(clientId: string, secretHash: string): Promise<number> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const latest = await this.credentials
+        .findOne({ clientId })
+        .sort({ version: -1 })
+        .lean<{ version: number } | null>()
+        .exec();
+      const version = (latest?.version ?? 0) + 1;
+      try {
+        await this.credentials.create({ clientId, secretHash, version });
+        return version;
+      } catch (err) {
+        if ((err as { code?: number }).code === 11000 && attempt === 0) {
+          continue; // a concurrent insert took this version; recompute and retry once
+        }
+        throw err;
+      }
+    }
+    // Unreachable: the loop either returns on success or rethrows on the second E11000.
+    throw new Error('insertNextVersion: exhausted retries');
   }
 
   /** Immediately revoke a specific credential version (bypasses any remaining grace). */

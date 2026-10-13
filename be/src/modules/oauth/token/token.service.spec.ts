@@ -241,6 +241,7 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
       client({ grantTypes: ['authorization_code', 'refresh_token'] }),
       data,
       'success',
+      true,
     );
     expect(audit.record).toHaveBeenCalledTimes(1);
     const event = audit.record.mock.calls[0][0] as unknown as Record<string, unknown>;
@@ -263,6 +264,7 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
       client({ grantTypes: ['authorization_code'] }),
       codeData({ scope: 'openid profile' }),
       'failure',
+      false,
       'session_ended',
     );
     expect(audit.record).toHaveBeenCalledTimes(1);
@@ -279,9 +281,9 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
 
   it('recordIssued audit failure => error propagates (fail-closed, controller revokes + 500)', async () => {
     audit.record.mockRejectedValueOnce(new Error('mongo down'));
-    await expect(buildService().recordIssued(client(), codeData(), 'success')).rejects.toThrow(
-      'mongo down',
-    );
+    await expect(
+      buildService().recordIssued(client(), codeData(), 'success', false),
+    ).rejects.toThrow('mongo down');
   });
 
   it('adminResourceIdentifier derives /admin/ from issuer', () => {

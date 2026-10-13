@@ -3,6 +3,7 @@ import { FormParseError, assertFormContentType, parseForm } from '../../../commo
 import type { HttpRequest } from '../../../common/http/http.types';
 import { deriveS256Challenge } from '../../../common/crypto/pkce.util';
 import {
+  ClientAuthRateLimitedError,
   ClientAuthenticationService,
   InvalidClientError,
 } from '../../clients/client-authentication.service';
@@ -123,12 +124,12 @@ export class TokenController {
       throw e;
     }
     try {
-      return await this.clientAuth.authenticate(auth);
+      return await this.clientAuth.authenticate(auth, { ip: req.ip });
     } catch (e) {
       if (e instanceof InvalidClientError) {
         throw new TokenError('invalid_client', HttpStatus.UNAUTHORIZED);
       }
-      throw e;
+      throw e; // ClientAuthRateLimitedError / infra errors handled by renderError.
     }
   }
 
@@ -206,7 +207,7 @@ export class TokenController {
           .catch(() => undefined);
       }
       await this.tokens
-        .recordIssued(client, data, 'failure', 'session_check_failed', audit)
+        .recordIssued(client, data, 'failure', !!familyId, 'session_check_failed', audit)
         .catch(() => undefined);
       throw err;
     }
@@ -216,20 +217,31 @@ export class TokenController {
       // family). A family that WAS minted is additionally revoked via
       // `revokeFamilyForEndedSession`, which records its own `TOKEN_REVOKED session_ended` (a real
       // revoke). No `TOKEN_REVOKED` for the no-family branch (nothing is revoked).
+      // DEBT-067: record the refusal audit even if the family revoke throws (Mongo down). The audit
+      // write is best-effort (never masks the revoke error); without this try/catch a throwing
+      // revoke skips `recordIssued` entirely, losing the `TOKEN_ISSUED failure session_ended` for a
+      // rejected grant. `finally` is unusable here (it would double-write on the success path).
       if (familyId) {
-        await this.refresh.revokeFamilyForEndedSession(familyId, client.clientId, new Date(), {
-          ip: req.ip,
-          requestId: req.id,
-        });
+        try {
+          await this.refresh.revokeFamilyForEndedSession(familyId, client.clientId, new Date(), {
+            ip: req.ip,
+            requestId: req.id,
+          });
+        } catch (err) {
+          await this.tokens
+            .recordIssued(client, data, 'failure', !!familyId, 'session_ended', audit)
+            .catch(() => undefined);
+          throw err;
+        }
       }
-      await this.tokens.recordIssued(client, data, 'failure', 'session_ended', audit);
+      await this.tokens.recordIssued(client, data, 'failure', !!familyId, 'session_ended', audit);
       throw new TokenError('invalid_grant');
     }
     // The session is live now: record `TOKEN_ISSUED success` right before the token leaves the
     // server (INV-25). If the audit write fails, revoke any minted family best-effort and fail
     // closed (500) — never return a token for which no `success` was recorded (no orphan grant).
     try {
-      await this.tokens.recordIssued(client, data, 'success', undefined, audit);
+      await this.tokens.recordIssued(client, data, 'success', !!familyId, undefined, audit);
     } catch (err) {
       if (familyId) {
         await this.refresh
@@ -317,6 +329,17 @@ export class TokenController {
   }
 
   private renderError(req: HttpRequest, reply: TokenReply, err: unknown): unknown {
+    // Client-auth failure rate limit (DEBT-029/039): 429 + Retry-After, no WWW-Authenticate, no
+    // echo of input. The counter is NOT incremented by this 429 (window expires on its own).
+    if (err instanceof ClientAuthRateLimitedError) {
+      return reply
+        .status(HttpStatus.TOO_MANY_REQUESTS)
+        .header('Retry-After', String(err.retryAfterSec))
+        .send({
+          error: 'temporarily_unavailable',
+          error_description: descriptionFor('temporarily_unavailable'),
+        });
+    }
     const tokenError =
       err instanceof TokenError
         ? err
@@ -359,6 +382,8 @@ function descriptionFor(code: string): string {
       return 'The requested scope exceeds the scope granted to the original token.';
     case 'invalid_target':
       return 'The requested resource is invalid.';
+    case 'temporarily_unavailable':
+      return 'Too many failed client authentications. Try again later.';
     default:
       return 'The authorization server encountered an unexpected condition.';
   }

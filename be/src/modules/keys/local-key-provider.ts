@@ -1,5 +1,6 @@
+import { Logger } from '@nestjs/common';
 import { createPrivateKey, createPublicKey, generateKeyPairSync, randomUUID } from 'node:crypto';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { KeyObject } from 'node:crypto';
 import type { KeyProvider, PublicJwk, RotationMode, RotationResult } from './key-provider';
@@ -22,6 +23,8 @@ const STATE_FILE = 'keys.json';
  * private file is deleted at rotation time — only its public JWK is kept.
  */
 export class LocalKeyProvider implements KeyProvider {
+  private readonly logger = new Logger(LocalKeyProvider.name);
+
   constructor(private readonly dir: string) {}
 
   /** Create the directory and a first active key if none exists. */
@@ -58,23 +61,50 @@ export class LocalKeyProvider implements KeyProvider {
     const old = entries.find((e) => e.status === 'active');
     const fresh = await this.createKey();
 
+    // DEBT-007: PERSIST the new state (atomically) BEFORE deleting any old private PEM. If the
+    // write fails, `rotate` rejects but the OLD key is still active in `keys.json` AND its PEM is
+    // still on disk, so `getSigningKey()` keeps working (no DoS). Deleting PEMs first would leave
+    // `keys.json` pointing at a missing file on a write failure. The freshly-written PEM that never
+    // made it into state is a harmless orphan (never used to sign); we do NOT garbage-collect
+    // orphans here — two processes sharing the key dir (rolling deploy) would delete each other's
+    // just-created PEM before the state write (re-creating the very bug this fixes).
     let next: KeyEntry[];
     if (mode === 'emergency') {
-      // Drop the old key and every retiring key right away (spec §6.4).
-      next = [fresh];
-      await Promise.all(entries.map((e) => rm(this.pemPath(e.kid), { force: true })));
+      next = [fresh]; // drop the old key and every retiring key (spec §6.4)
     } else {
       const retireAt = new Date(Date.now() + retainSec * 1000).toISOString();
       next = [
         ...entries.map((e) => (e === old ? { ...e, status: 'retiring' as const, retireAt } : e)),
         fresh,
       ];
-      if (old) {
-        await rm(this.pemPath(old.kid), { force: true }); // verify-only from now on
-      }
     }
     await this.writeState(next);
+
+    // State is durable now; remove private PEMs that are no longer needed (best-effort). An `rm`
+    // failure does NOT fail the rotation (the key is already retired/dropped in state and will not
+    // sign). For emergency the key is compromised, so a failure to delete is logged at ERROR; for a
+    // normal rotation it is a WARN. Only the kid is logged, never the PEM path contents.
+    if (mode === 'emergency') {
+      await Promise.all(entries.map((e) => this.removePem(e.kid, 'emergency')));
+    } else if (old) {
+      await this.removePem(old.kid, 'normal'); // verify-only from now on
+    }
+
     return { newKid: fresh.kid, oldKid: old?.kid ?? null, mode };
+  }
+
+  /** Delete a private PEM best-effort; log (never throw) on failure so rotation stays successful. */
+  private async removePem(kid: string, mode: RotationMode): Promise<void> {
+    try {
+      await rm(this.pemPath(kid), { force: true });
+    } catch {
+      const msg = `Failed to delete retired private key ${kid} after ${mode} rotation`;
+      if (mode === 'emergency') {
+        this.logger.error(msg); // compromised key may linger on disk — must be visible
+      } else {
+        this.logger.warn(msg);
+      }
+    }
   }
 
   private async createKey(): Promise<KeyEntry> {
@@ -108,6 +138,28 @@ export class LocalKeyProvider implements KeyProvider {
   }
 
   private async writeState(entries: KeyEntry[]): Promise<void> {
-    await writeFile(join(this.dir, STATE_FILE), JSON.stringify(entries, null, 2), { mode: 0o600 });
+    // DEBT-007: atomic replace. Write to a uniquely-named temp file (so two processes sharing the
+    // dir never collide), then rename over `keys.json` (atomic on the same filesystem). A crash mid
+    // write leaves the old `keys.json` intact instead of a truncated/invalid JSON. If the rename
+    // fails, remove the temp file best-effort and rethrow so `rotate`/`init` fail closed.
+    const finalPath = join(this.dir, STATE_FILE);
+    const tmpPath = join(this.dir, `${STATE_FILE}.${randomUUID()}.tmp`);
+    try {
+      // Inside the try so a mid-write failure (e.g. ENOSPC) also cleans up the partial temp file.
+      await writeFile(tmpPath, JSON.stringify(entries, null, 2), { mode: 0o600 });
+      await this.atomicRename(tmpPath, finalPath);
+    } catch (err) {
+      await rm(tmpPath, { force: true }).catch(() => undefined);
+      throw err;
+    }
+  }
+
+  /**
+   * Rename `tmpPath` over `finalPath` (atomic on the same filesystem). Isolated so the DEBT-007
+   * atomicity contract — a rename failure leaves the previous `keys.json` byte-intact — can be
+   * exercised deterministically under ESM (named `fs/promises` imports are not spyable).
+   */
+  protected atomicRename(tmpPath: string, finalPath: string): Promise<void> {
+    return rename(tmpPath, finalPath);
   }
 }

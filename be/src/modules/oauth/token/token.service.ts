@@ -170,13 +170,14 @@ export class TokenService {
     client: Client,
     data: AuthorizationCodeData,
     result: 'success' | 'failure',
+    // DEBT-068: whether a refresh family was actually minted, decided by the caller (`!!familyId`),
+    // NOT recomputed from the grant/scope here — so the audit never drifts from reality if the
+    // refresh-issuance rule in `issueForAuthorizationCode` changes.
+    refresh: boolean,
     reason?: string,
     audit: { ip?: string; userAgent?: string; requestId?: string } = {},
   ): Promise<void> {
     const scope = data.scope;
-    const scopes = scope.length ? scope.split(' ') : [];
-    const refresh =
-      client.grantTypes.includes('refresh_token') && scopes.includes('offline_access');
     await this.audit.record({
       actorType: 'user',
       actorId: data.userId,

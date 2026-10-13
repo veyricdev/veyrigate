@@ -36,11 +36,16 @@ Việc còn mở (🟡 từ review/test, debt, việc hoãn). **Nguồn duy nh�
 | DEBT-068 | run 19 senior 🟡#4 | `TokenService.recordIssued` tính lại `refresh` trùng `issueRefresh` ⇒ nguy cơ audit lệch khi quy tắc đổi | Truyền `refresh` từ controller (`!!familyId`) | Gộp DEBT-062 |
 | DEBT-069 | run 19 senior 🟡#5 + ponytail | `HealthReply` riêng (→ `Pick<HttpReply,'status'\|'header'>`); `upsertGrant` gọi 2 lần 7 đối số; khối revoke family lặp ở token.controller; comment resetPassword chồng | Ponytail ≈ -24 dòng | Gộp DEBT-062 |
 | DEBT-070 | run 19 senior 🟡#6 | `pnpm test:int` cần `vg-test-mongo@27117`/`vg-test-redis@6479` đang chạy; nếu không suite treo ~10' và 328 fail timeout | Ghi runbook test / preflight check port trong jest globalSetup | Gộp DEBT-054 |
+| DEBT-071 | run 20 tech-lead | `LocalKeyProvider.getPublicKeys()` prune ghi lại `keys.json` (read-modify-write) có thể đè `rotate` đồng thời (dev-only) | Bỏ ghi khi prune (lọc khi đọc) hoặc khoá file | B7.3 |
+| DEBT-072 | run 20 tech-lead | Rate limit client auth theo IP / client_id+IP không chặn botnet xoay IP (brute-force/DoS Argon2 phân tán) | Giới hạn toàn cục theo client_id với ngưỡng cao + WAF ở gateway | B7.x |
+| DEBT-073 | run 20 tech-lead retry 1 | `RateLimitService.hit()` (login/register/reset) gửi nhiều khoá `rl:<name>:<dim>:<hash>` khác slot trong 1 Lua ⇒ CROSSSLOT trên Redis Cluster (client-auth đã dùng hash tag `{sha256(ip)}`) | Khi chọn Cluster (Q5): hash tag theo subject hoặc gọi 1 script/khoá | B7.3 (cùng DEBT-013) |
+| DEBT-075 | run 20 tech-lead hoãn (nit senior lượt 2) | `/introspect` 429 `temporarily_unavailable` không có `error_description` (`/token` có) | Thêm mô tả tĩnh, không echo input | Khi chạm introspect |
 
 ## Đã đóng
 
 | ID | Đóng ở run | Ghi chú |
 |---|---|---|
+| DEBT-074 | 20 | Comment `be/src/config/validation.schema.ts:73–75` bỏ "or a hop count", ghi rõ `true` + số bị từ chối (Fastify 5 bỏ qua số). Comment-only, 0 đổi hành vi; tester xác minh typecheck/lint/full suite (617/617) vẫn xanh. |
 | DEBT-059 | 19 | `TokenService.recordIssued` gọi từ controller sau re-check; `failure session_ended`/`session_check_failed`; audit lỗi ⇒ revoke best-effort + 500. Mutation ghi audit trước re-check ⇒ RED. |
 | DEBT-055 | 19 | `resetPassword` chạy đủ 3 bước revoke, giữ lỗi đầu, audit `failure revoke_failed {failedStep}`, ném lại. |
 | DEBT-060 | 19 | `ConsentService.grant` retry đúng 1 lần khi `code===11000` (unit test). |

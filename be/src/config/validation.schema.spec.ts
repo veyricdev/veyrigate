@@ -103,3 +103,54 @@ describe('CLIENT_SECRET_GRACE_TTL (B3.1, tech-lead C2 — spec §17 still open)'
     );
   });
 });
+
+describe('CLIENT_AUTH_FAIL_* rate limit (DEBT-029/039)', () => {
+  it('missing → safe defaults (IP 30, client 10)', () => {
+    const env = validateEnv(BASE);
+    expect(env.CLIENT_AUTH_FAIL_IP_MAX).toBe(30);
+    expect(env.CLIENT_AUTH_FAIL_CLIENT_MAX).toBe(10);
+  });
+
+  it('accepts positive overrides', () => {
+    const env = validateEnv({
+      ...BASE,
+      CLIENT_AUTH_FAIL_IP_MAX: '5',
+      CLIENT_AUTH_FAIL_CLIENT_MAX: '3',
+    });
+    expect(env.CLIENT_AUTH_FAIL_IP_MAX).toBe(5);
+    expect(env.CLIENT_AUTH_FAIL_CLIENT_MAX).toBe(3);
+  });
+
+  it('rejects zero/negative values, naming the variable', () => {
+    expect(() => validateEnv({ ...BASE, CLIENT_AUTH_FAIL_IP_MAX: '0' })).toThrow(
+      /CLIENT_AUTH_FAIL_IP_MAX/,
+    );
+    expect(() => validateEnv({ ...BASE, CLIENT_AUTH_FAIL_CLIENT_MAX: '-2' })).toThrow(
+      /CLIENT_AUTH_FAIL_CLIENT_MAX/,
+    );
+  });
+});
+
+describe('TRUST_PROXY (DEBT-006)', () => {
+  it('missing → parses to false (disabled)', () => {
+    expect(buildConfig(validateEnv(BASE)).app.trustProxy).toBe(false);
+  });
+
+  it('accepts an IP/CIDR list', () => {
+    expect(buildConfig(validateEnv({ ...BASE, TRUST_PROXY: '10.0.0.0/8' })).app.trustProxy).toEqual(
+      ['10.0.0.0/8'],
+    );
+  });
+
+  it('rejects true (would enable IP spoofing), naming the variable', () => {
+    expect(() => validateEnv({ ...BASE, TRUST_PROXY: 'true' })).toThrow(/TRUST_PROXY/);
+  });
+
+  it('rejects a numeric hop count (Fastify 5 ignores it), naming the variable', () => {
+    expect(() => validateEnv({ ...BASE, TRUST_PROXY: '1' })).toThrow(/TRUST_PROXY/);
+  });
+
+  it('rejects an invalid IP/CIDR, naming the variable', () => {
+    expect(() => validateEnv({ ...BASE, TRUST_PROXY: 'not-an-ip' })).toThrow(/TRUST_PROXY/);
+  });
+});

@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { MongooseModule, getModelToken } from '@nestjs/mongoose';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
+import IORedis from 'ioredis';
 import { Types, type Model } from 'mongoose';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -18,6 +19,8 @@ import { ClientService, type Client } from '../src/modules/clients/client.servic
 import { ClientCredentialService } from '../src/modules/clients/client-credential.service';
 import { ClientAuthenticationService } from '../src/modules/clients/client-authentication.service';
 import { SessionService } from '../src/modules/sessions/session.service';
+import { RedisService } from '../src/database/redis/redis.service';
+import { RateLimitService } from '../src/modules/security/rate-limit/rate-limit.service';
 import { IntrospectController } from '../src/modules/oauth/introspect/introspect.controller';
 
 const MONGO_URI =
@@ -35,6 +38,14 @@ const cfg = {
   getOrThrow: (ns: string) => {
     if (ns === 'app') return { nodeEnv: 'production', issuer: ISSUER };
     if (ns === 'client') return { secretGraceTtl: 3600 };
+    if (ns === 'security')
+      return {
+        rateLimitWindow: 60,
+        rateLimitMax: 100,
+        // High thresholds so the client-auth failure limiter never fires in these tests.
+        clientAuthFailIpMax: 100000,
+        clientAuthFailClientMax: 100000,
+      };
     throw new Error(`unexpected ns ${ns}`);
   },
 } as unknown as ConfigService;
@@ -54,8 +65,11 @@ function form(fields: Record<string, string>): string {
     .join('&');
 }
 
+const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://localhost:6479';
+
 describe('/introspect (B4.6 Task 3, RFC 7662) on real Mongo', () => {
   let app: NestFastifyApplication;
+  let redis: IORedis;
   let keyDir: string;
   let signer: TokenSigner;
   let refreshModel: Model<Record<string, unknown>>;
@@ -117,6 +131,7 @@ describe('/introspect (B4.6 Task 3, RFC 7662) on real Mongo', () => {
   }
 
   beforeAll(async () => {
+    redis = new IORedis(REDIS_URL, { maxRetriesPerRequest: 1 });
     keyDir = await mkdtemp(join(tmpdir(), 'vg-introspect-int-'));
     const provider = new LocalKeyProvider(keyDir);
     await provider.init();
@@ -135,9 +150,11 @@ describe('/introspect (B4.6 Task 3, RFC 7662) on real Mongo', () => {
         ClientService,
         ClientCredentialService,
         ClientAuthenticationService,
+        RateLimitService,
         TokenSigner,
         TokenVerifier,
         { provide: KEY_PROVIDER, useValue: provider },
+        { provide: RedisService, useValue: new RedisService(redis) },
         { provide: ConfigService, useValue: cfg },
         { provide: SessionService, useValue: sessionsStub },
       ],
@@ -196,6 +213,11 @@ describe('/introspect (B4.6 Task 3, RFC 7662) on real Mongo', () => {
 
   afterAll(async () => {
     if (refreshModel) await refreshModel.db.dropDatabase();
+    if (redis) {
+      const keys = await redis.keys('rl:client-auth:*');
+      if (keys.length) await redis.del(...keys);
+      await redis.quit();
+    }
     if (app) await app.close();
     if (keyDir) await rm(keyDir, { recursive: true, force: true });
   });

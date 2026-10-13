@@ -13,6 +13,7 @@ import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
 import { sha256 } from '../src/common/crypto/crypto.util';
 import { deriveS256Challenge } from '../src/common/crypto/pkce.util';
 import { RedisService } from '../src/database/redis/redis.service';
+import { RateLimitService } from '../src/modules/security/rate-limit/rate-limit.service';
 import { KEY_PROVIDER } from '../src/modules/keys/key-provider';
 import { LocalKeyProvider } from '../src/modules/keys/local-key-provider';
 import { TokenSigner } from '../src/modules/keys/token-signer';
@@ -60,6 +61,14 @@ const cfg = {
         sessionAbsoluteTtl: 86400,
       };
     if (ns === 'client') return { secretGraceTtl: 3600 };
+    if (ns === 'security')
+      return {
+        rateLimitWindow: 60,
+        rateLimitMax: 100,
+        // High thresholds so the client-auth failure limiter never fires in these tests.
+        clientAuthFailIpMax: 100000,
+        clientAuthFailClientMax: 100000,
+      };
     throw new Error(`unexpected ns ${ns}`);
   },
 } as unknown as ConfigService;
@@ -312,6 +321,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
         ClientAuthenticationService,
         ClientCorsService,
         AuditService,
+        RateLimitService,
         TokenSigner,
         TokenVerifier,
         // DEBT-050: a real AuthenticationService so `resetPassword` drives the real refresh-family

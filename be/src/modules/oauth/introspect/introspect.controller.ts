@@ -5,6 +5,7 @@ import { sha256 } from '../../../common/crypto/crypto.util';
 import { FormParseError, assertFormContentType, parseForm } from '../../../common/http/form';
 import type { HttpRequest } from '../../../common/http/http.types';
 import {
+  ClientAuthRateLimitedError,
   ClientAuthenticationService,
   InvalidClientError,
 } from '../../clients/client-authentication.service';
@@ -126,12 +127,12 @@ export class IntrospectController {
       throw new IntrospectError('invalid_client', HttpStatus.UNAUTHORIZED);
     }
     try {
-      return await this.clientAuth.authenticate(auth);
+      return await this.clientAuth.authenticate(auth, { ip: req.ip });
     } catch (e) {
       if (e instanceof InvalidClientError) {
         throw new IntrospectError('invalid_client', HttpStatus.UNAUTHORIZED);
       }
-      throw e; // infrastructure failure => 500 (fail-closed), never active:true.
+      throw e; // ClientAuthRateLimitedError / infra failure => renderError (429 / 500); never active.
     }
   }
 
@@ -167,7 +168,7 @@ export class IntrospectController {
       claims,
       this.clients,
       { exists: async (id) => (await this.users.exists({ _id: id })) !== null },
-      { isEnded: (ref) => this.sessions.isEnded(ref) },
+      this.sessions,
     );
     if (!live) {
       return INACTIVE;
@@ -233,6 +234,14 @@ export class IntrospectController {
   }
 
   private renderError(req: HttpRequest, reply: IntrospectReply, err: unknown): unknown {
+    // Client-auth failure rate limit (DEBT-029/039): 429 + Retry-After, no introspection body,
+    // never `active`. No WWW-Authenticate. The counter is not incremented by this 429.
+    if (err instanceof ClientAuthRateLimitedError) {
+      return reply
+        .status(HttpStatus.TOO_MANY_REQUESTS)
+        .header('Retry-After', String(err.retryAfterSec))
+        .send({ error: 'temporarily_unavailable' });
+    }
     const error =
       err instanceof IntrospectError
         ? err

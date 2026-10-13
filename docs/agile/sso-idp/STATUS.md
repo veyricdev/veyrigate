@@ -2,12 +2,11 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: không có (19-bugfix đã đóng, commit `8a58faa`). Lưu ý: **T1 (scaffold fe-sso-test) chưa làm** — `fe-sso-test/` chỉ có package.json placeholder + .env.example + README.
-- **Vòng lặp (run 19)**: analyst=1, tech-lead=1 (PASS), dev=1, senior=1 (PASS), tester=1 (PASS)
+- **Run hiện tại**: `20-bugfix` — cổng: **tester PASS** (617/617: unit 175 + int 442; tsc 0, eslint 0). **CHƯA commit** → orchestrator đóng run rồi commit. Scaffold fe-sso-test vẫn chưa làm (FE sau).
+- **Vòng lặp (run 20)**: analyst=1, tech-lead=2 (PASS, PASS retry 1) + orchestrator chốt retry 3 (bỏ hop count), backend-dev=4 (lượt 1, retry 1/2/3), senior-reviewer=4 (REJECT ×3, PASS lượt 4)
 - **Run vừa đóng**: `19-bugfix` ✅ 5/5 task — 555/555 test (unit 141 + int 414). Xem `runs/19-bugfix/summary.md`.
 - **Run vừa đóng**: `18-consent-session-hardening` ✅ 5/5 task — 531/531 test (unit 131 + int 400). Xem `runs/18-consent-session-hardening/summary.md`.
-- **Việc tiếp theo**: run 20 bugfix tiếp — DEBT-067 (thứ tự audit nhánh `!live`), 029/039 (rate-limit `/token`, `/introspect`), 007 (rotate key atomic), 021 (rotateSecret atomic), 053/061 (spec/runbook). Sau đó FE: **T1** scaffold fe-sso-test → T2 → X1.
-  Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479`; full suite = `pnpm test` (141) + `pnpm test:int` (414) = **555** (phải `docker start vg-test-mongo vg-test-redis` trước, xem DEBT-070).
+- **Việc tiếp theo**: **orchestrator** đóng run 20 (tester PASS 617/617; xem `runs/20-bugfix/test-report.md`) rồi commit. Tester xác minh 5 task [BE] qua code+test thật: reserve/refund atomic song song, 429 đúng ở /token+/revoke+/introspect, không khoá client hợp lệ ở IP khác (f), 429 không consume code, Redis→500, TRUST_PROXY qua FastifyAdapter+proxy-addr thật, DEBT-067 audit, key rotate atomic, insertNextVersion+unique index. Đóng **DEBT-074** (comment-only). Còn mở **DEBT-075** (`/introspect` 429 thiếu `error_description`, tech-lead hoãn — không chặn). Rồi FE: scaffold fe-sso-test → T2 → X1.
 
 ## Tiến độ
 
@@ -37,4 +36,4 @@ Xem `plan.md` §12. Còn mở: **Q3, Q5, Q7–Q9**. **Q1, Q4, Q6 đã chốt** (
 
 ## Backlog mở
 
-29 mục mở. Xem [backlog.md](backlog.md). Run 19 đóng DEBT-001/003/005/055/059/060/065/066; mở DEBT-063/064/067–070.
+33 mục mở (run 20: tech-lead mở DEBT-071/072/073; senior mở DEBT-075; **tester đóng DEBT-074**). Xem [backlog.md](backlog.md). Run 19 đóng DEBT-001/003/005/055/059/060/065/066; mở DEBT-063/064/067–070.

@@ -13,6 +13,7 @@ export type TokenErrorCode =
   | 'unsupported_grant_type'
   | 'invalid_scope'
   | 'invalid_target'
+  | 'temporarily_unavailable'
   | 'server_error';
 
 /**

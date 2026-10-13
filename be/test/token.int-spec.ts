@@ -23,6 +23,7 @@ import { ClientCredentialService } from '../src/modules/clients/client-credentia
 import { ClientAuthenticationService } from '../src/modules/clients/client-authentication.service';
 import { ClientCorsService } from '../src/modules/clients/client-cors.service';
 import { AuditService } from '../src/modules/security/audit/audit.service';
+import { RateLimitService } from '../src/modules/security/rate-limit/rate-limit.service';
 import { AuditAction } from '../src/modules/security/audit/audit-action.enum';
 import type { AuditEvent } from '../src/modules/security/audit/audit.types';
 import { AuthorizationCodeService } from '../src/modules/oauth/code/authorization-code.service';
@@ -58,6 +59,15 @@ const cfg = {
         sessionAbsoluteTtl: SESSION_ABSOLUTE_TTL,
       };
     if (ns === 'client') return { secretGraceTtl: 3600 };
+    if (ns === 'security')
+      return {
+        rateLimitWindow: 60,
+        rateLimitMax: 100,
+        // High thresholds so the client-auth failure limiter never fires in these tests (the
+        // dedicated spec sets small thresholds). Prevents cross-test 429 on the shared 127.0.0.1.
+        clientAuthFailIpMax: 100000,
+        clientAuthFailClientMax: 100000,
+      };
     throw new Error(`unexpected ns ${ns}`);
   },
 } as unknown as ConfigService;
@@ -143,6 +153,7 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
         ClientAuthenticationService,
         ClientCorsService,
         AuditService,
+        RateLimitService,
         TokenSigner,
         TokenVerifier,
         { provide: KEY_PROVIDER, useValue: provider },
@@ -555,6 +566,34 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
     const flat = JSON.stringify(events);
     expect(flat).not.toContain(res.json().access_token);
     expect(flat).not.toContain(res.json().refresh_token);
+    // DEBT-068: metadata.refresh reflects the family actually minted (offline_access => true).
+    const success = events.filter(
+      (e) =>
+        e.result === 'success' &&
+        (e.metadata as { scope?: string }).scope?.includes('offline_access'),
+    );
+    expect(success.length).toBeGreaterThan(0);
+    expect((success.at(-1)?.metadata as { refresh?: boolean }).refresh).toBe(true);
+  });
+
+  it('DEBT-068: TOKEN_ISSUED metadata.refresh=false when no offline_access (no family minted)', async () => {
+    const u = new Types.ObjectId().toHexString();
+    const { code } = await mintCode({ scope: 'openid profile', userId: u });
+    const res = await post(
+      form({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: REDIRECT,
+        client_id: `${RUN}-public`,
+        code_verifier: VERIFIER,
+      }),
+    );
+    expect(res.statusCode).toBe(200);
+    const events = await auditModel
+      .find({ action: AuditAction.TOKEN_ISSUED, actorId: u, result: 'success' })
+      .lean();
+    expect(events).toHaveLength(1);
+    expect((events[0].metadata as { refresh?: boolean }).refresh).toBe(false);
   });
 
   it('two concurrent exchanges of the same code => exactly one 200, one DB refresh doc', async () => {
@@ -882,6 +921,66 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
 
       const issued = await auditModel.find({ action: AuditAction.TOKEN_ISSUED, actorId: u }).lean();
       expect(issued.filter((e) => e.result === 'success')).toHaveLength(0);
+    });
+
+    it('DEBT-067: revoke throws in the !live branch => still exactly 1 TOKEN_ISSUED failure session_ended, 0 success, 500', async () => {
+      const u = new Types.ObjectId().toHexString();
+      const ref = (await sessions.create(u, 'tenant-A')).session.ref;
+      const { code } = await mintCode({
+        scope: 'openid offline_access',
+        sessionRef: ref,
+        userId: u,
+      });
+      // exists(): pre-mint true, post-insert re-check false (session ended in the window).
+      jest.spyOn(sessions, 'exists').mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+      // The family revoke for the ended session throws (Mongo down): the audit of the refusal must
+      // still be written (best-effort) before the original error propagates.
+      const refreshService = app.get(RefreshTokenService);
+      jest
+        .spyOn(refreshService, 'revokeFamilyForEndedSession')
+        .mockRejectedValueOnce(new Error('db down'));
+
+      const res = await exchange(code);
+      expect(res.statusCode).toBe(500);
+      expect(res.json().error).toBe('server_error');
+      expect(res.json().access_token).toBeUndefined();
+      expect(res.json().refresh_token).toBeUndefined();
+
+      const issued = await auditModel.find({ action: AuditAction.TOKEN_ISSUED, actorId: u }).lean();
+      expect(issued.filter((e) => e.result === 'success')).toHaveLength(0);
+      const failures = issued.filter((e) => e.result === 'failure');
+      expect(failures).toHaveLength(1);
+      expect(failures[0].reason).toBe('session_ended');
+    });
+
+    it('DEBT-067: revoke AND the failure-audit both throw => still 500; the ORIGINAL revoke error propagates (audit error swallowed)', async () => {
+      const u = new Types.ObjectId().toHexString();
+      const ref = (await sessions.create(u, 'tenant-A')).session.ref;
+      const { code } = await mintCode({
+        scope: 'openid offline_access',
+        sessionRef: ref,
+        userId: u,
+      });
+      jest.spyOn(sessions, 'exists').mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+      const refreshService = app.get(RefreshTokenService);
+      const revokeSpy = jest
+        .spyOn(refreshService, 'revokeFamilyForEndedSession')
+        .mockRejectedValueOnce(new Error('revoke db down'));
+      // The best-effort refusal audit ALSO throws: it must be swallowed, never masking the revoke
+      // error and never changing the 500 outcome.
+      const tokens = app.get(TokenService);
+      const recordSpy = jest
+        .spyOn(tokens, 'recordIssued')
+        .mockRejectedValueOnce(new Error('audit db down'));
+
+      const res = await exchange(code);
+      expect(res.statusCode).toBe(500);
+      expect(res.json().error).toBe('server_error');
+      expect(res.json().access_token).toBeUndefined();
+      expect(res.json().refresh_token).toBeUndefined();
+      // Both best-effort writes were attempted; the audit throw did not short-circuit the flow.
+      expect(revokeSpy).toHaveBeenCalledTimes(1);
+      expect(recordSpy).toHaveBeenCalledTimes(1);
     });
 
     it('audit of success fails after a live re-check => 500, no token, minted family revoked', async () => {

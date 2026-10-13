@@ -9,4 +9,7 @@ export const ClientCredentialSchema = new Schema({
   expiresAt: { type: Date },
   revokedAt: { type: Date },
 });
-ClientCredentialSchema.index({ clientId: 1, version: 1 });
+// DEBT-021: unique so two credentials of the same client can never share a version number (a
+// concurrent createSecret/rotateSecret retries on E11000). `revokeSecret(clientId, version)` then
+// addresses exactly one credential.
+ClientCredentialSchema.index({ clientId: 1, version: 1 }, { unique: true });

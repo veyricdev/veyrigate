@@ -121,4 +121,54 @@ describe('Rate limit on real Redis (B1.8, spec §6.3)', () => {
       true,
     );
   });
+
+  it('reserve() blocks atomically when ANY bucket is at its limit and never increments on block', async () => {
+    const ipKey = `rl:${RUN}-rsv:{tag}:ip`;
+    const clKey = `rl:${RUN}-rsv:{tag}:client`;
+    const buckets = [
+      { key: ipKey, limit: 5 },
+      { key: clKey, limit: 2 },
+    ];
+    // Two reservations reach the client limit (2); both buckets are now at 2.
+    expect((await service.reserve(buckets, 30)).blocked).toBe(false);
+    expect((await service.reserve(buckets, 30)).blocked).toBe(false);
+    expect(await redis.get(ipKey)).toBe('2');
+    expect(await redis.get(clKey)).toBe('2');
+    // Third reservation: the client bucket is AT its limit => blocked, and NOTHING is incremented
+    // (the IP bucket, still under its own limit, must not be burned by a client-blocked request).
+    const blocked = await service.reserve(buckets, 30);
+    expect(blocked.blocked).toBe(true);
+    expect(blocked.retryAfterSec).toBeGreaterThanOrEqual(1);
+    expect(await redis.get(ipKey)).toBe('2');
+    expect(await redis.get(clKey)).toBe('2');
+  });
+
+  it('reserve() counts atomically under concurrency (no over-reservation past the limit)', async () => {
+    const key = `rl:${RUN}-rsv-race:{tag}:ip`;
+    const results = await Promise.all(
+      Array.from({ length: 20 }, () => service.reserve([{ key, limit: 5 }], 30)),
+    );
+    expect(results.filter((r) => !r.blocked)).toHaveLength(5);
+    expect(await redis.get(key)).toBe('5');
+  });
+
+  it('refund() decrements only an existing, positive counter (never re-creates, never negative)', async () => {
+    const key = `rl:${RUN}-refund:{tag}:ip`;
+    await service.reserve([{ key, limit: 5 }], 30);
+    await service.reserve([{ key, limit: 5 }], 30);
+    expect(await redis.get(key)).toBe('2');
+    const ttlBefore = await redis.pttl(key);
+    await service.refund([key]);
+    expect(await redis.get(key)).toBe('1');
+    // TTL is preserved by the refund (DECR keeps the key's expiry).
+    expect(await redis.pttl(key)).toBeGreaterThan(0);
+    expect(await redis.pttl(key)).toBeLessThanOrEqual(ttlBefore);
+    // Refunding past zero / on an absent key is a no-op: no key is created, no negative value.
+    await service.refund([key]);
+    await service.refund([key]);
+    expect(await redis.get(key)).toBe('0');
+    const absent = `rl:${RUN}-refund-absent:{tag}:ip`;
+    await service.refund([absent]);
+    expect(await redis.exists(absent)).toBe(0);
+  });
 });

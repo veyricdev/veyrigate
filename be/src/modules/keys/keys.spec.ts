@@ -1,9 +1,10 @@
 import { jest } from '@jest/globals';
+import { Logger } from '@nestjs/common';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import type { ConfigService } from '@nestjs/config';
 import { SignJWT, decodeProtectedHeader } from 'jose';
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AuditAction } from '../security/audit/audit-action.enum';
@@ -351,5 +352,106 @@ describe('Keys (B1.9, INV-19)', () => {
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({ metadata: { mode: 'emergency', oldKid } }),
     );
+  });
+
+  describe('DEBT-007: rotate() keeps a usable active key when persisting state fails', () => {
+    it('normal: writeState throws => rotate rejects, old kid still signs, JWKS keeps old key', async () => {
+      const { kid: oldKid } = await provider.getSigningKey();
+      jest
+        .spyOn(provider as unknown as { writeState: () => Promise<void> }, 'writeState')
+        .mockRejectedValueOnce(new Error('ENOSPC'));
+
+      await expect(provider.rotate('normal', 60)).rejects.toThrow();
+
+      // The old key is still active and can sign (not deleted before the state was durable).
+      const after = await provider.getSigningKey();
+      expect(after.kid).toBe(oldKid);
+      await expect(signer.sign({}, { audience: AUD, expiresInSec: 60 })).resolves.toBeDefined();
+      expect((await provider.getPublicKeys()).map((k) => k.kid)).toContain(oldKid);
+    });
+
+    it('emergency: writeState throws => rotate rejects, old kid still signs', async () => {
+      const { kid: oldKid } = await provider.getSigningKey();
+      jest
+        .spyOn(provider as unknown as { writeState: () => Promise<void> }, 'writeState')
+        .mockRejectedValueOnce(new Error('EPERM'));
+
+      await expect(provider.rotate('emergency', 60)).rejects.toThrow();
+
+      const after = await provider.getSigningKey();
+      expect(after.kid).toBe(oldKid);
+      await expect(signer.sign({}, { audience: AUD, expiresInSec: 60 })).resolves.toBeDefined();
+    });
+
+    it('removing the old PEM fails internally => rotate still resolves (durable state), new kid signs, warn logged', async () => {
+      const { kid: oldKid } = await provider.getSigningKey();
+      // Delete the old PEM up front so the provider's internal `rm` runs on a missing file. With
+      // `force:true` that does NOT throw, so to simulate a real rm failure (EBUSY/EPERM) we make
+      // `pemPath` return a path that cannot be removed: a directory with a child. The rm failure
+      // must be swallowed (warn) and the rotation must still succeed.
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      const badDir = join(dir, `${oldKid}.pem`);
+      await rm(badDir, { force: true });
+      await mkdir(badDir);
+      await writeFile(join(badDir, 'keep'), 'x');
+
+      const result = await provider.rotate('normal', 60);
+      expect(result.oldKid).toBe(oldKid);
+
+      const after = await provider.getSigningKey();
+      expect(after.kid).toBe(result.newKid);
+      expect(
+        decodeProtectedHeader(await signer.sign({}, { audience: AUD, expiresInSec: 60 })).kid,
+      ).toBe(result.newKid);
+      expect(warn).toHaveBeenCalled();
+    });
+
+    it('atomic replace: rename failure leaves the old keys.json intact and parseable, no *.tmp left', async () => {
+      // Write a known-good state so we can prove it survives a failed write (M15: a direct overwrite
+      // of keys.json would corrupt/replace it; the tmp+rename path must leave it byte-intact).
+      const stateFile = join(dir, 'keys.json');
+      const before = await readFile(stateFile, 'utf8');
+      JSON.parse(before); // sanity: current state is valid JSON
+
+      const renameSpy = jest
+        .spyOn(provider as unknown as { atomicRename: () => Promise<void> }, 'atomicRename')
+        .mockRejectedValueOnce(new Error('EXDEV cross-device'));
+
+      await expect(provider.rotate('normal', 60)).rejects.toThrow();
+      renameSpy.mockRestore();
+
+      // Old state intact + still valid JSON, and the temp file was cleaned up.
+      expect(await readFile(stateFile, 'utf8')).toBe(before);
+      JSON.parse(await readFile(stateFile, 'utf8'));
+      expect((await readdir(dir)).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+    });
+
+    it('emergency: a failed rm of the (compromised) old PEM logs at ERROR, not WARN (M16)', async () => {
+      const { kid: oldKid } = await provider.getSigningKey();
+      // Same trick as the normal-rotation rm test: a directory-with-child cannot be rm'd.
+      // Clear so earlier tests' (non-restored) prototype spies do not pollute the call counts.
+      const err = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      err.mockClear();
+      warn.mockClear();
+      const badDir = join(dir, `${oldKid}.pem`);
+      await rm(badDir, { force: true });
+      await mkdir(badDir);
+      await writeFile(join(badDir, 'keep'), 'x');
+
+      await provider.rotate('emergency', 60);
+      // A compromised key that cannot be deleted MUST be visible at error level.
+      expect(err).toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('does NOT touch an unrelated .pem (no orphan GC — shared key dir, DEBT-007 fold)', async () => {
+      const strayKid = '00000000-0000-4000-8000-000000000000';
+      await writeFile(join(dir, `${strayKid}.pem`), 'stray', { mode: 0o600 });
+
+      await provider.rotate('normal', 60);
+
+      expect(await readdir(dir)).toContain(`${strayKid}.pem`);
+    });
   });
 });

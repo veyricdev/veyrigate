@@ -11,6 +11,7 @@ import { MODELS } from '../src/database/mongo/models';
 import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
 import { deriveS256Challenge } from '../src/common/crypto/pkce.util';
 import { RedisService } from '../src/database/redis/redis.service';
+import { RateLimitService } from '../src/modules/security/rate-limit/rate-limit.service';
 import { KEY_PROVIDER } from '../src/modules/keys/key-provider';
 import { LocalKeyProvider } from '../src/modules/keys/local-key-provider';
 import { TokenSigner } from '../src/modules/keys/token-signer';
@@ -52,6 +53,14 @@ const cfg = {
         sessionAbsoluteTtl: 2592000,
       };
     if (ns === 'client') return { secretGraceTtl: 3600 };
+    if (ns === 'security')
+      return {
+        rateLimitWindow: 60,
+        rateLimitMax: 100,
+        // High thresholds so the client-auth failure limiter never fires in these tests.
+        clientAuthFailIpMax: 100000,
+        clientAuthFailClientMax: 100000,
+      };
     throw new Error(`unexpected ns ${ns}`);
   },
 } as unknown as ConfigService;
@@ -158,6 +167,7 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
         ClientAuthenticationService,
         ClientCorsService,
         AuditService,
+        RateLimitService,
         TokenSigner,
         TokenVerifier,
         { provide: KEY_PROVIDER, useValue: provider },

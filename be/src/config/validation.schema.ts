@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { parseTrustProxy } from './trust-proxy';
 
 /**
  * Environment validation schema (B1.2).
@@ -60,6 +61,21 @@ export const envSchema = z
     RATE_LIMIT_WINDOW: positiveInt,
     RATE_LIMIT_MAX: positiveInt,
 
+    // Client-auth failure rate limit (DEBT-029/039, spec §6.3). Counts only FAILED client
+    // authentications (unknown client / wrong method / wrong secret) on /token, /revoke,
+    // /introspect — a successful auth never counts, so a busy RP/RS is not throttled. Two
+    // buckets: per source IP (Argon2-DoS by rotating client_id) and per `client_id|ip`
+    // (brute-forcing one client's secret from one IP). Window reuses RATE_LIMIT_WINDOW.
+    CLIENT_AUTH_FAIL_IP_MAX: positiveInt.default(30),
+    CLIENT_AUTH_FAIL_CLIENT_MAX: positiveInt.default(10),
+
+    // Reverse-proxy trust for `req.ip` / X-Forwarded-For (DEBT-006). Disabled by default; set to
+    // the proxy IP(s)/CIDR(s) in production so per-IP rate-limit buckets see the real client IP.
+    // `true` and a numeric hop count are both rejected (`true` enables IP spoofing; a number is
+    // silently ignored by Fastify 5, dropping `req.ip` back to the socket IP). Kept as the raw string here;
+    // validated + parsed via parseTrustProxy (superRefine below, and buildConfig).
+    TRUST_PROXY: z.string().optional(),
+
     // Current consent policy/terms versions (B4.2). A stored consent only "covers" a request when
     // these match the versions recorded on the grant, so bumping a version forces re-consent.
     // Non-empty so an empty env can never auto-approve by matching an empty stored version.
@@ -79,6 +95,15 @@ export const envSchema = z
         code: 'custom',
         path: ['SESSION_IDLE_TTL'],
         message: 'SESSION_IDLE_TTL must be <= SESSION_ABSOLUTE_TTL',
+      });
+    }
+    try {
+      parseTrustProxy(env.TRUST_PROXY);
+    } catch (err) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['TRUST_PROXY'],
+        message: err instanceof Error ? err.message : 'Invalid TRUST_PROXY',
       });
     }
   });

@@ -19,7 +19,7 @@ const EXPECTED: Record<string, { key: Record<string, number>; unique?: boolean; 
       // DEBT-020: supports `isOriginRegisteredForAnyClient` (CORS preflight / metadata) lookups.
       { key: { allowedCorsOrigins: 1 } },
     ],
-    ClientCredential: [{ key: { clientId: 1, version: 1 } }],
+    ClientCredential: [{ key: { clientId: 1, version: 1 }, unique: true }],
     Resource: [{ key: { identifier: 1 }, unique: true }],
     Consent: [{ key: { userId: 1, clientId: 1, resource: 1 }, unique: true }],
     RefreshToken: [
@@ -91,6 +91,18 @@ describe('Mongo indexes after explicit sync (B1.6, spec §10)', () => {
     await RT.create(doc);
     await expect(RT.create({ ...doc, familyId: 'f2' })).rejects.toMatchObject({ code: 11000 });
   });
+
+  it('ClientCredential {clientId, version} is unique (DEBT-021)', async () => {
+    const CC = conn.models.ClientCredential;
+    await CC.create({ clientId: 'cc-dup', secretHash: 'h', version: 1 });
+    await expect(
+      CC.create({ clientId: 'cc-dup', secretHash: 'h2', version: 1 }),
+    ).rejects.toMatchObject({ code: 11000 });
+    // A different version for the same client is fine.
+    await expect(
+      CC.create({ clientId: 'cc-dup', secretHash: 'h3', version: 2 }),
+    ).resolves.toBeDefined();
+  });
 });
 
 /**
@@ -155,5 +167,12 @@ describe('Consent index migration M3→M4 (DEBT-028)', () => {
     // No user data was removed by the failed build (fail-closed; operator cleans up per runbook).
     const count = await conn.db!.collection('consents').countDocuments({ userId });
     expect(count).toBe(2);
+    // DEBT-061: mongoose 9 drops the old index BEFORE building the new one, so after a failed build
+    // `consents` has NO unique index left (only `_id_`). This pins the runbook §2b recovery note
+    // ("consents không còn unique index nào") to the real mongoose behaviour — if a future mongoose
+    // reorders drop/build, this assertion goes red and the runbook must be revisited.
+    const indexes = (await conn.db!.collection('consents').indexes()) as IndexInfo[];
+    const nonId = indexes.filter((i) => !('_id' in i.key));
+    expect(nonId.some((i) => i.unique)).toBe(false);
   });
 });

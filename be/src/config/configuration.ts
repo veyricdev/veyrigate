@@ -1,3 +1,4 @@
+import { parseTrustProxy } from './trust-proxy';
 import type { Env } from './validation.schema';
 
 /**
@@ -15,6 +16,8 @@ export interface AppConfig {
   nodeEnv: Env['NODE_ENV'];
   port: number;
   issuer: string;
+  /** Fastify `trustProxy` value parsed from `TRUST_PROXY` (DEBT-006): false | IP/CIDR list. */
+  trustProxy: false | string[];
 }
 
 export interface DatabaseConfig {
@@ -56,6 +59,10 @@ export interface SecurityConfig {
   csrfSecret: string;
   rateLimitWindow: number;
   rateLimitMax: number;
+  /** Client-auth failure limit per source IP (DEBT-029/039). */
+  clientAuthFailIpMax: number;
+  /** Client-auth failure limit per `client_id|ip` (DEBT-029/039). */
+  clientAuthFailClientMax: number;
 }
 
 export interface ConsentConfig {
@@ -96,6 +103,7 @@ export function buildConfig(env: Env): Config {
       nodeEnv: env.NODE_ENV,
       port: env.PORT,
       issuer: env.ISSUER,
+      trustProxy: parseTrustProxy(env.TRUST_PROXY),
     },
     database: {
       mongoUri: env.MONGO_URI,
@@ -125,6 +133,8 @@ export function buildConfig(env: Env): Config {
       csrfSecret: env.CSRF_SECRET,
       rateLimitWindow: env.RATE_LIMIT_WINDOW,
       rateLimitMax: env.RATE_LIMIT_MAX,
+      clientAuthFailIpMax: env.CLIENT_AUTH_FAIL_IP_MAX,
+      clientAuthFailClientMax: env.CLIENT_AUTH_FAIL_CLIENT_MAX,
     },
     adminSeed: {
       email: env.ADMIN_SEED_EMAIL,

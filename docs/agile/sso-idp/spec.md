@@ -448,18 +448,17 @@ Nếu multi-tenant kích hoạt: thêm `unique(tenantId, email)`, `unique(tenant
 | Endpoint | Method | Ghi chú |
 |---|---|---|
 | `/authorize` | GET | nonce carry, PKCE S256, redirect_uri exact match, resource binding, tạo AuthorizeRequestContext, `iss` trong redirect response |
-| `/token` | POST | atomic consume+bind cho authorization code; atomic rotation (hash-based) cho refresh token |
+| `/token` | POST | atomic consume+bind cho authorization code; atomic rotation (hash-based) cho refresh token; rate limit client auth theo lần thất bại (IP và client_id+IP, chung bucket với /revoke, /introspect), kiểm trước verify secret (429 temporarily_unavailable + Retry-After) |
 | `/userinfo` | GET | trả claims theo scope, verify access token qua JWKS + liveness (client/aud/user, phiên sid chưa bị chấm dứt) |
-| `/introspect` | POST | kiểm tra token real-time (RFC 7662): authz caller trước, rồi liveness (client/aud/user, phiên sid chưa bị chấm dứt; refresh: family còn active) |
+| `/introspect` | POST | kiểm tra token real-time (RFC 7662): authz caller trước, rồi liveness (client/aud/user, phiên sid chưa bị chấm dứt; refresh: family còn active); chung rate limit client auth với /token |
 | `/.well-known/openid-configuration` | GET | discovery, xem mục 12 |
 | `/jwks.json` | GET | public key, nguồn từ KMS |
 | `/consent` | GET/POST | hiển thị & xử lý quyết định consent, hỗ trợ `prompt` |
 | `/auth/google`, `/auth/github` (+ `/callback`) | GET | identity broker, static provider, state riêng cho leg này |
 | `/login`, `/register` | POST | rate limit đa chiều, chống account enumeration |
 | `/password/reset`, `/password/verify-email` | POST | atomic single-use token, response đồng nhất bất kể tài khoản tồn tại hay không |
-| `/revoke` | POST | thu hồi refresh token/family theo thiết bị |
+| `/revoke` | POST | thu hồi refresh token/family theo thiết bị; chung rate limit client auth với /token |
 | `/logout` | GET/POST | GET = xác nhận/khởi tạo RP logout, POST = destructive (local); `POST /logout?scope=all` = global logout |
-| `/introspect` | POST | kiểm tra token hợp lệ real-time (RFC 7662) cho resource server cần |
 
 ## 12. Discovery endpoint
 
