@@ -7,10 +7,7 @@ Việc còn mở (🟡 từ review/test, debt, việc hoãn). **Nguồn duy nh�
 
 | ID | Nguồn | Mô tả | Gợi ý xử lý | Nên làm ở |
 |---|---|---|---|---|
-| DEBT-001 | run 03 senior 🟡#1 | `/ready` 503 bị `OAuthExceptionFilter` ép body `{error:"server_error"}` → mất chi tiết `mongo`/`redis` | Trả 503 trực tiếp qua reply hoặc filter riêng cho health | B1.6–B1.10 hoặc B7.2 |
-| DEBT-003 | run 03 test | Chưa verify case Mongo down với `/ready` | Thêm case khi làm B7.1 | B7.1 |
 | DEBT-004 | run 02 | Job CI `e2e` đang placeholder | Bật thật | B7.1 / X1 |
-| DEBT-005 | run 04 tech-lead | Rate-limit (và mọi lệnh Redis) có thể treo khi Redis down do client chung `maxRetriesPerRequest: null` | Timeout/fail-fast cho lệnh trên đường request, đúng §6.2 | B7.3 |
 | DEBT-006 | run 04 senior 🟡#2 | Rate-limit chiều IP dùng `req.ip`; Fastify chưa bật `trustProxy` → sau reverse proxy mọi request cùng IP | Bật `trustProxy` theo danh sách proxy tin cậy (env) khi có gateway | B7.x (deploy) |
 | DEBT-007 | run 04 senior 🟡#3 | `LocalKeyProvider.rotate()` xoá PEM trước khi ghi `keys.json` → lỗi ghi giữa chừng làm hỏng state key (dev-only) | Ghi state trước (atomic rename) rồi mới xoá PEM; hoặc bỏ qua khi thay bằng KeyProvider thật | B7.3 |
 | DEBT-008 | run 05 tech-lead | Cookie session chưa dùng prefix `__Host-` (chống ghi đè cookie từ subdomain) | `__Host-idp_session` khi `Secure=true`; kiểm cùng ma trận cookie | X3 |
@@ -29,9 +26,6 @@ Việc còn mở (🟡 từ review/test, debt, việc hoãn). **Nguồn duy nh�
 | DEBT-048 | run 17 tech-lead | AT không `sid` (family pre-B4.7, ≤30d) và AT của phiên đã tự hết hạn vẫn sống tới `exp` sau global logout/reset password | Revocation epoch theo user (`user_epoch:{userId}`, `iat < epoch` ⇒ inactive) ở introspect/userinfo | B7 |
 | DEBT-053 | run 17 senior 🟡#4 + nit | spec.md §11 còn dòng `/introspect` cũ trùng (L460); inv. 29 có nhãn "(Task 3)"; ponytail: truyền thẳng `this.sessions` thay lambda `isEnded` (introspect/userinfo), rút comment lặp (≈ -9 dòng); `defaultRedirect` field + hằng song song | Xoá dòng trùng/nhãn; áp ponytail | run kế (rẻ) |
 | DEBT-054 | run 17 tester | Int suite (`pnpm test:int`, in-band) có open handles ⇒ "Jest did not exit" treo tiến trình nhiều phút; lượt chạy đầu trên container còn state cũ báo *transient* 3 suites/15 test fail rồi tự xanh khi chạy lại (CI reporter) ⇒ nhiễu cross-run, che tín hiệu fail thật | `--detectOpenHandles` tìm handle rò (Mongo/Redis/app chưa close); dọn DB theo-suite trước chạy; cân nhắc `forceExit` tạm + sửa gốc | sau (chất lượng hạ tầng test, không chặn) |
-| DEBT-055 | run 18 tech-lead (đề xuất) | Reset mật khẩu lỗi hạ tầng SAU `setPassword` (revoke family/session lỗi) ⇒ mật khẩu đã đổi nhưng không có audit `AUTH_PASSWORD_RESET` | Audit best-effort `result:'failure'` + `reason:'revoke_failed'` trong nhánh catch rồi rethrow | B7 (audit hardening) |
-| DEBT-059 | run 18 senior 🟡#4 (lượt 2) | `TOKEN_ISSUED` audit (token.service.ts:L139) ghi trước re-check; khi re-check từ chối ⇒ audit nói "issued" dù không trả token; nhánh non-refresh không có event nào | Dời audit issued về sau re-check (controller) hoặc ghi `TOKEN_REVOKED session_ended` cả khi không có family | B7 (audit hardening) |
-| DEBT-060 | run 18 senior 🟡#5 | `ConsentService.grant` không retry 1 lần khi upsert ném `11000` (fold Task 4) ⇒ 500 hiếm ở bước consent | Bắt `code===11000` retry đúng 1 lần + test mock | Run kế |
 | DEBT-061 | run 18 senior 🟡#6 | Runbook §2b: `syncIndexes` drop index cũ trước khi build mới; build lỗi E11000 ⇒ Consent không còn unique nào, runbook chưa ghi trạng thái/phục hồi | Ghi rõ trạng thái sau lỗi + bước phục hồi (dọn duplicate → sync lại) | deploy M4 |
 | DEBT-062 | run 18 senior ponytail/nit (lượt 2) | Comment dài kể lại spec (token.controller re-check, ui.controller SWEEP, consent.service), ternary global/local lặp, `...(familyId ? {familyId} : {})`, spy chọc `redis` private | Theo mục ✂️ `runs/18-consent-session-hardening/review-senior.md` (net -28 dòng) | Gộp DEBT-053 |
 | DEBT-049 | run 17 tech-lead | Tombstone `sess_end:*` (DEBT-037) bị evict ⇒ fail-open về baseline ≤15' | Runbook: Redis session `maxmemory-policy noeviction` + cảnh báo memory | B7 (runbook deploy) |
@@ -47,6 +41,12 @@ Việc còn mở (🟡 từ review/test, debt, việc hoãn). **Nguồn duy nh�
 
 | ID | Đóng ở run | Ghi chú |
 |---|---|---|
+| DEBT-059 | 19 | `TokenService.recordIssued` gọi từ controller sau re-check; `failure session_ended`/`session_check_failed`; audit lỗi ⇒ revoke best-effort + 500. Mutation ghi audit trước re-check ⇒ RED. |
+| DEBT-055 | 19 | `resetPassword` chạy đủ 3 bước revoke, giữ lỗi đầu, audit `failure revoke_failed {failedStep}`, ném lại. |
+| DEBT-060 | 19 | `ConsentService.grant` retry đúng 1 lần khi `code===11000` (unit test). |
+| DEBT-001 | 19 | `/ready` tự trả 503 qua `@Res({passthrough:true})`, body hằng `{status,mongo,redis}` + `no-store`; `OAuthExceptionFilter` không đổi. |
+| DEBT-003 | 19 | `health.int-spec.ts` phủ Mongo down ⇒ 503 `mongo:down`. |
+| DEBT-005 | 19 | `buildRedisOptions`: `commandTimeout` = `REDIS_COMMAND_TIMEOUT_MS` (mặc định 1000) + `maxRetriesPerRequest:1`; test refused + blackhole (DEBT-066). |
 | DEBT-065 | 19 | Comment trong 3 file test mới (`redis-fail-fast.int-spec.ts`, `health.int-spec.ts`, `consent.service.spec.ts`) đã khôi phục backtick + xoá byte `\x08`; xác minh 0 control byte, không BOM. Sửa bằng Node string-replace (tránh PowerShell escape backtick). |
 | DEBT-066 | 19 | Thêm case `net.createServer` accept-nhưng-im-lặng vào `redis-fail-fast.int-spec.ts` (`GREEN(DEBT-066)`). `get` reject `Command timed out` trong ~`commandTimeout` (1040ms thực đo). Mutant bỏ `commandTimeout` ⇒ case này FAIL (jest timeout 10s), chứng minh chỉ `commandTimeout` cắt treo blackhole; các case `127.0.0.1:1` cũ vẫn PASS khi bỏ timeout (đúng như senior nêu). Teardown sạch (`--detectOpenHandles` không cảnh báo). |
 | DEBT-026 | 18 | Đã xác nhận nhánh consent covered gọi thẳng `issueCode`, không ghi `authz_ctx:*`; đóng bằng test hồi quy (`authorize.int-spec.ts`). |

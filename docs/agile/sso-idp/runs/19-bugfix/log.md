@@ -47,3 +47,7 @@
 - **Full suite TH?T**: typecheck 0, lint 0, `pnpm test` **141/141** unit, `pnpm test:int` **414/414** int (21 suite PASS) = **555** t?ng (baseline 554, +1 do DEBT-066). 0 fail. (Log int c? `ERROR redis down` l? output c? ? c?a test ?m; jest exit?0 do eventual-rejection sau teardown ? DEBT-070 ? kh?ng ph?i fail.)
 - B?o c?o: `runs/19-bugfix/test-report.md` (b?ng acceptance?test?PASS/FAIL + risk matrix). Backlog: DEBT-065/066 ? "?? ??ng"; DEBT-067 m? (tr? backend-dev).
 - **C?ng tester: PASS**. B?n giao: orchestrator ??ng run (DEBT-067 sang run k?).
+
+## [2026-10-12] orchestrator
+- Đã làm: commit code `8a58faa`; viết `summary.md`; cập nhật `STATUS.md` (gộp dòng Tiến độ 01–02, 07–08 để giữ ≤ 40 dòng); chuyển DEBT-001/003/005/055/059/060 sang bảng Đã đóng.
+- Kết quả: DONE — run 19 đóng.
