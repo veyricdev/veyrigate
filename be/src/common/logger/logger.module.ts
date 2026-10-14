@@ -8,8 +8,9 @@ import type { AppConfig } from '../../config/configuration';
  * Structured logging with nestjs-pino (B1.3, INV-20).
  *
  * Redacts sensitive fields so credentials/tokens never reach the logs, and
- * attaches a request id to every HTTP log line. In development the output is
- * pretty-printed; in production it stays as JSON.
+ * surfaces the `genReqId` request id (`req.id`) on every HTTP log line so
+ * access logs stay correlatable with audit entries. In development the output
+ * is pretty-printed; in production it stays as JSON.
  */
 
 /**
@@ -40,11 +41,58 @@ const REDACT_PATHS = [
   'authorization',
 ];
 
-export function serializeRequest(req: { method?: string; url?: string }): {
+export function serializeRequest(req: { id?: unknown; method?: string; url?: string }): {
+  id?: unknown;
   method?: string;
   url?: string;
 } {
-  return { method: req.method, url: req.url?.split('?', 1)[0] };
+  // `id` is the non-secret `genReqId` value (correlates access log <-> audit).
+  return { id: req.id, method: req.method, url: req.url?.split('?', 1)[0] };
+}
+
+/**
+ * Allow-list response serializer (DEBT-089, INV-20): return only `statusCode` +
+ * an optional scrubbed `location`, so no other header (`set-cookie`…) is logged.
+ * `location` is cut with `split(/[?#]/)` (not `new URL`, which throws on relative
+ * locations) to drop the query (authz `code`/`state` on a 302) and fragment;
+ * non-string/missing `location` fails closed (key omitted).
+ */
+export function serializeResponse(res: {
+  statusCode?: number;
+  headers?: Record<string, unknown>;
+}): {
+  statusCode?: number;
+  headers: { location?: string };
+} {
+  const headers: { location?: string } = {};
+  const location = res.headers?.location;
+  if (typeof location === 'string') {
+    headers.location = location.split(/[?#]/, 1)[0];
+  }
+  return { statusCode: res.statusCode, headers };
+}
+
+/**
+ * Builds the `pinoHttp` options shared by every environment. Exported so the
+ * logger config can be exercised in isolation (wiring tests) without a DB.
+ */
+export function buildPinoHttpOptions(nodeEnv: string) {
+  const isDev = nodeEnv === 'development';
+  return {
+    level: isDev ? 'debug' : 'info',
+    genReqId: (
+      req: { headers: Record<string, string | string[] | undefined> },
+      res: { setHeader: (name: string, value: string) => void },
+    ) => {
+      const existing = req.headers['x-request-id'];
+      const id = (Array.isArray(existing) ? existing[0] : existing) ?? randomUUID();
+      res.setHeader('x-request-id', id);
+      return id;
+    },
+    redact: { paths: REDACT_PATHS, remove: true },
+    serializers: { req: serializeRequest, res: serializeResponse },
+    transport: isDev ? { target: 'pino-pretty', options: { singleLine: true } } : undefined,
+  };
 }
 
 @Module({
@@ -53,21 +101,7 @@ export function serializeRequest(req: { method?: string; url?: string }): {
       inject: [ConfigService],
       useFactory: (config: ConfigService) => {
         const { nodeEnv } = config.getOrThrow<AppConfig>('app');
-        const isDev = nodeEnv === 'development';
-        return {
-          pinoHttp: {
-            level: isDev ? 'debug' : 'info',
-            genReqId: (req, res) => {
-              const existing = req.headers['x-request-id'];
-              const id = (Array.isArray(existing) ? existing[0] : existing) ?? randomUUID();
-              res.setHeader('x-request-id', id);
-              return id;
-            },
-            redact: { paths: REDACT_PATHS, remove: true },
-            serializers: { req: serializeRequest },
-            transport: isDev ? { target: 'pino-pretty', options: { singleLine: true } } : undefined,
-          },
-        };
+        return { pinoHttp: buildPinoHttpOptions(nodeEnv) };
       },
     }),
   ],

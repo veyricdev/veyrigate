@@ -21,6 +21,10 @@ All BE/FE env is injected via `webServer.env` (`config/env.ts`) — the suite ne
 
 No database is ever flushed or dropped.
 
+The BE signing keyset is isolated too: `KEY_LOCAL_DIR` points at `e2e/.keys` (git-ignored,
+auto-created by `LocalKeyProvider.init()`), so the E2E run never writes to or prunes the dev
+keyset in `be/keys`.
+
 ## Prerequisites
 
 The three shared dev containers must be running (do **not** `docker compose up` or stop them):
@@ -36,11 +40,14 @@ pnpm -C e2e exec playwright install chromium
 ```
 
 Provide the dev-user credential (must match what `db:seed-dev` upserts and differ from
-`ADMIN_SEED_EMAIL`):
+`ADMIN_SEED_EMAIL`). `config/env.ts` loads `e2e/.env` automatically if present:
 
 ```bash
 cp e2e/.env.example e2e/.env   # then set DEV_SEED_PASSWORD
 ```
+
+`DEV_SEED_PASSWORD` is **required**: if it is missing/empty (and not set in the environment) the
+suite fails fast with a clear error — there is no default password.
 
 ## Run
 

@@ -4,3 +4,5 @@ playwright-report/
 blob-report/
 .playwright/
 .env
+# DEBT-091: E2E-only RSA keyset (never the dev keyset in be/keys); must not be committed.
+.keys/

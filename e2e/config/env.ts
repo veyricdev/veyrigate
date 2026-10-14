@@ -7,11 +7,34 @@
  * Isolation (tech-lead fold Q-X1-c): E2E uses its OWN Mongo db `sso-idp-e2e` and Redis db `/2` on
  * the shared local containers (`aegate-mongo`, `aegate-redis`) so it never touches dev data. No
  * FLUSH / dropDatabase anywhere.
+ *
+ * Credential loading (DEBT-090): the dev-user password is read from `e2e/.env` if that file exists
+ * (absolute path, resolved from this module), else from process env. `process.loadEnvFile` is NOT
+ * wrapped in try: an unreadable `.env` throws, while malformed lines are silently ignored by Node's
+ * lenient parser — so the real guard is the required-var check below, not file parsing. Node 22 does
+ * not override already-set vars, so the CI job `env:` (which sets `DEV_SEED_*`) still wins. There is
+ * NO silent default password: a missing/empty `DEV_SEED_PASSWORD` fails fast (see below).
  */
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 
-/** Dev-user credential for the login scenario. Supplied via process env (CI: job `env:`). */
+const dotenvPath = resolve(dirname(fileURLToPath(import.meta.url)), "..", ".env");
+if (existsSync(dotenvPath)) {
+  process.loadEnvFile(dotenvPath);
+}
+
+/** Dev-user credential for the login scenario. Supplied via `e2e/.env` or process env (CI: job `env:`). */
 export const DEV_SEED_EMAIL = process.env.DEV_SEED_EMAIL ?? "dev@example.com";
-export const DEV_SEED_PASSWORD = process.env.DEV_SEED_PASSWORD ?? "dev-password-123";
+
+if (!process.env.DEV_SEED_PASSWORD) {
+  throw new Error(
+    "DEV_SEED_PASSWORD is required for the E2E suite but is missing/empty. Set it in e2e/.env " +
+      "(copy e2e/.env.example) or export it in the environment; it must match the password used by " +
+      "`pnpm -C be db:seed-dev`. There is no default password.",
+  );
+}
+export const DEV_SEED_PASSWORD = process.env.DEV_SEED_PASSWORD;
 
 export const ISSUER = "http://localhost:4000";
 export const BE_PORT = 4000;
@@ -43,7 +66,10 @@ export function beEnv(): Record<string, string> {
     CLIENT_SECRET_GRACE_TTL: "604800",
     SESSION_COOKIE_SECURE: "false",
     KEY_PROVIDER: "local",
-    KEY_LOCAL_DIR: "./keys",
+    // DEBT-091: absolute path to an E2E-only keyset dir. BE runs `node dist/main.js` with cwd=be/,
+    // so a relative "./keys" would resolve to be/keys and overwrite/prune the dev keyset. Use an
+    // absolute dir under e2e/ (git-ignored) that LocalKeyProvider.init() auto-creates.
+    KEY_LOCAL_DIR: resolve(dirname(fileURLToPath(import.meta.url)), "..", ".keys"),
     SMTP_URL: "smtp://localhost:1025",
     GOOGLE_CLIENT_ID: "e2e-google-client-id",
     GOOGLE_CLIENT_SECRET: "e2e-google-client-secret",
