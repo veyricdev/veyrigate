@@ -82,3 +82,7 @@
 - File đổi: `be/test/authorize.int-spec.ts`, `be/test/ui.int-spec.ts`; test-report.md, log.md, STATUS.md, backlog.md (DEBT-086/087/088 → đã đóng).
 - Kết quả: **PASS** — 0 FAIL; DEBT-086/087/088 đóng. KHÔNG đụng `be/src` (đã khôi phục), KHÔNG flush/drop/dừng container.
 - Bàn giao: **orchestrator** — đóng run 22-X1; DEBT-089/090/091/092 (cần sửa code/config sản phẩm) còn mở.
+
+## [2026-10-14] orchestrator
+- Đã làm: theo chỉ định người dùng dùng `aegate-mongo`/`aegate-redis`/`veyrigate-mailpit-1` cho dev/E2E; cập nhật `be/.env` local (`REDIS_URL` /1, `DEV_SEED_*` — không commit); tạo lại `vg-test-mongo`/`vg-test-redis` sau khi backend-dev gỡ nhầm; commit `c2cf053`; viết `summary.md`; cập nhật `STATUS.md`.
+- Kết quả: DONE — run 22 đóng, M3 walking skeleton hoàn tất.

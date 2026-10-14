@@ -2,15 +2,12 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `22-X1` — cổng: **tester PASS** (2026-10-14): 0 FAIL; đóng DEBT-086/087/088 (test, verified RED). Còn mở 089/090/091/092 (cần sửa code/config sản phẩm).
-- **Vòng lặp (run 22)**: analyst=1, tech-lead=2, senior=1, tester=1
-- **Việc tiếp theo**: **orchestrator** đóng run 22-X1. Tester đã chạy thật: BE typecheck/lint sạch, unit **191**, int **482** (478→482, +4 test); FE 83/build ✓; E2E `pnpm -C e2e e2e` **1 passed (37.3s)** + nhánh consent **1 passed (28.7s)** trên DB tạm mới `sso-idp-e2e-consent-20261014125425` + Redis `/3` (no flush/drop). Xem `runs/22-X1/test-report.md`.
-- **Run vừa đóng**: `21-T1-T2` ✅ 4/4 task — 694/694 test (FE 67 + BE unit 175 + int 452).
-- **Tiến độ run 22**: T1 ✅ · T2 ✅ (83 test) · T3 ✅ (`e2e/` + Playwright webServer chain) · T6 ✅ (DEBT-084 đóng) · **T4 ✅** (`pnpm -C e2e e2e` ×3 liên tiếp: 1 passed mỗi lần, 28.7/27.7/28.8s, token không lộ) · **T5 ✅** (CI job `e2e` thật: Mongo single-node + Redis service, env giả trong job, `--with-deps chromium`, `retries:0`, upload report khi fail; YAML hợp lệ). DEBT-081 hoãn.
-- **✅ DEBT-084 (T6)**: CSP `form-action` theo từng response — `be/src/common/http/csp.ts` (`buildCsp` byte-identical global helmet 8 + `safeCspOrigin` fail-closed), `peek()` không consume/gia hạn TTL (INV-084-3), `/login`+consent+`/logout` thêm origin URI đã exact-match; comment DEBT-015 sửa. Verify: unit 191, int 478 (23 suite), **E2E `pnpm -C e2e e2e` 1 passed (53.6s), không còn "violates form-action"**; mutation A/B RED→khôi phục byte-identical. 10/10 acceptance.
-- **Đã chốt run 22**: Q-X1-a `e2e/` riêng; Q-X1-b `DEV_SEED_*` (không tái dùng admin, cấm trùng `ADMIN_SEED_EMAIL`); Q-X1-c dev = Mongo `sso-idp` + Redis `/1`, E2E = Mongo `sso-idp-e2e` + Redis `/2`, cấm FLUSH/drop; Q-X1-d CI Mongo single-node (DEBT-083). BE E2E: build→db:sync-indexes→db:seed-dev→start, readiness `127.0.0.1:4000/ready`, `SESSION_COOKIE_SECURE=false`.
-- **Hạ tầng DEV/E2E (3 container chỉ định, KHÔNG `compose up` thêm)**: `aegate-mongo`@27017 (dùng chung — chỉ DB `sso-idp`/`sso-idp-e2e`); `aegate-redis`@6379 (dùng chung, db0 của project khác — dùng `/1`,`/2`); `veyrigate-mailpit-1` SMTP@1025/UI@8025.
-- **Hạ tầng BE int-test (giữ nguyên)**: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (phải `docker start` trước — DEBT-070); FE `pnpm -C fe-sso-test test` (67).
+- **Run hiện tại**: không có (22-X1 đã đóng, commit `c2cf053`).
+- **Vòng lặp (run 22)**: analyst=1, tech-lead=2 (+DEBT-084), BE dev=2, FE dev=1 (3 lượt), senior=1 (PASS), tester=1
+- **Run vừa đóng**: `22-X1` ✅ 6/6 task — BE unit 191 + int 482, FE 83, E2E pass (cả nhánh consent). Xem `runs/22-X1/summary.md`. **M3 walking skeleton hoàn tất.**
+- **Việc tiếp theo**: dọn debt E2E/log (DEBT-089 log `location` chứa `code`, 090, 091) rồi T3–T5 (trang & route, gọi resource thật, security lab) hoặc M5 (B5 federation, B6 admin API).
+- **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
+- **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (phải `docker start` trước — DEBT-070); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`).
 
 ## Tiến độ
 
@@ -25,12 +22,12 @@
 | [18](runs/18-consent-session-hardening/summary.md) | M4 | consent-session-hardening | ✅ 531/531 | `46da89a` |
 | [19](runs/19-bugfix/summary.md)–[20](runs/20-bugfix/summary.md) | M4 | bugfix (DEBT-059…061) | ✅ 617/617 | `8a58faa`, `08adee8` |
 | [21](runs/21-T1-T2/summary.md) | M3 | T1–T2 (+ seed-dev) | ✅ 694/694 | `676cd92` |
+| [22](runs/22-X1/summary.md) | M3 | X1 walking skeleton (+ DEBT-076/078/079/080/084/004) | ✅ BE 673 + FE 83 + E2E | `c2cf053` |
 
 ## Chặn / cần người quyết định
 
 Xem `plan.md` §12. Còn mở: **Q3, Q5, Q7–Q9**. **Q1, Q4, Q6 đã chốt** (Q6: access 15', refresh 30d, idle 8h, absolute 30d, secret grace 7d — đọc từ env).
-- Người dùng: nên sửa `be/.env` local `REDIS_URL=redis://localhost:6379/1` (tránh db0 dùng chung) và thêm `DEV_SEED_EMAIL`/`DEV_SEED_PASSWORD`.
 
 ## Backlog mở
 
-41 mục mở. Xem [backlog.md](backlog.md). Run 22 mở DEBT-082–092 (DEBT-084 chặn E2E → T6; DEBT-085 federation B5 form-action).
+37 mục mở. Xem [backlog.md](backlog.md). Run 22 đóng DEBT-004/076/078/079/080/084/086/087/088; mở 082/083/085/089–092.

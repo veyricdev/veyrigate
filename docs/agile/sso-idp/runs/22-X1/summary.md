@@ -1,0 +1,9 @@
+# Summary — X1 walking skeleton (M3) + DEBT-076/078/079/080/084/004 — ✅ PASS 6/6 task
+
+- **Phạm vi**: T1 [BE] `db:seed-dev` tạo user dev đã verify email (`DEV_SEED_*`, chỉ đọc trong seed, chặn production, reset lockout, `UserTenant roles:[]`). T2 [FE] trang claims (`sub/iss/aud/exp`, `data-testid`), DEBT-078 (refresh lỗi chỉ xoá phiên hiện tại), DEBT-079 (kiểm `state` khi quay về sau logout), DEBT-080 (không hiển thị nguyên văn `error_description`). T3–T5 [E2E] package `e2e/` (Playwright 1.64, script `e2e` tách khỏi `pnpm test`), `webServer` BE (build → sync-indexes → seed-dev → start, đợi `/ready`) + FE; kịch bản login → `/authorize` → `/login` → consent (nếu có) → `/token` → claims, kiểm token không lộ ra DOM/URL/Web Storage; CI job `e2e` thật (DEBT-004). T6 [BE] DEBT-084 — CSP `form-action` theo từng response (login/consent/logout) chỉ thêm origin của URI đã exact-match.
+- **Hạ tầng (người dùng chỉ định)**: dev/E2E local dùng `aegate-mongo` (DB `sso-idp` / `sso-idp-e2e`), `aegate-redis` (DB `/1` / `/2`), `veyrigate-mailpit-1`; không FLUSH/drop.
+- **Bug tìm ra nhờ E2E**: CSP `form-action 'self'` chặn redirect từ form về RP trên Chromium ⇒ luồng đăng nhập không chạy trên trình duyệt thật (int-test không bắt). DEBT-015 trước đây đóng nhầm.
+- **Verify**: BE unit 191/191, int 482/482; FE 83/83; E2E pass 3/3 + 1 (tester) + nhánh consent trên DB tạm `sso-idp-e2e-consent-20261014125425` (để lại, không drop).
+- **Commit**: `c2cf053`.
+- **Vòng lặp**: analyst=1 (1 lần bị ngắt), tech-lead=2 (+DEBT-084), BE dev=2 (T1, T6), FE dev=1 (T2→T5, 3 lượt), senior=1 (PASS), tester=1.
+- **Debt**: đóng DEBT-004/076/078/079/080/084/086/087/088; mở DEBT-082, 083, 085, 089 (log pino in `location` chứa `code`), 090 (`e2e/.env` không được nạp), 091 (E2E ghi vào keyset dev), 092; DEBT-081 hoãn.
