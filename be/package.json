@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:int": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand --testRegex \"\\.int-spec\\.ts$\"",
-    "db:sync-indexes": "node --env-file-if-exists=.env dist/database/mongo/sync-indexes.js"
+    "db:sync-indexes": "node --env-file-if-exists=.env dist/database/mongo/sync-indexes.js",
+    "db:seed-dev": "node --env-file-if-exists=.env dist/database/seed-dev.js"
   },
   "dependencies": {
     "@fastify/cookie": "11.1.2",

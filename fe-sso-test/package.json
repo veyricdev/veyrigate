@@ -2,10 +2,36 @@
   "name": "@sso-idp/fe-sso-test",
   "private": true,
   "version": "0.0.0",
+  "type": "module",
   "scripts": {
-    "dev": "echo \"[fe-sso-test] TODO: scaffold Vite + React + React Router at T1\"",
-    "lint": "echo \"[fe-sso-test] TODO: lint at T1\"",
-    "typecheck": "echo \"[fe-sso-test] TODO: typecheck at T1\"",
-    "test": "echo \"[fe-sso-test] TODO: test at T1\""
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "lint": "eslint .",
+    "typecheck": "tsc -b --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "jose": "6.2.12",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-router": "8.4.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.18.0",
+    "@types/node": "22.10.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "eslint": "9.18.0",
+    "globals": "17.13.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "eslint-plugin-react-refresh": "0.5.7",
+    "happy-dom": "21.0.1",
+    "typescript": "5.7.3",
+    "typescript-eslint": "8.71.2",
+    "vite": "8.3.4",
+    "vitest": "5.0.4"
   }
 }

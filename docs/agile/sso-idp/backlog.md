@@ -31,6 +31,12 @@ Việc còn mở (🟡 từ review/test, debt, việc hoãn). **Nguồn duy nh�
 | DEBT-072 | run 20 tech-lead | Rate limit client auth theo IP / client_id+IP không chặn botnet xoay IP (brute-force/DoS Argon2 phân tán) | Giới hạn toàn cục theo client_id với ngưỡng cao + WAF ở gateway | B7.x |
 | DEBT-073 | run 20 tech-lead retry 1 | `RateLimitService.hit()` (login/register/reset) gửi nhiều khoá `rl:<name>:<dim>:<hash>` khác slot trong 1 Lua ⇒ CROSSSLOT trên Redis Cluster (client-auth đã dùng hash tag `{sha256(ip)}`) | Khi chọn Cluster (Q5): hash tag theo subject hoặc gọi 1 script/khoá | B7.3 (cùng DEBT-013) |
 | DEBT-075 | run 20 tech-lead hoãn (nit senior lượt 2) | `/introspect` 429 `temporarily_unavailable` không có `error_description` (`/token` có) | Thêm mô tả tĩnh, không echo input | Khi chạm introspect |
+| DEBT-076 | run 21 tech-lead | X1 cần user đã verify email (login từ chối khi `!emailVerifiedAt`); chưa có user dev sẵn | Playwright đăng ký + đọc mail dev, hoặc seed user dev từ env (không hardcode mật khẩu) | run 22 / X1 |
+| DEBT-077 | run 21 tech-lead | `be/src/database/seed-dev.ts` (client `fe-sso-test` + resource `demo`) là bản tạm trước B6.4 | Gộp vào seed idempotent đầy đủ B6.4, xoá bản trùng | B6.4 |
+| DEBT-078 | run 21 senior lượt 2 | `fe-sso-test/src/oidc/refresh.ts:94` nhánh lỗi `tokens.clear()` vô điều kiện → refresh cũ fail có thể xoá phiên mới (logout→login lại) | `if (tokens.get() === current) tokens.clear()` + test | Khi chạm fe-sso-test (run 22) |
+| DEBT-079 | run 21 senior lượt 2 | `consumeLogoutState` (logout.ts:67) chưa được route nào gọi; `oidc:logout_state` nằm lại sessionStorage | Gọi ở landing post-logout (Home khi có `state`) rồi xoá query, hoặc bỏ cả cặp | run 22 / X1 |
+| DEBT-080 | run 21 senior lượt 2 | `token-exchange.ts:38` nối nguyên văn `error_description` của `/token` vào message hiển thị | Chỉ giữ `error` code (hoặc cắt + đánh dấu IdP) | Khi chạm fe-sso-test |
+| DEBT-081 | run 21 senior lượt 2 (ponytail) | `callback.ts:32` `KNOWN_ERROR_CODES` thừa (sanitizer đã đủ); `test/helpers/jwt.ts` option `alg` chết | Xoá set, giữ sanitize; hardcode RS256 trong helper (~-25 dòng) | Khi chạm fe-sso-test |
 
 ## Đã đóng
 

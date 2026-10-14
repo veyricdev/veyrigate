@@ -2,11 +2,11 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: không có (20-bugfix đã đóng, commit `08adee8`). **T1 (scaffold fe-sso-test) chưa làm.**
+- **Run hiện tại**: `21-T1-T2` — cổng: **orchestrator (đóng run)**. Tester **PASS** (lượt 1): FE 67/67 (65 gốc + 2 tester thêm: Web Storage runtime proof), BE unit 175/175, BE int **452/452** (seed-dev 9.9s) — chạy thật trên Mongo :27117 (rs PRIMARY) + Redis :6479; typecheck/lint/build xanh; smoke :5173 HTTP 200. Int lần 1 fail do container Exited (ECONNREFUSED) → `docker start` rồi chạy lại xanh. KHÔNG sửa code sản phẩm. Xem `runs/21-T1-T2/test-report.md`.
 - **Vòng lặp (run 20)**: analyst=3 (lỗi mạng ×2), tech-lead=2, dev=4, senior=4 (REJECT×3 → PASS, +1 lượt ngoài giới hạn), tester=1
 - **Run vừa đóng**: `19-bugfix` ✅ 5/5 task — 555/555 test (unit 141 + int 414). Xem `runs/19-bugfix/summary.md`.
 - **Run vừa đóng**: `18-consent-session-hardening` ✅ 5/5 task — 531/531 test (unit 131 + int 400). Xem `runs/18-consent-session-hardening/summary.md`.
-- **Việc tiếp theo**: FE — **T1** scaffold fe-sso-test → **T2** OIDC client → **X1** walking skeleton (Playwright). Debt còn mở chủ yếu thuộc B5/B6/B7/deploy.
+- **Việc tiếp theo**: orchestrator **đóng run 21** (tester PASS, code chưa commit). X1 ở run 22 (cần DEBT-076; DEBT-077 gộp seed-dev vào B6.4; DEBT-078/079/080/081 nên làm cùng).
 
 ## Tiến độ
 
@@ -37,4 +37,4 @@ Xem `plan.md` §12. Còn mở: **Q3, Q5, Q7–Q9**. **Q1, Q4, Q6 đã chốt** (
 
 ## Backlog mở
 
-24 mục mở. Xem [backlog.md](backlog.md). Run 20 đóng DEBT-006/007/021/029/039/053/061/067/068/074; mở DEBT-071–073, 075.
+30 mục mở. Xem [backlog.md](backlog.md). Run 21 mở DEBT-076 (user verify cho X1), DEBT-077 (seed-dev tạm → B6.4), DEBT-078…081 (🟡 senior lượt 2: refresh-fail clear, logout state chưa nối, error_description /token, ponytail).
