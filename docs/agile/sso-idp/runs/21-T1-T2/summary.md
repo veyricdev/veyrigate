@@ -1,0 +1,9 @@
+# Summary — T1–T2 (M3 scaffold fe-sso-test + OIDC client) — ✅ PASS 4/4 task
+
+- **Phạm vi**: T1 — `fe-sso-test` Vite 8 + React 19 + React Router 8 (Data Mode) + TypeScript, `env.ts` zod (thiếu env → lỗi rõ trên UI), dev :5173 strictPort, Vitest + happy-dom, bỏ Tailwind. T2 — OIDC client viết tay: discovery (issuer === env), PKCE S256 WebCrypto, `state`/`nonce` 256-bit, `/authorize` kèm `resource`/`scope`; callback kiểm `state` + `iss` bắt buộc, đổi code đúng 1 lần (StrictMode), validate ID token bằng `jose` (chỉ RS256, JWKS, iss/aud/exp/nonce, `azp`), zod response `/token`; token chỉ trong bộ nhớ, transient sessionStorage xoá ngay ở mọi nhánh; refresh single-flight + rotation + kiểm `sub`, không hồi sinh phiên sau logout; RP-initiated logout có `state`; `error_description` không hiển thị nguyên văn. Task 4 [BE] — `db:seed-dev` (dev-only, chặn production trước mọi ghi, idempotent): client public `fe-sso-test` + resource `demo`, khớp `.env.example`.
+- **Quyết định**: token in-memory (reload → đăng xuất); không làm `prompt=none` (để T5); xử lý cả khi thiếu `refresh_token`; `/demo/me` để B6.5 (không chặn X1).
+- **Bug/khe đã sửa (senior REJECT 1)**: test không khoá bước validate ID token ở callback và `alg ≠ RS256`; transient không xoá ở nhánh lỗi; chặn production của seed không có test.
+- **Verify**: FE typecheck/lint/build PASS, vitest 67/67; BE unit 175/175, int 452/452 → **694/694**. Dev smoke :5173 OK.
+- **Commit**: `676cd92`.
+- **Vòng lặp**: analyst=1, tech-lead=1, FE dev=2, BE dev=2 (retry song song), senior=2 (REJECT→PASS; 2 lần agent không ghi kết quả, chạy lại), tester=1.
+- **Debt**: mở DEBT-076 (X1 cần user đã verify email), 077 (seed-dev → B6.4), 078 (refresh lỗi xoá cả phiên mới), 079 (`consumeLogoutState` chưa route nào gọi), 080 (`error_description` của `/token` hiển thị nguyên văn), 081 (ponytail).

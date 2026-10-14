@@ -2,19 +2,18 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `21-T1-T2` — cổng: **orchestrator (đóng run)**. Tester **PASS** (lượt 1): FE 67/67 (65 gốc + 2 tester thêm: Web Storage runtime proof), BE unit 175/175, BE int **452/452** (seed-dev 9.9s) — chạy thật trên Mongo :27117 (rs PRIMARY) + Redis :6479; typecheck/lint/build xanh; smoke :5173 HTTP 200. Int lần 1 fail do container Exited (ECONNREFUSED) → `docker start` rồi chạy lại xanh. KHÔNG sửa code sản phẩm. Xem `runs/21-T1-T2/test-report.md`.
-- **Vòng lặp (run 20)**: analyst=3 (lỗi mạng ×2), tech-lead=2, dev=4, senior=4 (REJECT×3 → PASS, +1 lượt ngoài giới hạn), tester=1
-- **Run vừa đóng**: `19-bugfix` ✅ 5/5 task — 555/555 test (unit 141 + int 414). Xem `runs/19-bugfix/summary.md`.
-- **Run vừa đóng**: `18-consent-session-hardening` ✅ 5/5 task — 531/531 test (unit 131 + int 400). Xem `runs/18-consent-session-hardening/summary.md`.
-- **Việc tiếp theo**: orchestrator **đóng run 21** (tester PASS, code chưa commit). X1 ở run 22 (cần DEBT-076; DEBT-077 gộp seed-dev vào B6.4; DEBT-078/079/080/081 nên làm cùng).
+- **Run hiện tại**: không có (21-T1-T2 đã đóng, commit `676cd92`).
+- **Vòng lặp (run 21)**: analyst=1, tech-lead=1, FE dev=2, BE dev=2, senior=2 (REJECT → PASS), tester=1
+- **Run vừa đóng**: `21-T1-T2` ✅ 4/4 task — 694/694 test (FE 67 + BE unit 175 + int 452). Xem `runs/21-T1-T2/summary.md`.
+- **Việc tiếp theo**: run 22 — **X1** walking skeleton (Playwright: email/password → `/authorize` → login → `/token` → hiển thị claims), cần DEBT-076 (user đã verify email cho dev). Làm cùng DEBT-078/079/080 (FE). Sau đó T3–T5.
+  Hạ tầng test: `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (BE int 452, phải `docker start` trước — DEBT-070); FE `pnpm -C fe-sso-test test` (67). Seed dev: `pnpm -C be db:seed-dev`.
 
 ## Tiến độ
 
 | Run | Mốc | Nhóm task | Kết quả | Commit |
 |---|---|---|---|---|
 | [01](runs/01-R1-R2/summary.md)–[02](runs/02-R3-R5/summary.md) | M0 | R1–R5 | ✅ 11/11 | `8b75f24`, `4c2104a` |
-| [03](runs/03-B1.1-B1.5/summary.md) | M1 | B1.1–B1.5 | ✅ 9/9 | `6d04558` |
-| [04](runs/04-B1.6-B1.10/summary.md) | M1 | B1.6–B1.10 | ✅ 45/45 | `1dcb2a8` |
+| [03](runs/03-B1.1-B1.5/summary.md)–[04](runs/04-B1.6-B1.10/summary.md) | M1 | B1.1–B1.10 | ✅ 45/45 | `6d04558`, `1dcb2a8` |
 | [05](runs/05-B2.1-B2.3/summary.md) | M2 | B2.1–B2.3 | ✅ 80/80 | `aea2d3f` |
 | [06](runs/06-B2.4-B2.5/summary.md) | M2 | B2.4–B2.5 | ✅ 123/123 | `f62426b` |
 | [07](runs/07-BUG-login-session/summary.md)–[08](runs/08-BUG-logout-action/summary.md) | M2 | BUG-login-session, BUG-logout-action | ✅ 158/158 | `f62426b` |
@@ -30,6 +29,7 @@
 | [18](runs/18-consent-session-hardening/summary.md) | M4 | consent-session-hardening (DEBT-026/027/028/050/051/052) | ✅ 531/531 | `46da89a` |
 | [19](runs/19-bugfix/summary.md) | M4 | bugfix (DEBT-059/055/060/001/005) | ✅ 555/555 | `8a58faa` |
 | [20](runs/20-bugfix/summary.md) | M4 | bugfix (DEBT-067/029/039/006/007/021/053/061) | ✅ 617/617 | `08adee8` |
+| [21](runs/21-T1-T2/summary.md) | M3 | T1–T2 (+ seed-dev) | ✅ 694/694 | `676cd92` |
 
 ## Chặn / cần người quyết định
 
@@ -37,4 +37,4 @@ Xem `plan.md` §12. Còn mở: **Q3, Q5, Q7–Q9**. **Q1, Q4, Q6 đã chốt** (
 
 ## Backlog mở
 
-30 mục mở. Xem [backlog.md](backlog.md). Run 21 mở DEBT-076 (user verify cho X1), DEBT-077 (seed-dev tạm → B6.4), DEBT-078…081 (🟡 senior lượt 2: refresh-fail clear, logout state chưa nối, error_description /token, ponytail).
+30 mục mở. Xem [backlog.md](backlog.md). Run 21 mở DEBT-076–081.

@@ -78,3 +78,7 @@
 - DEBT-078/079/080/081 là code sản phẩm (senior PASS lượt 2, tracked) — để nguyên, acceptance tương ứng đã có test xanh. Không mở DEBT mới.
 - Kết luận: **PASS 694/694** (FE 67 + BE unit 175 + BE int 452). Xem test-report.md.
 - Bàn giao: **orchestrator** (đóng run).
+
+## [2026-10-13] orchestrator
+- Đã làm: bật lại Docker Desktop + container test cho tester; commit `676cd92`; viết `summary.md`; cập nhật `STATUS.md` (gộp dòng Tiến độ 03–04 để giữ ≤ 40 dòng).
+- Kết quả: DONE — run 21 đóng.
