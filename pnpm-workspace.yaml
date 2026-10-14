@@ -2,6 +2,7 @@ packages:
   - be
   - fe-admin
   - fe-sso-test
+  - e2e
 
 # Disable pnpm's new-release cooldown so pinned versions (e.g. NestJS 12.x)
 # install reproducibly in dev and CI. We pin exact versions instead.

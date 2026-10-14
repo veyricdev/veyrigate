@@ -2,7 +2,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { MongooseModule, getModelToken } from '@nestjs/mongoose';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
-import { Test } from '@nestjs/testing';
+import { Test, type TestingModule } from '@nestjs/testing';
 import cookie from '@fastify/cookie';
 import view from '@fastify/view';
 import { Eta } from 'eta';
@@ -11,7 +11,20 @@ import mongoose, { type Connection, type Model } from 'mongoose';
 import { join } from 'node:path';
 import { MODELS } from '../src/database/mongo/models';
 import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
-import { seedDev, buildSeedDevTargets, assertNotProduction } from '../src/database/seed-dev';
+import { jest } from '@jest/globals';
+import {
+  seedDev,
+  seedDevUser,
+  readDevSeedUserConfig,
+  buildSeedDevTargets,
+  assertNotProduction,
+  type DevSeedUserConfig,
+} from '../src/database/seed-dev';
+import { AuthenticationService } from '../src/modules/authentication/authentication.service';
+import { UserService, normalizeEmail } from '../src/modules/identity/user.service';
+import { UserTenantService } from '../src/modules/identity/user-tenant.service';
+import { MAILER } from '../src/modules/mailer/mailer';
+import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
 import { RedisService } from '../src/database/redis/redis.service';
 import { ClientCorsService } from '../src/modules/clients/client-cors.service';
 import { registerCorsPreflight } from '../src/modules/clients/client-cors.helper';
@@ -316,5 +329,195 @@ describe('seed-dev: the seeded client works against the REAL /authorize + CORS p
       headers: { origin: 'http://localhost:5174', 'access-control-request-method': 'POST' },
     });
     expect(unknown.headers['access-control-allow-origin']).toBeUndefined();
+  });
+});
+
+/**
+ * DEBT-076: `seedDevUser` upserts one dev user that can actually log in through the REAL
+ * `AuthenticationService.login` (password hash verified, `emailVerifiedAt` set, membership present,
+ * lockout reset), is idempotent, refuses production, and refuses the admin-seed email.
+ */
+describe('seed-dev: dev user (DEBT-076) on real Mongo', () => {
+  const DEV_EMAIL = 'dev@example.com';
+  const DEV_PASSWORD = 'dev-password-123';
+  const ADMIN_EMAIL = 'admin@example.com';
+  const devConfig: DevSeedUserConfig = {
+    email: DEV_EMAIL,
+    password: DEV_PASSWORD,
+    adminEmail: ADMIN_EMAIL,
+  };
+
+  let moduleRef: TestingModule;
+  let connection: Connection;
+  let userModel: Model<Record<string, unknown>>;
+  let userTenantModel: Model<Record<string, unknown>>;
+  let auth: AuthenticationService;
+  const sessions = {
+    establish: jest.fn(async () => ({ session: { ref: 'sess-ref' } })),
+    revokeAllForUser: jest.fn(async () => 0),
+  };
+  const refreshTokens = { revokeAllForUser: jest.fn(async () => 0) };
+  const audit = { record: jest.fn(async () => undefined) };
+
+  beforeAll(async () => {
+    moduleRef = await Test.createTestingModule({
+      imports: [
+        MongooseModule.forRoot(MONGO_URI, {
+          serverSelectionTimeoutMS: 5000,
+          retryAttempts: 5,
+          retryDelay: 1000,
+        }),
+        MongooseModule.forFeature(MODELS),
+      ],
+      providers: [
+        AuthenticationService,
+        UserService,
+        UserTenantService,
+        { provide: SessionService, useValue: sessions },
+        { provide: RefreshTokenService, useValue: refreshTokens },
+        { provide: AuditService, useValue: audit },
+        { provide: MAILER, useValue: { send: async () => undefined } },
+        { provide: ConfigService, useValue: { getOrThrow: () => ({ issuer: ISSUER }) } },
+      ],
+    }).compile();
+    userModel = moduleRef.get(getModelToken('User'));
+    userTenantModel = moduleRef.get(getModelToken('UserTenant'));
+    connection = userModel.db;
+    await syncAllIndexes(connection);
+    auth = moduleRef.get(AuthenticationService);
+  }, 30_000);
+
+  afterEach(async () => {
+    jest.clearAllMocks();
+    await userModel.deleteMany({}).exec();
+    await userTenantModel.deleteMany({}).exec();
+  });
+
+  afterAll(async () => {
+    await connection.dropDatabase();
+    await moduleRef.close();
+  });
+
+  it('seeding twice yields exactly one user + one membership (idempotent, no duplicates)', async () => {
+    await seedDevUser(connection, devConfig, 'development');
+    await seedDevUser(connection, devConfig, 'development');
+
+    const normalized = normalizeEmail(DEV_EMAIL);
+    expect(await userModel.countDocuments({ email: normalized }).exec()).toBe(1);
+    const userDoc = await userModel.findOne({ email: normalized }).lean().exec();
+    expect(userDoc).not.toBeNull();
+    const user = userDoc as unknown as {
+      _id: { toString(): string };
+      emailVerifiedAt: Date;
+      failedLoginCount: number;
+      lockedUntil?: Date;
+    };
+    expect(user.emailVerifiedAt).toBeInstanceOf(Date);
+    expect(user.failedLoginCount).toBe(0);
+    expect(user.lockedUntil).toBeUndefined();
+
+    expect(
+      await userTenantModel
+        .countDocuments({ userId: user._id, tenantId: DEFAULT_TENANT_ID })
+        .exec(),
+    ).toBe(1);
+    const membership = (await userTenantModel
+      .findOne({ userId: user._id, tenantId: DEFAULT_TENANT_ID })
+      .lean()
+      .exec()) as unknown as { roles: string[]; status: string };
+    expect(membership.roles).toEqual([]); // dev user is a plain non-admin
+    expect(membership.status).toBe('active');
+  });
+
+  it('the seeded user logs in through the REAL login service (password + emailVerifiedAt + membership ok)', async () => {
+    await seedDevUser(connection, devConfig, 'development');
+    // Drives AuthenticationService.login: a resolved result means the Argon2 hash verified, the
+    // emailVerifiedAt gate passed, and the account was not locked. SessionService is mocked (no
+    // Redis needed) exactly as authentication.int-spec does.
+    await expect(auth.login(DEV_EMAIL, DEV_PASSWORD, {})).resolves.toBeDefined();
+    expect(sessions.establish).toHaveBeenCalledTimes(1);
+
+    // Negative control: wrong password is rejected (the happy path is not a tautology).
+    await expect(auth.login(DEV_EMAIL, 'wrong-password', {})).rejects.toThrow();
+  });
+
+  it('re-seeding resets lockout: failedLoginCount -> 0 and lockedUntil unset', async () => {
+    await seedDevUser(connection, devConfig, 'development');
+    const normalized = normalizeEmail(DEV_EMAIL);
+    // Simulate a prior run that failed/locked the account.
+    await userModel
+      .updateOne(
+        { email: normalized },
+        { $set: { failedLoginCount: 9, lockedUntil: new Date(Date.now() + 3_600_000) } },
+      )
+      .exec();
+
+    await seedDevUser(connection, devConfig, 'development');
+
+    const user = (await userModel.findOne({ email: normalized }).lean().exec()) as unknown as {
+      failedLoginCount: number;
+      lockedUntil?: Date;
+    };
+    expect(user.failedLoginCount).toBe(0);
+    expect(user.lockedUntil).toBeUndefined();
+  });
+
+  it('keeps the original emailVerifiedAt on re-seed ($min, not overwrite)', async () => {
+    await seedDevUser(connection, devConfig, 'development');
+    const normalized = normalizeEmail(DEV_EMAIL);
+    const first = (await userModel.findOne({ email: normalized }).lean().exec()) as unknown as {
+      emailVerifiedAt: Date;
+    };
+
+    await new Promise((r) => setTimeout(r, 10));
+    await seedDevUser(connection, devConfig, 'development', new Date());
+
+    const second = (await userModel.findOne({ email: normalized }).lean().exec()) as unknown as {
+      emailVerifiedAt: Date;
+    };
+    expect(second.emailVerifiedAt.getTime()).toBe(first.emailVerifiedAt.getTime());
+  });
+
+  it('refuses a DEV_SEED_EMAIL that collides with ADMIN_SEED_EMAIL (privilege split) and writes nothing', async () => {
+    await expect(
+      seedDevUser(connection, { ...devConfig, email: ADMIN_EMAIL }, 'development'),
+    ).rejects.toThrow(/ADMIN_SEED_EMAIL/);
+    expect(await userModel.countDocuments({}).exec()).toBe(0);
+    expect(await userTenantModel.countDocuments({}).exec()).toBe(0);
+  });
+
+  it('NODE_ENV=production is refused by seedDevUser itself (fail-closed) and writes NOTHING', async () => {
+    await expect(seedDevUser(connection, devConfig, 'production')).rejects.toThrow(/production/);
+    expect(await userModel.countDocuments({}).exec()).toBe(0);
+    expect(await userTenantModel.countDocuments({}).exec()).toBe(0);
+  });
+
+  it('readDevSeedUserConfig fails (naming the var) on missing/invalid env, without leaking the password', () => {
+    expect(() => readDevSeedUserConfig({}, ADMIN_EMAIL)).toThrow(/DEV_SEED_EMAIL/);
+    expect(() =>
+      readDevSeedUserConfig(
+        { DEV_SEED_EMAIL: 'not-an-email', DEV_SEED_PASSWORD: 'short' },
+        ADMIN_EMAIL,
+      ),
+    ).toThrow(/DEV_SEED_EMAIL/);
+    // A short password is reported by name/bound only — never echoes the value.
+    try {
+      readDevSeedUserConfig(
+        { DEV_SEED_EMAIL: DEV_EMAIL, DEV_SEED_PASSWORD: 'secret7' },
+        ADMIN_EMAIL,
+      );
+      throw new Error('expected to throw');
+    } catch (err) {
+      const msg = (err as Error).message;
+      expect(msg).toContain('DEV_SEED_PASSWORD');
+      expect(msg).not.toContain('secret7');
+    }
+    // Valid env parses and carries the admin email through for the collision check.
+    expect(
+      readDevSeedUserConfig(
+        { DEV_SEED_EMAIL: DEV_EMAIL, DEV_SEED_PASSWORD: DEV_PASSWORD },
+        ADMIN_EMAIL,
+      ),
+    ).toEqual({ email: DEV_EMAIL, password: DEV_PASSWORD, adminEmail: ADMIN_EMAIL });
   });
 });

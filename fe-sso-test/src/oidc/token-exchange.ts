@@ -16,10 +16,33 @@ const TokenSuccess = z.object({
   scope: z.string().optional(),
 });
 
+/** OAuth 2.0 token-error codes we surface verbatim (RFC 6749 §5.2). */
+const KNOWN_TOKEN_ERROR_CODES = new Set([
+  "invalid_request",
+  "invalid_client",
+  "invalid_grant",
+  "unauthorized_client",
+  "unsupported_grant_type",
+  "invalid_scope",
+]);
+
+/**
+ * Sanitise a `/token` error code WITHOUT echoing `error_description` (content spoofing: the IdP
+ * — or an attacker able to craft the response — controls that free-text field). Whitelisted codes
+ * pass through verbatim; anything else is reduced to `[a-z0-9_-]` and truncated. Mirrors
+ * `describeIdpError` in callback.ts (DEBT-080).
+ */
+function sanitizeTokenError(error: string): string {
+  return KNOWN_TOKEN_ERROR_CODES.has(error)
+    ? error
+    : error.replace(/[^a-z0-9_-]/gi, "").slice(0, 64) || "unknown";
+}
+
 /**
  * POST to `/token`. Public client (PKCE, no secret): no auth header, `client_id` in the body.
  * NO retry (F6): the authorization_code grant consumes a one-time code; a retry would hit
- * `invalid_grant`. On a non-2xx the OAuth error is surfaced fail-closed.
+ * `invalid_grant`. On a non-2xx the OAuth error is surfaced fail-closed — the sanitised `error`
+ * code only, never the attacker/IdP-controlled `error_description` (DEBT-080).
  */
 export async function postToken(
   tokenEndpoint: string,
@@ -34,9 +57,9 @@ export async function postToken(
 
   const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok) {
-    const code = typeof json.error === "string" ? json.error : `http_${res.status}`;
-    const desc = typeof json.error_description === "string" ? `: ${json.error_description}` : "";
-    throw new Error(`Token endpoint error (${code})${desc}`);
+    const code =
+      typeof json.error === "string" ? sanitizeTokenError(json.error) : `http_${res.status}`;
+    throw new Error(`Token endpoint error (${code})`);
   }
   const parsed = TokenSuccess.safeParse(json);
   if (!parsed.success) {

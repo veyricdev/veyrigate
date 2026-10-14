@@ -52,10 +52,17 @@ jobs:
       - name: Test
         run: pnpm test
 
-  # Khung e2e: service mongo/redis sẵn sàng, nhưng CHƯA có test e2e.
-  # Bật thật ở B7.1/X1 — hiện để placeholder để job KHÔNG đỏ.
+  # E2E thật (DEBT-004 / X1): Playwright 1 kịch bản login → /authorize → /token → claims.
+  # Mongo single-node (chưa dùng transaction — DEBT-083) + Redis service. Env BE/FE đều là giá trị
+  # GIẢ không-secret: BE/FE do playwright.config.ts (e2e/config/env.ts) cấp qua webServer.env; chỉ
+  # DEV_SEED_* đặt ở job env: (viết thẳng, KHÔNG dùng GitHub secrets). GH Actions tự set CI=true →
+  # Playwright bật trace retain-on-failure + forbidOnly.
   e2e:
     runs-on: ubuntu-latest
+    env:
+      # Credential user dev (giả, non-secret). Phải KHÁC ADMIN_SEED_EMAIL (e2e/config/env.ts).
+      DEV_SEED_EMAIL: dev@example.com
+      DEV_SEED_PASSWORD: dev-password-123
     services:
       mongo:
         image: mongo:7
@@ -72,5 +79,39 @@ jobs:
           --health-cmd "redis-cli ping"
           --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
-      - name: e2e placeholder
-        run: 'echo "e2e: TODO enable at B7.1/X1"'
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Enable corepack (pnpm)
+        run: corepack enable
+
+      - name: Get pnpm store path
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-
+
+      - name: Install
+        run: pnpm i --frozen-lockfile
+
+      - name: Install Playwright Chromium (+ OS deps)
+        run: pnpm -C e2e exec playwright install --with-deps chromium
+
+      - name: Run E2E (Playwright builds/seeds/starts BE + FE)
+        run: pnpm -C e2e e2e
+
+      - name: Upload Playwright report on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/playwright-report
+          retention-days: 7

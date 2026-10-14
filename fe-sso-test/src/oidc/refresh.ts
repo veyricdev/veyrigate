@@ -91,7 +91,10 @@ export async function refreshSession(
   try {
     return await task;
   } catch (err) {
-    deps.tokens.clear(); // fail-closed: drop everything, become anonymous
+    // Fail-closed, but don't clobber a newer session: only drop the store if it still holds the
+    // exact session we started from. If a concurrent logout → login installed a fresh session (or
+    // a logout cleared it) while this refresh was in flight, leave that untouched (DEBT-078).
+    if (deps.tokens.get() === current) deps.tokens.clear();
     throw err;
   } finally {
     inFlight.delete(deps.tokens);

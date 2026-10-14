@@ -26,6 +26,7 @@ import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { UiController } from '../src/modules/ui/ui.controller';
 import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
 import { LogoutService } from '../src/modules/oauth/logout/logout.service';
+import { AuthorizeRequestContextService } from '../src/modules/oauth/authorize/authorize-request-context.service';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -76,6 +77,9 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
         CsrfService,
         CsrfGuard,
         HtmlExceptionFilter,
+        // DEBT-084: `GET /login` peeks the resumable context (non-consuming) for the CSP origin.
+        // Real service on the shared test Redis (RedisService provided below).
+        AuthorizeRequestContextService,
         // This suite exercises the auth flow, not RP-initiated logout; stub the B4.7 collaborators
         // so the plain (no-hint) local logout path still works end to end.
         {

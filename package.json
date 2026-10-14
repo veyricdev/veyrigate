@@ -10,6 +10,7 @@
     "dev:all": "pnpm -r --parallel run dev",
     "lint": "pnpm -r --no-bail run --if-present lint",
     "typecheck": "pnpm -r --no-bail run --if-present typecheck",
-    "test": "pnpm -r --no-bail run --if-present test"
+    "test": "pnpm -r --no-bail run --if-present test",
+    "e2e": "pnpm -C e2e e2e"
   }
 }

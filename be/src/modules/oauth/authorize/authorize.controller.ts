@@ -11,6 +11,7 @@
   UseGuards,
 } from '@nestjs/common';
 import { IsOptional, IsString } from 'class-validator';
+import { buildCsp, safeCspOrigin } from '../../../common/http/csp';
 import type { HttpReply, HttpRequest } from '../../../common/http/http.types';
 import { SessionService } from '../../sessions/session.service';
 import { SessionCookie } from '../../sessions/session.cookie';
@@ -42,10 +43,12 @@ class ConsentDto {
  * 302 redirect with `error`/`state`/`iss`; a successful consent is delivered as a 302 with
  * `code`/`state`/`iss`.
  *
- * DEBT-015 (CSP `form-action 'self'`): the consent form POSTs to this same IdP origin
- * (`/authorize/consent`, same-origin) and only *then* 302-redirects (GET) to the RP, so helmet's
- * `form-action 'self'` never blocks the flow (proven by the consent redirect tests). DEBT-019/020
- * (CORS) do not apply: `/authorize` is a top-level browser navigation, not a CORS fetch/preflight.
+ * DEBT-084 (supersedes DEBT-015): Chromium applies the consent PAGE's `form-action` to EVERY step
+ * of the form submission, including the 302 from `/authorize/consent` to the RP — so helmet's global
+ * `form-action 'self'` DOES block the final redirect (int-tests pass because they do not run a
+ * browser). `respond()` therefore relaxes `form-action` on the consent response to the single
+ * already exact-matched `redirectUri` origin only. DEBT-019/020 (CORS) do not apply: `/authorize`
+ * is a top-level browser navigation, not a CORS fetch/preflight.
  */
 @Controller()
 @UseFilters(HtmlExceptionFilter)
@@ -148,6 +151,13 @@ export class AuthorizeController {
       // Render the consent screen. CSRF identity = session cookie (same as login); the guard on
       // POST verifies the same token, so the user must be signed-in here (B4.1 guaranteed that).
       const identity = this.sessionCookie.read(req)!;
+      // DEBT-084: the consent form POSTs to `/authorize/consent`, then 302s to the RP. Chromium
+      // enforces THIS page's `form-action` across that chain, so relax it to the single already
+      // exact-matched `redirectUri` origin (never the raw query); fall back to `'self'` when the
+      // stored URI does not yield a clean origin (INV-084-1/2). The page carries a CSRF token.
+      const origin = safeCspOrigin(outcome.redirectUri);
+      reply.header('Cache-Control', 'no-store');
+      reply.header('Content-Security-Policy', buildCsp({ formAction: origin ? [origin] : [] }));
       return reply.view('consent.eta', {
         title: 'Authorize access',
         csrf: this.csrf.token(identity),

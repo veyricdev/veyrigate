@@ -69,3 +69,35 @@ export function consumeLogoutState(store: TransientStore, received: string | nul
   store.removeItem(LOGOUT_STATE_KEY);
   return expected !== null && received !== null && received === expected;
 }
+
+/** Outcome of handling a post-logout landing (DEBT-079). */
+export interface LogoutLanding {
+  /** A logout-return `state` was present in the URL (whether or not it verified). */
+  readonly handled: boolean;
+  /** The `state` verified against the pending one — i.e. the redirect came from the IdP. */
+  readonly confirmed: boolean;
+  /** The original search string with the `state` param stripped (query to push to the URL). */
+  readonly cleanedSearch: string;
+}
+
+/**
+ * Handle a post-logout landing (DEBT-079). When the landing URL carries a `state` (the IdP
+ * redirected back here after RP-initiated logout), verify it against the pending logout state
+ * one-shot and fail-closed via {@link consumeLogoutState}, then strip `state` from the query so
+ * it cannot be replayed or linger. When no `state` is present this is an ordinary visit and
+ * nothing is consumed (`handled: false`).
+ *
+ * `search` is a location search string (e.g. `"?state=abc"`); `cleanedSearch` is the same string
+ * with `state` removed (leading `?` kept only when other params remain).
+ */
+export function handleLogoutLanding(store: TransientStore, search: string): LogoutLanding {
+  const params = new URLSearchParams(search);
+  if (!params.has("state")) {
+    return { handled: false, confirmed: false, cleanedSearch: search };
+  }
+  const received = params.get("state");
+  const confirmed = consumeLogoutState(store, received);
+  params.delete("state");
+  const rest = params.toString();
+  return { handled: true, confirmed, cleanedSearch: rest ? `?${rest}` : "" };
+}

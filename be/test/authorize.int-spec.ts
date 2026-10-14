@@ -341,6 +341,75 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
       expect(outcome.requestId).not.toContain('rp-controlled-state');
       await contexts.consume(outcome.requestId);
     });
+
+    // DEBT-084 (acceptance #3): peek reads without consuming or extending the TTL, so the single-use
+    // consume on the subsequent /authorize resume still works exactly once.
+    it('peek does NOT consume the context and does NOT extend its TTL (INV-084-3)', async () => {
+      const { requestId } = await contexts.create({
+        clientId: `${RUN}-client`,
+        redirectUri: 'https://app.example.com/callback',
+        codeChallenge: VALID_CHALLENGE,
+        scope: 'openid',
+      });
+      const key = `authz_ctx:${requestId}`;
+      const ttlBefore = await redis.pttl(key);
+      await new Promise((r) => setTimeout(r, 25)); // let the TTL visibly decrease
+
+      const peeked = await contexts.peek(requestId);
+      expect(peeked).not.toBeNull();
+      expect(peeked!.redirectUri).toBe('https://app.example.com/callback');
+
+      // A GET must never slide the TTL forward: it keeps counting down.
+      const ttlAfter = await redis.pttl(key);
+      expect(ttlAfter).toBeGreaterThan(0);
+      expect(ttlAfter).toBeLessThanOrEqual(ttlBefore);
+
+      // Context survives the peek: consume still succeeds once, then is gone (single-use intact).
+      expect(await contexts.consume(requestId)).not.toBeNull();
+      expect(await contexts.consume(requestId)).toBeNull();
+    });
+
+    // DEBT-086: the test above only proves `ttlAfter <= ttlBefore`, which a resetting peek
+    // (`GETEX PX CONTEXT_TTL_MS`) still satisfies because `ttlBefore` is itself ~600000. To catch a
+    // TTL-reset (the ctx silently living longer on every GET /login) we first SHRINK the TTL well
+    // below the context TTL, then assert peek keeps it below that shrunken ceiling. A `GETEX`/
+    // `PEXPIRE` inside peek would bump PTTL back towards 600000 and fail here.
+    it('peek does NOT reset a shrunken TTL back to the context TTL (DEBT-086)', async () => {
+      const { requestId } = await contexts.create({
+        clientId: `${RUN}-client`,
+        redirectUri: 'https://app.example.com/callback',
+        codeChallenge: VALID_CHALLENGE,
+        scope: 'openid',
+      });
+      const key = `authz_ctx:${requestId}`;
+
+      // Shrink the live key's TTL far below the 10-minute context TTL.
+      const SHRUNK_MS = 5000;
+      expect(await redis.pexpire(key, SHRUNK_MS)).toBe(1);
+      const ttlBefore = await redis.pttl(key);
+      expect(ttlBefore).toBeGreaterThan(0);
+      expect(ttlBefore).toBeLessThanOrEqual(SHRUNK_MS);
+
+      const peeked = await contexts.peek(requestId);
+      expect(peeked).not.toBeNull();
+
+      // A non-touching GET must leave the shrunken TTL intact (it can only count down).
+      const ttlAfter = await redis.pttl(key);
+      expect(ttlAfter).toBeGreaterThan(0);
+      expect(ttlAfter).toBeLessThanOrEqual(SHRUNK_MS);
+    });
+
+    it('peek returns null for a missing/consumed request_id and for an empty id', async () => {
+      const { requestId } = await contexts.create({
+        clientId: `${RUN}-client`,
+        redirectUri: 'https://app.example.com/callback',
+        codeChallenge: VALID_CHALLENGE,
+        scope: 'openid',
+      });
+      await contexts.consume(requestId);
+      expect(await contexts.peek(requestId)).toBeNull();
+      expect(await contexts.peek('')).toBeNull();
+    });
   });
 });
 describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', () => {
@@ -465,6 +534,12 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
     expect(resumed.body).toContain('Authorize access');
     expect(resumed.body).toMatch(/name="_csrf" value="[^"]+"/);
     expect(resumed.body).toContain('openid');
+    // DEBT-084 (acceptance #5): the consent page relaxes form-action to the already exact-matched
+    // redirect_uri origin only (never the raw query), and never leaks the path/query of the URI.
+    const csp = resumed.headers['content-security-policy'] as string;
+    expect(csp).toContain("form-action 'self' https://app.example.com");
+    expect(csp).not.toContain('/callback');
+    expect(resumed.headers['cache-control']).toBe('no-store');
     await sessionSvc.revoke(id);
   });
 

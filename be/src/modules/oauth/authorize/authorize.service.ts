@@ -62,6 +62,12 @@ export type AuthorizeOutcome =
       clientId: string;
       scopes: string[];
       resource: string;
+      /**
+       * Already-validated (exact-matched) redirect URI (DEBT-084). Used ONLY to derive the consent
+       * page's per-response CSP `form-action` origin — it is NEVER passed to the template and the
+       * redirect is always rebuilt from the stored context on the POST.
+       */
+      redirectUri: string;
     }
   /** Consent already satisfied (or just granted): a code was issued, redirect it to the RP. */
   | { kind: 'code_issued'; redirectUri: string; code: string; state?: string };
@@ -224,6 +230,7 @@ export class AuthorizeService {
         clientId: client.clientId,
         scopes: requestedScopes,
         resource: ConsentService.normalizeResource(resource),
+        redirectUri,
       };
     } catch (err) {
       if (err instanceof AuthorizeRedirectError) {

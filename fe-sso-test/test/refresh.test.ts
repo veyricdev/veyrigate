@@ -112,6 +112,43 @@ describe("refreshSession", () => {
     expect(store.get()).toBeNull();
   });
 
+  it("fail-closed clears the session when the store still holds the refreshing session (DEBT-078)", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(tokenResponse({ error: "invalid_grant" }, 400));
+    const store = seededStore("rt-old");
+    const current = store.get();
+    const d = depsFor(store, fetchImpl as unknown as typeof fetch);
+    await expect(
+      refreshSession({ clientId: CLIENT_ID, issuer: ISSUER }, d),
+    ).rejects.toThrow(/invalid_grant/);
+    // get()===current at catch time → fail-closed clear.
+    expect(store.get()).toBeNull();
+    expect(current).not.toBeNull();
+  });
+
+  it("fail-closed does NOT clear a NEWER session installed while the old refresh was in flight (DEBT-078)", async () => {
+    const store = seededStore("rt-old");
+    const newer: Session = {
+      accessToken: "at-newer",
+      idToken: "id-newer",
+      refreshToken: "rt-newer",
+      claims: { iss: ISSUER, sub: "user-123", aud: CLIENT_ID, exp: 0, iat: 0 },
+      accessTokenExpiresAt: 0,
+    };
+    // Simulate logout→login re-installing a fresh session right as the old /token call fails.
+    const fetchImpl = vi.fn().mockImplementation(async () => {
+      store.set(newer);
+      return tokenResponse({ error: "invalid_grant" }, 400);
+    });
+    const d = depsFor(store, fetchImpl as unknown as typeof fetch);
+    await expect(
+      refreshSession({ clientId: CLIENT_ID, issuer: ISSUER }, d),
+    ).rejects.toThrow(/invalid_grant/);
+    // get() !== current at catch time → the newer session must survive (not clobbered).
+    expect(store.get()).toBe(newer);
+  });
+
   it("throws when there is no refresh_token", async () => {
     const store = createTokenStore();
     store.set({

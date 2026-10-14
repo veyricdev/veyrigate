@@ -1,7 +1,11 @@
+import { Types } from 'mongoose';
 import mongoose, { type Connection, type Model } from 'mongoose';
+import { z } from 'zod';
 import { validateEnv } from '../config/validation.schema';
 import { MODELS } from './mongo/models';
 import { DEFAULT_TENANT_ID } from '../modules/identity/tenant.service';
+import { normalizeEmail } from '../modules/identity/user.service';
+import { hashPassword } from '../common/crypto/crypto.util';
 import type { Client } from '../modules/clients/client.service';
 import type { Resource } from '../modules/resources/resource.service';
 import { validateRedirectUriList } from '../modules/clients/redirect-uri.validator';
@@ -119,6 +123,128 @@ export function assertNotProduction(nodeEnv: string | undefined): void {
   }
 }
 
+/**
+ * Dev-user seed config (DEBT-076). Read ONLY here, via its own zod schema — deliberately NOT added
+ * to the app `envSchema`, so app boot and the integration-test harness never start requiring these
+ * variables. A missing/invalid variable fails BEFORE any DB connection with a message naming it.
+ * Password reuses the same 8–128 rule as `AuthenticationService.validatePassword` (kept in sync by
+ * hand: it is a one-line bound, not worth importing a private method). `DEV_SEED_PASSWORD` is never
+ * logged.
+ */
+const devSeedUserEnvSchema = z.object({
+  DEV_SEED_EMAIL: z
+    .string({ message: 'DEV_SEED_EMAIL is required' })
+    .email('DEV_SEED_EMAIL must be a valid email'),
+  DEV_SEED_PASSWORD: z
+    .string({ message: 'DEV_SEED_PASSWORD is required' })
+    .min(8, 'DEV_SEED_PASSWORD must be between 8 and 128 characters')
+    .max(128, 'DEV_SEED_PASSWORD must be between 8 and 128 characters'),
+});
+
+export interface DevSeedUserConfig {
+  email: string;
+  password: string;
+  /** `ADMIN_SEED_EMAIL` — the dev user must NOT collide with the admin seed (privilege split). */
+  adminEmail: string;
+}
+
+/**
+ * Parse `DEV_SEED_EMAIL`/`DEV_SEED_PASSWORD` from the environment. Throws (naming the variable) when
+ * missing/invalid — the CLI calls this BEFORE opening a DB connection. The password is never echoed
+ * in the error (zod only reports the variable name and the bound).
+ */
+export function readDevSeedUserConfig(
+  env: Record<string, unknown>,
+  adminEmail: string,
+): DevSeedUserConfig {
+  const parsed = devSeedUserEnvSchema.safeParse(env);
+  if (!parsed.success) {
+    const msg = parsed.error.issues.map((i) => i.message).join('; ');
+    throw new Error(`seed-dev: invalid dev-user environment: ${msg}`);
+  }
+  return {
+    email: parsed.data.DEV_SEED_EMAIL,
+    password: parsed.data.DEV_SEED_PASSWORD,
+    adminEmail,
+  };
+}
+
+/**
+ * Upsert a single dev user (DEBT-076) that can log in through the real login flow:
+ *   - `emailVerifiedAt` is set on insert (clears the `!user.emailVerifiedAt` gate in
+ *     `AuthenticationService.login`); kept at its original value on re-seed (`$min` of `now`);
+ *   - `failedLoginCount` reset to 0 and `lockedUntil` unset on EVERY run, so a prior failed/locked
+ *     run never blocks the next (lockout reset);
+ *   - a `UserTenant {tenantId: DEFAULT_TENANT_ID, status: 'active', roles: []}` membership is upserted
+ *     (like `register()` → `addMembership`; without it `TenantGuard` returns 403). NO role is granted:
+ *     the dev user is a plain non-admin, deliberately separate from the admin seed.
+ *
+ * Idempotent: keyed by the normalized email (unique index) for the user and by `(userId, tenantId)`
+ * for the membership, so running twice converges to one user + one membership. Fail-closed on
+ * environment: `assertNotProduction` runs BEFORE any write. The password is hashed with Argon2id
+ * (same as `UserService`) and never logged.
+ *
+ * NOTE (dev-only): if the email already exists (e.g. registered by hand), this OVERWRITES its
+ * password hash — acceptable because the tool is dev-only and refuses production. See README.
+ */
+export async function seedDevUser(
+  connection: Connection,
+  config: DevSeedUserConfig,
+  nodeEnv: string | undefined,
+  now: Date = new Date(),
+): Promise<void> {
+  // Fail-closed BEFORE any write: this dev tool must never mutate a production database.
+  assertNotProduction(nodeEnv);
+
+  const email = normalizeEmail(config.email);
+  // Privilege split: never seed a dev user over the admin seed account (B6.4 grants admin roles by
+  // ADMIN_SEED_EMAIL; a collision would hand the dev user admin privileges).
+  if (email === normalizeEmail(config.adminEmail)) {
+    throw new Error('seed-dev: DEV_SEED_EMAIL must differ from ADMIN_SEED_EMAIL');
+  }
+
+  const passwordHash = await hashPassword(config.password);
+
+  const userModel: Model<unknown> = connection.models.User ?? connection.model('User');
+  const userTenantModel: Model<unknown> =
+    connection.models.UserTenant ?? connection.model('UserTenant');
+
+  await upsert(() =>
+    userModel
+      .updateOne(
+        { email },
+        {
+          $set: { passwordHash, failedLoginCount: 0 },
+          $min: { emailVerifiedAt: now },
+          $unset: { lockedUntil: 1 },
+        },
+        { upsert: true },
+      )
+      .exec(),
+  );
+
+  const userDoc = await userModel
+    .findOne({ email })
+    .select('_id')
+    .lean<{ _id: Types.ObjectId }>()
+    .exec();
+  if (!userDoc) throw new Error('seed-dev: dev user disappeared after upsert');
+  const userId = userDoc._id;
+
+  await upsert(() =>
+    userTenantModel
+      .updateOne(
+        { userId, tenantId: DEFAULT_TENANT_ID },
+        { $set: { status: 'active' }, $setOnInsert: { roles: [] } },
+        { upsert: true },
+      )
+      .exec(),
+  );
+
+  // Log identifiers only — never the password or its hash.
+  console.log(`seed-dev: upserted user ${userId.toString()} <${email}>`);
+}
+
 /** Run an upsert, swallowing only the E11000 a lost concurrent-insert race produces. */
 async function upsert(run: () => Promise<unknown>): Promise<void> {
   try {
@@ -133,6 +259,11 @@ async function main(): Promise<void> {
   assertNotProduction(process.env.NODE_ENV);
 
   const env = validateEnv(process.env);
+  // Read dev-user config BEFORE opening a DB connection, so a missing/invalid DEV_SEED_* variable
+  // fails fast (naming the variable) without touching the database. DEV_SEED_* is NOT part of the
+  // app `envSchema` — it is read here only.
+  const devUser = readDevSeedUserConfig(process.env, env.ADMIN_SEED_EMAIL);
+
   const connection = await mongoose
     .createConnection(env.MONGO_URI, { autoIndex: false, serverSelectionTimeoutMS: 5000 })
     .asPromise();
@@ -142,6 +273,7 @@ async function main(): Promise<void> {
   }
   try {
     await seedDev(connection, env.ISSUER, process.env.NODE_ENV);
+    await seedDevUser(connection, devUser, process.env.NODE_ENV);
   } finally {
     await connection.close();
   }

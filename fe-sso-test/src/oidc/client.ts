@@ -3,7 +3,11 @@ import { discover, type Discovery } from "./discovery";
 import { beginLogin } from "./authorize";
 import { handleCallback } from "./callback";
 import { refreshSession } from "./refresh";
-import { logout as logoutInner } from "./logout";
+import {
+  logout as logoutInner,
+  handleLogoutLanding,
+  type LogoutLanding,
+} from "./logout";
 import { createJwks } from "./idToken";
 import { createTokenStore, type Session, type TokenStore } from "./tokenStore";
 import type { JWTVerifyGetKey } from "jose";
@@ -69,4 +73,12 @@ export async function logout(): Promise<string | null> {
     tokens,
     window.sessionStorage,
   );
+}
+
+/**
+ * Handle a post-logout landing on the current URL (DEBT-079): verify the returned `state`
+ * one-shot/fail-closed and report the stripped query string so the caller can clean the URL.
+ */
+export function consumeLogout(search: string): LogoutLanding {
+  return handleLogoutLanding(window.sessionStorage, search);
 }

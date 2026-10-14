@@ -1,6 +1,11 @@
 // @vitest-environment node
 import { describe, it, expect } from "vitest";
-import { buildLogoutUrl, consumeLogoutState, logout } from "../src/oidc/logout";
+import {
+  buildLogoutUrl,
+  consumeLogoutState,
+  handleLogoutLanding,
+  logout,
+} from "../src/oidc/logout";
 import { createTokenStore, type Session } from "../src/oidc/tokenStore";
 import { discovery, ISSUER, CLIENT_ID, memStore } from "./helpers/env";
 
@@ -69,3 +74,45 @@ describe("logout", () => {
 function memStoreWith(state: string) {
   return memStore({ "oidc:logout_state": state });
 }
+
+describe("handleLogoutLanding (DEBT-079)", () => {
+  it("matching state → confirmed, key removed, state stripped from the query", () => {
+    const store = memStoreWith("s1");
+    const r = handleLogoutLanding(store, "?state=s1");
+    expect(r).toEqual({ handled: true, confirmed: true, cleanedSearch: "" });
+    // One-shot: the pending key is consumed.
+    expect(store.getItem("oidc:logout_state")).toBeNull();
+  });
+
+  it("wrong state → not confirmed (fail-closed), but still consumes the key and strips state", () => {
+    const store = memStoreWith("s1");
+    const r = handleLogoutLanding(store, "?state=tampered");
+    expect(r.handled).toBe(true);
+    expect(r.confirmed).toBe(false);
+    expect(r.cleanedSearch).toBe("");
+    expect(store.getItem("oidc:logout_state")).toBeNull();
+  });
+
+  it("state present but nothing pending → not confirmed, key consumed one-shot", () => {
+    const store = memStore();
+    const r = handleLogoutLanding(store, "?state=whatever");
+    expect(r.handled).toBe(true);
+    expect(r.confirmed).toBe(false);
+    expect(store.getItem("oidc:logout_state")).toBeNull();
+  });
+
+  it("no state param → untouched (ordinary visit, key not consumed)", () => {
+    const store = memStoreWith("s1");
+    const r = handleLogoutLanding(store, "?foo=bar");
+    expect(r).toEqual({ handled: false, confirmed: false, cleanedSearch: "?foo=bar" });
+    // An ordinary visit must NOT consume a pending logout state.
+    expect(store.getItem("oidc:logout_state")).toBe("s1");
+  });
+
+  it("keeps other query params while stripping state", () => {
+    const store = memStoreWith("s1");
+    const r = handleLogoutLanding(store, "?state=s1&foo=bar");
+    expect(r.confirmed).toBe(true);
+    expect(r.cleanedSearch).toBe("?foo=bar");
+  });
+});

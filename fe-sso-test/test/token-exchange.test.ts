@@ -50,4 +50,37 @@ describe("postToken success-shape validation", () => {
       postToken(discovery.token_endpoint, body, fetchImpl as unknown as typeof fetch),
     ).rejects.toThrow(/invalid_grant/);
   });
+
+  /** Invoke `postToken` expecting rejection; return the thrown Error's message. */
+  async function tokenErrorMessage(resBody: Record<string, unknown>, status = 400): Promise<string> {
+    const fetchImpl = vi.fn().mockResolvedValue(tokenResponse(resBody, status));
+    try {
+      await postToken(discovery.token_endpoint, body, fetchImpl as unknown as typeof fetch);
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
+    throw new Error("expected postToken to reject");
+  }
+
+  it("does NOT echo error_description verbatim; keeps only the sanitised code (DEBT-080)", async () => {
+    const lure = "Your session is invalid. Visit http://evil.example to re-authenticate.";
+    const message = await tokenErrorMessage({ error: "invalid_grant", error_description: lure });
+    // Attacker/IdP-controlled free text must never reach the message.
+    expect(message).not.toContain(lure);
+    expect(message).not.toContain("evil.example");
+    expect(message).not.toContain("error_description");
+    // The whitelisted code is still surfaced.
+    expect(message).toContain("invalid_grant");
+  });
+
+  it("sanitises an unknown error code to [a-z0-9_-] and never echoes error_description (DEBT-080)", async () => {
+    const message = await tokenErrorMessage({
+      error: "weird <b>code</b> \"x\"",
+      error_description: "lure-text-here",
+    });
+    expect(message).not.toContain("<b>");
+    expect(message).not.toContain("lure-text-here");
+    // Stripped to the allowed charset.
+    expect(message).toMatch(/weirdbcodebx/);
+  });
 });

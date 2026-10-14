@@ -17,10 +17,16 @@ import { SessionCookie } from '../src/modules/sessions/session.cookie';
 import { SessionService } from '../src/modules/sessions/session.service';
 import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
 import { LogoutService } from '../src/modules/oauth/logout/logout.service';
+import {
+  AuthorizeRequestContextService,
+  type AuthorizeRequestContext,
+} from '../src/modules/oauth/authorize/authorize-request-context.service';
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { UiController } from '../src/modules/ui/ui.controller';
 import { OAuthExceptionFilter } from '../src/common/filters/oauth-exception.filter';
+import { buildCsp } from '../src/common/http/csp';
+import { Logger } from '@nestjs/common';
 
 @Controller('oauth-test')
 class OAuthTestController {
@@ -58,6 +64,11 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
     ]),
   };
   const audit = { record: jest.fn(async () => undefined) };
+  // DEBT-084: `GET /login` peeks the resumable context (non-consuming) to derive the CSP
+  // `form-action` origin. Default: no context (keeps `form-action 'self'`).
+  const authzContexts = {
+    peek: jest.fn<AuthorizeRequestContextService['peek']>(async () => null),
+  };
 
   beforeAll(async () => {
     const config = {
@@ -80,6 +91,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
         { provide: SessionService, useValue: sessions },
         { provide: RefreshTokenService, useValue: refreshTokens },
         { provide: LogoutService, useValue: logoutRp },
+        { provide: AuthorizeRequestContextService, useValue: authzContexts },
         { provide: AuditService, useValue: audit },
         {
           provide: RateLimitService,
@@ -125,6 +137,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
     refreshTokens.revokeAllForUser.mockResolvedValue(0);
     logoutRp.resolvePostLogoutRedirect.mockResolvedValue('/login?loggedOut=1');
     logoutRp.frontchannelIframes.mockResolvedValue([]);
+    authzContexts.peek.mockResolvedValue(null);
     audit.record.mockResolvedValue(undefined);
   });
   afterAll(() => app.close());
@@ -154,6 +167,191 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
     expect(response.headers['content-security-policy']).not.toContain('unsafe-inline');
     expect(response.headers['referrer-policy']).toBe('no-referrer');
     expect(response.body).not.toMatch(/<script\b|style=/i);
+  });
+
+  describe('DEBT-084: per-response CSP form-action for redirect forms', () => {
+    // Parse a CSP header value into a directive -> value map (same model as csp.spec.ts).
+    const directives = (csp: string | undefined): Map<string, string> => {
+      const map = new Map<string, string>();
+      for (const part of (csp ?? '').split(';')) {
+        const t = part.trim();
+        if (!t) continue;
+        const i = t.indexOf(' ');
+        if (i === -1) map.set(t, '');
+        else map.set(t.slice(0, i), t.slice(i + 1));
+      }
+      return map;
+    };
+    const ctx = (redirectUri: string): AuthorizeRequestContext => ({
+      clientId: 'rp',
+      redirectUri,
+      codeChallenge: 'x',
+      scope: 'openid',
+      createdAt: 0,
+      expiresAt: 0,
+    });
+
+    // Acceptance #1: valid resume context => form-action gains exactly the client origin; every
+    // other directive equals the global CSP measured from GET /register; no path/query leaks.
+    it('GET /login with a valid request_id resume adds only the redirect_uri origin to form-action', async () => {
+      authzContexts.peek.mockResolvedValue(ctx('https://rp.example/callback?x=1'));
+      const returnTo = encodeURIComponent('/authorize?request_id=abc123');
+      const { response } = await form(`/login?returnTo=${returnTo}`);
+      expect(response.statusCode).toBe(200);
+      const d = directives(response.headers['content-security-policy'] as string);
+      expect(d.get('form-action')).toBe("'self' https://rp.example");
+      // Only form-action differs from the global header.
+      const base = directives(
+        (await form('/register')).response.headers['content-security-policy'] as string,
+      );
+      for (const [name, value] of base) {
+        if (name === 'form-action') continue;
+        expect(d.get(name)).toBe(value);
+      }
+      expect([...d.keys()].sort()).toEqual([...base.keys()].sort());
+      // No path/query of the redirect_uri in the header.
+      expect(response.headers['content-security-policy']).not.toContain('/callback');
+      expect(response.headers['content-security-policy']).not.toContain('x=1');
+      expect(response.headers['cache-control']).toBe('no-store');
+      // peek is a read, never consume.
+      expect(authzContexts.peek).toHaveBeenCalledWith('abc123');
+    });
+
+    // Acceptance #2: negative returnTo shapes keep form-action 'self' verbatim.
+    it.each([
+      ['no returnTo', '/login'],
+      ['returnTo=/', `/login?returnTo=${encodeURIComponent('/')}`],
+      [
+        'extra redirect_uri query',
+        `/login?returnTo=${encodeURIComponent('/authorize?request_id=X&redirect_uri=https://evil.example')}`,
+      ],
+      ['consent path', `/login?returnTo=${encodeURIComponent('/authorize/consent?request_id=X')}`],
+      ['raw redirect_uri query', `/login?redirect_uri=https://evil.example`],
+    ])('GET /login (%s) keeps form-action self', async (_label, url) => {
+      authzContexts.peek.mockResolvedValue(ctx('https://rp.example/callback'));
+      const { response } = await form(url);
+      expect(response.statusCode).toBe(200);
+      const d = directives(response.headers['content-security-policy'] as string);
+      expect(d.get('form-action')).toBe("'self'");
+    });
+
+    it('GET /login with an unknown/consumed request_id keeps form-action self', async () => {
+      authzContexts.peek.mockResolvedValue(null); // missing/expired/consumed => null
+      const returnTo = encodeURIComponent('/authorize?request_id=gone');
+      const { response } = await form(`/login?returnTo=${returnTo}`);
+      const d = directives(response.headers['content-security-policy'] as string);
+      expect(d.get('form-action')).toBe("'self'");
+    });
+
+    // Acceptance #4: Redis failure during peek => fail-closed to 'self', still 200, no leak.
+    // DEBT-087: also prove the fail-closed warning log never carries the request_id or returnTo
+    // (the exposure budget). Spy on every Logger sink and scan all args for the secret id.
+    it('GET /login fails closed to self when peek throws (Redis error), without logging request_id', async () => {
+      const SECRET_ID = 'secret-id';
+      const sinks = ['log', 'warn', 'error', 'debug', 'verbose', 'fatal'] as const;
+      const spies = sinks.map((level) =>
+        jest.spyOn(Logger.prototype, level).mockImplementation(() => undefined),
+      );
+      try {
+        authzContexts.peek.mockRejectedValue(new Error('redis down'));
+        const returnTo = encodeURIComponent(`/authorize?request_id=${SECRET_ID}`);
+        const { response } = await form(`/login?returnTo=${returnTo}`);
+        expect(response.statusCode).toBe(200);
+        const d = directives(response.headers['content-security-policy'] as string);
+        expect(d.get('form-action')).toBe("'self'");
+
+        // A warn MUST have fired (fail-closed path is reached)...
+        const warn = spies[sinks.indexOf('warn')];
+        expect(warn).toHaveBeenCalled();
+        // ...but no log sink may contain the request_id or returnTo anywhere in its arguments.
+        const allArgs = spies
+          .flatMap((spy) => spy.mock.calls)
+          .flat()
+          .map((arg) => (typeof arg === 'string' ? arg : JSON.stringify(arg)));
+        for (const line of allArgs) {
+          expect(line).not.toContain(SECRET_ID);
+          expect(line).not.toContain('request_id');
+          expect(line).not.toContain('returnTo');
+          expect(line).not.toContain('/authorize');
+        }
+      } finally {
+        spies.forEach((spy) => spy.mockRestore());
+      }
+    });
+
+    // Acceptance #7: legacy/hand-edited redirect URI with a header-splitting host => no origin added.
+    it.each([
+      ['semicolon host', 'https://evil.example;script-src *'],
+      ['space host', 'https://evil.example x'],
+      ['non-http scheme', 'app://evil/callback'],
+    ])(
+      'GET /login drops a legacy redirect_uri (%s) that could split the header',
+      async (_label, uri) => {
+        authzContexts.peek.mockResolvedValue(ctx(uri));
+        const returnTo = encodeURIComponent('/authorize?request_id=legacy');
+        const { response } = await form(`/login?returnTo=${returnTo}`);
+        const d = directives(response.headers['content-security-policy'] as string);
+        expect(d.get('form-action')).toBe("'self'");
+        // Header never splits into an injected directive.
+        expect(d.has('script-src')).toBe(true);
+        expect(d.get('script-src')).toBe("'self'");
+      },
+    );
+
+    // Acceptance #6: GET /logout adds the resolved RP origin only when it is a real target.
+    it('GET /logout adds the resolved post-logout origin to form-action', async () => {
+      logoutRp.resolvePostLogoutRedirect.mockResolvedValue('https://rp.example/signed-out?x=1');
+      const { response } = await form('/logout');
+      expect(response.statusCode).toBe(200);
+      const d = directives(response.headers['content-security-policy'] as string);
+      expect(d.get('form-action')).toBe("'self' https://rp.example");
+      expect(response.headers['content-security-policy']).not.toContain('/signed-out');
+    });
+
+    it('GET /logout keeps form-action self when resolve falls back to the default redirect', async () => {
+      logoutRp.resolvePostLogoutRedirect.mockResolvedValue('/login?loggedOut=1'); // == defaultRedirect
+      const { response } = await form('/logout');
+      const d = directives(response.headers['content-security-policy'] as string);
+      expect(d.get('form-action')).toBe("'self'");
+    });
+
+    // Acceptance #8 (regression): other form pages keep the global CSP; buildCsp() === global.
+    it.each(['/register', '/forgot', '/verify-email', '/reset'])(
+      '%s keeps the global form-action self CSP',
+      async (path) => {
+        const { response } = await form(path);
+        const d = directives(response.headers['content-security-policy'] as string);
+        expect(d.get('form-action')).toBe("'self'");
+      },
+    );
+
+    // DEBT-088: automate the byte-identity the senior verified by hand. The header helmet emits for
+    // an ordinary page (GET /register) must equal `buildCsp()` with no arguments, directive for
+    // directive and byte for byte. A helmet default-directive change would break this immediately
+    // instead of silently drifting the 3 relaxed pages away from the global header.
+    it('buildCsp() with no args is byte-identical to the global helmet header (DEBT-088)', async () => {
+      const { response } = await form('/register');
+      const global = response.headers['content-security-policy'] as string;
+      expect(typeof global).toBe('string');
+      expect(buildCsp()).toBe(global);
+    });
+
+    // DEBT-088: `/` (home → 302 to /login with no session) still carries the unrelaxed global CSP.
+    it('GET / keeps form-action self on its response (DEBT-088)', async () => {
+      const response = await app.inject({ method: 'GET', url: '/' });
+      expect(response.statusCode).toBe(302); // redirect to /login (no session in this suite)
+      const d = directives(response.headers['content-security-policy'] as string);
+      expect(d.get('form-action')).toBe("'self'");
+    });
+
+    // DEBT-088: the HTML error page (403 CSRF reject) keeps form-action self — never relaxed.
+    it('HTML error page keeps form-action self (DEBT-088)', async () => {
+      const response = await app.inject({ method: 'POST', url: '/login', payload: {} });
+      expect(response.statusCode).toBe(403);
+      expect(response.body).toContain('The request could not be completed.');
+      const d = directives(response.headers['content-security-policy'] as string);
+      expect(d.get('form-action')).toBe("'self'");
+    });
   });
 
   describe.each([
@@ -1024,6 +1222,9 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
       expect(csp).toContain("default-src 'self'");
       expect(csp).toContain("script-src 'self'");
       expect(csp).toContain("frame-ancestors 'none'");
+      // DEBT-088: the front-channel page relaxes ONLY frame-src — form-action stays 'self'.
+      expect(csp).toContain("form-action 'self'");
+      expect(csp).not.toMatch(/form-action 'self' \S/);
       expect(response.headers['cache-control']).toBe('no-store');
 
       // A later ordinary page keeps the default (iframe-free) CSP.

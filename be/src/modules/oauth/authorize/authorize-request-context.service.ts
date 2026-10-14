@@ -97,4 +97,15 @@ export class AuthorizeRequestContextService {
     );
     return raw ? (JSON.parse(raw) as AuthorizeRequestContext) : null;
   }
+
+  /**
+   * Non-consuming read (DEBT-084): plain `GET`, never `DEL`, never touches the TTL (INV-084-3). Used
+   * only to derive the registered `redirectUri` origin for the per-response CSP `form-action` on
+   * `GET /login`; the single-use `consume` on the resumed `/authorize` is unaffected.
+   */
+  async peek(requestId: string): Promise<AuthorizeRequestContext | null> {
+    if (!requestId) return null;
+    const raw = await this.redis.client.get(ctxKey(requestId));
+    return raw ? (JSON.parse(raw) as AuthorizeRequestContext) : null;
+  }
 }

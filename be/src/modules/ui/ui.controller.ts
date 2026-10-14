@@ -5,6 +5,7 @@ import {
   Get,
   HttpException,
   HttpStatus,
+  Logger,
   Post,
   Query,
   Req,
@@ -15,6 +16,7 @@ import {
 import { IsEmail, IsOptional, IsString, Length } from 'class-validator';
 import { ConfigService } from '@nestjs/config';
 import { generateToken } from '../../common/crypto/crypto.util';
+import { buildCsp, safeCspOrigin } from '../../common/http/csp';
 import type { HttpReply, HttpRequest } from '../../common/http/http.types';
 import type { AppConfig, SessionConfig } from '../../config/configuration';
 import { AuthenticationService } from '../authentication/authentication.service';
@@ -26,9 +28,10 @@ import { SESSION_COOKIE, SessionCookie } from '../sessions/session.cookie';
 import { SessionService } from '../sessions/session.service';
 import { RefreshTokenService } from '../oauth/token/refresh-token.service';
 import { LogoutService, type LogoutParams } from '../oauth/logout/logout.service';
+import { AuthorizeRequestContextService } from '../oauth/authorize/authorize-request-context.service';
 import { CsrfGuard, CsrfService } from './csrf.service';
 import { HtmlExceptionFilter } from './html-exception.filter';
-import { safeReturnTo } from './return-to';
+import { requestIdFromReturnTo, safeReturnTo } from './return-to';
 
 class FormDto {
   @IsOptional() @IsString() _csrf?: string;
@@ -69,6 +72,7 @@ const ANON_COOKIE = 'idp_csrf';
 export class UiController {
   private readonly issuer: string;
   private readonly secure: boolean;
+  private readonly logger = new Logger(UiController.name);
   constructor(
     private readonly auth: AuthenticationService,
     private readonly csrf: CsrfService,
@@ -78,6 +82,7 @@ export class UiController {
     private readonly rateLimit: RateLimitService,
     private readonly refreshTokens: RefreshTokenService,
     private readonly logoutRp: LogoutService,
+    private readonly authzContexts: AuthorizeRequestContextService,
     config: ConfigService,
   ) {
     this.issuer = config.getOrThrow<AppConfig>('app').issuer;
@@ -99,10 +104,45 @@ export class UiController {
     @Query('returnTo') returnTo?: string,
   ) {
     if (await this.hasLiveSession(req, reply)) return reply.redirect('/', 302);
+    const safeReturn = safeReturnTo(returnTo, this.issuer);
+    // DEBT-084: the login form POSTs here, then 302s to `/authorize?request_id`, then 302s to the RP.
+    // Chromium enforces the `form-action` of THIS page across that chain, so relax it to the single
+    // RP origin already exact-matched in the resumable context (never the raw query). Fail-closed to
+    // `'self'` on any doubt. The page carries a CSRF token + credentials field: never cache it.
+    await this.setLoginFormActionCsp(reply, safeReturn);
     return this.form(req, reply, 'login.eta', {
       title: 'Sign in',
-      returnTo: safeReturnTo(returnTo, this.issuer),
+      returnTo: safeReturn,
     });
+  }
+
+  /**
+   * Set the per-response CSP for `GET /login` (DEBT-084). Only when `safeReturn` is EXACTLY
+   * `/authorize?request_id=<id>` (single query key) and the still-live context's already-validated
+   * `redirectUri` yields a clean origin is that one origin appended to `form-action`; otherwise the
+   * header stays `form-action 'self'` (INV-084-1/2). `peek` never consumes/extends the context
+   * (INV-084-3). A Redis failure is fail-closed (`'self'`) and logged without the request_id.
+   */
+  private async setLoginFormActionCsp(reply: UiReply, safeReturn: string): Promise<void> {
+    reply.header('Cache-Control', 'no-store');
+    const origin = await this.loginFormActionOrigin(safeReturn);
+    reply.header('Content-Security-Policy', buildCsp({ formAction: origin ? [origin] : [] }));
+  }
+
+  /** Resolve the single `form-action` origin for a `/login` resume, or null (→ `'self'`). */
+  private async loginFormActionOrigin(safeReturn: string): Promise<string | null> {
+    const requestId = requestIdFromReturnTo(safeReturn);
+    if (!requestId) return null;
+    let ctx;
+    try {
+      ctx = await this.authzContexts.peek(requestId);
+    } catch {
+      // Redis read failure: never guess an origin; keep `form-action 'self'` (fail-closed). Do not
+      // log the request_id or returnTo (exposure budget).
+      this.logger.warn('login CSP: context peek failed; keeping form-action self');
+      return null;
+    }
+    return ctx ? safeCspOrigin(ctx.redirectUri) : null;
   }
   @Get('/register') async register(@Req() req: UiRequest, @Res() reply: UiReply) {
     if (await this.hasLiveSession(req, reply)) return reply.redirect('/', 302);
@@ -147,6 +187,16 @@ export class UiController {
     );
     const reflectUri =
       resolved === this.logoutRp.defaultRedirect ? undefined : postLogoutRedirectUri;
+
+    // DEBT-084: the logout form POSTs here, then 302s to `post_logout_redirect_uri`. Relax
+    // `form-action` to that single already-validated origin, but ONLY when `resolved` is a real RP
+    // target (`!== defaultRedirect`) and yields a clean origin; otherwise keep `'self'` (INV-084-1/2).
+    const logoutOrigin =
+      resolved === this.logoutRp.defaultRedirect ? null : safeCspOrigin(resolved);
+    reply.header(
+      'Content-Security-Policy',
+      buildCsp({ formAction: logoutOrigin ? [logoutOrigin] : [] }),
+    );
 
     return this.form(req, reply, 'logout.eta', {
       title: 'Sign out',
@@ -336,24 +386,12 @@ export class UiController {
    * `Cache-Control: no-store` so the intermediate page is never cached.
    */
   private renderFrontchannel(reply: UiReply, iframes: string[], target: string): unknown {
-    const frameSrc = this.logoutRp.frameSrcOrigins(iframes).join(' ');
-    // Keep the SAME hardening directives helmet applies globally (main.ts + its defaults:
-    // base-uri/object-src/script-src-attr/upgrade-insecure-requests) and ONLY relax `frame-src` to
-    // the registered RP origins. Dropping those defaults here would silently weaken this one page.
+    // Keep the SAME hardening directives helmet applies globally and ONLY relax `frame-src` to the
+    // registered RP origins (one source of truth via `buildCsp`; DEBT-084). This page keeps
+    // `form-action 'self'` (it redirects via a static script, not a form).
     reply.header(
       'Content-Security-Policy',
-      [
-        "default-src 'self'",
-        "base-uri 'self'",
-        "script-src 'self'",
-        "script-src-attr 'none'",
-        "style-src 'self'",
-        "object-src 'none'",
-        "form-action 'self'",
-        "frame-ancestors 'none'",
-        `frame-src ${frameSrc}`,
-        'upgrade-insecure-requests',
-      ].join('; '),
+      buildCsp({ frameSrc: this.logoutRp.frameSrcOrigins(iframes) }),
     );
     reply.header('Cache-Control', 'no-store');
     reply.status(200);
