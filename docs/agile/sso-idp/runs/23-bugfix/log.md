@@ -111,3 +111,7 @@ dừng container. Không sửa code sản phẩm; test hiện có phủ đủ ac
 - Dọn file rác gốc repo (`=12`,`=23` từ tool trước) + script grep tạm trong `e2e/.keys` (git-ignored, đã xoá).
 - Bàn giao: **orchestrator** đóng run (cổng tester PASS). Code chưa commit — out-of-scope `.vscode/mcp.json`,
   `.mcp.json`, `.github/agents/*` đừng commit chung run này.
+
+## [2026-10-14] orchestrator
+- Đã làm: commit `8a36ae4`; viết `summary.md`; cập nhật `STATUS.md`.
+- Kết quả: DONE — run 23 đóng.

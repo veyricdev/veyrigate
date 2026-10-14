@@ -1,0 +1,8 @@
+# Summary — run 23 bugfix (DEBT-089/090/091/070) — ✅ PASS 4/4 task
+
+- **Phạm vi**: T1 [BE] DEBT-089 — access log pino: `serializeResponse` chỉ giữ `{statusCode, headers:{location}}`, `location` cắt tại `?`/`#` ⇒ không còn `code`/`state`/cookie/`set-cookie` trong log (cả log CI E2E); `serializeRequest` giữ `id`, method, path. T2 [E2E] DEBT-090 — `e2e/config/env.ts` nạp `e2e/.env` (đường dẫn tuyệt đối), bỏ password mặc định ⇒ thiếu thì dừng. T3 [E2E] DEBT-091 — E2E dùng keyset riêng `e2e/.keys` (git-ignored), không ghi vào `be/keys`. T4 [BE] DEBT-070 — `test:int` có preflight TCP cho container test, báo lỗi ~1s kèm lệnh `docker start` thay vì treo ~10'.
+- **Bug tìm ra trong review**: T1 làm mất request-id khỏi access log (senior REJECT 1, đã sửa). Phát hiện có từ trước: audit và access log dùng hai request-id khác nhau, `x-request-id` của client không được validate (DEBT-095).
+- **Verify**: BE unit 198/198, int 482/482; E2E 1/1; grep 210 dòng log E2E: 0 lần `code=`/`state=`/`id_token_hint=`/`login_hint=`/`idp_session=`/`set-cookie`/`authorization`/password/JWT; 9/9 dòng `request completed` có `req.id`; hash `be/keys/keys.json` không đổi.
+- **Commit**: `8a36ae4`.
+- **Vòng lặp**: analyst=1, tech-lead=2 (1 lần lỗi mạng), BE dev=2, FE dev=1, senior=2 (REJECT → PASS), tester=1.
+- **Debt**: đóng DEBT-070/089/090/091; mở DEBT-093, 094, 095, 096 (`--forceExit` tạm cho `test:int`), 097; DEBT-054 vẫn mở.

@@ -2,13 +2,12 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `23-bugfix` — cổng: **tester PASS → orchestrator đóng run**. Tester: unit **198/198**, int **482/482** exit 0; typecheck/lint be+e2e=0; preflight fail-fast exit 1 trong 1.67s (`--forceExit` không che); E2E thật **1/1**. Grep log E2E (210 dòng): `code=`/`state=`/`id_token_hint=`/`login_hint=`/`idp_session=`/`set-cookie`/`authorization`/password = **0**; **9** `request completed` đều có `req.id`. `be/keys/keys.json` hash trước=sau; `e2e/.env`+`.keys/` git-ignored. **Đóng DEBT-089/090/091/070**. Xem `runs/23-bugfix/test-report.md`. Code CHƯA commit.
-- **Vòng lặp (run 23)**: tech-lead=1, BE dev=2, FE dev=1, senior=2 (REJECT→PASS), tester=1 (PASS)
-- **Vòng lặp (run 22)**: analyst=1, tech-lead=2 (+DEBT-084), BE dev=2, FE dev=1 (3 lượt), senior=1 (PASS), tester=1
-- **Run vừa đóng**: `22-X1` ✅ 6/6 task — BE unit 191 + int 482, FE 83, E2E pass (cả nhánh consent). Xem `runs/22-X1/summary.md`. **M3 walking skeleton hoàn tất.**
-- **Việc tiếp theo**: run 23 dọn debt — chốt: T1 serializer `res` allow-list + cắt `?`/`#` của `location`; T2 nạp `e2e/.env`, thiếu password ⇒ throw; T3 `KEY_LOCAL_DIR` tuyệt đối `e2e/.keys` (cwd BE thực là `be/`); T4 `--globalSetup ./test/int-preflight.mjs` chỉ trong `test:int` (DEBT-054 giữ mở). Sau đó T3–T5 hoặc M5 (B5/B6).
+- **Run hiện tại**: không có (23-bugfix đã đóng, commit `8a36ae4`).
+- **Vòng lặp (run 23)**: analyst=1, tech-lead=2 (lỗi mạng ×1), BE dev=2, FE dev=1, senior=2 (REJECT → PASS), tester=1
+- **Run vừa đóng**: `23-bugfix` ✅ 4/4 task — BE unit 198 + int 482, E2E 1/1; log E2E không còn `code`/`state`/cookie. Xem `runs/23-bugfix/summary.md`.
+- **Việc tiếp theo**: T3–T5 (trang & route fe-sso-test, gọi resource thật, security lab) hoặc M5 (B5 federation, B6 admin API). Debt đáng chú ý: DEBT-095 (hai request-id, `x-request-id` chưa validate), DEBT-054/096 (open handles, `--forceExit`).
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
-- **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (phải `docker start` trước — DEBT-070); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`).
+- **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
 
 ## Tiến độ
 
@@ -24,6 +23,7 @@
 | [19](runs/19-bugfix/summary.md)–[20](runs/20-bugfix/summary.md) | M4 | bugfix (DEBT-059…061) | ✅ 617/617 | `8a58faa`, `08adee8` |
 | [21](runs/21-T1-T2/summary.md) | M3 | T1–T2 (+ seed-dev) | ✅ 694/694 | `676cd92` |
 | [22](runs/22-X1/summary.md) | M3 | X1 walking skeleton (+ DEBT-076/078/079/080/084/004) | ✅ BE 673 + FE 83 + E2E | `c2cf053` |
+| [23](runs/23-bugfix/summary.md) | M3 | bugfix (DEBT-089/090/091/070) | ✅ BE 680 + E2E | `8a36ae4` |
 
 ## Chặn / cần người quyết định
 
