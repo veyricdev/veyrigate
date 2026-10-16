@@ -1,4 +1,4 @@
-import { useSearchParams } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { describeOAuthError } from "../oidc/oauthError";
 
 /**
@@ -17,7 +17,7 @@ export default function ErrorPage() {
       <p role="alert" style={{ color: "#b00020" }}>
         <span data-testid="error-code">{code}</span>: <span data-testid="error-message">{message}</span>
       </p>
-      <a href="/">Back to start</a>
+      <Link to="/">Back to start</Link>
     </main>
   );
 }

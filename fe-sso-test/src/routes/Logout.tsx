@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router";
 import { logout } from "../oidc/client";
 
 /**
@@ -35,14 +36,14 @@ export default function Logout() {
           <p role="alert" style={{ color: "#b00020" }}>
             {error}
           </p>
-          <a href="/">Back to start</a>
+          <Link to="/">Back to start</Link>
         </>
       ) : anonymous ? (
         <>
           <p role="status" data-testid="logout-anonymous">
             You are not signed in.
           </p>
-          <a href="/">Back to start</a>
+          <Link to="/">Back to start</Link>
         </>
       ) : (
         <p>Redirecting to the identity provider.</p>

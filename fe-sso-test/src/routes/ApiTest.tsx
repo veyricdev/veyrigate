@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { Link } from "react-router";
 import {
   tokens,
   startAudProbe,
@@ -111,7 +112,7 @@ export default function ApiTest() {
       <main>
         <h1>API test</h1>
         <p role="status">Not signed in.</p>
-        <a href="/">Back to start</a>
+        <Link to="/">Back to start</Link>
       </main>
     );
   }
@@ -142,7 +143,7 @@ export default function ApiTest() {
         <ResultPanel testid="result-userinfo" title="C · /userinfo" outcome={userinfoResult} />
       </section>
       <nav>
-        <a href="/">Home</a>
+        <Link to="/">Home</Link>
       </nav>
     </main>
   );

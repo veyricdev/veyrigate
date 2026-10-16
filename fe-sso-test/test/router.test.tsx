@@ -124,4 +124,15 @@ describe("/callback loader", () => {
     expect(router.state.location.pathname).toBe("/error");
     expect(router.state.location.search).toBe("?error=access_denied");
   });
+
+  it("on an error response clears the redirect transient {state, nonce, code_verifier} (DEBT-102)", async () => {
+    tokensGet.mockReturnValue(null);
+    window.sessionStorage.setItem(
+      "oidc:transient",
+      JSON.stringify({ state: "s", nonce: "n", verifier: "v", createdAt: Date.now() }),
+    );
+    const router = await renderAt("/callback?error=access_denied&state=s");
+    expect(router.state.location.pathname).toBe("/error");
+    expect(window.sessionStorage.getItem("oidc:transient")).toBeNull();
+  });
 });

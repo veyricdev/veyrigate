@@ -14,9 +14,13 @@ export interface Transient {
    * Why this authorize flow was started. Absent/`"login"` is an ordinary sign-in; `"aud-probe"`
    * marks the wrong-`aud` security-lab flow (Task 3) so the callback runs the probe path instead
    * of installing a session. A persisted value of anything other than `"aud-probe"` is treated as
-   * a normal login (fail-closed: an unknown purpose never triggers the probe path).
+   * a normal login (fail-closed: an unknown purpose never triggers the probe path). `"lab"` marks
+   * a dev-only `/authorize` security-lab scenario (run 25): its callback is recorded, never
+   * exchanged at `/token`.
    */
-  readonly purpose?: "login" | "aud-probe";
+  readonly purpose?: "login" | "aud-probe" | "lab";
+  /** Dev-only lab scenario id (whitelisted against `LAB_SCENARIOS` on read); only with `"lab"`. */
+  readonly labScenario?: string;
 }
 
 const KEY = "oidc:transient";

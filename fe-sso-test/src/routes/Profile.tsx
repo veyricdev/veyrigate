@@ -1,3 +1,4 @@
+import { Link } from "react-router";
 import { tokens } from "../oidc/client";
 
 /** Audience may be a string or array; render it stably. */
@@ -34,7 +35,7 @@ export default function Profile() {
       <main>
         <h1>Profile</h1>
         <p role="status">Not signed in.</p>
-        <a href="/">Back to start</a>
+        <Link to="/">Back to start</Link>
       </main>
     );
   }
@@ -78,7 +79,7 @@ export default function Profile() {
         </dl>
       ) : null}
       <nav>
-        <a href="/">Home</a>
+        <Link to="/">Home</Link>
       </nav>
     </main>
   );

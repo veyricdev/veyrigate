@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { startLogin } from "../oidc/client";
 import { sanitizeReturnTo } from "../returnTo";
 
@@ -32,7 +32,7 @@ export default function Login() {
           <p role="alert" data-testid="login-error" style={{ color: "#b00020" }}>
             {error}
           </p>
-          <a href="/">Back to start</a>
+          <Link to="/">Back to start</Link>
         </>
       ) : (
         <p>Redirecting to the identity provider.</p>

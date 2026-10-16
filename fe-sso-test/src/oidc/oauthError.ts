@@ -5,8 +5,9 @@
  * is a reflected-XSS / message-spoofing vector. We therefore NEVER render `error_description`:
  * the UI shows only the recognised `error` code plus our own fixed description.
  *
- * Codes cover RFC 6749 §4.1.2.1 (authorization) and OIDC Core §3.1.2.6. An unknown/garbage code
- * is reported generically (and the raw code is not trusted for display — see `describeOAuthError`).
+ * Codes cover RFC 6749 §4.1.2.1 (authorization), OIDC Core §3.1.2.6 and RFC 8707 §2
+ * (`invalid_target`). An unknown/garbage code is reported generically (and the raw code is not
+ * trusted for display — see `describeOAuthError`).
  */
 const SAFE_MESSAGES: Readonly<Record<string, string>> = {
   invalid_request: "The sign-in request was malformed.",
@@ -25,6 +26,7 @@ const SAFE_MESSAGES: Readonly<Record<string, string>> = {
   request_not_supported: "This sign-in request parameter is not supported.",
   request_uri_not_supported: "This sign-in request parameter is not supported.",
   registration_not_supported: "This sign-in request parameter is not supported.",
+  invalid_target: "The requested resource is invalid.",
 };
 
 /** Only recognised codes (lowercase a-z + underscore) are ever echoed back to the UI. */

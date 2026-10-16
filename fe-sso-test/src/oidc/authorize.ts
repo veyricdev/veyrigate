@@ -16,7 +16,9 @@ export interface AuthorizeConfig {
   /** Optional; only added when provided (OPEN-2: no default `prompt=none`). */
   readonly prompt?: string;
   /** Tags the persisted transient so `/callback` can route the aud-probe flow (Task 3). */
-  readonly purpose?: "login" | "aud-probe";
+  readonly purpose?: "login" | "aud-probe" | "lab";
+  /** Dev-only security-lab scenario id, persisted with `purpose:"lab"` (run 25). */
+  readonly labScenario?: string;
 }
 
 export interface BeginLoginResult {
@@ -54,6 +56,7 @@ export async function beginLogin(
     verifier: pkce.verifier,
     createdAt: now(),
     ...(config.purpose ? { purpose: config.purpose } : {}),
+    ...(config.labScenario ? { labScenario: config.labScenario } : {}),
   };
   saveTransient(transient, store);
 

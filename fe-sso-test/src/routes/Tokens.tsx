@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router";
 import { tokens } from "../oidc/client";
 
 /** Fixed token type for a Bearer session (Q-24.3: `Session` has no `token_type` field). */
@@ -45,7 +46,7 @@ export default function Tokens() {
       <main>
         <h1>Tokens</h1>
         <p role="status">Not signed in.</p>
-        <a href="/">Back to start</a>
+        <Link to="/">Back to start</Link>
       </main>
     );
   }
@@ -85,7 +86,7 @@ export default function Tokens() {
         <dd data-testid="token-claim-exp">{formatEpoch(session.claims.exp)}</dd>
       </dl>
       <nav>
-        <a href="/">Home</a>
+        <Link to="/">Home</Link>
       </nav>
     </main>
   );

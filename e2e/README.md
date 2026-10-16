@@ -25,6 +25,17 @@ The BE signing keyset is isolated too: `KEY_LOCAL_DIR` points at `e2e/.keys` (gi
 auto-created by `LocalKeyProvider.init()`), so the E2E run never writes to or prunes the dev
 keyset in `be/keys`.
 
+## Specs
+
+- `login.spec.ts` — X1 walking skeleton (login → claims).
+- `api-test.spec.ts` — T4 `/api-test`: A `/demo/me` 200, B wrong-aud probe (redirect chain) 401 with
+  the same `sub` after the silent restore, C `/userinfo` 200.
+- `lab.spec.ts` — dev-only `/lab` smoke: `/authorize` tampering scenarios, forged `state`, and the
+  refresh-token replay (last: it revokes the token family).
+
+Shared helpers live in `tests/support/oidc.ts` (raw tokens of every `POST /token` 200 are captured
+to assert they never reach the DOM, URL, or Web Storage).
+
 ## Prerequisites
 
 The three shared dev containers must be running (do **not** `docker compose up` or stop them):

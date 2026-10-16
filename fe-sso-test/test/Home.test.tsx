@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { MemoryRouter } from "react-router";
 import type { Session } from "../src/oidc/tokenStore";
 
 // Mock the OIDC client so importing Home never triggers env.app's eager `parseEnv(import.meta.env)`
@@ -60,7 +61,7 @@ afterEach(() => {
 });
 
 function render() {
-  act(() => root.render(<Home />));
+  act(() => root.render(<MemoryRouter><Home /></MemoryRouter>));
 }
 
 describe("Home claims panel (X1 'display claims')", () => {

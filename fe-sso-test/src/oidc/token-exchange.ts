@@ -39,6 +39,18 @@ function sanitizeTokenError(error: string): string {
 }
 
 /**
+ * A non-2xx `/token` response, carrying the sanitised OAuth `error` code (or `http_<status>` when
+ * the body has none) as a structured field so callers (the security lab, run 25 F6) can tell
+ * `invalid_grant` apart from 5xx without parsing the message. The message is unchanged.
+ */
+export class TokenEndpointError extends Error {
+  constructor(readonly code: string) {
+    super(`Token endpoint error (${code})`);
+    this.name = "TokenEndpointError";
+  }
+}
+
+/**
  * POST to `/token`. Public client (PKCE, no secret): no auth header, `client_id` in the body.
  * NO retry (F6): the authorization_code grant consumes a one-time code; a retry would hit
  * `invalid_grant`. On a non-2xx the OAuth error is surfaced fail-closed — the sanitised `error`
@@ -59,7 +71,7 @@ export async function postToken(
   if (!res.ok) {
     const code =
       typeof json.error === "string" ? sanitizeTokenError(json.error) : `http_${res.status}`;
-    throw new Error(`Token endpoint error (${code})`);
+    throw new TokenEndpointError(code);
   }
   const parsed = TokenSuccess.safeParse(json);
   if (!parsed.success) {

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { MemoryRouter } from "react-router";
 import type { Session } from "../src/oidc/tokenStore";
 
 const { tokensGet } = vi.hoisted(() => ({ tokensGet: vi.fn<() => Session | null>() }));
@@ -51,7 +52,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 function render() {
-  act(() => root.render(<Tokens />));
+  act(() => root.render(<MemoryRouter><Tokens /></MemoryRouter>));
 }
 
 describe("/tokens — metadata only (Q-24.3, Task 2)", () => {

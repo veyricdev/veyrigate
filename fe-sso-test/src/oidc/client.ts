@@ -1,8 +1,9 @@
 import { env } from "../env.app";
 import { discover, type Discovery } from "./discovery";
-import { beginLogin } from "./authorize";
+import { beginLogin, type AuthorizeConfig } from "./authorize";
 import { handleCallback } from "./callback";
 import { refreshSession } from "./refresh";
+import { postToken } from "./token-exchange";
 import {
   logout as logoutInner,
   handleLogoutLanding,
@@ -19,6 +20,15 @@ import {
   PROBE_RELOGIN_KEY,
   type ProbeResult,
 } from "./probe";
+import {
+  buildScenarioUrl,
+  checkStateTamper,
+  findLabScenario,
+  recordLabCallback,
+  tamperState,
+  takeLabResult as takeLabResultInner,
+  type LabResult,
+} from "./lab";
 import type { JWTVerifyGetKey } from "jose";
 
 /** RFC 8707 resource indicator used for the wrong-`aud` security-lab probe (Q-24.1: `other`). */
@@ -210,4 +220,67 @@ export function demoApiUrl(): string {
 /** The `/userinfo` endpoint derived from the configured issuer. */
 export function userinfoUrl(): string {
   return `${env.VITE_OIDC_ISSUER.replace(/\/+$/, "")}/userinfo`;
+}
+
+/* ---- Dev-only security lab (run 25, T5). Reached only from `/lab` and the gated callback branch. */
+
+/** A fresh `/authorize` URL from the ordinary `beginLogin` (the lab never builds its own). */
+async function labAuthorizeUrl(
+  extra: Pick<AuthorizeConfig, "purpose" | "labScenario">,
+): Promise<string> {
+  const { discovery } = await ready();
+  const { url } = await beginLogin(
+    discovery,
+    {
+      clientId: env.VITE_OIDC_CLIENT_ID,
+      redirectUri: env.VITE_OIDC_REDIRECT_URI,
+      scope: env.VITE_OIDC_SCOPE,
+      resource: env.VITE_OIDC_RESOURCE,
+      ...extra,
+    },
+    window.sessionStorage,
+  );
+  return url;
+}
+
+/** Start a lab `/authorize` scenario (Task 3b): one parameter altered, transient `purpose:"lab"`. */
+export async function startLabScenario(id: string): Promise<void> {
+  const scenario = findLabScenario(id);
+  if (!scenario) throw new Error("Unknown lab scenario");
+  const url = await labAuthorizeUrl({ purpose: "lab", labScenario: scenario.id });
+  window.location.assign(buildScenarioUrl(url, scenario, env.VITE_OIDC_ISSUER));
+}
+
+/** Start the `state`-tamper check (Task 3c): a genuine login whose returned `state` is forged. */
+export async function startStateTamper(): Promise<void> {
+  const url = await labAuthorizeUrl({ purpose: "login" });
+  window.location.assign(tamperState(url, window.sessionStorage));
+}
+
+/** `/callback` for a lab scenario: record the outcome one-shot, never exchange the code. */
+export function finishLabCallback(params: URLSearchParams): LabResult | null {
+  return recordLabCallback(params, env.VITE_OIDC_ISSUER, window.sessionStorage);
+}
+
+/** `/callback` for the `state`-tamper check: run the real `finishLogin`, PASS only on rejection. */
+export function finishStateTamper(params: URLSearchParams): Promise<LabResult> {
+  return checkStateTamper(params, finishLogin, window.sessionStorage);
+}
+
+/** Read + delete the one-shot lab result for display on `/lab`. */
+export function takeLabResult(): LabResult | null {
+  return takeLabResultInner(window.sessionStorage);
+}
+
+/**
+ * Replay an OLD refresh token straight at `/token` (Task 2), bypassing the store. Throws
+ * `TokenEndpointError` on a non-2xx; a (wrongly) accepted response is discarded.
+ */
+export async function replayRefreshToken(refreshToken: string): Promise<void> {
+  const { discovery } = await ready();
+  await postToken(
+    discovery.token_endpoint,
+    { grant_type: "refresh_token", refresh_token: refreshToken, client_id: env.VITE_OIDC_CLIENT_ID },
+    fetch,
+  );
 }

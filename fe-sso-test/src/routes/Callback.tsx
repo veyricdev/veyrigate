@@ -1,4 +1,4 @@
-import { useRouteError } from "react-router";
+import { Link, useRouteError } from "react-router";
 
 /**
  * `/callback`: the code exchange runs in the route loader (see `router.tsx`) — one exchange
@@ -24,7 +24,7 @@ export function CallbackError() {
       <p role="alert" style={{ color: "#b00020" }}>
         {message}
       </p>
-      <a href="/">Back to start</a>
+      <Link to="/">Back to start</Link>
     </main>
   );
 }

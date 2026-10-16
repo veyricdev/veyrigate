@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { MemoryRouter } from "react-router";
 import type { Session } from "../src/oidc/tokenStore";
 import type { ProbeResult } from "../src/oidc/probe";
 
@@ -56,7 +57,7 @@ afterEach(() => {
 });
 
 function render() {
-  act(() => root.render(<ApiTest />));
+  act(() => root.render(<MemoryRouter><ApiTest /></MemoryRouter>));
 }
 function click(testid: string) {
   const el = container.querySelector(`[data-testid='${testid}']`) as HTMLButtonElement;

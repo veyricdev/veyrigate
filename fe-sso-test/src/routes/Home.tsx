@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router";
 import { startLogin, logout, consumeLogout, tokens } from "../oidc/client";
 
 /** Audience may be a string or array; render it stably for the claims panel. */
@@ -75,8 +76,8 @@ export default function Home() {
             <dd data-testid="claim-exp">{formatExp(session.claims.exp)}</dd>
           </dl>
           <nav aria-label="Signed-in navigation" data-testid="nav">
-            <a href="/profile">Profile</a> · <a href="/tokens">Tokens</a> ·{" "}
-            <a href="/api-test">API test</a>
+            <Link to="/profile">Profile</Link> · <Link to="/tokens">Tokens</Link> ·{" "}
+            <Link to="/api-test">API test</Link>
           </nav>
           <button type="button" onClick={onLogout}>
             Sign out
