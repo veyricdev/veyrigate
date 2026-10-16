@@ -66,3 +66,6 @@
   - mapper spread ⇒ RED 5
   - bỏ kiểm `t<0` của cursor ⇒ RED 1
 - Không sửa code sản phẩm. 🟡 mới DEBT-155 (cursor families không validate). Chuyển → **orchestrator** đóng run.
+
+## orchestrator — 2026-10-16 (đóng run)
+- Mọi cổng PASS. Commit `c9791aa`. summary.md + Tiến độ STATUS.md; 🟡 đã ở backlog.
