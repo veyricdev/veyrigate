@@ -16,7 +16,9 @@ const positiveInt = z.coerce.number().int().positive();
 
 export const envSchema = z
   .object({
-    NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+    // Required, no default (DEBT-098, Q-26.3): an unset NODE_ENV must not silently mean `development`
+    // (fail-open: demo surface, http localhost URIs, insecure cookies). Missing => app does not boot.
+    NODE_ENV: z.enum(['development', 'test', 'production']),
     PORT: z.coerce.number().int().min(1).max(65535).default(4000),
     ISSUER: z.string().url(),
 

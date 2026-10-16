@@ -41,6 +41,20 @@ export class UserTenantService {
     return found !== null;
   }
 
+  /**
+   * Roles of the user's ACTIVE membership in `tenantId`, or null when there is none (absent or
+   * suspended). `tenantId` must come from trusted server code (B6.1: the issuing client's
+   * `tenantId`), never from request input. A DB fault propagates (caller fails closed).
+   */
+  async activeRoles(userId: string, tenantId: string): Promise<string[] | null> {
+    if (!isValidObjectId(userId)) return null;
+    const found = await this.model
+      .findOne({ userId, tenantId, status: 'active' }, { roles: 1 })
+      .lean()
+      .exec();
+    return found ? (found.roles ?? []) : null;
+  }
+
   listMembers(ctx: TenantContext): Promise<UserTenant[]> {
     return this.repo.find(ctx);
   }

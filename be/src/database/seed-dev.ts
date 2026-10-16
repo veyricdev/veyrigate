@@ -121,12 +121,16 @@ export async function seedDev(
 }
 
 /**
- * Fail-closed environment guard. Throws when `NODE_ENV=production` so the dev seed can never
- * write a production database. Called by the CLI BEFORE any DB connection is opened.
+ * Fail-closed environment guard (allowlist, DEBT-098): only `NODE_ENV=development|test` may run the
+ * dev seed. `production`, an unset/empty `NODE_ENV` or any other value throws, so the dev seed can
+ * never write a production database by a forgotten variable. Called by the CLI BEFORE any DB
+ * connection is opened, and again by `seedDev`/`seedDevUser` before any write.
  */
 export function assertNotProduction(nodeEnv: string | undefined): void {
-  if (nodeEnv === 'production') {
-    throw new Error('seed-dev: refusing to run with NODE_ENV=production');
+  if (nodeEnv !== 'development' && nodeEnv !== 'test') {
+    throw new Error(
+      `seed-dev: refusing to run with NODE_ENV=${nodeEnv || '(unset)'} (only development|test; never production)`,
+    );
   }
 }
 

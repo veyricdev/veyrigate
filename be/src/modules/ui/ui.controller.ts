@@ -103,8 +103,12 @@ export class UiController {
     @Res() reply: UiReply,
     @Query('returnTo') returnTo?: string,
   ) {
-    if (await this.hasLiveSession(req, reply)) return reply.redirect('/', 302);
     const safeReturn = safeReturnTo(returnTo, this.issuer);
+    // B6.2: a live session normally skips the form, EXCEPT when the resumable `/authorize` context
+    // demands re-authentication (`prompt=login` / `max_age`) - then the user must sign in again.
+    if ((await this.hasLiveSession(req, reply)) && !(await this.reauthRequested(safeReturn))) {
+      return reply.redirect('/', 302);
+    }
     // DEBT-084: the login form POSTs here, then 302s to `/authorize?request_id`, then 302s to the RP.
     // Chromium enforces the `form-action` of THIS page across that chain, so relax it to the single
     // RP origin already exact-matched in the resumable context (never the raw query). Fail-closed to
@@ -127,6 +131,22 @@ export class UiController {
     reply.header('Cache-Control', 'no-store');
     const origin = await this.loginFormActionOrigin(safeReturn);
     reply.header('Content-Security-Policy', buildCsp({ formAction: origin ? [origin] : [] }));
+  }
+
+  /**
+   * Whether `safeReturn` is exactly `/authorize?request_id=<id>` of a live context that demands
+   * re-authentication (`reauthAfter`, B6.2). A Redis failure keeps the old behaviour (false) and is
+   * logged without the request_id.
+   */
+  private async reauthRequested(safeReturn: string): Promise<boolean> {
+    const requestId = requestIdFromReturnTo(safeReturn);
+    if (!requestId) return false;
+    try {
+      return (await this.authzContexts.peek(requestId))?.reauthAfter !== undefined;
+    } catch {
+      this.logger.warn('login: context peek failed; treating as no re-authentication demand');
+      return false;
+    }
   }
 
   /** Resolve the single `form-action` origin for a `/login` resume, or null (→ `'self'`). */

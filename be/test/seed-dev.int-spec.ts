@@ -185,6 +185,15 @@ describe('seed-dev (Task 4, B6.4 interim) on real Mongo', () => {
     expect(() => assertNotProduction('test')).not.toThrow();
   });
 
+  it('DEBT-098: NODE_ENV unset / empty / unknown is refused (allowlist development|test) and writes NOTHING', async () => {
+    for (const nodeEnv of [undefined, '', 'staging', 'Production']) {
+      expect(() => assertNotProduction(nodeEnv)).toThrow(/NODE_ENV/);
+      await expect(seedDev(connection, ISSUER, nodeEnv)).rejects.toThrow(/NODE_ENV/);
+    }
+    expect(await clientModel.countDocuments({}).exec()).toBe(0);
+    expect(await resourceModel.countDocuments({}).exec()).toBe(0);
+  });
+
   it('buildSeedDevTargets derives the resource identifier from the issuer without a double slash', () => {
     const demoOf = (issuer: string): string =>
       buildSeedDevTargets(issuer).resources.find((r) => r.resourceId === 'demo')!.identifier;
@@ -899,6 +908,8 @@ describe('seed-dev: dev user (DEBT-076) on real Mongo', () => {
 
   it('NODE_ENV=production is refused by seedDevUser itself (fail-closed) and writes NOTHING', async () => {
     await expect(seedDevUser(connection, devConfig, 'production')).rejects.toThrow(/production/);
+    // DEBT-098: an unset NODE_ENV is refused too (allowlist, fail-closed).
+    await expect(seedDevUser(connection, devConfig, undefined)).rejects.toThrow(/NODE_ENV/);
     expect(await userModel.countDocuments({}).exec()).toBe(0);
     expect(await userTenantModel.countDocuments({}).exec()).toBe(0);
   });
@@ -1145,8 +1156,13 @@ describe('seed-dev: DEBT-100 consent for a 2nd resource (`other`) + INV-8 chain 
   });
 
   it('fix: syncAllIndexes drops the stale index; `other` consent then 302s with a code', async () => {
-    // The stale index is still present from the previous test. Confirm it, then run the DEBT-028
-    // runbook remedy (`syncAllIndexes` = `pnpm db:sync-indexes`) and prove it is dropped.
+    // DEBT-106: self-contained — (re)create the stale pre-DEBT-028 index here (idempotent when the
+    // repro test already left it) so this test also passes when run alone (`-t`). Confirm it, then
+    // run the DEBT-028 runbook remedy (`syncAllIndexes` = `pnpm db:sync-indexes`) and prove it is
+    // dropped.
+    await clientModel.db
+      .collection('consents')
+      .createIndex({ userId: 1, clientId: 1 }, { unique: true, name: OLD_CONSENT_INDEX });
     const before = (await clientModel.db.collection('consents').indexes()) as {
       name: string;
     }[];

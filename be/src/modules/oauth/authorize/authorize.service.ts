@@ -121,7 +121,18 @@ export class AuthorizeService {
     audit: { ip?: string; userAgent?: string; requestId?: string } = {},
   ): Promise<AuthorizeOutcome | null> {
     const ctx = await this.contexts.consume(requestId);
-    if (!ctx) return null;
+    // Only a login context resumes here; a consent context belongs to POST /authorize/consent.
+    if (!ctx || ctx.kind !== 'login') return null;
+    // B6.2 / OIDC Core §3.1.2.1: a context created because re-authentication was demanded must
+    // only resume with a session that authenticated AFTER that demand. Otherwise (no session, or the
+    // old session re-used by calling `/authorize?request_id=` directly) => `login_required` to the RP.
+    // The context is already consumed (single-use), so this cannot loop or later mint a code.
+    if (ctx.reauthAfter !== undefined && (session === null || session.authTime < ctx.reauthAfter)) {
+      const err = new AuthorizeRedirectError('login_required', 'Re-authentication is required.');
+      err.redirectUri = ctx.redirectUri;
+      err.state = ctx.originalState;
+      throw err;
+    }
     const params: AuthorizeParams = {
       response_type: 'code',
       client_id: ctx.clientId,
@@ -190,11 +201,13 @@ export class AuthorizeService {
           throw new AuthorizeRedirectError('login_required', 'Authentication is required.');
         }
         const { requestId } = await this.createContext(
+          'login',
           client,
           redirectUri,
           scope,
           resource,
           params,
+          reauthRequired ? Date.now() : undefined,
         );
         await this.recordAuthorize(client, audit, session?.userId, 'login_required');
         return { kind: 'login_required', requestId };
@@ -222,7 +235,14 @@ export class AuthorizeService {
         throw new AuthorizeRedirectError('consent_required', 'User consent is required.');
       }
       // Persist the validated context so the POST /authorize/consent can resume it (single-use).
-      const { requestId } = await this.createContext(client, redirectUri, scope, resource, params);
+      const { requestId } = await this.createContext(
+        'consent',
+        client,
+        redirectUri,
+        scope,
+        resource,
+        params,
+      );
       await this.recordAuthorize(client, audit, session.userId, 'consent_required');
       return {
         kind: 'consent_required',
@@ -261,6 +281,16 @@ export class AuthorizeService {
   ): Promise<{ redirectUri: string; code?: string; state?: string; denied?: boolean } | null> {
     const ctx = await this.contexts.consume(requestId);
     if (!ctx) return null;
+    // Only a consent context (created with a live, sufficiently fresh session) can be decided here.
+    // A login context -- notably a re-auth one (`prompt=login`/`max_age`, B6.2) -- must never mint
+    // a code with the old session via this door (OIDC Core §3.1.2.1, INV-26). Already consumed, so
+    // no loop; nothing is recorded and no code is issued.
+    if (ctx.kind !== 'consent') {
+      const err = new AuthorizeRedirectError('login_required', 'Re-authentication is required.');
+      err.redirectUri = ctx.redirectUri;
+      err.state = ctx.originalState;
+      throw err;
+    }
 
     if (!approve) {
       await this.recordConsent(ctx.clientId, audit, session.userId, 'denied');
@@ -359,13 +389,16 @@ export class AuthorizeService {
     });
   }
   private async createContext(
+    kind: AuthorizeRequestContext['kind'],
     client: Client,
     redirectUri: string,
     scope: string,
     resource: string | undefined,
     params: AuthorizeParams,
+    reauthAfter?: number,
   ): Promise<{ requestId: string }> {
     const { requestId } = await this.contexts.create({
+      kind,
       clientId: client.clientId,
       redirectUri,
       codeChallenge: params.code_challenge!,
@@ -373,6 +406,7 @@ export class AuthorizeService {
       resource,
       originalState: params.state,
       nonce: params.nonce,
+      ...(reauthAfter !== undefined ? { reauthAfter } : {}),
     });
     return { requestId };
   }
@@ -444,7 +478,8 @@ export class AuthorizeService {
   private maxAgeExceeded(maxAge: number | undefined, session: SessionView | null): boolean {
     if (maxAge === undefined || session === null) return false;
     const ageSec = (Date.now() - session.authTime) / 1000;
-    return ageSec > maxAge;
+    // `max_age=0` always forces re-authentication (step-up hint, D3), even within the same ms.
+    return maxAge === 0 || ageSec > maxAge;
   }
 
   private async recordAuthorize(

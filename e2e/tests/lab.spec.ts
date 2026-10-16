@@ -19,10 +19,10 @@ test("lab /authorize: redirect_uri mismatch ⇒ IdP 400 error page, no redirect 
     page.getByTestId("lab-run-redirect-uri-mismatch").click(),
   ]);
   expect(nav.status()).toBe(400);
-  await page.waitForLoadState("load");
-  const url = new URL(page.url());
-  expect(url.port).toBe(String(BE_PORT));
-  expect(url.pathname).toBe("/authorize");
+  // Wait on the committed URL (condition), not on `load`: `waitForResponse` resolves at the
+  // response headers, before the 400 document commits, and the old /lab `load` already fired.
+  await expect(page).toHaveURL((u) => u.port === String(BE_PORT) && u.pathname === "/authorize");
+  await expect(page.getByRole("heading", { name: "Invalid request" })).toBeVisible();
 });
 
 // Scenarios the IdP answers by redirecting `error=` back (no session needed — clean context).

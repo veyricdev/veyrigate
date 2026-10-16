@@ -3,10 +3,14 @@
 Placeholder package. Real scaffold (NestJS + Fastify IdP) happens at task **B1.1**.
 Dev port: `http://localhost:4000` (`ISSUER`). See `docs/agile/sso-idp/plan.md` §1.
 
+`NODE_ENV` is **required** (`development` | `test` | `production`, no default — DEBT-098): if it is
+unset the app (and `db:sync-indexes` / `db:seed-dev`) refuses to start, naming `NODE_ENV`. `be/.env.example`
+sets `development`; Jest sets `test`; the E2E harness (`e2e/config/env.ts`) sets `test`.
+
 ## Dev seed (`fe-sso-test` client + `demo` resource)
 
 Interim dev-only provisioning for the `fe-sso-test` SPA (Task 4, interim for B6.4; DEBT-077).
-Builds (`nest build`) then run the CLI — idempotent, refuses `NODE_ENV=production`, creates no secret:
+Builds (`nest build`) then run the CLI — idempotent, runs only with `NODE_ENV=development|test` (unset/production refused), creates no secret:
 
 ```sh
 pnpm build && pnpm db:seed-dev
@@ -27,7 +31,8 @@ DEV_SEED_PASSWORD=<8..128 chars>
 
 Behaviour:
 
-- **Dev-only / fail-closed**: refuses `NODE_ENV=production` _before_ any DB connection and again
+- **Dev-only / fail-closed**: runs only with `NODE_ENV=development|test` (unset, empty, `production` or any
+  other value is refused) _before_ any DB connection and again
   _before_ any write. Never touches a production database.
 - **Verified email + no lock**: sets `emailVerifiedAt` on insert (so the login gate passes); every run
   resets `failedLoginCount` to 0 and clears `lockedUntil`, so a prior failed/locked run never blocks the

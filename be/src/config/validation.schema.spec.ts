@@ -2,6 +2,7 @@ import { buildConfig } from './configuration';
 import { validateEnv } from './validation.schema';
 
 const BASE: Record<string, string> = {
+  NODE_ENV: 'development',
   ISSUER: 'http://localhost:4000',
   MONGO_URI: 'mongodb://x',
   REDIS_URL: 'redis://x',
@@ -152,5 +153,24 @@ describe('TRUST_PROXY (DEBT-006)', () => {
 
   it('rejects an invalid IP/CIDR, naming the variable', () => {
     expect(() => validateEnv({ ...BASE, TRUST_PROXY: 'not-an-ip' })).toThrow(/TRUST_PROXY/);
+  });
+});
+
+describe('NODE_ENV is required (DEBT-098, Q-26.3: no silent default)', () => {
+  it('missing NODE_ENV → throws naming NODE_ENV (app does not boot)', () => {
+    const withoutNodeEnv = { ...BASE };
+    delete withoutNodeEnv.NODE_ENV;
+    expect(() => validateEnv(withoutNodeEnv)).toThrow(/NODE_ENV/);
+  });
+
+  it('empty or unknown NODE_ENV → throws naming NODE_ENV', () => {
+    expect(() => validateEnv({ ...BASE, NODE_ENV: '' })).toThrow(/NODE_ENV/);
+    expect(() => validateEnv({ ...BASE, NODE_ENV: 'prod' })).toThrow(/NODE_ENV/);
+  });
+
+  it('each allowed value is accepted as-is', () => {
+    for (const value of ['development', 'test', 'production']) {
+      expect(validateEnv({ ...BASE, NODE_ENV: value }).NODE_ENV).toBe(value);
+    }
   });
 });

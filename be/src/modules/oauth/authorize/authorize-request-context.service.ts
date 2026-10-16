@@ -17,6 +17,12 @@ const CONTEXT_TTL_MS = 10 * 60 * 1000;
  * independent of the RP's `state` (spec §9.1, tech-lead C8).
  */
 export interface AuthorizeRequestContext {
+  /**
+   * Which door may consume this context (run 26 retry, DEBT-122): `login` only via the resume
+   * `/authorize?request_id=`, `consent` only via `POST /authorize/consent`. A context missing the
+   * field (or of the other kind) is refused by both doors (fail-closed).
+   */
+  kind: 'login' | 'consent';
   clientId: string;
   redirectUri: string;
   codeChallenge: string;
@@ -24,6 +30,13 @@ export interface AuthorizeRequestContext {
   resource?: string;
   originalState?: string;
   nonce?: string;
+  /**
+   * B6.2: ms epoch at which re-authentication was demanded (`prompt=login` or `max_age` exceeded,
+   * incl. `max_age=0`). Present ONLY on such contexts: `GET /login` then shows the form even to a
+   * live session, and the resume refuses (`login_required`) unless the session authenticated at or
+   * after this instant.
+   */
+  reauthAfter?: number;
   createdAt: number;
   expiresAt: number;
 }

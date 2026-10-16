@@ -301,6 +301,7 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
   describe('AuthorizeRequestContext single-use + TTL', () => {
     it('consume is single-use: a second consume returns null', async () => {
       const { requestId } = await contexts.create({
+        kind: 'login',
         clientId: `${RUN}-client`,
         redirectUri: 'https://app.example.com/callback',
         codeChallenge: VALID_CHALLENGE,
@@ -312,6 +313,7 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
 
     it('two concurrent consumes of the same request_id: exactly one wins', async () => {
       const { requestId } = await contexts.create({
+        kind: 'login',
         clientId: `${RUN}-client`,
         redirectUri: 'https://app.example.com/callback',
         codeChallenge: VALID_CHALLENGE,
@@ -323,6 +325,7 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
 
     it('context expires after its TTL', async () => {
       const { requestId } = await contexts.create({
+        kind: 'login',
         clientId: `${RUN}-client`,
         redirectUri: 'https://app.example.com/callback',
         codeChallenge: VALID_CHALLENGE,
@@ -346,6 +349,7 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
     // consume on the subsequent /authorize resume still works exactly once.
     it('peek does NOT consume the context and does NOT extend its TTL (INV-084-3)', async () => {
       const { requestId } = await contexts.create({
+        kind: 'login',
         clientId: `${RUN}-client`,
         redirectUri: 'https://app.example.com/callback',
         codeChallenge: VALID_CHALLENGE,
@@ -376,6 +380,7 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
     // `PEXPIRE` inside peek would bump PTTL back towards 600000 and fail here.
     it('peek does NOT reset a shrunken TTL back to the context TTL (DEBT-086)', async () => {
       const { requestId } = await contexts.create({
+        kind: 'login',
         clientId: `${RUN}-client`,
         redirectUri: 'https://app.example.com/callback',
         codeChallenge: VALID_CHALLENGE,
@@ -401,6 +406,7 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
 
     it('peek returns null for a missing/consumed request_id and for an empty id', async () => {
       const { requestId } = await contexts.create({
+        kind: 'login',
         clientId: `${RUN}-client`,
         redirectUri: 'https://app.example.com/callback',
         codeChallenge: VALID_CHALLENGE,
@@ -725,6 +731,50 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
     expect(url.searchParams.get('error')).toBe('access_denied');
     expect(url.searchParams.get('state')).toBe('rp-state');
     expect(url.searchParams.get('iss')).toBe(ISSUER);
+    expect(url.searchParams.get('code')).toBeNull();
+    expect(await consentSvc.find(userId, `${RUN}-http`, undefined)).toBeNull();
+    await sessionSvc.revoke(sessionId);
+  });
+
+  // Run 26 retry 1 / DEBT-122: each door only accepts its own context kind.
+  it('a consent request_id resumed via GET /authorize?request_id => 400 expired page, no code, consumed', async () => {
+    const { sessionId, csrf, requestId } = await openConsent();
+    const res = await httpApp.inject({
+      method: 'GET',
+      url: `/authorize?request_id=${encodeURIComponent(requestId)}`,
+      cookies: { [SESSION_COOKIE]: sessionId },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.headers['location']).toBeUndefined();
+    const post = await httpApp.inject({
+      method: 'POST',
+      url: '/authorize/consent',
+      cookies: { [SESSION_COOKIE]: sessionId },
+      payload: { _csrf: csrf, request_id: requestId, approve: 'true' },
+    });
+    expect(post.statusCode).toBe(400); // single-use: already consumed by the wrong door
+    await sessionSvc.revoke(sessionId);
+  });
+
+  it('a plain login request_id POSTed to /authorize/consent => error=login_required, no code, no consent', async () => {
+    const { userId, sessionId, csrf } = await openConsent();
+    const login = await httpApp.inject({ method: 'GET', url: fullQuery() }); // no session
+    expect(login.statusCode).toBe(302);
+    const returnTo = new URL(login.headers['location'] as string, ISSUER).searchParams.get(
+      'returnTo',
+    )!;
+    const loginRequestId = new URLSearchParams(returnTo.split('?')[1]).get('request_id')!;
+    expect(loginRequestId).toBeTruthy();
+    const post = await httpApp.inject({
+      method: 'POST',
+      url: '/authorize/consent',
+      cookies: { [SESSION_COOKIE]: sessionId },
+      payload: { _csrf: csrf, request_id: loginRequestId, approve: 'true' },
+    });
+    expect(post.statusCode).toBe(302);
+    const url = new URL(post.headers['location'] as string);
+    expect(url.searchParams.get('error')).toBe('login_required');
+    expect(url.searchParams.get('state')).toBe('rp-state');
     expect(url.searchParams.get('code')).toBeNull();
     expect(await consentSvc.find(userId, `${RUN}-http`, undefined)).toBeNull();
     await sessionSvc.revoke(sessionId);

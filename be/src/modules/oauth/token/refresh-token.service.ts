@@ -148,7 +148,8 @@ export class RefreshTokenService {
 
     // Atomic single-use rotation is the source of truth (re-validates active/unexpired/owner/
     // resource). Any invalid/reuse result throws here before any token is signed.
-    const result = await this.rotate(value, client, audit);
+    // DEBT-105: hand the identifiers resolved for the pre-check to rotate (one lookup per refresh).
+    const result = await this.rotate(value, client, audit, allowedIdentifiers);
 
     // Access token uses the narrowed scope when the client asked to narrow; otherwise the full
     // granted scope. The descendant refresh keeps the original scope (done inside `rotate`).
@@ -242,6 +243,9 @@ export class RefreshTokenService {
     value: string,
     client: { clientId: string; allowedResources: string[] },
     audit: AuditCtx = {},
+    /** Identifiers of `client.allowedResources` already resolved by the caller (DEBT-105); resolved
+     * here when omitted. The atomic filter below is the same either way. */
+    allowedIdentifiers?: string[],
   ): Promise<RotationResult> {
     const tokenHash = sha256(value);
     const now = new Date();
@@ -252,7 +256,8 @@ export class RefreshTokenService {
     // allowed resourceIds are resolved to identifiers so the stored `resource` URI is matched
     // against identifiers, never a resourceId directly (confused-deputy guard, spec §7). A Mongo
     // failure propagates (fail-closed): the rotate never runs, so no token is burned.
-    const allowedIdentifiers = await this.resources.identifiersFor(client.allowedResources);
+    const identifiers =
+      allowedIdentifiers ?? (await this.resources.identifiersFor(client.allowedResources));
     const old = (await this.refreshTokens
       .findOneAndUpdate(
         {
@@ -260,7 +265,7 @@ export class RefreshTokenService {
           clientId: client.clientId,
           revokedAt: null,
           expiresAt: { $gt: now },
-          resource: { $in: allowedIdentifiers },
+          resource: { $in: identifiers },
         },
         { $set: { revokedAt: now, replacedBy: successorId } },
         { new: false },

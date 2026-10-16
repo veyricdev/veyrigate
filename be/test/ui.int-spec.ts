@@ -183,6 +183,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
       return map;
     };
     const ctx = (redirectUri: string): AuthorizeRequestContext => ({
+      kind: 'login',
       clientId: 'rp',
       redirectUri,
       codeChallenge: 'x',

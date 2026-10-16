@@ -655,6 +655,31 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
     }
   });
 
+  it('DEBT-105: one refresh resolves the resource identifiers exactly once (pre-check + rotate share it)', async () => {
+    const rt = await firstRefresh();
+    const spy = jest.spyOn(app.get(ResourceService), 'identifiersFor');
+    try {
+      const res = await refreshReq(rt);
+      expect(res.statusCode).toBe(200);
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('DEBT-105: rotate() called directly (no identifiers passed) still resolves them itself', async () => {
+    const rt = await firstRefresh();
+    const spy = jest.spyOn(app.get(ResourceService), 'identifiersFor');
+    try {
+      const client = (await clientModel.findOne({ clientId: CLIENT }).lean().exec())!;
+      const result = await app.get(RefreshTokenService).rotate(rt, client);
+      expect(result.newRefreshToken).toBeTruthy();
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('client without refresh_token grant => 400 unauthorized_client; missing refresh_token => invalid_request', async () => {
     const res = await post(
       '/token',
