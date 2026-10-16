@@ -2,7 +2,7 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: — (run 24 đã đóng, chưa commit). Kế tiếp: **run 25** = E2E (T4) + T5; sửa DEBT-101/102 [FE] trước E2E; chạy `pnpm -C be db:sync-indexes` trên DB dev/E2E trước E2E nút B.
+- **Run hiện tại**: — (run 24 đã đóng, `374863d`). Kế tiếp: **run 25** = E2E (T4) + T5; sửa DEBT-101/102 [FE] trước E2E; chạy `pnpm -C be db:sync-indexes` trên DB dev/E2E trước E2E nút B.
 - **Vòng lặp (run 24)**: analyst=2, tech-lead=2 (REJECT → PASS), senior=1, tester=1
 - **Run vừa đóng**: `24-T3-B6.5-T4` ✅ 5/5 task — BE unit 211 + int 507, FE 187. Xem `runs/24-T3-B6.5-T4/summary.md`.
 - **Việc tiếp theo**: T3–T5 (trang & route fe-sso-test, gọi resource thật, security lab) hoặc M5 (B5 federation, B6 admin API). Debt đáng chú ý: DEBT-095 (hai request-id, `x-request-id` chưa validate), DEBT-054/096 (open handles, `--forceExit`).
@@ -24,7 +24,7 @@
 | [21](runs/21-T1-T2/summary.md) | M3 | T1–T2 (+ seed-dev) | ✅ 694/694 | `676cd92` |
 | [22](runs/22-X1/summary.md) | M3 | X1 walking skeleton (+ DEBT-076/078/079/080/084/004) | ✅ BE 673 + FE 83 + E2E | `c2cf053` |
 | [23](runs/23-bugfix/summary.md) | M3 | bugfix (DEBT-089/090/091/070) | ✅ BE 680 + E2E | `8a36ae4` |
-| [24](runs/24-T3-B6.5-T4/summary.md) | M3 | T3 + B6.5 + T4 (+ DEBT-100) | ✅ BE 718 + FE 187 | chưa commit |
+| [24](runs/24-T3-B6.5-T4/summary.md) | M3 | T3 + B6.5 + T4 (+ DEBT-100) | ✅ BE 718 + FE 187 | `374863d` |
 
 ## Chặn / cần người quyết định
 
