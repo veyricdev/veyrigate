@@ -12,6 +12,15 @@ export interface PublicJwk {
 
 export type RotationMode = 'normal' | 'emergency';
 
+/** Signing key metadata for the admin API (B6.3c) — never any key material. */
+export interface KeyMetadata {
+  kid: string;
+  alg: 'RS256';
+  status: 'active' | 'retiring';
+  createdAt: string;
+  retireAt: string | null;
+}
+
 export interface RotationResult {
   newKid: string;
   oldKid: string | null;
@@ -27,6 +36,8 @@ export interface KeyProvider {
   getSigningKey(): Promise<{ kid: string; privateKey: KeyObject }>;
   /** Keys valid for verification: the active key plus retiring keys not yet expired. */
   getPublicKeys(): Promise<PublicJwk[]>;
+  /** Metadata of the same key set as `getPublicKeys()` (read-only, no key material). */
+  listKeys(): Promise<KeyMetadata[]>;
   /**
    * normal: new active key; old key stays verify-only for `retainSec` seconds.
    * emergency: new active key; old key is removed immediately.

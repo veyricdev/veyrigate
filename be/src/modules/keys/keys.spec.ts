@@ -21,6 +21,40 @@ const ISSUER = 'http://localhost:4000';
 const AUD = 'https://api.example.test/';
 const PRIVATE_MEMBERS = ['d', 'p', 'q', 'dp', 'dq', 'qi'];
 
+/** Deferred promise helper for the deterministic race tests (DEBT-145). */
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => (resolve = r));
+  return { promise, resolve };
+}
+
+/**
+ * Holds the N-th `atomicRename` (0-based) until released: a rotate is paused AFTER it read state and
+ * wrote its temp file, but BEFORE `keys.json` is replaced — the exact window DEBT-145 is about.
+ */
+class GatedKeyProvider extends LocalKeyProvider {
+  readonly gates = new Map<
+    number,
+    { reached: ReturnType<typeof deferred>; release: ReturnType<typeof deferred> }
+  >();
+  renames = 0;
+
+  gate(n: number): { reached: Promise<void>; release: () => void } {
+    const g = { reached: deferred(), release: deferred() };
+    this.gates.set(n, g);
+    return { reached: g.reached.promise, release: g.release.resolve };
+  }
+
+  protected override async atomicRename(tmpPath: string, finalPath: string): Promise<void> {
+    const g = this.gates.get(this.renames++);
+    if (g) {
+      g.reached.resolve();
+      await g.release.promise;
+    }
+    return super.atomicRename(tmpPath, finalPath);
+  }
+}
+
 const config = {
   getOrThrow: (key: string) => ({ app: { issuer: ISSUER }, token: { accessTokenTtl: 900 } })[key],
 } as unknown as ConfigService;
@@ -311,7 +345,7 @@ describe('Keys (B1.9, INV-19)', () => {
     const [{ kid: oldKid }] = await provider.getPublicKeys();
     const oldToken = await signer.sign({}, { audience: AUD, expiresInSec: 60 });
 
-    const result = await rotation.rotate('normal', 'admin_1');
+    const result = await rotation.rotate('normal', { actorType: 'admin', actorId: 'admin_1' });
     expect(result).toMatchObject({ oldKid, mode: 'normal' });
 
     const kids = (await provider.getPublicKeys()).map((k) => k.kid);
@@ -343,7 +377,7 @@ describe('Keys (B1.9, INV-19)', () => {
     const [{ kid: oldKid }] = await provider.getPublicKeys();
     const oldToken = await signer.sign({}, { audience: AUD, expiresInSec: 60 });
 
-    const result = await rotation.rotate('emergency', 'admin_1');
+    const result = await rotation.rotate('emergency', { actorType: 'admin', actorId: 'admin_1' });
 
     const kids = (await provider.getPublicKeys()).map((k) => k.kid);
     expect(kids).toEqual([result.newKid]);
@@ -352,6 +386,63 @@ describe('Keys (B1.9, INV-19)', () => {
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({ metadata: { mode: 'emergency', oldKid } }),
     );
+  });
+
+  describe('KeyRotationService failure semantics (B6.3c)', () => {
+    const base = {
+      actorType: 'admin' as const,
+      actorId: 'admin_1',
+      tenantId: 't1',
+      requestId: 'r1',
+    };
+
+    it('state write fails => rejects, old key still active, failure audit with reason (best-effort)', async () => {
+      const { kid: oldKid } = await provider.getSigningKey();
+      jest
+        .spyOn(provider as unknown as { atomicRename: () => Promise<void> }, 'atomicRename')
+        .mockRejectedValueOnce(new Error('ENOSPC'));
+      audit.record.mockRejectedValueOnce(new Error('mongo down')); // failure audit is best-effort
+
+      await expect(rotation.rotate('normal', base)).rejects.toThrow('ENOSPC');
+      expect((await provider.getSigningKey()).kid).toBe(oldKid);
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ...base,
+          action: AuditAction.SIGNING_KEY_ROTATED,
+          result: 'failure',
+          reason: 'rotate_failed',
+          metadata: { mode: 'normal' },
+        }),
+      );
+    });
+
+    it('audit fails after a successful rotate => rejects, rotation NOT rolled back, only kid logged', async () => {
+      const { kid: oldKid } = await provider.getSigningKey();
+      audit.record.mockRejectedValueOnce(new Error('mongo down'));
+      const err = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+      err.mockClear();
+
+      await expect(rotation.rotate('emergency', base)).rejects.toThrow('mongo down');
+      const kids = (await provider.getPublicKeys()).map((k) => k.kid);
+      expect(kids).not.toContain(oldKid);
+      expect(kids).toHaveLength(1);
+      expect(err).toHaveBeenCalledTimes(1);
+      expect(String(err.mock.calls[0][0])).toContain(kids[0]);
+      expect(String(err.mock.calls[0][0])).not.toMatch(/PRIVATE|\.pem|[\\/]/);
+    });
+
+    it('success audit carries the admin base + {mode, oldKid}', async () => {
+      const { kid: oldKid } = await provider.getSigningKey();
+      const r = await rotation.rotate('normal', base);
+      expect(audit.record).toHaveBeenCalledWith({
+        ...base,
+        action: AuditAction.SIGNING_KEY_ROTATED,
+        targetType: 'signing_key',
+        targetId: r.newKid,
+        result: 'success',
+        metadata: { mode: 'normal', oldKid },
+      });
+    });
   });
 
   describe('DEBT-007: rotate() keeps a usable active key when persisting state fails', () => {
@@ -452,6 +543,129 @@ describe('Keys (B1.9, INV-19)', () => {
       await provider.rotate('normal', 60);
 
       expect(await readdir(dir)).toContain(`${strayKid}.pem`);
+    });
+  });
+
+  describe('DEBT-145: rotate is serialised; read paths never write', () => {
+    let gated: GatedKeyProvider;
+    let gatedSigner: TokenSigner;
+    let gatedVerifier: TokenVerifier;
+
+    beforeEach(async () => {
+      gated = new GatedKeyProvider(dir); // same dir: reuses the key created by `provider.init()`
+      gatedSigner = new TokenSigner(gated, config);
+      gatedVerifier = new TokenVerifier(gated, config);
+    });
+
+    it('normal ∥ emergency: old kid is gone from JWKS and disk (same as sequential)', async () => {
+      const { kid: oldKid } = await gated.getSigningKey();
+      const g0 = gated.gate(0);
+      const p1 = gated.rotate('normal', 60);
+      await g0.reached; // normal read [A] and is about to replace keys.json
+      const p2 = gated.rotate('emergency', 60);
+      g0.release();
+      const [, r2] = await Promise.all([p1, p2]);
+
+      expect((await gated.getPublicKeys()).map((k) => k.kid)).toEqual([r2.newKid]);
+      const files = await readdir(dir);
+      expect(files).not.toContain(`${oldKid}.pem`);
+      expect(files.filter((f) => f.endsWith('.pem'))).toEqual([`${r2.newKid}.pem`]);
+      expect((await gated.getSigningKey()).kid).toBe(r2.newKid);
+    });
+
+    it('normal ∥ normal: no signed key is lost (A retiring, F1 retiring, F2 active)', async () => {
+      const { kid: a } = await gated.getSigningKey();
+      const g0 = gated.gate(0);
+      const g1 = gated.gate(1);
+      const p1 = gated.rotate('normal', 60);
+      await g0.reached;
+      const p2 = gated.rotate('normal', 60);
+      g0.release();
+      const r1 = await p1;
+      await g1.reached; // second rotate is about to write; F1 is the active key right now
+      const tokenF1 = await gatedSigner.sign({}, { audience: AUD, expiresInSec: 60 });
+      expect(decodeProtectedHeader(tokenF1).kid).toBe(r1.newKid);
+      g1.release();
+      const r2 = await p2;
+
+      expect(r2.oldKid).toBe(r1.newKid);
+      const meta = await gated.listKeys();
+      expect(meta.map((k) => [k.kid, k.status])).toEqual([
+        [a, 'retiring'],
+        [r1.newKid, 'retiring'],
+        [r2.newKid, 'active'],
+      ]);
+      await expect(gatedVerifier.verify(tokenF1, AUD)).resolves.toBeDefined();
+    });
+
+    it('a failed rotate does not jam the chain', async () => {
+      jest
+        .spyOn(gated as unknown as { atomicRename: () => Promise<void> }, 'atomicRename')
+        .mockRejectedValueOnce(new Error('EIO'));
+      const p1 = gated.rotate('normal', 60);
+      const p2 = gated.rotate('normal', 60);
+      await expect(p1).rejects.toThrow('EIO');
+      const r2 = await p2;
+      expect((await gated.getSigningKey()).kid).toBe(r2.newKid);
+    });
+
+    it('getPublicKeys/listKeys drop an expired retiring key without writing; rotate prunes it', async () => {
+      const stateFile = join(dir, 'keys.json');
+      const { kid: expiredKid } = await gated.getSigningKey();
+      await gated.rotate('normal', 60);
+      // Age the retiring key past its window directly in the state file.
+      const state = JSON.parse(await readFile(stateFile, 'utf8')) as {
+        kid: string;
+        retireAt?: string;
+      }[];
+      state.find((e) => e.kid === expiredKid)!.retireAt = new Date(Date.now() - 1000).toISOString();
+      await writeFile(stateFile, JSON.stringify(state));
+      const before = await readFile(stateFile, 'utf8');
+
+      const renameSpy = jest.spyOn(
+        gated as unknown as { atomicRename: () => Promise<void> },
+        'atomicRename',
+      );
+      expect((await gated.getPublicKeys()).map((k) => k.kid)).not.toContain(expiredKid);
+      expect((await gated.listKeys()).map((k) => k.kid)).not.toContain(expiredKid);
+      await gated.getSigningKey();
+      expect(renameSpy).not.toHaveBeenCalled();
+      expect(await readFile(stateFile, 'utf8')).toBe(before);
+
+      await gated.rotate('normal', 60);
+      expect(await readFile(stateFile, 'utf8')).not.toContain(expiredKid);
+    });
+
+    it('listKeys returns metadata only (exact key set, no key material)', async () => {
+      const r = await gated.rotate('normal', 900);
+      const items = await gated.listKeys();
+      for (const item of items) {
+        expect(Object.keys(item).sort()).toEqual(['alg', 'createdAt', 'kid', 'retireAt', 'status']);
+      }
+      const old = items.find((k) => k.kid === r.oldKid)!;
+      expect(old.status).toBe('retiring');
+      expect(Math.abs(Date.parse(old.retireAt!) - (Date.now() + 900_000))).toBeLessThan(5000);
+      expect(items.find((k) => k.kid === r.newKid)).toMatchObject({
+        status: 'active',
+        retireAt: null,
+      });
+    });
+
+    it('getSigningKey re-reads state once when the active PEM vanished (ENOENT)', async () => {
+      const { kid: oldKid } = await gated.getSigningKey();
+      const stateFile = join(dir, 'keys.json');
+      const stale = await readFile(stateFile, 'utf8');
+      const r = await gated.rotate('normal', 60);
+      const fresh = await readFile(stateFile, 'utf8');
+      // First read sees the pre-rotate state (old PEM already deleted), second sees the new state.
+      let reads = 0;
+      jest
+        .spyOn(gated as unknown as { readState: () => Promise<unknown> }, 'readState')
+        .mockImplementation(async () => JSON.parse(reads++ === 0 ? stale : fresh));
+      const key = await gated.getSigningKey();
+      expect(key.kid).toBe(r.newKid);
+      expect(key.kid).not.toBe(oldKid);
+      expect(reads).toBe(2);
     });
   });
 });

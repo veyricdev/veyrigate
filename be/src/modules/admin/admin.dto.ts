@@ -266,3 +266,20 @@ export class AuditQueryDto extends PageQueryDto {
   @IsISO8601({ strict: true })
   to?: string;
 }
+
+/** `POST /admin/keys/rotate` (super_admin, step-up, B6.3c). `mode` is required; no query flag. */
+export class RotateKeyDto {
+  @ApiProperty({ enum: ['normal', 'emergency'] })
+  @IsIn(['normal', 'emergency'])
+  mode!: 'normal' | 'emergency';
+}
+
+/** `GET /admin/tenants` — `after` is a tenant `id` (the sort key). */
+export class TenantListQueryDto extends PageQueryDto {
+  @ApiPropertyOptional({ maxLength: 128, pattern: '^[A-Za-z0-9._-]+$' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  @Matches(/^[A-Za-z0-9._-]+$/)
+  declare after?: string;
+}

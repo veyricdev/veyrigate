@@ -28,6 +28,7 @@ const EXPECTED: Record<string, { key: Record<string, number>; unique?: boolean; 
       { key: { tokenHash: 1 }, unique: true },
       { key: { userId: 1, clientId: 1 } },
       { key: { familyId: 1 } },
+      { key: { clientId: 1 } },
       { key: { expiresAt: 1 }, ttl: 0 },
     ],
     PasswordResetToken: [

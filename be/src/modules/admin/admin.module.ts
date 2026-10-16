@@ -7,12 +7,14 @@ import { OauthModule } from '../oauth/oauth.module';
 import { ResourcesModule } from '../resources/resources.module';
 import { AdminAuditController } from './admin-audit.controller';
 import { AdminClientsController } from './admin-clients.controller';
+import { AdminKeysController } from './admin-keys.controller';
 import { AdminResourcesController } from './admin-resources.controller';
+import { AdminTenantsController } from './admin-tenants.controller';
 import { AdminUsersController } from './admin-users.controller';
 import { AdminController } from './admin.controller';
 
 /**
- * Admin API (B6.1+, B6.3a, B6.3b). Mounted in every environment and always guarded (admin bearer token,
+ * Admin API (B6.1+, B6.3a, B6.3b, B6.3c). Mounted in every environment and always guarded (admin bearer token,
  * every mutation step-up). The OpenAPI JSON is served only outside production (`admin.openapi.ts`).
  */
 @Module({
@@ -30,6 +32,8 @@ import { AdminController } from './admin.controller';
     AdminResourcesController,
     AdminUsersController,
     AdminAuditController,
+    AdminKeysController,
+    AdminTenantsController,
   ],
 })
 export class AdminModule {}

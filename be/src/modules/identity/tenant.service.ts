@@ -34,6 +34,16 @@ export class TenantService implements OnApplicationBootstrap {
     }
   }
 
+  /** Admin list (B6.3c, super_admin): ordered by the unique `id`, strictly after the cursor. */
+  list(after: string | undefined, limit: number): Promise<Tenant[]> {
+    return this.tenants
+      .find(after === undefined ? {} : { id: { $gt: after } }, { _id: 0, id: 1, name: 1 })
+      .sort({ id: 1 })
+      .limit(limit)
+      .lean<Tenant[]>()
+      .exec();
+  }
+
   findById(id: string): Promise<Tenant | null> {
     return this.tenants.findOne({ id }, { _id: 0, id: 1, name: 1 }).lean<Tenant>().exec();
   }

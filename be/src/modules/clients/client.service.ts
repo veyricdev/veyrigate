@@ -242,23 +242,36 @@ export class ClientService {
     if (typeof patch.frontchannelLogoutUri === 'string') {
       set.frontchannelLogoutUri = patch.frontchannelLogoutUri;
     }
-    if (patch.disabled !== undefined) set.disabledAt = patch.disabled ? new Date() : null;
+    // DEBT-132: `disabled:true` is NOT in the main `$set` (it would overwrite the first disable
+    // time); it is stamped below only while still null. No `$min` (BSON null < Date => no-op,
+    // fail-open) and no pipeline update (a `$`-prefixed user value would be read as an expression).
+    if (patch.disabled === false) set.disabledAt = null;
     const unsetFrontchannel = patch.frontchannelLogoutUri === null;
+    const filter = adminIds.length
+      ? { clientId, allowedResources: { $nin: adminIds } }
+      : { clientId };
 
-    const before = await this.repo.findOneAndUpdate(
-      ctx,
-      adminIds.length ? { clientId, allowedResources: { $nin: adminIds } } : { clientId },
-      {
-        ...(Object.keys(set).length ? { $set: set } : {}),
-        ...(unsetFrontchannel ? { $unset: { frontchannelLogoutUri: 1 } } : {}),
-      },
-    );
+    const before = await this.repo.findOneAndUpdate(ctx, filter, {
+      ...(Object.keys(set).length ? { $set: set } : {}),
+      ...(unsetFrontchannel ? { $unset: { frontchannelLogoutUri: 1 } } : {}),
+    });
     if (!before) {
       // Same-tenant re-read only: a client of another tenant stays an opaque 404.
       if (adminIds.length && (await this.getForTenant(ctx, clientId))) {
         throw new ForbiddenClientConfigError('only super_admin may modify an admin client');
       }
       return null;
+    }
+    if (patch.disabled === true) {
+      const now = new Date();
+      if (before.disabledAt == null) {
+        await this.repo.updateOne(
+          ctx,
+          { ...filter, disabledAt: null },
+          { $set: { disabledAt: now } },
+        );
+      }
+      set.disabledAt = before.disabledAt ?? now;
     }
     const after = { ...before, ...set } as Client;
     if (unsetFrontchannel) delete after.frontchannelLogoutUri;

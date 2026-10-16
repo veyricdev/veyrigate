@@ -29,7 +29,7 @@ describe('AuthenticationService', () => {
     findByEmailForAuthentication: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
     verifyEmail: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
     recordFailedLogin: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
-    resetFailedLogins: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
+    clearFailedLoginsIfUnlocked: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
     setPassword: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
   };
   const tokenModel = {
@@ -243,7 +243,7 @@ describe('AuthenticationService', () => {
       UnauthorizedException,
     );
     sessions.establish.mockResolvedValue({ id: 'new-id', session: {} });
-    users.resetFailedLogins.mockResolvedValue(user);
+    users.clearFailedLoginsIfUnlocked.mockResolvedValue(user);
     await expect(
       service.login('a@example.com', 'correct password', { oldSessionId: 'old' }),
     ).resolves.toMatchObject({ id: 'new-id' });

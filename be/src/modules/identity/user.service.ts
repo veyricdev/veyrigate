@@ -229,6 +229,26 @@ export class UserService {
     return doc ? toView(doc) : null;
   }
 
+  /**
+   * Login success path (DEBT-154): clear the counter and an EXPIRED lock, but only while the user is
+   * not locked at write time (`lockedUntil` missing, null or <= now). An admin lock or a brute-force
+   * lock set after the login read its snapshot does not match => null, and login must fail. Admin
+   * unlock keeps using `resetFailedLogins`.
+   */
+  async clearFailedLoginsIfUnlocked(sub: string, now = new Date()): Promise<UserView | null> {
+    if (!isValidObjectId(sub)) return null;
+    const doc = await this.users
+      .findOneAndUpdate(
+        { _id: sub, lockedUntil: { $not: { $gt: now } } },
+        { $set: { failedLoginCount: 0 }, $unset: { lockedUntil: 1 } },
+        { returnDocument: 'after' },
+      )
+      .select(PUBLIC_FIELDS)
+      .lean<UserDoc>()
+      .exec();
+    return doc ? toView(doc) : null;
+  }
+
   async verifyEmail(sub: string, at = new Date()): Promise<UserView | null> {
     return this.update(sub, { emailVerifiedAt: at });
   }

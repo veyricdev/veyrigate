@@ -3,7 +3,13 @@ import { createPrivateKey, createPublicKey, generateKeyPairSync, randomUUID } fr
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { KeyObject } from 'node:crypto';
-import type { KeyProvider, PublicJwk, RotationMode, RotationResult } from './key-provider';
+import type {
+  KeyMetadata,
+  KeyProvider,
+  PublicJwk,
+  RotationMode,
+  RotationResult,
+} from './key-provider';
 
 interface KeyEntry {
   kid: string;
@@ -21,9 +27,17 @@ const STATE_FILE = 'keys.json';
  * in `KEY_LOCAL_DIR` (git-ignored, mode 0600); state (kid/status/public JWK) in
  * `keys.json`. Private keys never go to MongoDB (INV-19). A retiring key's
  * private file is deleted at rotation time — only its public JWK is kept.
+ *
+ * Concurrency (DEBT-145): only `init` and `rotate` write `keys.json`; every `rotate` runs inside an
+ * in-process promise-chain mutex, and the read paths (`getPublicKeys`, `listKeys`, `getSigningKey`)
+ * never write. The mutex holds within ONE process only (`KEY_PROVIDER` is a DI singleton): two
+ * processes sharing `KEY_LOCAL_DIR` can still race (single dev node only; multi-node needs the KMS
+ * provider, plan B7.3 / DEBT-159).
  */
 export class LocalKeyProvider implements KeyProvider {
   private readonly logger = new Logger(LocalKeyProvider.name);
+  /** Tail of the rotate mutex; a failed rotate must not block the next one. */
+  private chain: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly dir: string) {}
 
@@ -38,6 +52,19 @@ export class LocalKeyProvider implements KeyProvider {
   }
 
   async getSigningKey(): Promise<{ kid: string; privateKey: KeyObject }> {
+    try {
+      return await this.loadSigningKey();
+    } catch (err) {
+      // A normal rotate deletes the old PEM right after persisting the new state: a reader holding
+      // the previous state sees ENOENT. Re-read the state once; a second failure is real.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw err;
+      }
+      return this.loadSigningKey();
+    }
+  }
+
+  private async loadSigningKey(): Promise<{ kid: string; privateKey: KeyObject }> {
     const active = (await this.readState()).find((e) => e.status === 'active');
     if (!active) {
       throw new Error('No active signing key');
@@ -46,17 +73,37 @@ export class LocalKeyProvider implements KeyProvider {
     return { kid: active.kid, privateKey: createPrivateKey(pem) };
   }
 
+  /** Read-only (DEBT-145): expired retiring keys are filtered here and pruned by `rotate`. */
   async getPublicKeys(): Promise<PublicJwk[]> {
-    const now = Date.now();
-    const entries = await this.readState();
-    const live = entries.filter((e) => e.status === 'active' || Date.parse(e.retireAt ?? '') > now);
-    if (live.length !== entries.length) {
-      await this.writeState(live); // prune expired retiring keys
-    }
-    return live.map((e) => e.publicJwk);
+    return (await this.liveEntries()).map((e) => e.publicJwk);
   }
 
-  async rotate(mode: RotationMode, retainSec: number): Promise<RotationResult> {
+  async listKeys(): Promise<KeyMetadata[]> {
+    return (await this.liveEntries()).map((e) => ({
+      kid: e.kid,
+      alg: e.publicJwk.alg,
+      status: e.status,
+      createdAt: e.createdAt,
+      retireAt: e.retireAt ?? null,
+    }));
+  }
+
+  private async liveEntries(): Promise<KeyEntry[]> {
+    return LocalKeyProvider.live(await this.readState(), Date.now());
+  }
+
+  private static live(entries: KeyEntry[], now: number): KeyEntry[] {
+    return entries.filter((e) => e.status === 'active' || Date.parse(e.retireAt ?? '') > now);
+  }
+
+  /** Serialised (DEBT-145): every rotation sees the state the previous one wrote. */
+  rotate(mode: RotationMode, retainSec: number): Promise<RotationResult> {
+    const run = this.chain.then(() => this.rotateExclusive(mode, retainSec));
+    this.chain = run.catch(() => undefined);
+    return run;
+  }
+
+  private async rotateExclusive(mode: RotationMode, retainSec: number): Promise<RotationResult> {
     const entries = await this.readState();
     const old = entries.find((e) => e.status === 'active');
     const fresh = await this.createKey();
@@ -73,8 +120,11 @@ export class LocalKeyProvider implements KeyProvider {
       next = [fresh]; // drop the old key and every retiring key (spec §6.4)
     } else {
       const retireAt = new Date(Date.now() + retainSec * 1000).toISOString();
+      // Prune expired retiring keys here, inside the mutex (their PEMs are already gone).
       next = [
-        ...entries.map((e) => (e === old ? { ...e, status: 'retiring' as const, retireAt } : e)),
+        ...LocalKeyProvider.live(entries, Date.now()).map((e) =>
+          e === old ? { ...e, status: 'retiring' as const, retireAt } : e,
+        ),
         fresh,
       ];
     }

@@ -45,3 +45,10 @@ Behaviour:
   logged (stdout prints only `seed-dev: upserted user <id> <email>`).
 - **Note (dev-only)**: if the email already exists (e.g. registered by hand), the seed **overwrites**
   its password hash. Acceptable because the tool is dev-only and refuses production.
+
+## Signing keys (`KEY_PROVIDER=local`, dev-only)
+
+`LocalKeyProvider` keeps PEMs + `keys.json` in `KEY_LOCAL_DIR` and refuses `NODE_ENV=production`.
+Rotations are serialised by an **in-process** mutex and the read paths (`/jwks.json`, verify, sign)
+never write `keys.json` (DEBT-145). The mutex does not span processes: run **one** IdP process per
+`KEY_LOCAL_DIR`. Multi-node needs the KMS/Vault provider (plan B7.3, DEBT-159).

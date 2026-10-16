@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { getModelToken, MongooseModule } from '@nestjs/mongoose';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test, type TestingModule } from '@nestjs/testing';
+import { jest } from '@jest/globals';
 import { Eta } from 'eta';
 import IORedis from 'ioredis';
 import type { Model } from 'mongoose';
@@ -13,7 +14,7 @@ import { MODELS } from '../src/database/mongo/models';
 import { RedisService } from '../src/database/redis/redis.service';
 import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
 import { AuthenticationService } from '../src/modules/authentication/authentication.service';
-import { UserService } from '../src/modules/identity/user.service';
+import { ADMIN_LOCKED_UNTIL, UserService } from '../src/modules/identity/user.service';
 import { UserTenantService } from '../src/modules/identity/user-tenant.service';
 import { MAILER, type MailMessage } from '../src/modules/mailer/mailer';
 import { AuditAction } from '../src/modules/security/audit/audit-action.enum';
@@ -265,5 +266,102 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
     expect(
       await auditModel.exists({ action: AuditAction.SESSION_REVOKED, result: 'success' }),
     ).not.toBeNull();
+  });
+
+  describe('run 29 Task 4 (DEBT-154): a lock set between the login read and the reset wins', () => {
+    const LOGIN_PASSWORD = 'correct password'; // test-only value for a throwaway int DB user.
+    let seq = 0;
+
+    async function verifiedUser(): Promise<{ sub: string; email: string }> {
+      const user = await users.create({
+        email: `t4-${++seq}-${Date.now()}@example.com`,
+        password: LOGIN_PASSWORD,
+      });
+      await users.verifyEmail(user.sub);
+      return user;
+    }
+    const postLogin = async (email: string, password: string) => {
+      const page = await form('/login');
+      return app.inject({
+        method: 'POST',
+        url: '/login',
+        headers: { cookie: page.cookie },
+        payload: { _csrf: page.csrf, email, password, returnTo: '/' },
+      });
+    };
+    /** Body with the per-request CSRF token / nonces masked, for a byte-for-byte comparison. */
+    const normalized = (body: string) =>
+      body
+        .replace(/name="_csrf" value="[^"]+"/g, 'name="_csrf" value="X"')
+        .replace(/nonce="[^"]+"/g, 'nonce="X"');
+    const sessionCookieSet = (headers: Record<string, unknown>) =>
+      [headers['set-cookie'] ?? []]
+        .flat()
+        .some((c) => /^idp_session=[^;]+/.test(String(c)) && !/Max-Age=0/i.test(String(c)));
+    /** The login reads an UNLOCKED snapshot, then `lock` lands in the DB before the reset. */
+    const lockAfterRead = (lockedUntil: Date) => {
+      const original = users.findByEmailForAuthentication.bind(users);
+      return jest
+        .spyOn(users, 'findByEmailForAuthentication')
+        .mockImplementationOnce(async (email: string) => {
+          const snapshot = await original(email);
+          await userModel.updateOne({ email }, { $set: { lockedUntil } });
+          return snapshot;
+        });
+    };
+
+    afterEach(() => jest.restoreAllMocks());
+
+    it.each([
+      ['admin lock (sentinel)', () => ADMIN_LOCKED_UNTIL],
+      ['brute-force lock (now + 15 min)', () => new Date(Date.now() + 15 * 60_000)],
+    ])(
+      '%s: correct password => generic 401 identical to a wrong password, lock kept, no session',
+      async (_name, lockOf) => {
+        const user = await verifiedUser();
+        const wrong = await postLogin(user.email, 'wrong password');
+        await users.resetFailedLogins(user.sub); // the wrong attempt above bumped the counter
+        const lockedUntil = lockOf();
+        const spy = lockAfterRead(lockedUntil);
+
+        const res = await postLogin(user.email, LOGIN_PASSWORD);
+        expect(spy).toHaveBeenCalledTimes(1);
+        expect(res.statusCode).toBe(401);
+        expect(res.statusCode).toBe(wrong.statusCode);
+        expect(normalized(res.body)).toBe(normalized(wrong.body));
+        expect(sessionCookieSet(res.headers)).toBe(false);
+        expect(res.headers.location).toBeUndefined();
+
+        const doc = await userModel.findById(user.sub).lean();
+        expect((doc!.lockedUntil as Date).getTime()).toBe(lockedUntil.getTime());
+        expect(doc!.failedLoginCount).toBe(0); // no counter bump on this path
+        expect(await sessions.listByUser(user.sub)).toEqual([]);
+        expect(
+          await auditModel.exists({ action: AuditAction.AUTH_LOGIN_SUCCESS, actorId: user.sub }),
+        ).toBeNull();
+        expect(
+          await auditModel.countDocuments({
+            action: AuditAction.AUTH_LOGIN_FAILED,
+            targetId: user.sub,
+            reason: 'invalid_credentials',
+          }),
+        ).toBe(2);
+      },
+    );
+
+    it('normal login still resets the counter and clears an EXPIRED lock, creating a session', async () => {
+      const user = await verifiedUser();
+      await userModel.updateOne(
+        { _id: user.sub },
+        { $set: { failedLoginCount: 3, lockedUntil: new Date(Date.now() - 1000) } },
+      );
+      const res = await postLogin(user.email, LOGIN_PASSWORD);
+      expect(res.statusCode).toBe(302);
+      expect(sessionCookieSet(res.headers)).toBe(true);
+      const doc = await userModel.findById(user.sub).lean();
+      expect(doc!.failedLoginCount).toBe(0);
+      expect(doc!.lockedUntil).toBeUndefined();
+      expect(await sessions.listByUser(user.sub)).toHaveLength(1);
+    });
   });
 });

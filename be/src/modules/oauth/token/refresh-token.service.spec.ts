@@ -71,4 +71,19 @@ describe('RefreshTokenService revoke-scope guard (negative, no DB)', () => {
       expect(filter).toMatchObject({ clientId: 'c1', resource: 'https://api/' });
     }
   });
+
+  it('revokeForClient("") rejects (fail closed) and never calls updateMany', async () => {
+    await expect(svc.revokeForClient('', now)).rejects.toThrow();
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it('revokeForClient scopes every write to exactly {clientId}, stamp-first (B6.3c)', async () => {
+    await svc.revokeForClient('c1', now);
+    const calls = updateMany.mock.calls as [Record<string, unknown>, Record<string, unknown>][];
+    expect(calls.map(([f]) => f)).toEqual([
+      { clientId: 'c1', familyRevokedAt: null },
+      { clientId: 'c1', revokedAt: null },
+    ]);
+    expect(calls[0][1]).toEqual({ $set: { familyRevokedAt: now } });
+  });
 });

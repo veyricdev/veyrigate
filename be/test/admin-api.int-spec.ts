@@ -13,6 +13,7 @@ import { Types, type Model } from 'mongoose';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { sha256 } from '../src/common/crypto/crypto.util';
 import { deriveS256Challenge } from '../src/common/crypto/pkce.util';
 import { OAuthExceptionFilter } from '../src/common/filters/oauth-exception.filter';
 import { MODELS } from '../src/database/mongo/models';
@@ -1208,6 +1209,294 @@ describe('Admin API B6.3a (clients, secrets, resources) on real Mongo + Redis', 
           await a.close();
         }
       }
+    });
+  });
+
+  describe('run 29 Task 3 — disable revokes refresh families (DEBT-125), keeps first disabledAt (DEBT-132)', () => {
+    const refreshModel = () =>
+      app.get<Model<Record<string, unknown>>>(getModelToken('RefreshToken'));
+    const rtClient = (over: Record<string, unknown> = {}) =>
+      confidential({ grantTypes: ['authorization_code', 'refresh_token'], ...over });
+
+    /** A live refresh family inserted directly (plaintext value only known to the test). */
+    async function insertRefresh(clientId: string): Promise<string> {
+      const value = `rt-${randomUUID()}`;
+      await refreshModel().create({
+        tokenHash: sha256(value),
+        familyId: `fam-${randomUUID()}`,
+        userId: new Types.ObjectId(tadminA),
+        clientId,
+        scope: ['openid', 'api.read'],
+        resource: API_AUD,
+        issuedAt: new Date(),
+        expiresAt: new Date(Date.now() + 86_400_000),
+      });
+      return value;
+    }
+    const refreshGrant = (clientId: string, secret: string, value: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/token',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          authorization: basic(clientId, secret),
+        },
+        payload: form({ grant_type: 'refresh_token', refresh_token: value }),
+      });
+    async function clientWithSecret(): Promise<{ id: string; secret: string }> {
+      const id = await mkClient(rtClient());
+      const issued = await call('POST', `/admin/clients/${id}/secrets`, await tok(tadminA));
+      return { id, secret: (issued.json() as { clientSecret: string }).clientSecret };
+    }
+    const liveCount = async (clientId: string) =>
+      refreshModel().countDocuments({ clientId, revokedAt: null, familyRevokedAt: null });
+    const disabledAtOf = async (clientId: string) =>
+      ((await clientModel.findOne({ clientId }).lean())?.disabledAt as Date | null | undefined) ??
+      null;
+
+    it('disable -> enable: old refresh => invalid_grant, whole family stamped; another client of the same user survives', async () => {
+      const x = await clientWithSecret();
+      const y = await clientWithSecret();
+      const first = await refreshGrant(x.id, x.secret, await insertRefresh(x.id));
+      expect(first.statusCode).toBe(200); // the family is genuinely live before the disable
+      const rotated = first.json().refresh_token as string;
+      const yValue = await insertRefresh(y.id);
+      const t = await tok(tadminA);
+
+      expect(
+        (await call('PATCH', `/admin/clients/${x.id}`, t, { disabled: true })).statusCode,
+      ).toBe(200);
+      expect(
+        (await call('PATCH', `/admin/clients/${x.id}`, t, { disabled: false })).statusCode,
+      ).toBe(200);
+
+      const replay = await refreshGrant(x.id, x.secret, rotated);
+      expect(replay.statusCode).toBe(400);
+      expect(replay.json().error).toBe('invalid_grant');
+      const docs = await refreshModel().find({ clientId: x.id }).lean();
+      expect(docs.length).toBeGreaterThanOrEqual(2);
+      for (const d of docs) expect(d.familyRevokedAt).toBeInstanceOf(Date);
+      expect((await refreshGrant(y.id, y.secret, yValue)).statusCode).toBe(200);
+
+      const revokedEvent = await auditModel
+        .findOne({ action: 'TOKEN_REVOKED', clientId: x.id, 'metadata.reason': 'client_disabled' })
+        .lean();
+      expect(revokedEvent).toMatchObject({
+        actorType: 'admin',
+        actorId: tadminA,
+        tenantId: TENANT_A,
+        metadata: { reason: 'client_disabled', count: 1 },
+      });
+    });
+
+    it('disable twice: disabledAt keeps the FIRST time; the 2nd disable still revokes a family that slipped in', async () => {
+      const x = await clientWithSecret();
+      const t = await tok(tadminA);
+      expect(
+        (await call('PATCH', `/admin/clients/${x.id}`, t, { disabled: true })).statusCode,
+      ).toBe(200);
+      const firstAt = (await disabledAtOf(x.id))!;
+      expect(firstAt).toBeInstanceOf(Date);
+
+      await insertRefresh(x.id); // e.g. a code exchange that passed client auth before the disable
+      expect(await liveCount(x.id)).toBe(1);
+      await new Promise((r) => setTimeout(r, 20));
+      const again = await call('PATCH', `/admin/clients/${x.id}`, t, { disabled: true });
+      expect(again.statusCode).toBe(200);
+      expect(new Date(again.json().disabledAt as string).getTime()).toBe(firstAt.getTime());
+      expect((await disabledAtOf(x.id))!.getTime()).toBe(firstAt.getTime());
+      expect(await liveCount(x.id)).toBe(0);
+
+      // ADMIN_CLIENT_UPDATED for both PATCHes; `disabled` only when the state actually changed.
+      const updates = await auditModel
+        .find({ action: 'ADMIN_CLIENT_UPDATED', targetId: x.id, result: 'success' })
+        .sort({ timestamp: 1 })
+        .lean();
+      expect(updates).toHaveLength(2);
+      expect((updates[0].metadata as Record<string, unknown>).disabled).toBe(true);
+      expect(updates[1].metadata as Record<string, unknown>).not.toHaveProperty('disabled');
+    });
+
+    it('enable clears disabledAt; a later disable stamps a NEW time', async () => {
+      const x = await clientWithSecret();
+      const t = await tok(tadminA);
+      await call('PATCH', `/admin/clients/${x.id}`, t, { disabled: true });
+      const firstAt = (await disabledAtOf(x.id))!;
+      await call('PATCH', `/admin/clients/${x.id}`, t, { disabled: false });
+      expect(await disabledAtOf(x.id)).toBeNull();
+      await new Promise((r) => setTimeout(r, 20));
+      await call('PATCH', `/admin/clients/${x.id}`, t, { disabled: true });
+      expect((await disabledAtOf(x.id))!.getTime()).toBeGreaterThan(firstAt.getTime());
+    });
+
+    it('tenant_admin B disabling a client of tenant A => 404, its refresh family stays live', async () => {
+      const x = await clientWithSecret();
+      await insertRefresh(x.id);
+      const res = await call(
+        'PATCH',
+        `/admin/clients/${x.id}`,
+        await tok(tadminB, { client: BFF_B }),
+        { disabled: true },
+      );
+      expect(res.statusCode).toBe(404);
+      expect(await liveCount(x.id)).toBe(1);
+      expect(await disabledAtOf(x.id)).toBeNull();
+    });
+
+    it('revoke fails => 5xx, client stays disabled (fail-closed), failure audited; retry revokes', async () => {
+      const x = await clientWithSecret();
+      await insertRefresh(x.id);
+      const t = await tok(tadminA);
+      const spy = jest
+        .spyOn(moduleRef.get(RefreshTokenService), 'revokeForClient')
+        .mockRejectedValueOnce(new Error('mongo down'));
+      const res = await call('PATCH', `/admin/clients/${x.id}`, t, { disabled: true });
+      expect(res.statusCode).toBeGreaterThanOrEqual(500);
+      spy.mockRestore();
+      expect(await disabledAtOf(x.id)).toBeInstanceOf(Date);
+      expect(
+        await auditModel
+          .findOne({ action: 'ADMIN_CLIENT_UPDATED', targetId: x.id, result: 'failure' })
+          .lean(),
+      ).toMatchObject({ reason: 'revoke_failed' });
+      expect(await liveCount(x.id)).toBe(1);
+
+      expect(
+        (await call('PATCH', `/admin/clients/${x.id}`, t, { disabled: true })).statusCode,
+      ).toBe(200);
+      expect(await liveCount(x.id)).toBe(0);
+    });
+  });
+
+  describe('run 29 QA (tester) — /token grant paths after disable (DEBT-125)', () => {
+    const tokenPost = (clientId: string, secret: string, fields: Record<string, string>) =>
+      app.inject({
+        method: 'POST',
+        url: '/token',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          authorization: basic(clientId, secret),
+        },
+        payload: form(fields),
+      });
+    async function liveClient(): Promise<{ id: string; secret: string }> {
+      const id = await mkClient(
+        confidential({
+          grantTypes: ['authorization_code', 'refresh_token'],
+          scopes: ['openid', 'offline_access', 'api.read'],
+        }),
+      );
+      const issued = await call('POST', `/admin/clients/${id}/secrets`, await tok(tadminA));
+      return { id, secret: (issued.json() as { clientSecret: string }).clientSecret };
+    }
+    /** A code minted the way `/authorize` mints it, bound to a live session of tadminA. */
+    async function mintCode(clientId: string): Promise<string> {
+      const { session } = await sessions.create(tadminA, DEFAULT_TENANT_ID);
+      return (
+        await moduleRef.get(AuthorizationCodeService).create({
+          clientId,
+          redirectUri: REDIRECT,
+          codeChallenge: deriveS256Challenge(VERIFIER),
+          resource: API_AUD,
+          scope: 'openid offline_access api.read',
+          userId: tadminA,
+          authTime: Math.floor(Date.now() / 1000),
+          sessionRef: session.ref,
+        })
+      ).code;
+    }
+    const codeGrant = (c: { id: string; secret: string }, code: string) =>
+      tokenPost(c.id, c.secret, {
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: REDIRECT,
+        code_verifier: VERIFIER,
+      });
+    const refreshModel = () =>
+      app.get<Model<Record<string, unknown>>>(getModelToken('RefreshToken'));
+
+    it('code minted BEFORE disable cannot be exchanged while disabled; refresh dies; enable does not revive it', async () => {
+      const x = await liveClient();
+      // Positive control: our mint path really yields a working code + refresh token.
+      const ok = await codeGrant(x, await mintCode(x.id));
+      expect(ok.statusCode).toBe(200);
+      const rt = ok.json().refresh_token as string;
+      expect(typeof rt).toBe('string');
+      const pending = await mintCode(x.id); // issued before the disable, exchanged after
+
+      const t = await tok(tadminA);
+      expect(
+        (await call('PATCH', `/admin/clients/${x.id}`, t, { disabled: true })).statusCode,
+      ).toBe(200);
+
+      const exch = await codeGrant(x, pending);
+      expect(exch.statusCode).not.toBe(200);
+      expect(exch.json()).not.toHaveProperty('access_token');
+      expect(['invalid_client', 'invalid_grant']).toContain(exch.json().error);
+
+      const r1 = await tokenPost(x.id, x.secret, {
+        grant_type: 'refresh_token',
+        refresh_token: rt,
+      });
+      expect(r1.statusCode).not.toBe(200);
+      expect(r1.json()).not.toHaveProperty('access_token');
+      expect(['invalid_client', 'invalid_grant']).toContain(r1.json().error);
+
+      const cc = await tokenPost(x.id, x.secret, {
+        grant_type: 'client_credentials',
+        scope: 'api.read',
+      });
+      expect(cc.statusCode).toBe(400);
+      expect(cc.json()).not.toHaveProperty('access_token');
+
+      expect(
+        (await call('PATCH', `/admin/clients/${x.id}`, t, { disabled: false })).statusCode,
+      ).toBe(200);
+      const r2 = await tokenPost(x.id, x.secret, {
+        grant_type: 'refresh_token',
+        refresh_token: rt,
+      });
+      expect(r2.statusCode).toBe(400);
+      expect(r2.json().error).toBe('invalid_grant');
+      const live = await refreshModel().countDocuments({
+        clientId: x.id,
+        revokedAt: null,
+        familyRevokedAt: null,
+      });
+      expect(live).toBe(0);
+      // A fresh code after re-enable works again (the client is not bricked).
+      expect((await codeGrant(x, await mintCode(x.id))).statusCode).toBe(200);
+    });
+
+    it('concurrent disable PATCHes: all 2xx, one disabledAt, zero live families, no 5xx', async () => {
+      const x = await liveClient();
+      const ok = await codeGrant(x, await mintCode(x.id));
+      expect(ok.statusCode).toBe(200);
+      const t = await tok(tadminA);
+      const results = await Promise.all(
+        Array.from({ length: 5 }, () =>
+          call('PATCH', `/admin/clients/${x.id}`, t, { disabled: true }),
+        ),
+      );
+      expect(results.map((r) => r.statusCode)).toEqual([200, 200, 200, 200, 200]);
+      const stored = await clientModel.findOne({ clientId: x.id }).lean();
+      expect(stored?.disabledAt).toBeInstanceOf(Date);
+      expect(
+        await refreshModel().countDocuments({
+          clientId: x.id,
+          revokedAt: null,
+          familyRevokedAt: null,
+        }),
+      ).toBe(0);
+      const changed = await auditModel
+        .find({
+          action: 'ADMIN_CLIENT_UPDATED',
+          targetId: x.id,
+          result: 'success',
+          'metadata.disabled': true,
+        })
+        .lean();
+      expect(changed.length).toBeGreaterThanOrEqual(1);
     });
   });
 });

@@ -60,12 +60,15 @@ interface RefreshDoc {
  * - `{userId, sessionRef}` — local logout: only the families minted by this browser session.
  * - `{userId, clientId, resource}` — admin consent revoke (B6.3b): the families of exactly that
  *   `user × client × resource` grant; another resource of the same client survives.
+ * - `{clientId}` (no `userId`) — admin disables a client (B6.3c, DEBT-125): every family of it.
+ *   `clientId` is globally unique; the caller already checked the client's tenant.
  */
 type RevokeFilter =
   | { familyId: string; clientId: string }
   | { userId: string }
   | { userId: string; sessionRef: string }
-  | { userId: string; clientId: string; resource: string };
+  | { userId: string; clientId: string; resource: string }
+  | { clientId: string };
 
 /** Admin metadata of one refresh family (B6.3b). Never a hash, parent/successor or device data. */
 export interface FamilySummary {
@@ -465,6 +468,14 @@ export class RefreshTokenService {
     return this.revokeWhere({ userId, clientId, resource }, now);
   }
 
+  /**
+   * Revoke every family of a client (admin disable, B6.3c, DEBT-125) so enabling it again does not
+   * revive old refresh tokens. Idempotent (a repeated disable is the retry path).
+   */
+  async revokeForClient(clientId: string, now: Date): Promise<number> {
+    return this.revokeWhere({ clientId }, now);
+  }
+
   /** Distinct `clientId`s the user holds refresh tokens for (admin: resolve the tenant's clients). */
   async distinctClientIds(userId: string): Promise<string[]> {
     return (await this.refreshTokens
@@ -587,6 +598,12 @@ export class RefreshTokenService {
         throw new Error('revokeWhere requires both familyId and clientId');
       }
       return { familyId: filter.familyId, clientId: filter.clientId };
+    }
+    if (!('userId' in filter)) {
+      if (typeof filter.clientId !== 'string' || !filter.clientId) {
+        throw new Error('revokeWhere requires a non-empty clientId');
+      }
+      return { clientId: filter.clientId };
     }
     if (!filter.userId) {
       throw new Error('revokeWhere requires a userId');

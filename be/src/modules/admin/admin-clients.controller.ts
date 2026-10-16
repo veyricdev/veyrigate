@@ -27,6 +27,7 @@ import {
   Tenant,
   type TenantContext,
 } from '../identity/tenant-context/tenant-context';
+import { RefreshTokenService } from '../oauth/token/refresh-token.service';
 import { AuditAction } from '../security/audit/audit-action.enum';
 import { AuditService } from '../security/audit/audit.service';
 import type { AuditMetadata } from '../security/audit/audit.types';
@@ -69,6 +70,7 @@ export class AdminClientsController {
     private readonly clients: ClientService,
     private readonly credentials: ClientCredentialService,
     private readonly audit: AuditService,
+    private readonly refreshTokens: RefreshTokenService,
   ) {}
 
   @Get()
@@ -140,6 +142,25 @@ export class AdminClientsController {
       targetId: clientId,
       clientId,
     };
+    // DEBT-125 / Q-29.3: EVERY disable revokes all refresh families of the client (also when it was
+    // already disabled: the retry path). Order update -> revoke -> audit; a revoke failure leaves
+    // the client disabled (fail-closed: `findByClientId` already refuses it) and is a 5xx.
+    let revoked = 0;
+    if (dto.disabled === true) {
+      try {
+        revoked = await this.refreshTokens.revokeForClient(clientId, new Date());
+      } catch (err) {
+        await this.audit
+          .record({
+            ...base,
+            action: AuditAction.ADMIN_CLIENT_UPDATED,
+            result: 'failure',
+            reason: 'revoke_failed',
+          })
+          .catch(() => undefined);
+        throw err;
+      }
+    }
     const changed = DIFF_FIELDS.filter((f) => !sameValue(res.before[f], res.after[f]));
     const wasDisabled = res.before.disabledAt != null;
     const metadata: AuditMetadata = {
@@ -155,6 +176,14 @@ export class AdminClientsController {
       result: 'success',
       metadata,
     });
+    if (revoked > 0) {
+      await this.audit.record({
+        ...base,
+        action: AuditAction.TOKEN_REVOKED,
+        result: 'success',
+        metadata: { reason: 'client_disabled', count: revoked },
+      });
+    }
     const redirectChanged = REDIRECT_FIELDS.filter((f) => changed.includes(f));
     if (redirectChanged.length) {
       await this.audit.record({

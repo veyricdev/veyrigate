@@ -114,13 +114,8 @@ export class AuthenticationService {
       () => false,
     );
     const locked = !!user?.lockedUntil && user.lockedUntil > new Date();
-    if (!user || !passwordOk || !user.emailVerifiedAt || locked) {
-      let newlyLocked = false;
-      if (user && !locked) {
-        const updated = await this.users.recordFailedLogin(user.sub);
-        newlyLocked = updated?.newlyLocked ?? false;
-      }
-      await this.audit.record({
+    const recordFailed = () =>
+      this.audit.record({
         actorType: 'system',
         ...(user ? { targetType: 'user', targetId: user.sub } : {}),
         action: AuditAction.AUTH_LOGIN_FAILED,
@@ -130,6 +125,13 @@ export class AuthenticationService {
         userAgent: context.userAgent,
         requestId: context.requestId,
       });
+    if (!user || !passwordOk || !user.emailVerifiedAt || locked) {
+      let newlyLocked = false;
+      if (user && !locked) {
+        const updated = await this.users.recordFailedLogin(user.sub);
+        newlyLocked = updated?.newlyLocked ?? false;
+      }
+      await recordFailed();
       if (newlyLocked)
         await this.audit.record({
           actorType: 'system',
@@ -140,7 +142,12 @@ export class AuthenticationService {
         });
       throw new UnauthorizedException(GENERIC_LOGIN_ERROR);
     }
-    await this.users.resetFailedLogins(user.sub);
+    // DEBT-154: the snapshot above may be stale — an admin/brute-force lock set since then must
+    // win. Atomic conditional reset; no match => same generic failure, no counter bump, no session.
+    if (!(await this.users.clearFailedLoginsIfUnlocked(user.sub, new Date()))) {
+      await recordFailed();
+      throw new UnauthorizedException(GENERIC_LOGIN_ERROR);
+    }
     const established = await this.sessions.establish(
       context.oldSessionId,
       user.sub,

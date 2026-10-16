@@ -6,6 +6,7 @@ import {
 } from '../clients/client.service';
 import { InvalidRedirectUriError } from '../clients/redirect-uri.validator';
 import { DuplicateError } from '../identity/identity.errors';
+import type { Tenant } from '../identity/tenant.service';
 import type { UserTenant } from '../identity/user-tenant.service';
 import type { UserView } from '../identity/user.service';
 import type { Consent } from '../oauth/consent/consent.service';
@@ -67,6 +68,16 @@ export interface AdminResourceView {
 
 export function toAdminResource(r: Resource): AdminResourceView {
   return { resourceId: r.resourceId, identifier: r.identifier, scopes: r.scopes ?? [] };
+}
+
+export interface AdminTenantView {
+  id: string;
+  name: string;
+}
+
+/** Allowlist (B6.3c): no `_id`/`__v`. */
+export function toAdminTenant(t: Tenant): AdminTenantView {
+  return { id: t.id, name: t.name };
 }
 
 export type CredentialStatus = 'active' | 'grace' | 'expired' | 'revoked';

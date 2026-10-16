@@ -123,7 +123,10 @@ export class AdminResourcesController {
   }
 }
 
-/** Resources are global: writing one affects every tenant, so tenant_admin may not (Q-27.2). */
-function assertSuperAdmin(actor: AdminActor): void {
+/**
+ * Resources are global: writing one affects every tenant, so tenant_admin may not (Q-27.2).
+ * Also gates the platform-level signing keys (B6.3c, Q-29.1).
+ */
+export function assertSuperAdmin(actor: AdminActor): void {
   if (!actor.roles.includes('super_admin')) throw AdminAuthError.forbidden();
 }

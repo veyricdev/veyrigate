@@ -34,4 +34,6 @@ export const RefreshTokenSchema = new Schema({
 RefreshTokenSchema.index({ tokenHash: 1 }, { unique: true });
 RefreshTokenSchema.index({ userId: 1, clientId: 1 });
 RefreshTokenSchema.index({ familyId: 1 });
+// B6.3c (DEBT-125): disabling a client revokes by `{clientId}`; `{userId, clientId}` cannot serve it.
+RefreshTokenSchema.index({ clientId: 1 });
 RefreshTokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
