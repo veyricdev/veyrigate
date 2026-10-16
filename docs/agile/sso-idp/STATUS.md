@@ -2,8 +2,8 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: — (run 26 đã đóng, `7321765`). Kế tiếp: run 27 = B6.3 (endpoint quản trị).
-- **Vòng lặp (run 26)**: tech-lead=1, BE dev=2, senior=2 (REJECT → PASS), tester=1
+- **Run hiện tại**: `27-B6.3a` — cổng: **orchestrator** (đóng run) — tester **PASS**: BE unit 241 + int 585 (+5 tester: DEBT-136, liveness admin sau disable, grace TTL, OpenAPI prod 404), FE 240, E2E 12/12; typecheck/lint sạch. Xem `runs/27-B6.3a/test-report.md`. Dev DB cần `db:sync-indexes`. Run 28 = B6.3b.
+- **Vòng lặp (run 27)**: tech-lead=1 (PASS), backend-dev=2, senior=2 (REJECT → PASS), tester=1 (PASS)
 - **Run vừa đóng**: `26-B6.1-B6.2` ✅ 4/4 — BE unit 220 + int 554, FE 240, E2E 12. Xem `runs/26-B6.1-B6.2/summary.md`.
 - **Việc tiếp theo**: T6/T7 (plan §7) hoặc M5 (B5 federation, B6 admin API). Debt đáng chú ý: DEBT-103/104/109 (gom kiểm callback FE), DEBT-095, DEBT-054/096.
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
@@ -34,4 +34,4 @@ Xem `plan.md` §12. Còn mở: **Q3, Q5, Q7–Q9**. **Q1, Q4, Q6 đã chốt** (
 
 ## Backlog mở
 
-Xem [backlog.md](backlog.md). Run 22 đóng DEBT-004/076/078/079/080/084/086/087/088; mở 082/083/085/089–092. Run 23 đóng **DEBT-089/090/091/070** (tester); mở DEBT-093/094 (tech-lead), DEBT-095–097 (senior). Run 24 tech-lead mở DEBT-098/099; frontend-dev (smoke Task 3) mở DEBT-100 — **backend-dev (Task 4) ĐÃ ĐÓNG DEBT-100** (gốc: index `consents` cũ sót ở DB dev; fix ops `db:sync-indexes` + int-test repro). Senior mở DEBT-101…106. Run 26 tech-lead mở DEBT-116/117/118; backend-dev đóng DEBT-098/105/106, mở DEBT-119/120; senior mở DEBT-121/122; backend-dev retry 1 đóng DEBT-122; senior lượt 2 mở DEBT-123. Run 25 tech-lead mở DEBT-107/108; frontend-dev đóng DEBT-101/102, mở DEBT-109/110/111; senior mở DEBT-112…115. Giữ mở: DEBT-054 (gỡ `--forceExit`, ngoài phạm vi). E2E (T4)+T5 → run 25 (orchestrator mở sau khi run 24 PASS; **chạy `db:sync-indexes` trên DB dev/E2E trước khi E2E nút B**).
+Xem [backlog.md](backlog.md). Run 22 đóng DEBT-004/076/078/079/080/084/086/087/088; mở 082/083/085/089–092. Run 23 đóng **DEBT-089/090/091/070** (tester); mở DEBT-093/094 (tech-lead), DEBT-095–097 (senior). Run 24 tech-lead mở DEBT-098/099; frontend-dev (smoke Task 3) mở DEBT-100 — **backend-dev (Task 4) ĐÃ ĐÓNG DEBT-100** (gốc: index `consents` cũ sót ở DB dev; fix ops `db:sync-indexes` + int-test repro). Senior mở DEBT-101…106. Run 26 tech-lead mở DEBT-116/117/118; backend-dev đóng DEBT-098/105/106, mở DEBT-119/120; senior mở DEBT-121/122; backend-dev retry 1 đóng DEBT-122; senior lượt 2 mở DEBT-123. Run 27 tech-lead mở DEBT-124…129; backend-dev mở DEBT-130…132; senior mở DEBT-133…135; backend-dev retry 1 đóng DEBT-131/133; senior lượt 2 mở DEBT-136…138; tester đóng DEBT-136, mở DEBT-139. Run 25 tech-lead mở DEBT-107/108; frontend-dev đóng DEBT-101/102, mở DEBT-109/110/111; senior mở DEBT-112…115. Giữ mở: DEBT-054 (gỡ `--forceExit`, ngoài phạm vi). E2E (T4)+T5 → run 25 (orchestrator mở sau khi run 24 PASS; **chạy `db:sync-indexes` trên DB dev/E2E trước khi E2E nút B**).

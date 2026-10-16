@@ -267,7 +267,8 @@ export class AuthorizeService {
    * `request_id`/`_csrf`) is never trusted for `redirect_uri`/`state`/`scope`/`resource`/`client_id`
    * (anti-param-tampering, symmetric with resume). Returns null when the context is missing/expired/
    * already consumed (replay) so the controller shows a first-party "expired" page (no redirect:
-   * `redirect_uri` is gone with the context).
+   * `redirect_uri` is gone with the context) — and, on approve, also when the client is now
+   * disabled/gone or no longer registers the stored `redirect_uri`/allows the stored resource (B6.3a).
    *
    * `approve=false` (deny) redirects `access_denied` and writes NO consent and NO code. `approve=true`
    * records consent (owner = session.userId) and issues a code. The session is re-checked by the
@@ -300,12 +301,16 @@ export class AuthorizeService {
     // The client could have changed between render and POST: re-resolve it and bound the granted
     // scopes by its *current* scopes so a scope the client has since lost is never carried forward.
     const client = await this.clients.findByClientId(ctx.clientId);
-    if (!client) {
-      // Client vanished mid-flow: fail closed with an OAuth error to the stored redirect_uri.
-      const err = new AuthorizeRedirectError('access_denied', 'Client is no longer available.');
-      err.redirectUri = ctx.redirectUri;
-      err.state = ctx.originalState;
-      throw err;
+    // B6.3a: the client may have been disabled, or the admin may have removed the stored
+    // redirect_uri / resource while this context waited (TTL <= 10'). Then the stored redirect_uri
+    // is no longer trusted: first-party error page (null), no redirect there, no code minted.
+    if (
+      !client ||
+      !isRegisteredRedirectUri(client.redirectUris, ctx.redirectUri) ||
+      (ctx.resource !== undefined &&
+        (await this.resources.resolveForClient(client.allowedResources, ctx.resource)) === null)
+    ) {
+      return null;
     }
     const requestedScopes = ctx.scope.split(' ').filter(Boolean);
     const versions = this.consents.currentVersions();

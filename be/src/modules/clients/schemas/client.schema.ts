@@ -28,10 +28,16 @@ export const ClientSchema = new Schema(
     allowedResources: { type: [String], default: [] },
     scopes: { type: [String], default: [] },
     tenantId: { type: String, required: true },
+    // Admin disable (B6.3a, Q-27.4): non-null => the client cannot authorize/authenticate and its
+    // access tokens are inactive (`ClientService.findByClientId` filters `disabledAt: null`, which
+    // also matches older documents without the field). Reversible; there is no DELETE.
+    disabledAt: { type: Date, default: null },
   },
   { timestamps: true },
 );
 ClientSchema.index({ clientId: 1 }, { unique: true });
+// B6.3a: admin list/get always filter by `tenantId` and page by `clientId`.
+ClientSchema.index({ tenantId: 1, clientId: 1 });
 // DEBT-020: `isOriginRegisteredForAnyClient` (discovery/jwks/preflight CORS) queries by
 // `allowedCorsOrigins`; a multikey index avoids a full collection scan per preflight/metadata hit.
 ClientSchema.index({ allowedCorsOrigins: 1 });

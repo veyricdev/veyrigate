@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import type { Model } from 'mongoose';
-import { mapDuplicate } from '../identity/identity.errors';
+import { DuplicateError, mapDuplicate } from '../identity/identity.errors';
 import { validateResourceFormat } from './resource.validator';
 
 export interface Resource {
@@ -34,6 +34,56 @@ export class ResourceService {
       }),
     );
     return doc.toObject();
+  }
+
+  /**
+   * Admin create (B6.3a): `resourceId` is not unique-indexed (DEBT-077/127), so a duplicate is
+   * refused by a pre-check (race accepted: super_admin only); `identifier` by its unique index.
+   */
+  async createUnique(input: CreateResourceInput): Promise<Resource> {
+    validateResourceFormat(input.identifier);
+    if (await this.resources.exists({ resourceId: input.resourceId })) {
+      throw new DuplicateError('Resource');
+    }
+    return this.create(input);
+  }
+
+  /** Admin list (global, spec §10), ordered by the unique `identifier`, strictly after the cursor. */
+  list(after: string | undefined, limit: number): Promise<Resource[]> {
+    return this.resources
+      .find(after === undefined ? {} : { identifier: { $gt: after } })
+      .sort({ identifier: 1 })
+      .limit(limit)
+      .lean<Resource[]>()
+      .exec();
+  }
+
+  findByResourceId(resourceId: string): Promise<Resource | null> {
+    return this.resources.findOne({ resourceId }).lean<Resource>().exec();
+  }
+
+  /** Every resource whose `resourceId` is in the set (B6.3a: validate `Client.allowedResources`). */
+  findByResourceIds(resourceIds: readonly string[]): Promise<Resource[]> {
+    return this.resources
+      .find({ resourceId: { $in: [...resourceIds] } })
+      .lean<Resource[]>()
+      .exec();
+  }
+
+  /**
+   * Admin PATCH (B6.3a, Q-27.4): only `scopes` may change — `resourceId`/`identifier` are
+   * immutable (changing `identifier` would kill every live token's `aud` at once). Returns the
+   * before/after documents, or null when not found.
+   */
+  async updateScopes(
+    resourceId: string,
+    scopes: string[],
+  ): Promise<{ before: Resource; after: Resource } | null> {
+    const before = await this.resources
+      .findOneAndUpdate({ resourceId }, { $set: { scopes } }, { returnDocument: 'before' })
+      .lean<Resource>()
+      .exec();
+    return before ? { before, after: { ...before, scopes } } : null;
   }
 
   findByIdentifier(identifier: string): Promise<Resource | null> {

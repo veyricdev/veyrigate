@@ -16,6 +16,7 @@ import { assertTrustProxyConsistent, parseTrustProxy } from './config/trust-prox
 import { ClientCorsService } from './modules/clients/client-cors.service';
 import { registerCorsPreflight } from './modules/clients/client-cors.helper';
 import { isDemoEnabled } from './modules/demo/demo.enabled';
+import { registerAdminOpenApi } from './modules/admin/admin.openapi';
 
 async function bootstrap(): Promise<void> {
   // Load `.env` BEFORE anything reads `process.env` (R3). `@nestjs/config` only copies `.env` into
@@ -76,6 +77,10 @@ async function bootstrap(): Promise<void> {
     app.get(ClientCorsService),
     extraCorsPaths,
   );
+
+  // Admin OpenAPI JSON (`GET /openapi/admin.json`, Q-27.1): development/test only, never in
+  // production (route not registered => 404). Shared helper, same as the integration bootstrap.
+  registerAdminOpenApi(app, process.env);
 
   // Reject unknown/extra fields on all DTOs.
   app.useGlobalPipes(

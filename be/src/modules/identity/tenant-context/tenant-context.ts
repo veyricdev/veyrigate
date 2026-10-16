@@ -47,9 +47,12 @@ export type TenantContext = Readonly<{
 /** Where the guard stores the context on the request (private symbol, not a readable field name). */
 const TENANT_CTX = Symbol('tenantContext');
 
-/** Admin principal set by `AdminTokenGuard` (private symbol): admin roles + raw `auth_time`. */
+/**
+ * Admin principal set by `AdminTokenGuard` (private symbol): admin roles + raw `auth_time` + the
+ * `client_id` that issued the admin token (B6.3a: lets a handler refuse to lock out its own BFF).
+ */
 const ADMIN_PRINCIPAL = Symbol('adminPrincipal');
-type AdminPrincipal = Readonly<{ roles: readonly string[]; authTime: unknown }>;
+type AdminPrincipal = Readonly<{ roles: readonly string[]; authTime: unknown; clientId: string }>;
 
 type RequestWithTenant = {
   cookies?: Record<string, string | undefined>;
@@ -194,6 +197,7 @@ export class AdminTokenGuard implements CanActivate {
     req[ADMIN_PRINCIPAL] = Object.freeze({
       roles: Object.freeze(adminRoles),
       authTime: claims.auth_time,
+      clientId: claims.client_id,
     });
     return true;
   }
@@ -207,6 +211,20 @@ export const AdminRoles = createParamDecorator((_data: unknown, context: Executi
   }
   return principal.roles;
 });
+
+/** What an admin handler may know about its caller (never `auth_time`/`sid`/the token). */
+export type AdminActor = Readonly<{ roles: readonly string[]; clientId: string }>;
+
+/** `@CurrentAdmin() actor` - roles + issuing `client_id` resolved by `AdminTokenGuard` (B6.3a). */
+export const CurrentAdmin = createParamDecorator(
+  (_data: unknown, context: ExecutionContext): AdminActor => {
+    const principal = context.switchToHttp().getRequest<RequestWithTenant>()[ADMIN_PRINCIPAL];
+    if (!principal) {
+      throw new Error('Admin principal missing: apply @UseGuards(AdminTokenGuard)');
+    }
+    return { roles: principal.roles, clientId: principal.clientId };
+  },
+);
 
 /** DI token for the step-up clock (ms epoch); tests inject it to probe the N-minute boundary. */
 export const STEP_UP_CLOCK = 'STEP_UP_CLOCK';

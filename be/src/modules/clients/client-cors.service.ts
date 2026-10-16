@@ -30,7 +30,7 @@ export class ClientCorsService {
   async isOriginAllowedForClient(clientId: string, origin: string): Promise<boolean> {
     if (!origin) return false;
     const client = await this.clients
-      .findOne({ clientId }, { allowedCorsOrigins: 1 })
+      .findOne({ clientId, disabledAt: null }, { allowedCorsOrigins: 1 })
       .lean<Pick<Client, 'allowedCorsOrigins'>>()
       .exec();
     return client?.allowedCorsOrigins?.includes(origin) ?? false;
@@ -43,7 +43,7 @@ export class ClientCorsService {
   async isOriginRegisteredForAnyClient(origin: string): Promise<boolean> {
     if (!origin) return false;
     const match = await this.clients
-      .findOne({ allowedCorsOrigins: origin }, { _id: 1 })
+      .findOne({ allowedCorsOrigins: origin, disabledAt: null }, { _id: 1 })
       .lean()
       .exec();
     return match !== null;

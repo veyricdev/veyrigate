@@ -37,6 +37,24 @@ export class AdminAuthError extends Error {
   static stepUpRequired(): AdminAuthError {
     return new AdminAuthError(403, { error: 'step_up_required', max_age: 0 });
   }
+
+  /**
+   * 404 (B6.3a, D-27.c): the target does not exist IN THE TOKEN'S TENANT. Cross-tenant and
+   * truly-missing are byte-identical (no oracle), so there is never a description.
+   */
+  static notFound(): AdminAuthError {
+    return new AdminAuthError(404, { error: 'not_found' });
+  }
+
+  /** 409 (B6.3a): the write conflicts with current state (duplicate, self-lock). */
+  static conflict(description: string): AdminAuthError {
+    return new AdminAuthError(409, { error: 'conflict', error_description: description });
+  }
+
+  /** 400 (B6.3a): a domain validation failure (redirect URI, origin, resource, ...). */
+  static invalidRequest(description: string): AdminAuthError {
+    return new AdminAuthError(400, { error: 'invalid_request', error_description: description });
+  }
 }
 
 interface AdminReply {

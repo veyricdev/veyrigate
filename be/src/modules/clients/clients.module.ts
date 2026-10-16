@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ResourcesModule } from '../resources/resources.module';
 import { ClientAuthenticationService } from './client-authentication.service';
 import { ClientCorsService } from './client-cors.service';
 import { ClientCredentialService } from './client-credential.service';
@@ -6,6 +7,7 @@ import { ClientService } from './client.service';
 
 /** Clients + ClientCredential + client authentication + dynamic CORS (B3.1, B3.3, B3.4). */
 @Module({
+  imports: [ResourcesModule],
   providers: [
     ClientService,
     ClientCredentialService,

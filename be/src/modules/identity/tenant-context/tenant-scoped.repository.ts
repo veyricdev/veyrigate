@@ -1,5 +1,20 @@
-import type { DeleteResult, Model, QueryFilter, UpdateQuery, UpdateResult } from 'mongoose';
+import type {
+  DeleteResult,
+  Model,
+  ProjectionType,
+  QueryFilter,
+  SortOrder,
+  UpdateQuery,
+  UpdateResult,
+} from 'mongoose';
 import type { TenantContext } from './tenant-context';
+
+/** Optional read shaping for `find` (B6.3a: server-side pagination + DB-level projection). */
+export interface FindOptions<T> {
+  sort?: Partial<Record<keyof T & string, SortOrder>>;
+  limit?: number;
+  projection?: ProjectionType<T>;
+}
 
 /**
  * Tenant-scoped data access (B2.1, INV-24). Every call requires a `TenantContext` and puts
@@ -14,8 +29,11 @@ export class TenantScopedRepository<T extends { tenantId: string }> {
     return this.model.findOne(this.scope(ctx, filter)).lean<T>().exec();
   }
 
-  find(ctx: TenantContext, filter: QueryFilter<T> = {}): Promise<T[]> {
-    return this.model.find(this.scope(ctx, filter)).lean<T[]>().exec();
+  find(ctx: TenantContext, filter: QueryFilter<T> = {}, opts: FindOptions<T> = {}): Promise<T[]> {
+    const query = this.model.find(this.scope(ctx, filter), opts.projection);
+    if (opts.sort) query.sort(opts.sort as Record<string, SortOrder>);
+    if (opts.limit !== undefined) query.limit(opts.limit);
+    return query.lean<T[]>().exec();
   }
 
   async create(ctx: TenantContext, doc: Omit<T, 'tenantId'>): Promise<T> {
@@ -30,6 +48,23 @@ export class TenantScopedRepository<T extends { tenantId: string }> {
     update: UpdateQuery<T>,
   ): Promise<UpdateResult> {
     return this.model.updateOne(this.scope(ctx, filter), withoutTenantId(update)).exec();
+  }
+
+  /**
+   * Atomic update returning the document BEFORE the update (lean), or null when nothing in this
+   * tenant matched — lets a caller compute an exact diff (audit) without a read-then-write race.
+   */
+  findOneAndUpdate(
+    ctx: TenantContext,
+    filter: QueryFilter<T>,
+    update: UpdateQuery<T>,
+  ): Promise<T | null> {
+    return this.model
+      .findOneAndUpdate(this.scope(ctx, filter), withoutTenantId(update), {
+        returnDocument: 'before',
+      })
+      .lean<T>()
+      .exec();
   }
 
   deleteOne(ctx: TenantContext, filter: QueryFilter<T>): Promise<DeleteResult> {

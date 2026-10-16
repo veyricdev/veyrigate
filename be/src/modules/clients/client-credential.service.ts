@@ -153,6 +153,26 @@ export class ClientCredentialService {
     return matched ? { valid: true, version: matched.version } : { valid: false };
   }
 
+  /** Admin listing (B6.3a): every version, newest first, WITHOUT `secretHash` (DB projection). */
+  listMetadata(clientId: string): Promise<Omit<ClientCredential, 'secretHash'>[]> {
+    return this.credentials
+      .find({ clientId }, { secretHash: 0 })
+      .sort({ version: -1 })
+      .lean<Omit<ClientCredential, 'secretHash'>[]>()
+      .exec();
+  }
+
+  /** Whether the client has at least one currently-valid credential (create vs rotate, B6.3a). */
+  async hasActive(clientId: string): Promise<boolean> {
+    const now = new Date();
+    const found = await this.credentials.exists({
+      clientId,
+      revokedAt: null,
+      $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }],
+    });
+    return found !== null;
+  }
+
   private async listActive(clientId: string, now: Date): Promise<ClientCredential[]> {
     return this.credentials
       .find({

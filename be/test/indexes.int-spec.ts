@@ -18,6 +18,8 @@ const EXPECTED: Record<string, { key: Record<string, number>; unique?: boolean; 
       { key: { clientId: 1 }, unique: true },
       // DEBT-020: supports `isOriginRegisteredForAnyClient` (CORS preflight / metadata) lookups.
       { key: { allowedCorsOrigins: 1 } },
+      // B6.3a: tenant-scoped admin list/get paged by clientId.
+      { key: { tenantId: 1, clientId: 1 } },
     ],
     ClientCredential: [{ key: { clientId: 1, version: 1 }, unique: true }],
     Resource: [{ key: { identifier: 1 }, unique: true }],

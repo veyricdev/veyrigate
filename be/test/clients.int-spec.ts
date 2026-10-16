@@ -585,7 +585,12 @@ describe('Clients + Resources on real Mongo (B3.1–B3.3)', () => {
 
   describe('B3.4 — dynamic CORS origin resolution (D8, §9.7)', () => {
     beforeAll(async () => {
-      await clients.create({
+      // `http://localhost` origins are only valid outside production (B6.3a origin validator).
+      const devClients = new ClientService(
+        clientModel,
+        config({ app: { nodeEnv: 'development', issuer: 'http://localhost:4000' } }),
+      );
+      await devClients.create({
         clientId: 'cors-spa',
         clientType: 'public',
         tokenEndpointAuthMethod: 'none',

@@ -11,5 +11,6 @@ minimumReleaseAge: 0
 # Native postinstall builds we trust (transitive dep of the eslint resolver).
 allowBuilds:
   '@parcel/watcher': true
+  '@scarf/scarf': false
   '@tailwindcss/oxide': true
   unrs-resolver: true

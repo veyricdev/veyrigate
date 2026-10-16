@@ -24,6 +24,8 @@ export enum AuditAction {
   ACCOUNT_UNLINKED = 'ACCOUNT_UNLINKED',
   ADMIN_CLIENT_CREATED = 'ADMIN_CLIENT_CREATED',
   ADMIN_CLIENT_UPDATED = 'ADMIN_CLIENT_UPDATED',
+  ADMIN_RESOURCE_CREATED = 'ADMIN_RESOURCE_CREATED',
+  ADMIN_RESOURCE_UPDATED = 'ADMIN_RESOURCE_UPDATED',
 }
 
 /** Actions that must raise a separate alert (spec §10: reuse, key rotation, admin control-plane). */
@@ -36,4 +38,6 @@ export const ALERT_ACTIONS: ReadonlySet<AuditAction> = new Set([
   AuditAction.REDIRECT_URI_CHANGED,
   AuditAction.ADMIN_CLIENT_CREATED,
   AuditAction.ADMIN_CLIENT_UPDATED,
+  AuditAction.ADMIN_RESOURCE_CREATED,
+  AuditAction.ADMIN_RESOURCE_UPDATED,
 ]);
