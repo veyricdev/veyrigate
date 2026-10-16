@@ -42,3 +42,6 @@
 - Test mới (`admin-api.int-spec.ts` › "tester run 27 — gaps"): DEBT-136 (client admin-capable tenant khác ⇒ 404 byte-identical cho tenant_admin + super_admin, 7 thao tác, DB không đổi), disable client admin-capable ⇒ AT admin của nó 401 (liveness) rồi enable lại 200, disable chặn `client_secret_post` tại `/token`, grace `expiresAt = now + TTL`, OpenAPI production/unset ⇒ 404 trên Fastify thật.
 - Mutation: re-read không scope trong `updateForTenant` ⇒ test DEBT-136 RED (403); khôi phục byte-identical (sha256).
 - Đóng **DEBT-136**; mở **DEBT-139** (cảnh báo Mongoose `new` ở `refresh-token.service.ts`, ngoài diff). Không lỗi [BE] chặn. Chuyển **orchestrator** đóng run.
+
+## orchestrator — 2026-10-16 (đóng run)
+- Mọi cổng PASS. Commit `b9370c1`. summary.md + Tiến độ STATUS.md; 🟡 đã ở backlog.
