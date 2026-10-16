@@ -2,9 +2,9 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `26-B6.1-B6.2` — cổng: **tester PASS** → orchestrator đóng run (BE unit 220, int 554, FE 240, E2E 12/12; xem `runs/26-B6.1-B6.2/test-report.md`). Phạm vi (M5): B6.1 admin guard, B6.2 step-up, DEBT-098 (`NODE_ENV`), DEBT-105/106.
-- **Vòng lặp (run 26)**: tech-lead=1 (PASS), backend-dev=2 (retry 1: BE unit 220, int 542), senior=2 (REJECT → PASS), tester=1 (PASS)
-- **Run vừa đóng**: `25-T5-T4e2e` ✅ 4/4 — FE 240, E2E 12/12 ×2, BE unit 211. Xem `runs/25-T5-T4e2e/summary.md`.
+- **Run hiện tại**: — (run 26 đã đóng, `7321765`). Kế tiếp: run 27 = B6.3 (endpoint quản trị).
+- **Vòng lặp (run 26)**: tech-lead=1, BE dev=2, senior=2 (REJECT → PASS), tester=1
+- **Run vừa đóng**: `26-B6.1-B6.2` ✅ 4/4 — BE unit 220 + int 554, FE 240, E2E 12. Xem `runs/26-B6.1-B6.2/summary.md`.
 - **Việc tiếp theo**: T6/T7 (plan §7) hoặc M5 (B5 federation, B6 admin API). Debt đáng chú ý: DEBT-103/104/109 (gom kiểm callback FE), DEBT-095, DEBT-054/096.
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
@@ -26,6 +26,7 @@
 | [23](runs/23-bugfix/summary.md) | M3 | bugfix (DEBT-089/090/091/070) | ✅ BE 680 + E2E | `8a36ae4` |
 | [24](runs/24-T3-B6.5-T4/summary.md) | M3 | T3 + B6.5 + T4 (+ DEBT-100) | ✅ BE 718 + FE 187 | `374863d` |
 | [25](runs/25-T5-T4e2e/summary.md) | M3 | T5 lab + T4 E2E (+ DEBT-101/102) | ✅ FE 240 + E2E 12 + BE 211 | `d823b04` |
+| [26](runs/26-B6.1-B6.2/summary.md) | M5 | B6.1–B6.2 (+ DEBT-098/105/106/122) | ✅ BE 774 + FE 240 + E2E 12 | `7321765` |
 
 ## Chặn / cần người quyết định
 

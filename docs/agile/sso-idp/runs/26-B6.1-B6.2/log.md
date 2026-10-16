@@ -44,3 +44,6 @@
 - Chạy thật: BE typecheck/lint sạch, unit 22 suites **220/220**, int 25 suites **554/554** (542 dev + 12 tester), fe-sso-test **240/240**, E2E **12/12** (×2). DEBT-106 chạy riêng `-t` xanh, DEBT-105 `-t` xanh. Boot `dist/main.js` thiếu/rỗng `NODE_ENV` ⇒ exit 1, message nêu `NODE_ENV`.
 - Test mới (`admin.int-spec.ts` › "tester risk matrix (run 26)", 12 test): token hết hạn / bị sửa payload / ký bằng khoá lạ / nằm ở query hoặc dùng scheme Basic ⇒ 401; user bị xoá ⇒ 401; sai scope (read↔write, lookalike) ⇒ 403 (`insufficient_scope` đứng trước step-up); positive control tenant B; body lỗi không lộ tenant/sub/roles; 5 resume đồng thời ⇒ đúng 1 code; cookie cũ sau re-login không lấy được code.
 - E2E lần đầu fail 1/12 (`lab.spec.ts:10`, có từ run 25): race giữa `waitForResponse` và `load` ⇒ URL chưa commit. BE vẫn trả 400 đúng. Đã sửa trong test (chờ `toHaveURL` + heading). Không phải lỗi [BE]. Không mở debt mới. Không commit. → **orchestrator** đóng run.
+
+## orchestrator — 2026-10-16 (đóng run)
+- Mọi cổng PASS. Commit `7321765`. summary.md + dòng Tiến độ STATUS.md; 🟡 đã ở backlog.
