@@ -40,3 +40,6 @@
 - Bổ sung `admin-api.int-spec` (2 test): code phát trước disable, refresh, cc sau disable và sau enable; 5 disable đồng thời.
 - Mutation: bỏ prune ⇒ 1 RED; bỏ revoke ⇒ 2 RED; gỡ mutex ⇒ 2 RED (3/3 lần), có lần ra 500. Khôi phục bằng cp, sha256 khớp.
 - Không có 🟡 mới. Người dùng vẫn cần chạy `db:sync-indexes` cho dev/E2E. Chuyển → orchestrator đóng run.
+
+## orchestrator — 2026-10-16 (đóng run)
+- Mọi cổng PASS. Commit `dc7704d`. summary.md + Tiến độ STATUS.md; 🟡 đã ở backlog.
