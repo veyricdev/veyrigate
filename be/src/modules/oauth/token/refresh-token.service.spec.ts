@@ -55,4 +55,20 @@ describe('RefreshTokenService revoke-scope guard (negative, no DB)', () => {
     await expect(svc.revokeFamily('fam-1', '', now)).rejects.toThrow();
     expect(updateMany).not.toHaveBeenCalled();
   });
+
+  it('revokeForConsent(userId, "", resource) rejects (missing clientId) and never calls updateMany', async () => {
+    await expect(
+      svc.revokeForConsent('507f1f77bcf86cd799439011', '', 'https://api/', now),
+    ).rejects.toThrow();
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it('revokeForConsent scopes every write to user × client × resource (B6.3b)', async () => {
+    await svc.revokeForConsent('507f1f77bcf86cd799439011', 'c1', 'https://api/', now);
+    expect(updateMany).toHaveBeenCalledTimes(2);
+    for (const [filter] of updateMany.mock.calls as [Record<string, unknown>][]) {
+      expect(String(filter.userId)).toBe('507f1f77bcf86cd799439011');
+      expect(filter).toMatchObject({ clientId: 'c1', resource: 'https://api/' });
+    }
+  });
 });

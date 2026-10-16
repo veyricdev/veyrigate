@@ -58,11 +58,27 @@ interface RefreshDoc {
  * - `{familyId, clientId}` — reuse detection / `/revoke` (one family of one client).
  * - `{userId}` — global "log out everywhere": all families of the user.
  * - `{userId, sessionRef}` — local logout: only the families minted by this browser session.
+ * - `{userId, clientId, resource}` — admin consent revoke (B6.3b): the families of exactly that
+ *   `user × client × resource` grant; another resource of the same client survives.
  */
 type RevokeFilter =
   | { familyId: string; clientId: string }
   | { userId: string }
-  | { userId: string; sessionRef: string };
+  | { userId: string; sessionRef: string }
+  | { userId: string; clientId: string; resource: string };
+
+/** Admin metadata of one refresh family (B6.3b). Never a hash, parent/successor or device data. */
+export interface FamilySummary {
+  familyId: string;
+  clientId: string;
+  resource: string;
+  scope: string[];
+  createdAt: Date;
+  lastRotatedAt: Date;
+  expiresAt: Date;
+  active: boolean;
+  revokedAt: Date | null;
+}
 
 /**
  * Refresh-token rotation, reuse detection and family revocation (spec §9.5, INV-10/11/12).
@@ -437,6 +453,98 @@ export class RefreshTokenService {
   }
 
   /**
+   * Revoke the families of one consent grant `user × client × resource` (admin consent revoke,
+   * B6.3b) — so an `offline_access` client cannot keep refreshing after its consent is gone.
+   */
+  async revokeForConsent(
+    userId: string,
+    clientId: string,
+    resource: string,
+    now: Date,
+  ): Promise<number> {
+    return this.revokeWhere({ userId, clientId, resource }, now);
+  }
+
+  /** Distinct `clientId`s the user holds refresh tokens for (admin: resolve the tenant's clients). */
+  async distinctClientIds(userId: string): Promise<string[]> {
+    return (await this.refreshTokens
+      .distinct('clientId', { userId: new Types.ObjectId(userId) })
+      .exec()) as string[];
+  }
+
+  /**
+   * Admin list (B6.3b): one summary per family of `userId` restricted to `clientIds` (the caller
+   * passes only clients of the token's tenant), ordered by `familyId`, strictly after the cursor.
+   * Uses the `{userId, clientId}` index. Members without `revokedAt` count as live (the field is
+   * absent until a revoke, so it is read through `$ifNull`).
+   */
+  async listFamilies(
+    userId: string,
+    clientIds: string[],
+    after: string | undefined,
+    limit: number,
+    now: Date,
+  ): Promise<FamilySummary[]> {
+    if (clientIds.length === 0) return [];
+    return this.refreshTokens
+      .aggregate<FamilySummary>([
+        {
+          $match: {
+            userId: new Types.ObjectId(userId),
+            clientId: { $in: clientIds },
+            ...(after !== undefined ? { familyId: { $gt: after } } : {}),
+          },
+        },
+        {
+          $group: {
+            _id: '$familyId',
+            clientId: { $first: '$clientId' },
+            resource: { $first: '$resource' },
+            scope: { $first: '$scope' },
+            createdAt: { $min: '$issuedAt' },
+            lastRotatedAt: { $max: '$issuedAt' },
+            expiresAt: { $max: '$expiresAt' },
+            revokedAt: { $max: '$familyRevokedAt' },
+            active: {
+              $max: {
+                $and: [
+                  { $eq: [{ $ifNull: ['$revokedAt', null] }, null] },
+                  { $gt: ['$expiresAt', now] },
+                ],
+              },
+            },
+          },
+        },
+        { $sort: { _id: 1 } },
+        { $limit: limit },
+        {
+          $project: {
+            _id: 0,
+            familyId: '$_id',
+            clientId: 1,
+            resource: 1,
+            scope: 1,
+            createdAt: 1,
+            lastRotatedAt: 1,
+            expiresAt: 1,
+            active: 1,
+            revokedAt: { $ifNull: ['$revokedAt', null] },
+          },
+        },
+      ])
+      .exec();
+  }
+
+  /** `clientId` of the family `familyId` owned by `userId`, or null (admin family revoke). */
+  async findFamilyClient(familyId: string, userId: string): Promise<string | null> {
+    const doc = (await this.refreshTokens
+      .findOne({ familyId, userId: new Types.ObjectId(userId) }, { clientId: 1 })
+      .lean()
+      .exec()) as { clientId: string } | null;
+    return doc?.clientId ?? null;
+  }
+
+  /**
    * The ONE place that revokes RefreshToken documents (DEBT-034). Enforces INV-11 stamp-first
    * ordering for ANY revoke path: stamp `familyRevokedAt` on every still-live match BEFORE the
    * `revokedAt` write, so a concurrent `rotate` that re-reads the stamp after minting its
@@ -489,6 +597,13 @@ export class RefreshTokenService {
         throw new Error('revokeWhere requires a non-empty sessionRef');
       }
       scope.sessionRef = filter.sessionRef;
+    }
+    if ('resource' in filter) {
+      if (!filter.clientId || typeof filter.resource !== 'string') {
+        throw new Error('revokeWhere requires clientId and resource');
+      }
+      scope.clientId = filter.clientId;
+      scope.resource = filter.resource;
     }
     return scope;
   }

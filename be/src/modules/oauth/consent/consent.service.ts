@@ -74,6 +74,64 @@ export class ConsentService {
       .exec();
   }
 
+  /** Distinct `clientId`s the user has consent records for (admin: resolve the tenant's clients). */
+  async distinctClientIds(userId: string): Promise<string[]> {
+    return (await this.consents
+      .distinct('clientId', { userId: new Types.ObjectId(userId) })
+      .exec()) as string[];
+  }
+
+  /**
+   * Admin list (B6.3b): ACTIVE consents of `userId` for `clientIds` (only clients of the token's
+   * tenant), ordered by `_id`, strictly after the cursor (an `_id` hex validated by the caller).
+   */
+  async listActive(
+    userId: string,
+    clientIds: string[],
+    after: string | undefined,
+    limit: number,
+  ): Promise<(Consent & { _id: Types.ObjectId })[]> {
+    if (clientIds.length === 0) return [];
+    return this.consents
+      .find({
+        userId: new Types.ObjectId(userId),
+        clientId: { $in: clientIds },
+        revokedAt: null,
+        ...(after !== undefined ? { _id: { $gt: new Types.ObjectId(after) } } : {}),
+      })
+      .sort({ _id: 1 })
+      .limit(limit)
+      .lean<(Consent & { _id: Types.ObjectId })[]>()
+      .exec();
+  }
+
+  /**
+   * Admin revoke (B6.3b): atomically stamp `revokedAt` on the ACTIVE consent `id` of `userId` for
+   * one of `clientIds`, returning it, or null when nothing matched (unknown, other user/tenant,
+   * already revoked). `isCovered` then refuses it, so the next `/authorize` asks again.
+   */
+  async revokeById(
+    id: string,
+    userId: string,
+    clientIds: string[],
+    now: Date,
+  ): Promise<Consent | null> {
+    if (clientIds.length === 0) return null;
+    return this.consents
+      .findOneAndUpdate(
+        {
+          _id: new Types.ObjectId(id),
+          userId: new Types.ObjectId(userId),
+          clientId: { $in: clientIds },
+          revokedAt: null,
+        },
+        { $set: { revokedAt: now } },
+        { returnDocument: 'after' },
+      )
+      .lean<Consent>()
+      .exec();
+  }
+
   /**
    * True only when `consent` covers every requested scope AND matches the current versions.
    * A null consent, a missing scope, or any version drift returns false (fail-closed).

@@ -6,6 +6,7 @@ import type { TenantContext } from './tenant-context/tenant-context';
 import { TenantScopedRepository } from './tenant-context/tenant-scoped.repository';
 
 export interface UserTenant {
+  _id?: Types.ObjectId;
   userId: Types.ObjectId;
   tenantId: string;
   status: string;
@@ -57,6 +58,66 @@ export class UserTenantService {
 
   listMembers(ctx: TenantContext): Promise<UserTenant[]> {
     return this.repo.find(ctx);
+  }
+
+  /**
+   * Admin list (B6.3b): memberships of the token's tenant ordered by `_id`, strictly after the
+   * cursor (a membership `_id`). `userId` narrows to one user (exact email match resolved by the
+   * caller). The caller validates `after` as an ObjectId.
+   */
+  listMembersPage(
+    ctx: TenantContext,
+    filter: { status?: string; userId?: string },
+    after: string | undefined,
+    limit: number,
+  ): Promise<UserTenant[]> {
+    return this.repo.find(
+      ctx,
+      {
+        ...(filter.status !== undefined ? { status: filter.status } : {}),
+        ...(filter.userId !== undefined ? { userId: new Types.ObjectId(filter.userId) } : {}),
+        ...(after !== undefined ? { _id: { $gt: new Types.ObjectId(after) } } : {}),
+      },
+      { sort: { _id: 1 }, limit },
+    );
+  }
+
+  /**
+   * Every membership of a user in EVERY tenant (B6.3b). Trusted server use only: decides whether
+   * a tenant_admin may touch a user whose global state (lock, sessions) affects other tenants.
+   * Never returned to a client.
+   */
+  async membershipsOf(
+    userId: string,
+  ): Promise<Pick<UserTenant, 'tenantId' | 'status' | 'roles'>[]> {
+    if (!isValidObjectId(userId)) return [];
+    return this.model
+      .find({ userId: new Types.ObjectId(userId) }, { tenantId: 1, status: 1, roles: 1 })
+      .lean<Pick<UserTenant, 'tenantId' | 'status' | 'roles'>[]>()
+      .exec();
+  }
+
+  /**
+   * Replace the roles of a membership of the token's tenant atomically (B6.3b) and return the
+   * membership BEFORE the write (audit diff), or null when nothing matched. `unlessRole` makes the
+   * write conditional ("target does not hold that role") inside the same filter, so a concurrent
+   * grant cannot slip between a check and the write.
+   */
+  replaceRoles(
+    ctx: TenantContext,
+    userId: string,
+    roles: string[],
+    unlessRole?: string,
+  ): Promise<UserTenant | null> {
+    if (!isValidObjectId(userId)) return Promise.resolve(null);
+    return this.repo.findOneAndUpdate(
+      ctx,
+      {
+        userId: new Types.ObjectId(userId),
+        ...(unlessRole !== undefined ? { roles: { $ne: unlessRole } } : {}),
+      },
+      { $set: { roles } },
+    );
   }
 
   findMember(ctx: TenantContext, userId: string): Promise<UserTenant | null> {

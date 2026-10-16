@@ -6,8 +6,13 @@ import {
 } from '../clients/client.service';
 import { InvalidRedirectUriError } from '../clients/redirect-uri.validator';
 import { DuplicateError } from '../identity/identity.errors';
+import type { UserTenant } from '../identity/user-tenant.service';
+import type { UserView } from '../identity/user.service';
+import type { Consent } from '../oauth/consent/consent.service';
+import type { FamilySummary } from '../oauth/token/refresh-token.service';
 import { AdminAuthError } from '../identity/tenant-context/admin-auth.errors';
 import type { Resource } from '../resources/resource.service';
+import type { AuditEvent } from '../security/audit/audit.types';
 import { InvalidResourceError } from '../resources/resource.validator';
 
 /**
@@ -89,6 +94,112 @@ export function toAdminCredential(
         ? 'grace'
         : 'expired';
   return { version: c.version, createdAt: c.createdAt, expiresAt, revokedAt, status };
+}
+
+export interface AdminUserView {
+  id: string;
+  email: string;
+  emailVerified: boolean;
+  locked: boolean;
+  lockedUntil: Date | null;
+  membershipStatus: string;
+  roles: string[];
+  createdAt: Date | null;
+}
+
+/**
+ * User + its membership of the token's tenant (B6.3b). Never `passwordHash`, `mfaSecret`,
+ * `lockTransitionNonce`, `failedLoginCount`, profile, or any session/token field.
+ */
+export function toAdminUser(
+  u: UserView,
+  m: Pick<UserTenant, 'status' | 'roles'>,
+  now: Date,
+): AdminUserView {
+  const lockedUntil = u.lockedUntil ?? null;
+  return {
+    id: u.sub,
+    email: u.email,
+    emailVerified: u.emailVerifiedAt != null,
+    locked: lockedUntil !== null && lockedUntil.getTime() > now.getTime(),
+    lockedUntil,
+    membershipStatus: m.status,
+    roles: [...(m.roles ?? [])],
+    createdAt: u.createdAt ?? null,
+  };
+}
+
+export interface AdminFamilyView {
+  familyId: string;
+  clientId: string;
+  resource: string;
+  scope: string[];
+  createdAt: Date;
+  lastRotatedAt: Date;
+  expiresAt: Date;
+  active: boolean;
+  revokedAt: Date | null;
+}
+
+/** Refresh family metadata (B6.3b): never `tokenHash`, parent/successor, session or device data. */
+export function toAdminFamily(f: FamilySummary): AdminFamilyView {
+  return {
+    familyId: f.familyId,
+    clientId: f.clientId,
+    resource: f.resource,
+    scope: [...(f.scope ?? [])],
+    createdAt: f.createdAt,
+    lastRotatedAt: f.lastRotatedAt,
+    expiresAt: f.expiresAt,
+    active: f.active === true,
+    revokedAt: f.revokedAt ?? null,
+  };
+}
+
+export interface AdminConsentView {
+  id: string;
+  clientId: string;
+  resource: string;
+  grantedScopes: string[];
+  policyVersion: string | null;
+  termsVersion: string | null;
+  grantedAt: Date;
+  updatedAt: Date;
+}
+
+export function toAdminConsent(c: Consent & { _id: { toHexString(): string } }): AdminConsentView {
+  return {
+    id: c._id.toHexString(),
+    clientId: c.clientId,
+    resource: c.resource,
+    grantedScopes: [...(c.grantedScopes ?? [])],
+    policyVersion: c.policyVersion ?? null,
+    termsVersion: c.termsVersion ?? null,
+    grantedAt: c.grantedAt,
+    updatedAt: c.updatedAt,
+  };
+}
+
+export type AdminAuditView = Omit<AuditEvent, 'tenantId'>;
+
+/** Audit event (B6.3b): allowlist, no `_id`; metadata was already sanitized at write (B1.7). */
+export function toAdminAuditEvent(e: AuditEvent): AdminAuditView {
+  return {
+    eventId: e.eventId,
+    timestamp: e.timestamp,
+    actorType: e.actorType,
+    actorId: e.actorId,
+    action: e.action,
+    targetType: e.targetType,
+    targetId: e.targetId,
+    clientId: e.clientId,
+    ip: e.ip,
+    userAgent: e.userAgent,
+    requestId: e.requestId,
+    result: e.result,
+    reason: e.reason,
+    metadata: e.metadata,
+  };
 }
 
 /**

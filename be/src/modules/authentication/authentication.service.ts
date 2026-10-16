@@ -38,6 +38,9 @@ export interface AuthContext {
   requestId?: string;
 }
 
+/** Step of `revokeAllUserCredentials` that failed first (audit metadata, never a secret). */
+export type RevokeStep = 'pre_revoke' | 'sessions' | 'sweep';
+
 const VERIFY_TTL_MS = 24 * 60 * 60 * 1000;
 const RESET_TTL_MS = 30 * 60 * 1000;
 const GENERIC_LOGIN_ERROR = 'Email or password is incorrect.';
@@ -181,51 +184,19 @@ export class AuthenticationService {
     // §9.8 / INV-11 / INV-28: terminate every session AND every refresh family of the user so a
     // leaked/old credential cannot survive the reset. `setPassword` MUST run before any revoke: if
     // we revoked first, an attacker who knows the old password could log in in between and keep a
-    // fresh session. Order (tech-lead fold): revoke families (stamp-first) → revoke sessions (MARK,
-    // writes tombstones) → revoke families again (SWEEP) so a family a concurrent `/token` created
-    // between the first revoke and the session tombstone cannot survive (§15 inv. 29). Any infra
-    // failure here propagates (5xx) — we do NOT swallow it, do NOT report success, and do NOT roll
-    // the password back (rollback would re-enable a possibly-leaked password).
+    // fresh session. Any infra failure propagates (5xx) — never reported as success, and the
+    // password is NOT rolled back (DEBT-050: rollback could re-enable a possibly-leaked credential).
     const userId = String(consumed.userId);
-    const now = new Date();
-    // DEBT-055: the reset link is single-use and already consumed, so the user cannot retry. Run
-    // ALL three revoke steps even if an earlier one failed — skipping the session MARK just because
-    // Mongo failed in pre-revoke would leave a hijacked session alive. Each step is isolated;
-    // we keep the FIRST error and the step it came from, audit a failure (best-effort — a failed
-    // audit write must not mask the original revoke error), then rethrow. The password is NOT rolled
-    // back (DEBT-050: rollback could re-enable a possibly-leaked credential).
-    let firstError: unknown;
-    let failedStep: 'pre_revoke' | 'sessions' | 'sweep' | undefined;
-    const runStep = async (
-      step: 'pre_revoke' | 'sessions' | 'sweep',
-      op: () => Promise<unknown>,
-    ) => {
-      try {
-        await op();
-      } catch (err) {
-        if (firstError === undefined) {
-          firstError = err;
-          failedStep = step;
-        }
-      }
-    };
-    await runStep('pre_revoke', () => this.refreshTokens.revokeAllForUser(userId, now));
-    await runStep('sessions', () => this.sessions.revokeAllForUser(userId));
-    await runStep('sweep', () => this.refreshTokens.revokeAllForUser(userId, now));
-
-    if (firstError !== undefined) {
-      await this.audit
-        .record({
-          actorType: 'user',
-          actorId: userId,
-          action: AuditAction.AUTH_PASSWORD_RESET,
-          result: 'failure',
-          reason: 'revoke_failed',
-          metadata: { failedStep: failedStep as string },
-        })
-        .catch(() => undefined);
-      throw firstError;
-    }
+    await this.revokeAllUserCredentials(userId, new Date(), (failedStep) =>
+      this.audit.record({
+        actorType: 'user',
+        actorId: userId,
+        action: AuditAction.AUTH_PASSWORD_RESET,
+        result: 'failure',
+        reason: 'revoke_failed',
+        metadata: { failedStep },
+      }),
+    );
 
     await this.audit.record({
       actorType: 'user',
@@ -233,6 +204,49 @@ export class AuthenticationService {
       action: AuditAction.AUTH_PASSWORD_RESET,
       result: 'success',
     });
+  }
+
+  /**
+   * Terminate EVERY credential of a user (password reset, admin lock, admin "revoke sessions";
+   * B6.3b). Order (tech-lead fold): revoke families (stamp-first) → revoke sessions (MARK, writes
+   * `sess_end` tombstones so an access token carrying that `sid` dies via liveness) → revoke
+   * families again (SWEEP) so a family a concurrent `/token` created between the first revoke and
+   * the tombstone cannot survive (§15 inv. 29).
+   *
+   * DEBT-055: ALL three steps run even if an earlier one failed (skipping the session MARK because
+   * Mongo failed in pre-revoke would leave a hijacked session alive). The FIRST error wins: the
+   * caller's `onFailure(step)` is awaited best-effort (a failing failure-audit never masks the
+   * revoke error), then that error is rethrown. Idempotent, so a caller may simply retry.
+   */
+  async revokeAllUserCredentials(
+    userId: string,
+    now: Date,
+    onFailure?: (failedStep: RevokeStep) => Promise<unknown>,
+  ): Promise<{ sessionCount: number; tokenCount: number }> {
+    let firstError: unknown;
+    let failedStep: RevokeStep | undefined;
+    const runStep = async (step: RevokeStep, op: () => Promise<number>): Promise<number> => {
+      try {
+        return await op();
+      } catch (err) {
+        if (firstError === undefined) {
+          firstError = err;
+          failedStep = step;
+        }
+        return 0;
+      }
+    };
+    let tokenCount = await runStep('pre_revoke', () =>
+      this.refreshTokens.revokeAllForUser(userId, now),
+    );
+    const sessionCount = await runStep('sessions', () => this.sessions.revokeAllForUser(userId));
+    tokenCount += await runStep('sweep', () => this.refreshTokens.revokeAllForUser(userId, now));
+
+    if (firstError !== undefined) {
+      await onFailure?.(failedStep as RevokeStep).catch(() => undefined);
+      throw firstError;
+    }
+    return { sessionCount, tokenCount };
   }
 
   private async issueToken(

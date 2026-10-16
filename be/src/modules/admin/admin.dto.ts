@@ -2,10 +2,12 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
+  ArrayUnique,
   IsArray,
   IsBoolean,
   IsIn,
   IsInt,
+  IsISO8601,
   IsOptional,
   IsString,
   Matches,
@@ -16,6 +18,7 @@ import {
   ValidateIf,
 } from 'class-validator';
 import type { ClientType, GrantType, TokenEndpointAuthMethod } from '../clients/client.service';
+import { AuditAction } from '../security/audit/audit-action.enum';
 
 /**
  * Admin API DTOs (B6.3a). Validated by the global `ValidationPipe({whitelist,
@@ -187,4 +190,79 @@ export class UpdateResourceDto {
   @MaxLength(256, { each: true })
   @Matches(SCOPE_TOKEN, { each: true })
   scopes!: string[];
+}
+
+/** `GET /admin/users` — exact-match filters only (no regex: `User` is global, ReDoS/enumeration). */
+export class UserListQueryDto extends PageQueryDto {
+  @ApiPropertyOptional({ maxLength: 320, description: 'Exact email (normalized), no pattern.' })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  @MaxLength(320)
+  email?: string;
+
+  @ApiPropertyOptional({ enum: ['active', 'suspended'], description: 'Membership status.' })
+  @IsOptional()
+  @IsIn(['active', 'suspended'])
+  status?: 'active' | 'suspended';
+}
+
+export const ADMIN_ROLE_VALUES = ['tenant_admin', 'super_admin'] as const;
+export type AdminRole = (typeof ADMIN_ROLE_VALUES)[number];
+
+/** `PATCH /admin/users/:id/roles` — replaces the admin roles of the membership wholesale. */
+export class UpdateUserRolesDto {
+  @ApiProperty({ enum: ADMIN_ROLE_VALUES, isArray: true, maxItems: 2, uniqueItems: true })
+  @IsArray()
+  @ArrayMaxSize(2)
+  @ArrayUnique()
+  @IsIn(ADMIN_ROLE_VALUES, { each: true })
+  roles!: AdminRole[];
+}
+
+/** `GET /admin/audit` — exact-match filters, `[from, to)` ISO 8601 range, opaque cursor. */
+export class AuditQueryDto extends PageQueryDto {
+  @ApiPropertyOptional({ enum: AuditAction })
+  @IsOptional()
+  @IsIn(Object.values(AuditAction))
+  action?: AuditAction;
+
+  @ApiPropertyOptional({ maxLength: 128 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  actorId?: string;
+
+  @ApiPropertyOptional({ maxLength: 64 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  targetType?: string;
+
+  @ApiPropertyOptional({ maxLength: 128 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  targetId?: string;
+
+  @ApiPropertyOptional({ maxLength: 128 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  clientId?: string;
+
+  @ApiPropertyOptional({ enum: ['success', 'failure'] })
+  @IsOptional()
+  @IsIn(['success', 'failure'])
+  result?: 'success' | 'failure';
+
+  @ApiPropertyOptional({ description: 'Inclusive ISO 8601 lower bound.' })
+  @IsOptional()
+  @IsISO8601({ strict: true })
+  from?: string;
+
+  @ApiPropertyOptional({ description: 'Exclusive ISO 8601 upper bound (must be after `from`).' })
+  @IsOptional()
+  @IsISO8601({ strict: true })
+  to?: string;
 }

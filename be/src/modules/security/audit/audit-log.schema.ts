@@ -26,3 +26,5 @@ AuditLogSchema.index({ timestamp: 1 });
 AuditLogSchema.index({ actorId: 1 }); // spec §10 "index(userId)" — the user is the actor
 AuditLogSchema.index({ clientId: 1 });
 AuditLogSchema.index({ action: 1 });
+// B6.3b: admin audit query = one tenant, newest first, cursor `(timestamp, eventId)`.
+AuditLogSchema.index({ tenantId: 1, timestamp: -1, eventId: -1 });

@@ -43,6 +43,8 @@ const EXPECTED: Record<string, { key: Record<string, number>; unique?: boolean; 
       { key: { actorId: 1 } },
       { key: { clientId: 1 } },
       { key: { action: 1 } },
+      // B6.3b: `GET /admin/audit` (tenant, newest first, cursor timestamp+eventId).
+      { key: { tenantId: 1, timestamp: -1, eventId: -1 } },
     ],
   };
 

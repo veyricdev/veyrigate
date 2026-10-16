@@ -194,6 +194,20 @@ export class ClientService {
     return this.repo.findOne(ctx, { clientId });
   }
 
+  /**
+   * The subset of `clientIds` that belongs to the token's tenant (disabled included): tenant in
+   * the query itself (INV-24). Scopes the tenant-less collections (RefreshToken, Consent).
+   */
+  async tenantClientIds(ctx: TenantContext, clientIds: string[]): Promise<string[]> {
+    if (clientIds.length === 0) return [];
+    const rows = await this.repo.find(
+      ctx,
+      { clientId: { $in: clientIds } },
+      { projection: { clientId: 1 } },
+    );
+    return rows.map((c) => c.clientId);
+  }
+
   /** Admin list in the token's tenant, ordered by `clientId`, strictly after the cursor. */
   listForTenant(ctx: TenantContext, after: string | undefined, limit: number): Promise<Client[]> {
     return this.repo.find(ctx, after === undefined ? {} : { clientId: { $gt: after } }, {

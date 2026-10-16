@@ -50,6 +50,9 @@ export function normalizeEmail(email: string): string {
 
 const PUBLIC_FIELDS = '-passwordHash -mfaSecret';
 
+/** Admin lock = "until an admin unlocks" (B6.3b). Only admin unlock clears it, never a reset. */
+export const ADMIN_LOCKED_UNTIL = new Date('9999-12-31T23:59:59.999Z');
+
 function toView(doc: UserDoc): UserView {
   return {
     sub: doc._id.toString(),
@@ -95,6 +98,18 @@ export class UserService {
     if (!isValidObjectId(sub)) return null;
     const doc = await this.users.findById(sub).select(PUBLIC_FIELDS).lean<UserDoc>().exec();
     return doc ? toView(doc) : null;
+  }
+
+  /** Batch read by `sub` (B6.3b admin list: one `$in` per page). Invalid ids are skipped. */
+  async findByIds(subs: string[]): Promise<UserView[]> {
+    const ids = subs.filter((s) => isValidObjectId(s));
+    if (ids.length === 0) return [];
+    const docs = await this.users
+      .find({ _id: { $in: ids } })
+      .select(PUBLIC_FIELDS)
+      .lean<UserDoc[]>()
+      .exec();
+    return docs.map(toView);
   }
 
   async findByEmail(email: string): Promise<UserView | null> {
@@ -218,14 +233,33 @@ export class UserService {
     return this.update(sub, { emailVerifiedAt: at });
   }
 
+  /**
+   * New password (reset): clears the counter and a brute-force lock (B2.4), but NEVER an admin lock
+   * (`ADMIN_LOCKED_UNTIL`) - self-service must not undo an admin decision. One atomic pipeline.
+   */
   async setPassword(sub: string, passwordHash: string): Promise<UserView | null> {
-    return this.update(
-      sub,
-      { passwordHash, emailVerifiedAt: new Date(), failedLoginCount: 0 },
-      {
-        lockedUntil: 1,
-      },
-    );
+    if (!isValidObjectId(sub)) return null;
+    const doc = await this.users
+      .findByIdAndUpdate(
+        sub,
+        [
+          {
+            $set: {
+              passwordHash: { $literal: passwordHash }, // a hash starts with `$`: not a field path
+              emailVerifiedAt: new Date(),
+              failedLoginCount: 0,
+              lockedUntil: {
+                $cond: [{ $eq: ['$lockedUntil', ADMIN_LOCKED_UNTIL] }, '$lockedUntil', '$$REMOVE'],
+              },
+            },
+          },
+        ],
+        { returnDocument: 'after', updatePipeline: true },
+      )
+      .select(PUBLIC_FIELDS)
+      .lean<UserDoc>()
+      .exec();
+    return doc ? toView(doc) : null;
   }
 
   async updateStatus(sub: string, patch: UserStatusPatch): Promise<UserView | null> {
@@ -238,19 +272,11 @@ export class UserService {
     return this.update(sub, set);
   }
 
-  private async update(
-    sub: string,
-    set: Record<string, unknown>,
-    unset?: Record<string, 1>,
-  ): Promise<UserView | null> {
+  private async update(sub: string, set: Record<string, unknown>): Promise<UserView | null> {
     if (!isValidObjectId(sub)) return null;
     const doc = await mapDuplicate('User', () =>
       this.users
-        .findByIdAndUpdate(
-          sub,
-          { $set: set, ...(unset ? { $unset: unset } : {}) },
-          { returnDocument: 'after', runValidators: true },
-        )
+        .findByIdAndUpdate(sub, { $set: set }, { returnDocument: 'after', runValidators: true })
         .select(PUBLIC_FIELDS)
         .lean<UserDoc>()
         .exec(),

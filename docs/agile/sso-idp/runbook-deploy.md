@@ -18,6 +18,12 @@ CLI đọc `MONGO_URI` từ env (`--env-file-if-exists=.env`), chạy `syncAllIn
 trong `be/src/database/mongo/models.ts`, in ra index đã drop theo từng model, rồi thoát.
 Lỗi bất kỳ ⇒ exit code 1 (deploy dừng).
 
+**Run 28 (B6.3b) — index audit mới.** `AuditLog` thêm index ghép
+`{tenantId: 1, timestamp: -1, eventId: -1}` (`tenantId_1_timestamp_-1_eventId_-1`) cho
+`GET /admin/audit`. Không unique ⇒ không cần dọn dữ liệu trước; chỉ cần chạy
+`db:sync-indexes` như trên (build index trên collection lớn có thể mất thời gian — chạy trước
+rollout). Xác minh: `db.auditlogs.getIndexes()` có đúng key trên.
+
 ## 2. Di trú index `Consent` M3→M4 (DEBT-028)
 
 **Bối cảnh.** Q1 đổi khoá consent từ `{userId, clientId}` sang

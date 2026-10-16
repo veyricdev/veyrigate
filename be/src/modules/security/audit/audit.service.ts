@@ -1,8 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import type { Model } from 'mongoose';
+import type { Model, QueryFilter } from 'mongoose';
 import { randomUUID } from 'node:crypto';
-import { ALERT_ACTIONS } from './audit-action.enum';
+import type { TenantContext } from '../../identity/tenant-context/tenant-context';
+import { ALERT_ACTIONS, type AuditAction } from './audit-action.enum';
 import type { AuditAlertListener, AuditEvent, AuditEventInput, AuditMetadata } from './audit.types';
 
 /** Runtime guard (defense in depth for `any`/casts): key names that look secret. */
@@ -31,6 +32,26 @@ export function sanitizeMetadata(metadata: AuditMetadata | undefined): AuditMeta
   return clean as AuditMetadata;
 }
 
+/** Exact-match filters of the admin audit query (B6.3b). Never a regex. */
+export interface AuditQuery {
+  action?: AuditAction;
+  actorId?: string;
+  targetType?: string;
+  targetId?: string;
+  clientId?: string;
+  result?: 'success' | 'failure';
+  /** Inclusive lower bound. */
+  from?: Date;
+  /** Exclusive upper bound. */
+  to?: Date;
+}
+
+/** Position after the last event of a page (sort `timestamp desc, eventId desc`). */
+export interface AuditCursor {
+  timestamp: Date;
+  eventId: string;
+}
+
 /**
  * Audit log (B1.7, INV-25). `record()` persists the event and throws if the
  * write fails — a sensitive operation must not silently lose its audit trail.
@@ -46,6 +67,50 @@ export class AuditService {
 
   onAlert(listener: AuditAlertListener): void {
     this.alertListeners.push(listener);
+  }
+
+  /**
+   * Admin query (B6.3b): events of the token's tenant ONLY (`tenantId` merged last, so no filter
+   * can widen it; events without a tenant never match), newest first, strictly after `cursor`.
+   * Stable under concurrent writes: new events sort before any cursor already handed out.
+   */
+  listForTenant(
+    ctx: TenantContext,
+    q: AuditQuery,
+    cursor: AuditCursor | undefined,
+    limit: number,
+  ): Promise<AuditEvent[]> {
+    if (!ctx?.tenantId) throw new Error('TenantContext required');
+    const filter: QueryFilter<AuditEvent> = {};
+    for (const key of [
+      'action',
+      'actorId',
+      'targetType',
+      'targetId',
+      'clientId',
+      'result',
+    ] as const) {
+      if (q[key] !== undefined) filter[key] = q[key];
+    }
+    if (q.from !== undefined || q.to !== undefined) {
+      filter.timestamp = {
+        ...(q.from !== undefined ? { $gte: q.from } : {}),
+        ...(q.to !== undefined ? { $lt: q.to } : {}),
+      };
+    }
+    if (cursor) {
+      filter.$or = [
+        { timestamp: { $lt: cursor.timestamp } },
+        { timestamp: cursor.timestamp, eventId: { $lt: cursor.eventId } },
+      ];
+    }
+    filter.tenantId = ctx.tenantId;
+    return this.auditModel
+      .find(filter)
+      .sort({ timestamp: -1, eventId: -1 })
+      .limit(limit)
+      .lean<AuditEvent[]>()
+      .exec();
   }
 
   async record(input: AuditEventInput): Promise<AuditEvent> {
