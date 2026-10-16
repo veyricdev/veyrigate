@@ -41,3 +41,6 @@
 - BE hồi quy: `pnpm -C be test` 21 suite / 211 xanh.
 - Thêm `fe-sso-test/test/lab-replay.test.ts` (4 test: replay lab callback consume-once, callback rỗng ⇒ rejected, no-nonce thiếu `iss` ⇒ FAIL, cờ tamper one-shot); mutation 3/3 RED rồi khôi phục byte-identical. FE sau cùng **31 file / 240 xanh**.
 - Không lỗi [FE]/[E2E]/[BE]. Không debt mới. Kết quả: **PASS** — `test-report.md`. Bàn giao: **orchestrator** đóng run.
+
+## orchestrator — 2026-10-16 (đóng run)
+- Tất cả cổng PASS (tech-lead, senior, tester). Commit `d823b04`. Viết summary.md, thêm dòng Tiến độ STATUS.md; 🟡 DEBT-107…115 đã ở backlog.
