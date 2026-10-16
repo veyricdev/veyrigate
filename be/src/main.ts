@@ -15,6 +15,7 @@ import type { AppConfig } from './config/configuration';
 import { assertTrustProxyConsistent, parseTrustProxy } from './config/trust-proxy';
 import { ClientCorsService } from './modules/clients/client-cors.service';
 import { registerCorsPreflight } from './modules/clients/client-cors.helper';
+import { isDemoEnabled } from './modules/demo/demo.enabled';
 
 async function bootstrap(): Promise<void> {
   // Load `.env` BEFORE anything reads `process.env` (R3). `@nestjs/config` only copies `.env` into
@@ -66,8 +67,15 @@ async function bootstrap(): Promise<void> {
   });
 
   // Dynamic per-client CORS preflight (DEBT-019, spec §9.7). Shared with the integration tests so
-  // the production wiring is the exact code under test (see `registerCorsPreflight`).
-  registerCorsPreflight(app.getHttpAdapter().getInstance(), app.get(ClientCorsService));
+  // the production wiring is the exact code under test (see `registerCorsPreflight`). `/demo/me`
+  // only answers preflight when the dev/test demo resource is enabled (B6.5, Q-24.2); it is NOT
+  // hard-coded into the static path set, so a disabled demo never looks CORS-enabled.
+  const extraCorsPaths = isDemoEnabled(process.env) ? new Set(['/demo/me']) : undefined;
+  registerCorsPreflight(
+    app.getHttpAdapter().getInstance(),
+    app.get(ClientCorsService),
+    extraCorsPaths,
+  );
 
   // Reject unknown/extra fields on all DTOs.
   app.useGlobalPipes(

@@ -19,6 +19,7 @@ import { LocalKeyProvider } from '../src/modules/keys/local-key-provider';
 import { TokenSigner } from '../src/modules/keys/token-signer';
 import { TokenVerifier } from '../src/modules/keys/token-verifier';
 import { ClientService, type Client } from '../src/modules/clients/client.service';
+import { ResourceService } from '../src/modules/resources/resource.service';
 import { ClientCredentialService } from '../src/modules/clients/client-credential.service';
 import { ClientAuthenticationService } from '../src/modules/clients/client-authentication.service';
 import { ClientCorsService } from '../src/modules/clients/client-cors.service';
@@ -97,6 +98,7 @@ async function buildApp(keyDir: string, trustProxyEnv?: string): Promise<NestFas
     providers: [
       TokenService,
       RefreshTokenService,
+      ResourceService,
       AuthorizationCodeService,
       SessionService,
       ClientService,

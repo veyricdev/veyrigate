@@ -6,6 +6,7 @@ import { AuditAction } from '../../security/audit/audit-action.enum';
 import { AuditService } from '../../security/audit/audit.service';
 import { TokenService, type TokenResponse } from './token.service';
 import { TokenError } from './token.errors';
+import { ResourceService } from '../../resources/resource.service';
 
 /**
  * A rotation could not produce a successor. The HTTP layer (Task 3) maps this to `invalid_grant`
@@ -78,6 +79,7 @@ export class RefreshTokenService {
     @InjectModel('RefreshToken') private readonly refreshTokens: Model<Record<string, unknown>>,
     private readonly tokens: TokenService,
     private readonly audit: AuditService,
+    private readonly resources: ResourceService,
   ) {}
 
   /**
@@ -109,13 +111,18 @@ export class RefreshTokenService {
     // `resource ∈ allowedResources` mirrors the atomic rotate filter (INV-14): a token whose
     // resource the client lost skips the scope check so it classifies as invalid_grant at rotate,
     // not invalid_scope (consistency; harmless since only the owning client could see either).
+    // `RefreshToken.resource` stores the resource URI (identifier), while `allowedResources[]`
+    // holds resourceIds (spec §7), so the client's allowed resourceIds are resolved to their
+    // identifiers first and the URI is matched against those — never a resourceId directly
+    // (confused-deputy guard). A Mongo failure here propagates (fail-closed, no rotation).
+    const allowedIdentifiers = await this.resources.identifiersFor(client.allowedResources);
     const original = (await this.refreshTokens
       .findOne({
         tokenHash,
         clientId: client.clientId,
         revokedAt: null,
         expiresAt: { $gt: now },
-        resource: { $in: client.allowedResources },
+        resource: { $in: allowedIdentifiers },
       })
       .lean()
       .exec()) as RefreshDoc | null;
@@ -241,7 +248,11 @@ export class RefreshTokenService {
     const successorId = new Types.ObjectId();
 
     // Atomic single-use swap: only an active, unexpired, client-owned token whose resource is
-    // still allowed flips to revoked here; the same filter prevents a second winner.
+    // still allowed flips to revoked here; the same filter prevents a second winner. The client's
+    // allowed resourceIds are resolved to identifiers so the stored `resource` URI is matched
+    // against identifiers, never a resourceId directly (confused-deputy guard, spec §7). A Mongo
+    // failure propagates (fail-closed): the rotate never runs, so no token is burned.
+    const allowedIdentifiers = await this.resources.identifiersFor(client.allowedResources);
     const old = (await this.refreshTokens
       .findOneAndUpdate(
         {
@@ -249,7 +260,7 @@ export class RefreshTokenService {
           clientId: client.clientId,
           revokedAt: null,
           expiresAt: { $gt: now },
-          resource: { $in: client.allowedResources },
+          resource: { $in: allowedIdentifiers },
         },
         { $set: { revokedAt: now, replacedBy: successorId } },
         { new: false },

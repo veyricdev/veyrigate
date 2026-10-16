@@ -40,13 +40,17 @@ import { validateResourceFormat } from '../modules/resources/resource.validator'
 
 const CLIENT_ID = 'fe-sso-test';
 const RESOURCE_ID = 'demo';
+// A second resource (Q-24.1) so the SPA/E2E can prove INV-8: a token minted for `other` must be
+// REFUSED by `/demo/me`. `fe-sso-test` is allowed BOTH, but the IdP binds one resource per grant
+// (no token exchange), so a token for `other` is obtained via a second `/authorize` flow.
+const OTHER_RESOURCE_ID = 'other';
 
 export interface SeedDevTargets {
   client: Omit<Client, 'frontchannelLogoutUri'>;
-  resource: Resource;
+  resources: Resource[];
 }
 
-/** Build the target config from the issuer. `identifier` = `${issuer without trailing /}/demo/`. */
+/** Build the target config from the issuer. Identifiers = `${issuer without trailing /}/<id>/`. */
 export function buildSeedDevTargets(issuer: string): SeedDevTargets {
   const base = issuer.replace(/\/+$/, '');
   return {
@@ -58,15 +62,14 @@ export function buildSeedDevTargets(issuer: string): SeedDevTargets {
       redirectUris: ['http://localhost:5173/callback'],
       postLogoutRedirectUris: ['http://localhost:5173/'],
       allowedCorsOrigins: ['http://localhost:5173'],
-      allowedResources: [RESOURCE_ID],
+      allowedResources: [RESOURCE_ID, OTHER_RESOURCE_ID],
       scopes: ['openid', 'profile', 'email', 'offline_access'],
       tenantId: DEFAULT_TENANT_ID,
     },
-    resource: {
-      resourceId: RESOURCE_ID,
-      identifier: `${base}/demo/`,
-      scopes: [],
-    },
+    resources: [
+      { resourceId: RESOURCE_ID, identifier: `${base}/demo/`, scopes: [] },
+      { resourceId: OTHER_RESOURCE_ID, identifier: `${base}/other/`, scopes: [] },
+    ],
   };
 }
 
@@ -87,11 +90,13 @@ export async function seedDev(
   // caller reaches `seedDev` without having guarded first.
   assertNotProduction(nodeEnv);
 
-  const { client, resource } = buildSeedDevTargets(issuer);
+  const { client, resources } = buildSeedDevTargets(issuer);
 
   validateRedirectUriList(client.redirectUris, { allowHttpLocalhost: true });
   validateRedirectUriList(client.postLogoutRedirectUris, { allowHttpLocalhost: true });
-  validateResourceFormat(resource.identifier);
+  for (const resource of resources) {
+    validateResourceFormat(resource.identifier);
+  }
 
   const clientModel: Model<Client> = connection.models.Client ?? connection.model<Client>('Client');
   const resourceModel: Model<Resource> =
@@ -102,15 +107,17 @@ export async function seedDev(
   );
   console.log(`seed-dev: upserted client ${client.clientId}`);
 
-  // Key the resource upsert by the stable `resourceId` (never `identifier`): `identifier` is
-  // derived from `ISSUER`, so keying by it would insert a second `demo` document every time the
-  // issuer changes. Keying by `resourceId` updates the single `demo` resource in place.
-  await upsert(() =>
-    resourceModel
-      .updateOne({ resourceId: resource.resourceId }, { $set: resource }, { upsert: true })
-      .exec(),
-  );
-  console.log(`seed-dev: upserted resource ${resource.resourceId}`);
+  // Key each resource upsert by the stable `resourceId` (never `identifier`): `identifier` is
+  // derived from `ISSUER`, so keying by it would insert a second document every time the issuer
+  // changes. Keying by `resourceId` updates the single `demo`/`other` resource in place.
+  for (const resource of resources) {
+    await upsert(() =>
+      resourceModel
+        .updateOne({ resourceId: resource.resourceId }, { $set: resource }, { upsert: true })
+        .exec(),
+    );
+    console.log(`seed-dev: upserted resource ${resource.resourceId}`);
+  }
 }
 
 /**

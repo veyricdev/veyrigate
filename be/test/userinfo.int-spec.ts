@@ -16,6 +16,7 @@ import { LocalKeyProvider } from '../src/modules/keys/local-key-provider';
 import { TokenSigner } from '../src/modules/keys/token-signer';
 import { TokenVerifier } from '../src/modules/keys/token-verifier';
 import { ClientService, type Client } from '../src/modules/clients/client.service';
+import { ResourceService, type Resource } from '../src/modules/resources/resource.service';
 import { jest } from '@jest/globals';
 import { ClientCorsService } from '../src/modules/clients/client-cors.service';
 import { registerCorsPreflight } from '../src/modules/clients/client-cors.helper';
@@ -27,8 +28,14 @@ const MONGO_URI =
   `mongodb://localhost:27117/vg-int-userinfo-${Date.now()}?directConnection=true`;
 const RUN = `ui${Date.now()}`;
 const ISSUER = 'http://localhost:4000';
+// `allowedResources[]` holds resourceIds (spec §7); `aud`/`RefreshToken.resource` hold the URI
+// identifier. The two are reconciled via the `Resource` registry (Task 0), so the fixtures below
+// register a `Resource {resourceId, identifier}` and put the resourceId — never the URI — in
+// `allowedResources`.
 const RESOURCE = 'https://api.example.com/';
+const RESOURCE_ID = 'res-api';
 const OTHER_RESOURCE = 'https://other.example.com/';
+const OTHER_RESOURCE_ID = 'res-other';
 const ORIGIN = 'https://spa.example.com';
 const CLIENT = `${RUN}-client`;
 const OTHER_CLIENT = `${RUN}-other`;
@@ -52,6 +59,7 @@ describe('/userinfo (B4.6 Task 2) on real Mongo', () => {
   let provider: LocalKeyProvider;
   let userModel: Model<Record<string, unknown>>;
   let clientModel: Model<Client>;
+  let resourceModel: Model<Resource>;
   let userId: string;
 
   const get = (headers: Record<string, string> = {}) =>
@@ -102,6 +110,7 @@ describe('/userinfo (B4.6 Task 2) on real Mongo', () => {
       providers: [
         ClientService,
         ClientCorsService,
+        ResourceService,
         TokenSigner,
         TokenVerifier,
         { provide: KEY_PROVIDER, useValue: provider },
@@ -120,6 +129,7 @@ describe('/userinfo (B4.6 Task 2) on real Mongo', () => {
     signer = moduleRef.get(TokenSigner);
     userModel = app.get<Model<Record<string, unknown>>>(getModelToken('User'));
     clientModel = app.get<Model<Client>>(getModelToken('Client'));
+    resourceModel = app.get<Model<Resource>>(getModelToken('Resource'));
     await syncAllIndexes(clientModel.db);
 
     const clients = new ClientService(clientModel, cfg);
@@ -129,16 +139,20 @@ describe('/userinfo (B4.6 Task 2) on real Mongo', () => {
       tokenEndpointAuthMethod: 'none',
       redirectUris: [`${ORIGIN}/cb`],
       allowedCorsOrigins: [ORIGIN],
-      allowedResources: [RESOURCE],
+      allowedResources: [RESOURCE_ID],
       tenantId: 'tenant-A',
     });
     await clients.create({
       clientId: OTHER_CLIENT,
       clientType: 'public',
       tokenEndpointAuthMethod: 'none',
-      allowedResources: [OTHER_RESOURCE],
+      allowedResources: [OTHER_RESOURCE_ID],
       tenantId: 'tenant-A',
     });
+
+    const resources = new ResourceService(resourceModel);
+    await resources.create({ resourceId: RESOURCE_ID, identifier: RESOURCE });
+    await resources.create({ resourceId: OTHER_RESOURCE_ID, identifier: OTHER_RESOURCE });
 
     const user = await userModel.create({
       email: 'alice@example.com',
@@ -288,6 +302,27 @@ describe('/userinfo (B4.6 Task 2) on real Mongo', () => {
     expect(res.statusCode).toBe(403);
     expect(res.json().error).toBe('insufficient_scope');
     expect(res.headers['www-authenticate']).toContain('insufficient_scope');
+  });
+
+  it('(Task 0 e) fail-closed: a Mongo error resolving the resource mapping => 5xx, never 200/401', async () => {
+    const token = await accessToken();
+    const resources = app.get(ResourceService);
+    const spy = jest
+      .spyOn(resources, 'identifiersFor')
+      .mockRejectedValueOnce(new Error('mongo down'));
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/userinfo',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      // An infrastructure fault must surface as a 5xx, NOT be swallowed into a 401 (which would
+      // look like "token revoked") or a 200 (which would leak PII without a live check).
+      expect(res.statusCode).toBeGreaterThanOrEqual(500);
+      expect(res.json()).not.toHaveProperty('sub');
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('aud not in client.allowedResources => 401', async () => {

@@ -10,6 +10,13 @@ export interface Transient {
   readonly verifier: string;
   /** Epoch ms when the login began; used to reject stale callbacks (F6, 10-minute cap). */
   readonly createdAt: number;
+  /**
+   * Why this authorize flow was started. Absent/`"login"` is an ordinary sign-in; `"aud-probe"`
+   * marks the wrong-`aud` security-lab flow (Task 3) so the callback runs the probe path instead
+   * of installing a session. A persisted value of anything other than `"aud-probe"` is treated as
+   * a normal login (fail-closed: an unknown purpose never triggers the probe path).
+   */
+  readonly purpose?: "login" | "aud-probe";
 }
 
 const KEY = "oidc:transient";

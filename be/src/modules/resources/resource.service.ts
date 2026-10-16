@@ -41,6 +41,27 @@ export class ResourceService {
   }
 
   /**
+   * Map a set of `resourceId`s (as stored in `Client.allowedResources[]`) to the absolute
+   * `identifier` URIs of the matching `Resource` documents. Used by the access-token liveness
+   * gate, the refresh rotation filter and `/introspect` caller authorization to compare a token's
+   * `aud`/`resource` (a URI) against a client's allowlist WITHOUT ever comparing the URI to a
+   * `resourceId` directly (confused-deputy guard, spec §7).
+   *
+   * `resourceId` is NOT unique (DEBT-077), so every identifier whose `resourceId` is in the set is
+   * returned — never any identifier outside the allowed `resourceId` set. An empty input returns
+   * an empty array without a query. A Mongo failure propagates (the caller fails closed); it is
+   * never swallowed into an empty result that would silently reject a legitimate token.
+   */
+  async identifiersFor(resourceIds: readonly string[]): Promise<string[]> {
+    if (resourceIds.length === 0) return [];
+    const docs = await this.resources
+      .find({ resourceId: { $in: [...resourceIds] } }, { identifier: 1 })
+      .lean<Pick<Resource, 'identifier'>[]>()
+      .exec();
+    return docs.map((d) => d.identifier);
+  }
+
+  /**
    * Resolve a `resource` URI against a client's `allowedResources[]` (tech-lead C3):
    * look up `Resource` by `identifier` (URI) to get its `resourceId`, then check that
    * `resourceId` — never the URI itself — against `allowedResourceIds`.

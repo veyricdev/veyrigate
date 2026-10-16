@@ -19,6 +19,7 @@ import { LocalKeyProvider } from '../src/modules/keys/local-key-provider';
 import { TokenSigner } from '../src/modules/keys/token-signer';
 import { TokenVerifier } from '../src/modules/keys/token-verifier';
 import { ClientService, type Client } from '../src/modules/clients/client.service';
+import { ResourceService, type Resource } from '../src/modules/resources/resource.service';
 import { ClientCredentialService } from '../src/modules/clients/client-credential.service';
 import { ClientAuthenticationService } from '../src/modules/clients/client-authentication.service';
 import { ClientCorsService } from '../src/modules/clients/client-cors.service';
@@ -45,7 +46,11 @@ const ISSUER = 'http://localhost:4000';
 const ACCESS_TTL = 900;
 const REFRESH_TTL = 2592000;
 const REDIRECT = 'https://app.example.com/callback';
+// `allowedResources[]` holds resourceIds (spec §7); `RefreshToken.resource`/`aud` hold the URI
+// identifier. The `Resource` registry (Task 0) maps resourceId -> identifier, so the fixtures put
+// the resourceId in `allowedResources` and register a `Resource {resourceId, identifier}`.
 const RESOURCE = 'https://api.example.com/';
+const RESOURCE_ID = 'res-api';
 const VERIFIER = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
 const CHALLENGE = deriveS256Challenge(VERIFIER);
 
@@ -103,6 +108,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
   let resetModel: Model<Record<string, unknown>>;
   let auditModel: Model<AuditEvent>;
   let clientModel: Model<Client>;
+  let resourceModel: Model<Resource>;
 
   const CLIENT = `${RUN}-public`;
   const CLIENT_B = `${RUN}-other`;
@@ -314,6 +320,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       providers: [
         TokenService,
         RefreshTokenService,
+        ResourceService,
         SessionService,
         AuthorizationCodeService,
         ClientService,
@@ -353,6 +360,12 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
     await syncAllIndexes(refreshModel.db);
 
     clientModel = app.get<Model<Client>>(getModelToken('Client'));
+    resourceModel = app.get<Model<Resource>>(getModelToken('Resource'));
+    // Register the resource whose identifier is the refresh tokens' bound `resource`/`aud`; the
+    // clients below hold its resourceId in `allowedResources` (resolved to this identifier by the
+    // rotation filter / liveness gate, Task 0).
+    const resourceService = new ResourceService(resourceModel);
+    await resourceService.create({ resourceId: RESOURCE_ID, identifier: RESOURCE });
     const clientService = new ClientService(clientModel, cfg);
     await clientService.create({
       clientId: CLIENT,
@@ -360,7 +373,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       tokenEndpointAuthMethod: 'none',
       redirectUris: [REDIRECT],
       grantTypes: ['authorization_code', 'refresh_token'],
-      allowedResources: [RESOURCE],
+      allowedResources: [RESOURCE_ID],
       tenantId: 'tenant-A',
     });
     await clientService.create({
@@ -369,7 +382,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       tokenEndpointAuthMethod: 'none',
       redirectUris: [REDIRECT],
       grantTypes: ['authorization_code', 'refresh_token'],
-      allowedResources: [RESOURCE],
+      allowedResources: [RESOURCE_ID],
       tenantId: 'tenant-A',
     });
     await clientService.create({
@@ -378,7 +391,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       tokenEndpointAuthMethod: 'none',
       redirectUris: [REDIRECT],
       grantTypes: ['authorization_code'],
-      allowedResources: [RESOURCE],
+      allowedResources: [RESOURCE_ID],
       tenantId: 'tenant-A',
     });
   }, 60_000);
@@ -613,7 +626,32 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
         .lean<Record<string, unknown>>();
       expect(doc!.revokedAt).toBeFalsy();
     } finally {
-      await clientModel.updateOne({ clientId: CLIENT }, { $set: { allowedResources: [RESOURCE] } });
+      await clientModel.updateOne(
+        { clientId: CLIENT },
+        { $set: { allowedResources: [RESOURCE_ID] } },
+      );
+    }
+  });
+
+  it('(Task 0 e) fail-closed: a Mongo error resolving the resource mapping => 5xx, no rotation', async () => {
+    const rt = await firstRefresh();
+    const resources = app.get(ResourceService);
+    // The pre-check resolves identifiers first; a lookup fault there must propagate to a 5xx and
+    // NOT be swallowed into invalid_grant (that would burn/retire a valid token) — and the token
+    // must stay un-rotated (revokedAt still null).
+    const spy = jest
+      .spyOn(resources, 'identifiersFor')
+      .mockRejectedValueOnce(new Error('mongo down'));
+    try {
+      const res = await refreshReq(rt);
+      expect(res.statusCode).toBeGreaterThanOrEqual(500);
+      expect(res.json()).not.toHaveProperty('access_token');
+      const doc = await refreshModel
+        .findOne({ tokenHash: sha256(rt) })
+        .lean<Record<string, unknown>>();
+      expect(doc!.revokedAt).toBeFalsy();
+    } finally {
+      spy.mockRestore();
     }
   });
 
@@ -1369,9 +1407,10 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
         sid?: string;
       };
       expect(claims.sid).toBe(sessionRef);
-      const clients = { findByClientId: async () => ({ allowedResources: [RESOURCE] }) };
+      const clients = { findByClientId: async () => ({ allowedResources: [RESOURCE_ID] }) };
       const users = { exists: async () => true };
-      const live = await isAccessTokenLive(claims, clients, users, sessionSvc);
+      const resources = { identifiersFor: async () => [RESOURCE] };
+      const live = await isAccessTokenLive(claims, clients, users, sessionSvc, resources);
       expect(live).toBe(false);
     });
 
@@ -1797,7 +1836,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       // Proof F1 is genuinely alive: its refresh token still rotates (200).
       const rotate = await refreshSvc.issueForRefresh(
         f1Refresh,
-        { clientId: CLIENT, allowedResources: [RESOURCE] },
+        { clientId: CLIENT, allowedResources: [RESOURCE_ID] },
         {},
         {},
       );

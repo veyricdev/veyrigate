@@ -16,6 +16,7 @@ import {
 } from '../../clients/client-auth-request';
 import { ClientService, type Client } from '../../clients/client.service';
 import { TokenVerifier } from '../../keys/token-verifier';
+import { ResourceService } from '../../resources/resource.service';
 import { SessionService } from '../../sessions/session.service';
 import { isAccessTokenLive } from '../access-token-liveness';
 
@@ -81,6 +82,7 @@ export class IntrospectController {
     private readonly clients: ClientService,
     private readonly verifier: TokenVerifier,
     private readonly sessions: SessionService,
+    private readonly resources: ResourceService,
   ) {}
 
   @Post('/introspect')
@@ -149,12 +151,22 @@ export class IntrospectController {
     }
 
     // Caller authorization FIRST (confused-deputy / anti-oracle, DEBT-040): the caller must be the
-    // token's client, or a resource server that still holds the token's `aud` in `allowedResources`.
-    // A caller with no stake in this token gets the identical `{active:false}` WITHOUT any
-    // content-dependent I/O — so it cannot use `/introspect` as a timing/DB-load oracle for "does
-    // this user/client/session still exist". Liveness only runs once the caller is authorized.
-    const authorized =
-      claims.client_id === caller.clientId || caller.allowedResources.includes(claims.aud);
+    // token's client, or a resource server that still holds the token's `aud` among its allowed
+    // resources. A caller with no stake in this token gets the identical `{active:false}`.
+    //
+    // Anti-oracle (DEBT-040): the resource mapping is keyed by the CALLER's own `allowedResources`
+    // (`identifiersFor` → the caller's resource identifiers), NOT by `findByIdentifier(claims.aud)`.
+    // So the only content-dependent step is a pure in-memory `includes(claims.aud)` — the DB lookup
+    // depends solely on the (already-authenticated) caller, never on the presented token's content.
+    // A caller with no stake therefore cannot drive a DB/session probe keyed by someone else's
+    // token. The cheap `client_id === caller` short-circuit runs first (no I/O). Liveness only runs
+    // once the caller is authorized. A lookup failure propagates => 500 (fail-closed), never
+    // `active:false`.
+    let authorized = claims.client_id === caller.clientId;
+    if (!authorized) {
+      const callerIdentifiers = await this.resources.identifiersFor(caller.allowedResources);
+      authorized = callerIdentifiers.includes(claims.aud);
+    }
     if (!authorized) {
       return INACTIVE;
     }
@@ -169,6 +181,7 @@ export class IntrospectController {
       this.clients,
       { exists: async (id) => (await this.users.exists({ _id: id })) !== null },
       this.sessions,
+      this.resources,
     );
     if (!live) {
       return INACTIVE;

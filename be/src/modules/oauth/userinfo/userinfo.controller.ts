@@ -2,10 +2,12 @@ import { Controller, Get, Header, HttpStatus, Req, Res } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Types, type Model } from 'mongoose';
 import type { HttpRequest } from '../../../common/http/http.types';
+import { bearerToken } from '../../../common/http/bearer';
 import { applyCors, requestOrigin } from '../../clients/client-cors.helper';
 import { ClientCorsService } from '../../clients/client-cors.service';
 import { ClientService } from '../../clients/client.service';
 import { TokenVerifier } from '../../keys/token-verifier';
+import { ResourceService } from '../../resources/resource.service';
 import { SessionService } from '../../sessions/session.service';
 import { isAccessTokenLive } from '../access-token-liveness';
 
@@ -65,12 +67,13 @@ export class UserinfoController {
     private readonly clients: ClientService,
     private readonly cors: ClientCorsService,
     private readonly sessions: SessionService,
+    private readonly resources: ResourceService,
   ) {}
 
   @Get('/userinfo')
   @Header('Cache-Control', 'no-store')
   async userinfo(@Req() req: HttpRequest, @Res() reply: UserinfoReply): Promise<unknown> {
-    const token = this.bearerToken(req);
+    const token = bearerToken(req);
     if (!token) {
       return this.unauthorized(req, reply, 'invalid_token');
     }
@@ -112,6 +115,7 @@ export class UserinfoController {
         },
       },
       this.sessions,
+      this.resources,
     );
     const user = fetched.user;
     if (!live || user === null) {
@@ -151,19 +155,6 @@ export class UserinfoController {
       out.updated_at = Math.floor(user.updatedAt.getTime() / 1000);
     }
     return out;
-  }
-
-  /** The `Bearer` token from the single `Authorization` header (scheme case-insensitive). */
-  private bearerToken(req: HttpRequest): string | undefined {
-    const raw = req.headers['authorization'];
-    if (Array.isArray(raw)) {
-      return undefined; // a repeated Authorization header is malformed - reject.
-    }
-    if (!raw) {
-      return undefined;
-    }
-    const match = /^Bearer (.+)$/i.exec(raw.trim());
-    return match ? match[1].trim() : undefined;
   }
 
   /**

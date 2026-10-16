@@ -16,6 +16,17 @@ export interface UserExistence {
 }
 
 /**
+ * The resource lookup the liveness check needs: map the client's `allowedResources[]` (resourceIds)
+ * to the absolute `identifier` URIs of the matching `Resource` documents, so the token's `aud`
+ * (a URI) is compared to identifiers — NEVER to a resourceId directly (confused-deputy guard,
+ * spec §7). An infrastructure failure MUST propagate (the caller fails closed): it is never
+ * swallowed into an empty list that would silently reject a legitimate token.
+ */
+export interface ResourceLookup {
+  identifiersFor(resourceIds: readonly string[]): Promise<string[]>;
+}
+
+/**
  * The session lookup the liveness check needs: whether a session `ref` has been actively ended
  * (DEBT-037). `isEnded` is `true` once a logout / device-revoke / password-reset wrote the
  * `sess_end:{ref}` tombstone; a session that merely expired naturally is NOT "ended" and this
@@ -32,8 +43,14 @@ const SESSION_REF_RE = /^[0-9a-f]{64}$/;
  * Liveness of a *verified* access token (spec §214, DEBT-037). An access token is self-contained
  * (no `jti` denylist before `exp`), so the live-state signals the IdP still controls are: the
  * issuing session `sid` (when present) has not been actively ended, the client it was issued to
- * still exists AND still allows the `aud` it targets, and the `sub` user still exists (with a
- * well-formed `sub`).
+ * still exists AND still allows the resource the `aud` targets, and the `sub` user still exists
+ * (with a well-formed `sub`).
+ *
+ * `aud` is an absolute URI (a `Resource.identifier`), while `client.allowedResources[]` holds
+ * stable `resourceId`s (spec §7). The two are reconciled by resolving the client's allowed
+ * `resourceId`s to their identifiers (`ResourceLookup.identifiersFor`) and checking membership of
+ * `aud` — NEVER by comparing the URI to a `resourceId` directly (confused-deputy guard). An `aud`
+ * that is not the identifier of any currently-allowed `Resource` is not live (fail-closed).
  *
  * `sid` semantics (DEBT-037): present `sid` must be a well-formed session ref; a malformed `sid`
  * is not live (no Redis call). An actively-ended session (tombstone) is not live. A session that
@@ -53,6 +70,7 @@ export async function isAccessTokenLive(
   clients: ClientLookup,
   users: UserExistence,
   sessions: SessionEndLookup,
+  resources: ResourceLookup,
 ): Promise<boolean> {
   // A non-ObjectId `sub` is not a user this IdP ever issued for - reject before touching the DB
   // (and so `users.exists` never throws a CastError that would look like an infrastructure fault).
@@ -71,7 +89,14 @@ export async function isAccessTokenLive(
     }
   }
   const client = await clients.findByClientId(claims.client_id);
-  if (!client || !client.allowedResources.includes(claims.aud)) {
+  if (!client) {
+    return false;
+  }
+  // Compare the token's `aud` (a URI) against the identifiers of the client's allowed resourceIds,
+  // never against a resourceId directly (confused-deputy guard, spec §7). A lookup failure
+  // propagates (fail-closed) — it is never swallowed into `false`/`true` here.
+  const allowedIdentifiers = await resources.identifiersFor(client.allowedResources);
+  if (!allowedIdentifiers.includes(claims.aud)) {
     return false;
   }
   return users.exists(new Types.ObjectId(claims.sub));

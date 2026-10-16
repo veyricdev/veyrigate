@@ -1,6 +1,7 @@
 import { jest } from '@jest/globals';
 import type { Model } from 'mongoose';
 import type { AuditService } from '../../security/audit/audit.service';
+import type { ResourceService } from '../../resources/resource.service';
 import type { TokenService } from './token.service';
 import { RefreshTokenService } from './refresh-token.service';
 
@@ -24,6 +25,7 @@ describe('RefreshTokenService revoke-scope guard (negative, no DB)', () => {
       model,
       {} as unknown as TokenService,
       {} as unknown as AuditService,
+      {} as unknown as ResourceService,
     );
   });
 

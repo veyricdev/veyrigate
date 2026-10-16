@@ -31,6 +31,7 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import { TokenController } from '../src/modules/oauth/token/token.controller';
 import { TokenService } from '../src/modules/oauth/token/token.service';
 import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
+import { ResourceService } from '../src/modules/resources/resource.service';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -146,6 +147,7 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
       providers: [
         TokenService,
         RefreshTokenService,
+        ResourceService,
         AuthorizationCodeService,
         SessionService,
         ClientService,

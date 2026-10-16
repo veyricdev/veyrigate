@@ -12,6 +12,7 @@ const DiscoverySchema = z.object({
   jwks_uri: z.string().url(),
   end_session_endpoint: z.string().url(),
   userinfo_endpoint: z.string().url().optional(),
+  revocation_endpoint: z.string().url().optional(),
 });
 
 export type Discovery = z.infer<typeof DiscoverySchema>;

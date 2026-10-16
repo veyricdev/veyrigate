@@ -79,12 +79,20 @@ interface PreflightRequest {
  *
  * Extracted so `main.ts` (production) and the integration tests run the SAME hook — a test can no
  * longer pass against a hand-copied stand-in while the real wiring is wrong.
+ *
+ * `extraPaths` adds endpoints that answer preflight ONLY when a feature is enabled (Task 1: the
+ * dev/test-only `/demo/me`). It is never hard-coded into {@link CORS_PREFLIGHT_PATHS} so a disabled
+ * feature gets NO preflight 204 for its path (the route 404s and must not look CORS-enabled).
  */
-export function registerCorsPreflight(fastify: HookableFastify, cors: OriginRegistry): void {
+export function registerCorsPreflight(
+  fastify: HookableFastify,
+  cors: OriginRegistry,
+  extraPaths?: ReadonlySet<string>,
+): void {
   fastify.addHook('onRequest', async (request, reply) => {
     if (request.method !== 'OPTIONS') return;
     const path = request.url.split('?')[0];
-    if (!CORS_PREFLIGHT_PATHS.has(path)) return;
+    if (!CORS_PREFLIGHT_PATHS.has(path) && !(extraPaths?.has(path) ?? false)) return;
     const origin = requestOrigin({ headers: request.headers });
     const allowed = origin ? await cors.isOriginRegisteredForAnyClient(origin) : false;
     applyCors(reply, origin, allowed);

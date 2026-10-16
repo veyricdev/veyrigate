@@ -26,6 +26,7 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import { TokenController } from '../src/modules/oauth/token/token.controller';
 import { TokenService } from '../src/modules/oauth/token/token.service';
 import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
+import { ResourceService, type Resource } from '../src/modules/resources/resource.service';
 import { IntrospectController } from '../src/modules/oauth/introspect/introspect.controller';
 import { UserinfoController } from '../src/modules/oauth/userinfo/userinfo.controller';
 
@@ -35,7 +36,10 @@ const MONGO_URI =
 const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://localhost:6479';
 const RUN = `sr${Date.now()}`;
 const ISSUER = 'http://localhost:4000';
+// `allowedResources[]` holds resourceIds (spec §7); `aud`/`RefreshToken.resource` hold the URI
+// identifier. The `Resource` registry (Task 0) maps between them.
 const RESOURCE = 'https://api.example.com/';
+const RESOURCE_ID = 'res-api';
 const REDIRECT = 'https://app.example.com/callback';
 const VERIFIER = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
 const CHALLENGE = deriveS256Challenge(VERIFIER);
@@ -81,6 +85,7 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
   let signer: TokenSigner;
   let userModel: Model<Record<string, unknown>>;
   let clientModel: Model<Client>;
+  let resourceModel: Model<Resource>;
   let appSecret = '';
   let userId = '';
 
@@ -160,6 +165,7 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
       providers: [
         TokenService,
         RefreshTokenService,
+        ResourceService,
         AuthorizationCodeService,
         SessionService,
         ClientService,
@@ -185,10 +191,16 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
     signer = moduleRef.get(TokenSigner);
     userModel = app.get<Model<Record<string, unknown>>>(getModelToken('User'));
     clientModel = app.get<Model<Client>>(getModelToken('Client'));
+    resourceModel = app.get<Model<Resource>>(getModelToken('Resource'));
     await syncAllIndexes(clientModel.db);
 
     const user = await userModel.create({ email: `${RUN}@example.com` });
     userId = (user._id as Types.ObjectId).toHexString();
+
+    // Register the resource whose identifier is the issued tokens' `aud`/`resource`; APP_CLIENT
+    // holds its resourceId (resolved to this identifier by the liveness/rotation gates, Task 0).
+    const resources = new ResourceService(resourceModel);
+    await resources.create({ resourceId: RESOURCE_ID, identifier: RESOURCE });
 
     const clients = new ClientService(clientModel, cfg);
     const creds = moduleRef.get(ClientCredentialService);
@@ -198,7 +210,7 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
       tokenEndpointAuthMethod: 'client_secret_basic',
       redirectUris: [REDIRECT],
       grantTypes: ['authorization_code', 'refresh_token'],
-      allowedResources: [RESOURCE],
+      allowedResources: [RESOURCE_ID],
       tenantId: 'tenant-A',
     });
     appSecret = (await creds.createSecret(APP_CLIENT)).secret;

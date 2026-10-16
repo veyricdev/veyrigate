@@ -16,6 +16,7 @@ import { LocalKeyProvider } from '../src/modules/keys/local-key-provider';
 import { TokenSigner } from '../src/modules/keys/token-signer';
 import { TokenVerifier } from '../src/modules/keys/token-verifier';
 import { ClientService, type Client } from '../src/modules/clients/client.service';
+import { ResourceService, type Resource } from '../src/modules/resources/resource.service';
 import { ClientCredentialService } from '../src/modules/clients/client-credential.service';
 import { ClientAuthenticationService } from '../src/modules/clients/client-authentication.service';
 import { SessionService } from '../src/modules/sessions/session.service';
@@ -28,7 +29,14 @@ const MONGO_URI =
   `mongodb://localhost:27117/vg-int-introspect-${Date.now()}?directConnection=true`;
 const RUN = `is${Date.now()}`;
 const ISSUER = 'http://localhost:4000';
+// `allowedResources[]` holds resourceIds (spec §7); `aud`/`RefreshToken.resource` hold the URI
+// identifier. The `Resource` registry (Task 0) maps between them, so the fixtures register
+// `Resource {resourceId, identifier}` and put the resourceId — never the URI — in allowlists.
 const RESOURCE = 'https://api.example.com/';
+const RESOURCE_ID = 'res-api';
+// A resourceId with NO registered `Resource` (confused-deputy probe): its `identifiersFor` is
+// empty, so a caller holding only it can never match any token's `aud`.
+const NOPE_RESOURCE_ID = 'res-nope';
 const RS_CLIENT = `${RUN}-rs`; // a resource server, registered as a confidential client
 const TOKEN_CLIENT = `${RUN}-app`; // the client the tokens were issued to
 const OTHER_CLIENT = `${RUN}-other`;
@@ -75,6 +83,7 @@ describe('/introspect (B4.6 Task 3, RFC 7662) on real Mongo', () => {
   let refreshModel: Model<Record<string, unknown>>;
   let clientModel: Model<Client>;
   let userModel: Model<Record<string, unknown>>;
+  let resourceModel: Model<Resource>;
   let rsSecret = '';
   let otherSecret = '';
   // A REAL user id: `/introspect` now gates on access-token liveness (OPEN-1 -> A), so an access
@@ -148,6 +157,7 @@ describe('/introspect (B4.6 Task 3, RFC 7662) on real Mongo', () => {
       controllers: [IntrospectController],
       providers: [
         ClientService,
+        ResourceService,
         ClientCredentialService,
         ClientAuthenticationService,
         RateLimitService,
@@ -168,7 +178,13 @@ describe('/introspect (B4.6 Task 3, RFC 7662) on real Mongo', () => {
     refreshModel = app.get<Model<Record<string, unknown>>>(getModelToken('RefreshToken'));
     clientModel = app.get<Model<Client>>(getModelToken('Client'));
     userModel = app.get<Model<Record<string, unknown>>>(getModelToken('User'));
+    resourceModel = app.get<Model<Resource>>(getModelToken('Resource'));
     await syncAllIndexes(clientModel.db);
+
+    // Register the resource whose identifier is the tokens' `aud`; RS_CLIENT/TOKEN_CLIENT hold its
+    // resourceId. NOPE_RESOURCE_ID is deliberately NOT registered (confused-deputy probe).
+    const resources = new ResourceService(resourceModel);
+    await resources.create({ resourceId: RESOURCE_ID, identifier: RESOURCE });
 
     // A real user whose `_id` every default-`sub` token points at (liveness requires it to exist).
     const user = await userModel.create({ email: `is-${Date.now()}@example.com` });
@@ -181,7 +197,7 @@ describe('/introspect (B4.6 Task 3, RFC 7662) on real Mongo', () => {
       clientId: RS_CLIENT,
       clientType: 'confidential',
       tokenEndpointAuthMethod: 'client_secret_basic',
-      allowedResources: [RESOURCE],
+      allowedResources: [RESOURCE_ID],
       tenantId: 'tenant-A',
     });
     rsSecret = (await creds.createSecret(RS_CLIENT)).secret;
@@ -190,15 +206,16 @@ describe('/introspect (B4.6 Task 3, RFC 7662) on real Mongo', () => {
       clientId: TOKEN_CLIENT,
       clientType: 'confidential',
       tokenEndpointAuthMethod: 'client_secret_basic',
-      allowedResources: [RESOURCE],
+      allowedResources: [RESOURCE_ID],
       tenantId: 'tenant-A',
     });
-    // Another confidential client with no claim on RESOURCE (confused-deputy probe).
+    // Another confidential client with no claim on RESOURCE (confused-deputy probe): it holds only
+    // an unregistered resourceId, so `identifiersFor` is empty and it can never match a token aud.
     await clients.create({
       clientId: OTHER_CLIENT,
       clientType: 'confidential',
       tokenEndpointAuthMethod: 'client_secret_basic',
-      allowedResources: ['https://nope.example.com/'],
+      allowedResources: [NOPE_RESOURCE_ID],
       tenantId: 'tenant-A',
     });
     otherSecret = (await creds.createSecret(OTHER_CLIENT)).secret;
@@ -332,7 +349,7 @@ describe('/introspect (B4.6 Task 3, RFC 7662) on real Mongo', () => {
       clientId: gone,
       clientType: 'confidential',
       tokenEndpointAuthMethod: 'client_secret_basic',
-      allowedResources: [RESOURCE],
+      allowedResources: [RESOURCE_ID],
       tenantId: 'tenant-A',
     });
     const token = await access({ clientId: gone });
@@ -425,7 +442,7 @@ describe('/introspect (B4.6 Task 3, RFC 7662) on real Mongo', () => {
       clientId: postClient,
       clientType: 'confidential',
       tokenEndpointAuthMethod: 'client_secret_post',
-      allowedResources: [RESOURCE],
+      allowedResources: [RESOURCE_ID],
       tenantId: 'tenant-A',
     });
     const secret = (await app.get(ClientCredentialService).createSecret(postClient)).secret;
@@ -444,7 +461,7 @@ describe('/introspect (B4.6 Task 3, RFC 7662) on real Mongo', () => {
       clientId: postClient,
       clientType: 'confidential',
       tokenEndpointAuthMethod: 'client_secret_post',
-      allowedResources: [RESOURCE],
+      allowedResources: [RESOURCE_ID],
       tenantId: 'tenant-A',
     });
     await app.get(ClientCredentialService).createSecret(postClient);
@@ -514,6 +531,25 @@ describe('/introspect (B4.6 Task 3, RFC 7662) on real Mongo', () => {
     });
     try {
       const res = await post(form({ token: 'opaque-refresh-shaped' }), {
+        authorization: basic(RS_CLIENT, rsSecret),
+      });
+      expect(res.statusCode).toBe(500);
+      expect(res.json().error).toBe('server_error');
+      expect(res.json()).not.toHaveProperty('active');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('(Task 0 e) fail-closed: a Mongo error in the resource mapping => 500 server_error, never active', async () => {
+    // RS_CLIENT is authorized for the token via the resource mapping (not `client_id === caller`),
+    // so a lookup fault here must surface as 500 server_error, NOT be swallowed into active:false.
+    const resources = app.get(ResourceService);
+    const spy = jest
+      .spyOn(resources, 'identifiersFor')
+      .mockRejectedValueOnce(new Error('mongo down'));
+    try {
+      const res = await post(form({ token: await access() }), {
         authorization: basic(RS_CLIENT, rsSecret),
       });
       expect(res.statusCode).toBe(500);

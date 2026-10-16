@@ -74,6 +74,10 @@ export default function Home() {
             <dt>exp</dt>
             <dd data-testid="claim-exp">{formatExp(session.claims.exp)}</dd>
           </dl>
+          <nav aria-label="Signed-in navigation" data-testid="nav">
+            <a href="/profile">Profile</a> · <a href="/tokens">Tokens</a> ·{" "}
+            <a href="/api-test">API test</a>
+          </nav>
           <button type="button" onClick={onLogout}>
             Sign out
           </button>

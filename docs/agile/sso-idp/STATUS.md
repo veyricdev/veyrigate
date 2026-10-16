@@ -2,9 +2,9 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: không có (23-bugfix đã đóng, commit `8a36ae4`).
-- **Vòng lặp (run 23)**: analyst=1, tech-lead=2 (lỗi mạng ×1), BE dev=2, FE dev=1, senior=2 (REJECT → PASS), tester=1
-- **Run vừa đóng**: `23-bugfix` ✅ 4/4 task — BE unit 198 + int 482, E2E 1/1; log E2E không còn `code`/`state`/cookie. Xem `runs/23-bugfix/summary.md`.
+- **Run hiện tại**: — (run 24 đã đóng, chưa commit). Kế tiếp: **run 25** = E2E (T4) + T5; sửa DEBT-101/102 [FE] trước E2E; chạy `pnpm -C be db:sync-indexes` trên DB dev/E2E trước E2E nút B.
+- **Vòng lặp (run 24)**: analyst=2, tech-lead=2 (REJECT → PASS), senior=1, tester=1
+- **Run vừa đóng**: `24-T3-B6.5-T4` ✅ 5/5 task — BE unit 211 + int 507, FE 187. Xem `runs/24-T3-B6.5-T4/summary.md`.
 - **Việc tiếp theo**: T3–T5 (trang & route fe-sso-test, gọi resource thật, security lab) hoặc M5 (B5 federation, B6 admin API). Debt đáng chú ý: DEBT-095 (hai request-id, `x-request-id` chưa validate), DEBT-054/096 (open handles, `--forceExit`).
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
@@ -24,6 +24,7 @@
 | [21](runs/21-T1-T2/summary.md) | M3 | T1–T2 (+ seed-dev) | ✅ 694/694 | `676cd92` |
 | [22](runs/22-X1/summary.md) | M3 | X1 walking skeleton (+ DEBT-076/078/079/080/084/004) | ✅ BE 673 + FE 83 + E2E | `c2cf053` |
 | [23](runs/23-bugfix/summary.md) | M3 | bugfix (DEBT-089/090/091/070) | ✅ BE 680 + E2E | `8a36ae4` |
+| [24](runs/24-T3-B6.5-T4/summary.md) | M3 | T3 + B6.5 + T4 (+ DEBT-100) | ✅ BE 718 + FE 187 | chưa commit |
 
 ## Chặn / cần người quyết định
 
@@ -31,4 +32,4 @@ Xem `plan.md` §12. Còn mở: **Q3, Q5, Q7–Q9**. **Q1, Q4, Q6 đã chốt** (
 
 ## Backlog mở
 
-Xem [backlog.md](backlog.md). Run 22 đóng DEBT-004/076/078/079/080/084/086/087/088; mở 082/083/085/089–092. Run 23 đóng **DEBT-089/090/091/070** (tester); mở DEBT-093/094 (tech-lead), DEBT-095–097 (senior). Giữ mở: DEBT-054 (gỡ `--forceExit`, ngoài phạm vi T4).
+Xem [backlog.md](backlog.md). Run 22 đóng DEBT-004/076/078/079/080/084/086/087/088; mở 082/083/085/089–092. Run 23 đóng **DEBT-089/090/091/070** (tester); mở DEBT-093/094 (tech-lead), DEBT-095–097 (senior). Run 24 tech-lead mở DEBT-098/099; frontend-dev (smoke Task 3) mở DEBT-100 — **backend-dev (Task 4) ĐÃ ĐÓNG DEBT-100** (gốc: index `consents` cũ sót ở DB dev; fix ops `db:sync-indexes` + int-test repro). Senior mở DEBT-101…106. Giữ mở: DEBT-054 (gỡ `--forceExit`, ngoài phạm vi). E2E (T4)+T5 → run 25 (orchestrator mở sau khi run 24 PASS; **chạy `db:sync-indexes` trên DB dev/E2E trước khi E2E nút B**).

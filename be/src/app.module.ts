@@ -13,6 +13,9 @@ import { SecurityModule } from './modules/security/security.module';
 import { AuthenticationModule } from './modules/authentication/authentication.module';
 import { UiModule } from './modules/ui/ui.module';
 import { OauthModule } from './modules/oauth/oauth.module';
+import { ConditionalModule } from '@nestjs/config';
+import { DemoModule } from './modules/demo/demo.module';
+import { isDemoEnabled } from './modules/demo/demo.enabled';
 
 @Module({
   imports: [
@@ -28,6 +31,10 @@ import { OauthModule } from './modules/oauth/oauth.module';
     AuthenticationModule,
     UiModule,
     OauthModule,
+    // Dev/test-only demo resource (`GET /demo/me`, B6.5). Loaded ONLY when `isDemoEnabled` (raw
+    // `NODE_ENV` allowlist: development|test); absent/production => the module (and route) do not
+    // exist at all, so the route 404s (Q-24.2 / DEBT-098).
+    ConditionalModule.registerWhen(DemoModule, (env) => isDemoEnabled(env)),
   ],
   providers: [
     {
