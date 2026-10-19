@@ -30,3 +30,6 @@
 - Mutation (cp + sha256 OK): `redirect:'follow'` ⇒ RED 2; consume không atomic ⇒ RED 1 (replay song song).
 - **DEBT-189 xác nhận bằng test thật** (`max_age` 60/0 khi không có session IdP ⇒ không chuyển cho Google, ID token `auth_time≈now` với auth Google 30 ngày tuổi). **Chấp nhận 🟡** vì step-up hệ thống (`prompt=login&max_age=0`) không bị vượt, điều kiện khai thác cần sẵn phiên Google của nạn nhân, không cross-tenant/replay/rò secret. Phải đóng ở run 33, trước khi có RP chỉ dựa vào `max_age`. Test #18 đặc tả hành vi hiện tại, sẽ RED khi sửa.
 - Mở DEBT-191. Cổng → **orchestrator** đóng run.
+
+## orchestrator — 2026-10-19 (đóng run)
+- Mọi cổng PASS. Commit `4c36371`.

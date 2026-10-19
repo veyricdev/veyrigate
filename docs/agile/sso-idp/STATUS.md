@@ -2,9 +2,9 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `32-B5.1-B5.2` — cổng: **orchestrator đóng run** (tester **PASS**: BE unit 303 + int 780 (+18 risk matrix), FE 240, E2E 12; mutation tester 2/2 RED; DEBT-189 xác nhận bằng test, chấp nhận 🟡 → run 33; mở DEBT-191). Phạm vi (M6): provider tĩnh Google/GitHub, broker flow, FederatedIdentity, nút social, `amr` (DEBT-030). B5.3 + X4 → run 33. Vòng lặp: tech-lead=1, backend-dev=1, senior=1, tester=1 (PASS).
+- **Run hiện tại**: — (run 32 đã đóng, `4c36371`). Kế tiếp: run 33 = B5.3 account linking + DEBT-189 (bắt buộc) + X4 federation E2E.
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `31-admin-hardening` ✅ 3/3 — BE unit 271 + int 730, FE 240, E2E 12. Xem `runs/31-admin-hardening/summary.md`.
+- **Run vừa đóng**: `32-B5.1-B5.2` ✅ 4/4 — BE unit 303 + int 780, FE 240, E2E 12. Xem `runs/32-B5.1-B5.2/summary.md`.
 - **Việc tiếp theo**: T6/T7 (plan §7) hoặc M5 (B5 federation, B6 admin API). Debt đáng chú ý: DEBT-103/104/109 (gom kiểm callback FE), DEBT-095, DEBT-054/096.
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
@@ -32,6 +32,7 @@
 | [29](runs/29-B6.3c/summary.md) | M5 | B6.3c keys + tenants (+ DEBT-125/132/145/154) | ✅ BE 914 + FE 240 + E2E 12 | `dc7704d` |
 | [30](runs/30-B6.4/summary.md) | M5 | B6.4 seed (+ DEBT-137/161/163/169/172) | ✅ BE 967 + FE 240 + E2E 12 | `e950419` |
 | [31](runs/31-admin-hardening/summary.md) | M5 | admin-hardening (DEBT-167/170/173–176/178) | ✅ BE 1001 + FE 240 + E2E 12 | `a299314` |
+| [32](runs/32-B5.1-B5.2/summary.md) | M6 | B5.1–B5.2 federation broker (+ DEBT-030) | ✅ BE 1083 + FE 240 + E2E 12 | `4c36371` |
 
 ## Chặn / cần người quyết định
 
