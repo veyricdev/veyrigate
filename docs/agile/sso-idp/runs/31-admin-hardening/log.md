@@ -26,3 +26,6 @@
 - Test mới: `be/test/admin-capable-matrix.int-spec.ts` (10 test — 9 shape × `/authorize`/code/refresh/guard qua HTTP, refresh lệch không sinh `TOKEN_REUSE_DETECTED`, reuse thật vẫn báo động sau drift); `seed-risk` +1 test DEBT-178 (`listIndexes` sau seed trên DB `autoIndex:false`).
 - Repro DEBT-178 bằng 2 tiến trình `seed.js` build ra scratchpad (cwd trống, env tường minh, DB `vg-int-seedcli-*` tự drop): bản thật 0/30 vòng nhân đôi, mutant bỏ `createIndexes` 5/10. Mutation M1 (bỏ `createIndexes`) RED 3/3; M2/M3/M4 (predicate chỉ type / chỉ method / bỏ nhánh guard) RED 3/2/7. Khôi phục `cp` + `sha256sum -c` OK.
 - Đóng DEBT-178; mở DEBT-181. Cổng → orchestrator đóng run.
+
+## orchestrator — 2026-10-19 (đóng run)
+- Mọi cổng PASS. Commit `a299314`.

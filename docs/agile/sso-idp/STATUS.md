@@ -2,9 +2,9 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `31-admin-hardening` — cổng: **orchestrator đóng run** (tester PASS, xem `runs/31-admin-hardening/test-report.md`). Phạm vi: DEBT-173/174/175/176/167/170 (invariant aud=admin theo client, seed đồng thời, audit PATCH client thất bại một phần). Sau đó: M6 (B5 federation); A4–A6 chờ Q3.
-- **Vòng lặp (run 31)**: tech-lead=1 (PASS), BE dev=1 (3/3), senior=1 (PASS, 0 🔴), tester=1 (PASS — BE unit 271 + int 730, FE 240, E2E 12). Việc tiếp theo: orchestrator đóng run 31.
-- **Run vừa đóng**: `30-B6.4` ✅ 3/3 — BE unit 262 + int 705, FE 240, E2E 12. Xem `runs/30-B6.4/summary.md`.
+- **Run hiện tại**: — (run 31 đã đóng, `a299314`). Kế tiếp: M6 B5 federation (lane BE); A4–A6 (fe-admin) chờ Q3.
+- **Vòng lặp (run 31)**: tech-lead=1, BE dev=1, senior=1, tester=1 (đều PASS)
+- **Run vừa đóng**: `31-admin-hardening` ✅ 3/3 — BE unit 271 + int 730, FE 240, E2E 12. Xem `runs/31-admin-hardening/summary.md`.
 - **Việc tiếp theo**: T6/T7 (plan §7) hoặc M5 (B5 federation, B6 admin API). Debt đáng chú ý: DEBT-103/104/109 (gom kiểm callback FE), DEBT-095, DEBT-054/096.
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
@@ -31,6 +31,7 @@
 | [28](runs/28-B6.3b/summary.md) | M5 | B6.3b admin users, families, consents, audit | ✅ BE 868 + FE 240 + E2E 12 | `c9791aa` |
 | [29](runs/29-B6.3c/summary.md) | M5 | B6.3c keys + tenants (+ DEBT-125/132/145/154) | ✅ BE 914 + FE 240 + E2E 12 | `dc7704d` |
 | [30](runs/30-B6.4/summary.md) | M5 | B6.4 seed (+ DEBT-137/161/163/169/172) | ✅ BE 967 + FE 240 + E2E 12 | `e950419` |
+| [31](runs/31-admin-hardening/summary.md) | M5 | admin-hardening (DEBT-167/170/173–176/178) | ✅ BE 1001 + FE 240 + E2E 12 | `a299314` |
 
 ## Chặn / cần người quyết định
 
