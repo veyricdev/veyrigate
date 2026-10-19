@@ -247,6 +247,8 @@ describe('AuthenticationService', () => {
     await expect(
       service.login('a@example.com', 'correct password', { oldSessionId: 'old' }),
     ).resolves.toMatchObject({ id: 'new-id' });
-    expect(sessions.establish).toHaveBeenCalledWith('old', user.sub, 'default-tenant', {});
+    expect(sessions.establish).toHaveBeenCalledWith('old', user.sub, 'default-tenant', {
+      amr: ['pwd'],
+    });
   });
 });

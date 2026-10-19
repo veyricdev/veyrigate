@@ -14,11 +14,12 @@ import type { AuthorizationCodeData } from '../code/authorization-code.service';
 import { TokenError } from './token.errors';
 
 /**
- * amr/acr are hard-coded for M3: the only way to establish a session today is email/password,
- * with no MFA. This is WRONG once federation lands ? B5 must carry `amr` from the session into
- * the authorization code and then into the token (DEBT-030). Never read `amr` from the request.
+ * `amr` comes from the session via the authorization code (DEBT-030, run 32): `['pwd']` or
+ * `['fed']`. A code minted before run 32 has none => `['pwd']` (the only method then). A
+ * refresh-issued ID token carries NO `amr` (the RefreshToken stores none; never fabricated,
+ * DEBT-185). Never read `amr` from the request. `acr` stays fixed (no MFA yet).
  */
-const DEFAULT_AMR = ['pwd'] as const;
+const LEGACY_AMR = ['pwd'] as const;
 const DEFAULT_ACR = 'urn:idp:aal1';
 
 /**
@@ -134,7 +135,7 @@ export class TokenService {
     );
     const idToken = scopes.includes('openid')
       ? await this.signIdToken(
-          { userId: data.userId, nonce: data.nonce },
+          { userId: data.userId, nonce: data.nonce, amr: data.amr ?? [...LEGACY_AMR] },
           client.clientId,
           authTimeSec,
         )
@@ -291,18 +292,18 @@ export class TokenService {
   /**
    * Sign an ID token. Takes only what the claims need (`userId`, optional `nonce`/`authTime`) so
    * both the authorization_code grant and the refresh grant can call it. A refresh-issued ID
-   * token carries neither `nonce` nor `auth_time` (the RefreshToken document stores neither), so
+   * token carries neither `nonce`, `auth_time` nor `amr` (the RefreshToken document stores none), so
    * B6.2 step-up stays fail-closed — never fabricate `now` (OIDC Core §12.2).
    */
   private signIdToken(
-    subject: { userId: string; nonce?: string },
+    subject: { userId: string; nonce?: string; amr?: string[] },
     clientId: string,
     authTimeSec: number | undefined,
   ): Promise<string> {
-    const claims: Record<string, unknown> = {
-      amr: [...DEFAULT_AMR],
-      acr: DEFAULT_ACR,
-    };
+    const claims: Record<string, unknown> = { acr: DEFAULT_ACR };
+    if (subject.amr !== undefined) {
+      claims.amr = [...subject.amr];
+    }
     // `nonce` is carried through byte-for-byte when present; never fabricated (RP owns it).
     if (subject.nonce !== undefined) {
       claims.nonce = subject.nonce;

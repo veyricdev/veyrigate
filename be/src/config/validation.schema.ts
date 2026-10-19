@@ -13,6 +13,11 @@ import { parseTrustProxy } from './trust-proxy';
  */
 
 const positiveInt = z.coerce.number().int().positive();
+// Optional credential (B5.1, F4): unset or empty string => undefined (provider disabled).
+const optionalCredential = z
+  .string()
+  .optional()
+  .transform((v) => (v ? v : undefined));
 
 export const envSchema = z
   .object({
@@ -50,10 +55,12 @@ export const envSchema = z
 
     SMTP_URL: z.string().min(1),
 
-    GOOGLE_CLIENT_ID: z.string().min(1),
-    GOOGLE_CLIENT_SECRET: z.string().min(1),
-    GITHUB_CLIENT_ID: z.string().min(1),
-    GITHUB_CLIENT_SECRET: z.string().min(1),
+    // Federation providers (B5.1, F4): optional. A provider is enabled only when BOTH its id and
+    // secret are set; exactly one of the pair is a misconfiguration and fails the boot (below).
+    GOOGLE_CLIENT_ID: optionalCredential,
+    GOOGLE_CLIENT_SECRET: optionalCredential,
+    GITHUB_CLIENT_ID: optionalCredential,
+    GITHUB_CLIENT_SECRET: optionalCredential,
 
     ADMIN_SEED_EMAIL: z.string().email(),
     // DEBT-169: ADMIN_SEED_PASSWORD is NOT an app variable: only `db:seed` reads it (own zod,
@@ -99,6 +106,18 @@ export const envSchema = z
         path: ['SESSION_IDLE_TTL'],
         message: 'SESSION_IDLE_TTL must be <= SESSION_ABSOLUTE_TTL',
       });
+    }
+    for (const [id, secret] of [
+      ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'],
+      ['GITHUB_CLIENT_ID', 'GITHUB_CLIENT_SECRET'],
+    ] as const) {
+      if (!env[id] !== !env[secret]) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [env[id] ? secret : id],
+          message: `${id} and ${secret} must be set together (or both left empty)`,
+        });
+      }
     }
     try {
       parseTrustProxy(env.TRUST_PROXY);

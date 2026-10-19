@@ -139,6 +139,28 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
     expect(payload.acr).toBe('urn:idp:aal1');
   });
 
+  it('amr comes from the code (DEBT-030): fed => [fed], pwd => [pwd]', async () => {
+    for (const amr of [['fed'], ['pwd']]) {
+      const { response: res } = await buildService().issueForAuthorizationCode(
+        client(),
+        codeData({ amr }),
+      );
+      expect((await verifier.verify(res.id_token!, 'rp-client')).amr).toEqual(amr);
+    }
+  });
+
+  it('refresh-issued id token carries no amr (never fabricated, DEBT-185)', async () => {
+    const { idToken } = await buildService().signTokensForRefresh({
+      userId: USER_ID,
+      clientId: 'rp-client',
+      resource: RESOURCE,
+      effectiveScope: ['openid'],
+    });
+    const payload = await verifier.verify(idToken!, 'rp-client');
+    expect(payload).not.toHaveProperty('amr');
+    expect(payload).not.toHaveProperty('auth_time');
+  });
+
   it('auth_time in access token only when resource is the admin identifier (D3)', async () => {
     const { response: admin } = await buildService().issueForAuthorizationCode(
       // aud=admin requires a confidential client (DEBT-172).

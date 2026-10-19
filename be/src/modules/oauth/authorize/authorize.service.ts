@@ -42,6 +42,8 @@ export interface SessionView {
   /** sha256 of the session cookie id (`Session.ref`); bound onto any RefreshToken this session
    * mints so a local logout can target exactly this browser session (B4.7). */
   ref: string;
+  /** Authentication methods of the session (DEBT-030); carried into the code, then the ID token. */
+  amr?: string[];
 }
 
 /**
@@ -351,6 +353,7 @@ export class AuthorizeService {
       userId: session.userId,
       authTime: session.authTime,
       sessionRef: session.ref,
+      ...(session.amr ? { amr: session.amr } : {}),
     });
     // Track this RP against the session so a later logout can notify it (front-channel, B4.7).
     await this.sessions.recordClientForSession(session.ref, client.clientId);
@@ -372,6 +375,7 @@ export class AuthorizeService {
       userId: session.userId,
       authTime: session.authTime,
       sessionRef: session.ref,
+      ...(session.amr ? { amr: session.amr } : {}),
     });
     // Track this RP against the session so a later logout can notify it (front-channel, B4.7).
     await this.sessions.recordClientForSession(session.ref, ctx.clientId);

@@ -48,11 +48,12 @@ export interface KeysConfig {
   localDir: string;
 }
 
+/** Federation credentials (B5.1): optional; a provider is enabled only when both are set. */
 export interface FederationConfig {
-  googleClientId: string;
-  googleClientSecret: string;
-  githubClientId: string;
-  githubClientSecret: string;
+  googleClientId?: string;
+  googleClientSecret?: string;
+  githubClientId?: string;
+  githubClientSecret?: string;
 }
 
 export interface SecurityConfig {

@@ -76,12 +76,15 @@ export class UserService {
     email: string;
     password?: string;
     profile?: Record<string, unknown>;
+    /** Set only for an email the caller already verified (federation, B5.2). */
+    emailVerifiedAt?: Date;
   }): Promise<UserView> {
     const doc = await mapDuplicate('User', async () =>
       this.users.create({
         email: normalizeEmail(input.email),
         passwordHash: input.password ? await hashPassword(input.password) : undefined,
         profile: input.profile ?? {},
+        ...(input.emailVerifiedAt ? { emailVerifiedAt: input.emailVerifiedAt } : {}),
       }),
     );
     return toView(doc.toObject());
@@ -92,6 +95,15 @@ export class UserService {
       this.users.create({ email: normalizeEmail(email), passwordHash, profile: {} }),
     );
     return toView(doc.toObject());
+  }
+
+  /**
+   * Internal compensation only (B5.2 provisioning race): delete a user THIS request just created.
+   * No route, never exposed to admin/RP input.
+   */
+  async deleteById(sub: string): Promise<boolean> {
+    if (!isValidObjectId(sub)) return false;
+    return (await this.users.deleteOne({ _id: sub }).exec()).deletedCount === 1;
   }
 
   async findById(sub: string): Promise<UserView | null> {

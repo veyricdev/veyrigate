@@ -27,6 +27,8 @@ export interface AuthorizationCodeData {
    * (DEBT-043): every mint path sets it, and `/token` refuses a code whose session is no longer
    * live, so a logged-out session's code cannot still be exchanged. */
   sessionRef: string;
+  /** Session authentication methods (DEBT-030). Absent on pre-run-32 codes => ID token `['pwd']`. */
+  amr?: string[];
 }
 
 /** Redis key is sha256(code), never the raw code (tech-lead C1) — mirrors `sess:{sha256(id)}`. */

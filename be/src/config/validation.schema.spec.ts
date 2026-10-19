@@ -188,3 +188,63 @@ describe('.env.example (DEBT-169)', () => {
     expect(buildConfig(validateEnv(example)).adminSeed).toEqual({ email: 'admin@example.com' });
   });
 });
+
+describe('GOOGLE_* / GITHUB_* federation credentials (B5.1, F4)', () => {
+  const withoutFederation = () => {
+    const env = { ...BASE };
+    for (const k of [
+      'GOOGLE_CLIENT_ID',
+      'GOOGLE_CLIENT_SECRET',
+      'GITHUB_CLIENT_ID',
+      'GITHUB_CLIENT_SECRET',
+    ])
+      delete env[k];
+    return env;
+  };
+
+  it('all missing or empty → boots, every credential undefined (providers disabled)', () => {
+    for (const env of [
+      withoutFederation(),
+      {
+        ...BASE,
+        GOOGLE_CLIENT_ID: '',
+        GOOGLE_CLIENT_SECRET: '',
+        GITHUB_CLIENT_ID: '',
+        GITHUB_CLIENT_SECRET: '',
+      },
+    ]) {
+      expect(buildConfig(validateEnv(env)).federation).toEqual({
+        googleClientId: undefined,
+        googleClientSecret: undefined,
+        githubClientId: undefined,
+        githubClientSecret: undefined,
+      });
+    }
+  });
+
+  it('a complete pair is kept', () => {
+    const cfg = buildConfig(
+      validateEnv({ ...withoutFederation(), GITHUB_CLIENT_ID: 'id', GITHUB_CLIENT_SECRET: 'sec' }),
+    ).federation;
+    expect(cfg).toMatchObject({ githubClientId: 'id', githubClientSecret: 'sec' });
+    expect(cfg.googleClientId).toBeUndefined();
+  });
+
+  it.each([
+    [{ GOOGLE_CLIENT_ID: 'id' }, /GOOGLE_CLIENT_SECRET: .*set together/],
+    [{ GOOGLE_CLIENT_SECRET: 'sec' }, /GOOGLE_CLIENT_ID: .*set together/],
+    [{ GITHUB_CLIENT_ID: 'id', GITHUB_CLIENT_SECRET: '' }, /GITHUB_CLIENT_SECRET: .*set together/],
+    [{ GITHUB_CLIENT_SECRET: 'sec' }, /GITHUB_CLIENT_ID: .*set together/],
+  ])('half a pair %p → boot fails naming the missing variable', (over, message) => {
+    expect(() => validateEnv({ ...withoutFederation(), ...over })).toThrow(message);
+  });
+
+  it('.env.example leaves every provider disabled (no placeholder credentials)', () => {
+    const example = parseEnv(readFileSync(join(process.cwd(), '.env.example'), 'utf8')) as Record<
+      string,
+      string
+    >;
+    const fed = buildConfig(validateEnv(example)).federation;
+    expect(Object.values(fed).every((v) => v === undefined)).toBe(true);
+  });
+});

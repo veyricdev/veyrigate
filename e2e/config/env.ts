@@ -71,10 +71,12 @@ export function beEnv(): Record<string, string> {
     // absolute dir under e2e/ (git-ignored) that LocalKeyProvider.init() auto-creates.
     KEY_LOCAL_DIR: resolve(dirname(fileURLToPath(import.meta.url)), "..", ".keys"),
     SMTP_URL: "smtp://localhost:1025",
-    GOOGLE_CLIENT_ID: "e2e-google-client-id",
-    GOOGLE_CLIENT_SECRET: "e2e-google-client-secret",
-    GITHUB_CLIENT_ID: "e2e-github-client-id",
-    GITHUB_CLIENT_SECRET: "e2e-github-client-secret",
+    // Run 32 (F4): federation providers are optional; empty = disabled. Set explicitly (not omitted)
+    // so BE does not fall back to be/.env values (loaded non-overriding). E2E never calls real providers.
+    GOOGLE_CLIENT_ID: "",
+    GOOGLE_CLIENT_SECRET: "",
+    GITHUB_CLIENT_ID: "",
+    GITHUB_CLIENT_SECRET: "",
     ADMIN_SEED_EMAIL: "admin@example.com",
     ADMIN_SEED_PASSWORD: "e2e-admin-password",
     CSRF_SECRET: "e2e-csrf-secret-0123456789abcdef0123456789abcdef",

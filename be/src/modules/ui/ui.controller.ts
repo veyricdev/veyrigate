@@ -5,7 +5,9 @@ import {
   Get,
   HttpException,
   HttpStatus,
+  Inject,
   Logger,
+  Optional,
   Post,
   Query,
   Req,
@@ -29,6 +31,11 @@ import { SessionService } from '../sessions/session.service';
 import { RefreshTokenService } from '../oauth/token/refresh-token.service';
 import { LogoutService, type LogoutParams } from '../oauth/logout/logout.service';
 import { AuthorizeRequestContextService } from '../oauth/authorize/authorize-request-context.service';
+import {
+  enabledProviderNames,
+  FEDERATION_PROVIDERS,
+  type FederationProviders,
+} from '../federation/providers';
 import { CsrfGuard, CsrfService } from './csrf.service';
 import { HtmlExceptionFilter } from './html-exception.filter';
 import { requestIdFromReturnTo, safeReturnTo } from './return-to';
@@ -84,6 +91,8 @@ export class UiController {
     private readonly logoutRp: LogoutService,
     private readonly authzContexts: AuthorizeRequestContextService,
     config: ConfigService,
+    // Optional: absent (tests composing UiController without FederationModule) => no buttons.
+    @Optional() @Inject(FEDERATION_PROVIDERS) private readonly federation?: FederationProviders,
   ) {
     this.issuer = config.getOrThrow<AppConfig>('app').issuer;
     this.secure = config.getOrThrow<SessionConfig>('session').cookieSecure;
@@ -117,7 +126,34 @@ export class UiController {
     return this.form(req, reply, 'login.eta', {
       title: 'Sign in',
       returnTo: safeReturn,
+      social: await this.socialLogins(safeReturn),
     });
+  }
+
+  /**
+   * Social login buttons (B5.2, F11): only enabled providers, and only for a live resumable login
+   * context (`/authorize?request_id=<id>` exactly) — no context, no button (no RP-less social flow).
+   * GitHub is hidden when the context demands re-authentication (F8). The link carries only the
+   * opaque `request_id` (escaped by Eta). A Redis failure shows no button (fail-closed).
+   */
+  private async socialLogins(safeReturn: string): Promise<{ label: string; href: string }[]> {
+    const names = this.federation ? enabledProviderNames(this.federation) : [];
+    const requestId = requestIdFromReturnTo(safeReturn);
+    if (names.length === 0 || !requestId) return [];
+    let ctx;
+    try {
+      ctx = await this.authzContexts.peek(requestId);
+    } catch {
+      this.logger.warn('login: context peek failed; hiding social login');
+      return [];
+    }
+    if (!ctx || ctx.kind !== 'login') return [];
+    return names
+      .filter((name) => !(name === 'github' && ctx.reauthAfter !== undefined))
+      .map((name) => ({
+        label: name === 'google' ? 'Sign in with Google' : 'Sign in with GitHub',
+        href: `/auth/${name}/start?request_id=${encodeURIComponent(requestId)}`,
+      }));
   }
 
   /**

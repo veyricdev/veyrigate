@@ -17,6 +17,7 @@ import { ConditionalModule } from '@nestjs/config';
 import { DemoModule } from './modules/demo/demo.module';
 import { isDemoEnabled } from './modules/demo/demo.enabled';
 import { AdminModule } from './modules/admin/admin.module';
+import { FederationModule } from './modules/federation/federation.module';
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { AdminModule } from './modules/admin/admin.module';
     AuthenticationModule,
     UiModule,
     OauthModule,
+    FederationModule,
     AdminModule,
     // Dev/test-only demo resource (`GET /demo/me`, B6.5). Loaded ONLY when `isDemoEnabled` (raw
     // `NODE_ENV` allowlist: development|test); absent/production => the module (and route) do not

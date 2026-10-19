@@ -152,7 +152,7 @@ export class AuthenticationService {
       context.oldSessionId,
       user.sub,
       DEFAULT_TENANT_ID,
-      context.deviceLabel ? { deviceLabel: context.deviceLabel } : {},
+      { amr: ['pwd'], ...(context.deviceLabel ? { deviceLabel: context.deviceLabel } : {}) },
     );
     await this.audit.record({
       actorType: 'user',

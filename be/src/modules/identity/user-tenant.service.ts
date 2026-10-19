@@ -36,6 +36,12 @@ export class UserTenantService {
     return doc.toObject();
   }
 
+  /** Internal compensation only (B5.2): undo a membership THIS request just created. */
+  async deleteMembership(userId: string, tenantId: string): Promise<void> {
+    if (!isValidObjectId(userId)) return;
+    await this.model.deleteOne({ userId: new Types.ObjectId(userId), tenantId }).exec();
+  }
+
   async isActiveMember(userId: string, tenantId: string): Promise<boolean> {
     if (!isValidObjectId(userId)) return false;
     const found = await this.model.exists({ userId, tenantId, status: 'active' }).exec();

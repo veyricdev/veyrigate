@@ -11,3 +11,5 @@ export const FederatedIdentitySchema = new Schema({
   lastLoginAt: { type: Date },
 });
 FederatedIdentitySchema.index({ provider: 1, providerId: 1 }, { unique: true });
+// B5.2: a user's external identities (lookup / compensation cleanup).
+FederatedIdentitySchema.index({ userId: 1 });

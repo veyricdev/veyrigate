@@ -27,6 +27,11 @@ export class FederatedIdentityService {
     return this.identities.findOne({ provider, providerId }).lean<FederatedIdentity>().exec();
   }
 
+  /** Stamp a successful federated login on the identity (B5.2). */
+  async touchLastLogin(provider: string, providerId: string, at = new Date()): Promise<void> {
+    await this.identities.updateOne({ provider, providerId }, { $set: { lastLoginAt: at } }).exec();
+  }
+
   /** Link an external identity to an existing user. Duplicate provider+providerId → DuplicateError. */
   async link(input: {
     userId: string;

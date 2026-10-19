@@ -17,6 +17,12 @@ export interface SessionData {
   createdAt: number;
   lastSeenAt: number;
   device: { label?: string };
+  /**
+   * Authentication methods of the login that established the session (DEBT-030): `['pwd']` local
+   * password, `['fed']` federation (B5.2; the provider's own `amr` is never copied). Absent on
+   * sessions created before run 32 => treat as `['pwd']` (the only method then).
+   */
+  amr?: string[];
 }
 
 /** A live session. `ref` = sha256(id): safe to show/pass around, cannot be turned back into the cookie. */
@@ -26,6 +32,8 @@ export interface Session extends SessionData {
 
 export interface CreateSessionOptions {
   deviceLabel?: string;
+  /** See `SessionData.amr`. Set by server code only, never from request input. */
+  amr?: string[];
 }
 
 const sessKey = (ref: string): string => `sess:${ref}`;
@@ -123,6 +131,7 @@ export class SessionService {
       createdAt: now,
       lastSeenAt: now,
       device: opts.deviceLabel ? { label: opts.deviceLabel } : {},
+      ...(opts.amr ? { amr: opts.amr } : {}),
     };
     const [set] = await execOrThrow(
       this.redis.client

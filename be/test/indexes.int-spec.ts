@@ -11,7 +11,11 @@ type IndexInfo = { key: Record<string, number>; unique?: boolean; expireAfterSec
 const EXPECTED: Record<string, { key: Record<string, number>; unique?: boolean; ttl?: number }[]> =
   {
     User: [{ key: { email: 1 }, unique: true }],
-    FederatedIdentity: [{ key: { provider: 1, providerId: 1 }, unique: true }],
+    FederatedIdentity: [
+      { key: { provider: 1, providerId: 1 }, unique: true },
+      // B5.2 (run 32): look up / clean up a user's external identities.
+      { key: { userId: 1 } },
+    ],
     Tenant: [{ key: { id: 1 }, unique: true }],
     UserTenant: [{ key: { userId: 1, tenantId: 1 }, unique: true }],
     Client: [
@@ -95,6 +99,16 @@ describe('Mongo indexes after explicit sync (B1.6, spec §10)', () => {
     };
     await RT.create(doc);
     await expect(RT.create({ ...doc, familyId: 'f2' })).rejects.toMatchObject({ code: 11000 });
+  });
+
+  it('FederatedIdentity {provider, providerId} is unique; same providerId on another provider is fine (B5.2)', async () => {
+    const FI = conn.models.FederatedIdentity;
+    const doc = { userId: new Types.ObjectId(), provider: 'github', providerId: '42' };
+    await FI.create(doc);
+    await expect(FI.create({ ...doc, userId: new Types.ObjectId() })).rejects.toMatchObject({
+      code: 11000,
+    });
+    await expect(FI.create({ ...doc, provider: 'google' })).resolves.toBeDefined();
   });
 
   it('ClientCredential {clientId, version} is unique (DEBT-021)', async () => {
