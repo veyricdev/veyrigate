@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { parseEnv } from 'node:util';
 import { buildConfig } from './configuration';
 import { validateEnv } from './validation.schema';
 
@@ -17,7 +20,6 @@ const BASE: Record<string, string> = {
   GITHUB_CLIENT_ID: 'g',
   GITHUB_CLIENT_SECRET: 'g',
   ADMIN_SEED_EMAIL: 'a@example.com',
-  ADMIN_SEED_PASSWORD: 'p',
   CSRF_SECRET: 's',
   RATE_LIMIT_WINDOW: '60',
   RATE_LIMIT_MAX: '100',
@@ -172,5 +174,17 @@ describe('NODE_ENV is required (DEBT-098, Q-26.3: no silent default)', () => {
     for (const value of ['development', 'test', 'production']) {
       expect(validateEnv({ ...BASE, NODE_ENV: value }).NODE_ENV).toBe(value);
     }
+  });
+});
+
+describe('.env.example (DEBT-169)', () => {
+  it('a fresh copy passes app env validation (empty ADMIN_SEED_PASSWORD is not an app variable)', () => {
+    const example = parseEnv(readFileSync(join(process.cwd(), '.env.example'), 'utf8')) as Record<
+      string,
+      string
+    >;
+    expect(example.ADMIN_SEED_PASSWORD).toBe('');
+    expect(() => validateEnv(example)).not.toThrow();
+    expect(buildConfig(validateEnv(example)).adminSeed).toEqual({ email: 'admin@example.com' });
   });
 });

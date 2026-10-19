@@ -4,7 +4,7 @@ import { Types, type Model } from 'mongoose';
 import { sha256 } from '../../../common/crypto/crypto.util';
 import { AuditAction } from '../../security/audit/audit-action.enum';
 import { AuditService } from '../../security/audit/audit.service';
-import { TokenService, type TokenResponse } from './token.service';
+import { TokenService, adminTargetForbidden, type TokenResponse } from './token.service';
 import { TokenError } from './token.errors';
 import { ResourceService } from '../../resources/resource.service';
 
@@ -116,7 +116,7 @@ export class RefreshTokenService {
    */
   async issueForRefresh(
     value: string,
-    client: { clientId: string; allowedResources: string[] },
+    client: { clientId: string; allowedResources: string[]; clientType?: string },
     request: { scope?: string; resource?: string },
     audit: AuditCtx = {},
   ): Promise<TokenResponse> {
@@ -134,7 +134,12 @@ export class RefreshTokenService {
     // holds resourceIds (spec §7), so the client's allowed resourceIds are resolved to their
     // identifiers first and the URI is matched against those — never a resourceId directly
     // (confused-deputy guard). A Mongo failure here propagates (fail-closed, no rotation).
-    const allowedIdentifiers = await this.resources.identifiersFor(client.allowedResources);
+    // DEBT-172: a non-confidential client never refreshes an `aud=admin` family: the admin
+    // identifier is dropped from its allowlist, so the token classifies as invalid (invalid_grant)
+    // exactly like a resource the client lost (not reuse; nothing is rotated or burned).
+    const allowedIdentifiers = (
+      await this.resources.identifiersFor(client.allowedResources)
+    ).filter((id) => !adminTargetForbidden(client.clientType, id, this.tokens.adminResource));
     const original = (await this.refreshTokens
       .findOne({
         tokenHash,

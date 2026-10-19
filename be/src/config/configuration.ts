@@ -70,9 +70,9 @@ export interface ConsentConfig {
   termsVersion: string;
 }
 
+/** Only the email: the bootstrap password is read by `db:seed` alone, never kept by the app (DEBT-169). */
 export interface AdminSeedConfig {
   email: string;
-  password: string;
 }
 
 export interface MailerConfig {
@@ -138,7 +138,6 @@ export function buildConfig(env: Env): Config {
     },
     adminSeed: {
       email: env.ADMIN_SEED_EMAIL,
-      password: env.ADMIN_SEED_PASSWORD,
     },
     mailer: {
       smtpUrl: env.SMTP_URL,

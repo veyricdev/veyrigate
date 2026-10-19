@@ -1368,6 +1368,208 @@ describe('Admin API B6.3a (clients, secrets, resources) on real Mongo + Redis', 
     });
   });
 
+  describe('run 30 Task 4 — super_admin granting admin revokes every secret (DEBT-137)', () => {
+    const auth = (id: string, secret: string) => tokenAttempt({ authorization: basic(id, secret) });
+    const grant = async (id: string) =>
+      call('PATCH', `/admin/clients/${id}`, await tok(superA), {
+        allowedResources: ['api', 'admin'],
+      });
+    /** Confidential client set up by tenant_admin A with a secret S it knows. */
+    async function tenantAdminClient(): Promise<{ id: string; s: string }> {
+      const id = await mkClient(confidential());
+      const res = await call('POST', `/admin/clients/${id}/secrets`, await tok(tadminA));
+      expect(res.statusCode).toBe(201);
+      const s = (res.json() as { clientSecret: string }).clientSecret;
+      expect((await auth(id, s)).statusCode).toBe(400); // S authenticates before the grant
+      return { id, s };
+    }
+    const liveCreds = (id: string) =>
+      credentialModel.countDocuments({ clientId: id, revokedAt: null });
+
+    it('grant => 200, every credential revoked, S => invalid_client (/token + /introspect); new secret only via super_admin', async () => {
+      const { id, s } = await tenantAdminClient();
+      const res = await grant(id);
+      expect(res.statusCode).toBe(200);
+      expect(res.json().allowedResources).toEqual(['api', 'admin']);
+      expect(await credentialModel.countDocuments({ clientId: id })).toBe(1);
+      expect(await liveCreds(id)).toBe(0);
+
+      const viaToken = await auth(id, s);
+      expect(viaToken.statusCode).toBe(401);
+      expect(viaToken.json().error).toBe('invalid_client');
+      const viaIntrospect = await app.inject({
+        method: 'POST',
+        url: '/introspect',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          authorization: basic(id, s),
+        },
+        payload: form({ token: 'whatever' }),
+      });
+      expect(viaIntrospect.statusCode).toBe(401);
+      expect(viaIntrospect.json().error).toBe('invalid_client');
+
+      // tenant_admin can no longer mint a secret nor repoint the redirect.
+      const ta = await tok(tadminA);
+      expect((await call('POST', `/admin/clients/${id}/secrets`, ta)).statusCode).toBe(403);
+      expect(
+        (
+          await call('PATCH', `/admin/clients/${id}`, ta, {
+            redirectUris: ['https://evil.example/cb'],
+          })
+        ).statusCode,
+      ).toBe(403);
+      expect(await liveCreds(id)).toBe(0);
+
+      const fresh = await call('POST', `/admin/clients/${id}/secrets`, await tok(superA));
+      expect(fresh.statusCode).toBe(201);
+      const s2 = (fresh.json() as { clientSecret: string }).clientSecret;
+      expect((await auth(id, s2)).statusCode).toBe(400);
+
+      // Audit: flag on the update + a CLIENT_SECRET_REVOKED with the count, no secret material.
+      const updated = await auditModel
+        .findOne({ action: 'ADMIN_CLIENT_UPDATED', targetId: id, actorId: superA })
+        .lean();
+      expect(updated).toMatchObject({ result: 'success', tenantId: TENANT_A });
+      expect(updated?.metadata).toMatchObject({ adminGranted: true });
+      const revokedAudit = await auditModel
+        .find({ action: 'CLIENT_SECRET_REVOKED', targetId: id })
+        .lean();
+      expect(revokedAudit).toHaveLength(1);
+      expect(revokedAudit[0]).toMatchObject({
+        actorId: superA,
+        result: 'success',
+        metadata: { reason: 'admin_granted', count: 1 },
+      });
+      expect(JSON.stringify(await auditModel.find({ targetId: id }).lean())).not.toContain(s);
+
+      // PATCH again (already admin-capable) => no further revoke, s2 keeps working.
+      const again = await grant(id);
+      expect(again.statusCode).toBe(200);
+      expect((await auth(id, s2)).statusCode).toBe(400);
+      expect(
+        await auditModel.countDocuments({ action: 'CLIENT_SECRET_REVOKED', targetId: id }),
+      ).toBe(1);
+      const last = await auditModel
+        .find({ action: 'ADMIN_CLIENT_UPDATED', targetId: id, actorId: superA })
+        .sort({ _id: -1 })
+        .limit(1)
+        .lean();
+      expect(last[0].metadata).not.toHaveProperty('adminGranted');
+    });
+
+    it('a secret issued between the two revoke passes is revoked too (2nd pass)', async () => {
+      const { id } = await tenantAdminClient();
+      const svc = moduleRef.get(ClientCredentialService);
+      const real = svc.revokeAll.bind(svc);
+      let sneaked = '';
+      jest.spyOn(svc, 'revokeAll').mockImplementationOnce(async (clientId, now) => {
+        const n = await real(clientId, now);
+        // tenant_admin's POST secrets passed `assertMayModify` before the grant and inserts now.
+        sneaked = (await svc.createSecret(clientId)).secret;
+        return n;
+      });
+      expect((await grant(id)).statusCode).toBe(200);
+      expect(sneaked).not.toBe('');
+      expect(await liveCreds(id)).toBe(0);
+      expect((await auth(id, sneaked)).statusCode).toBe(401);
+      const revokedAudit = await auditModel
+        .findOne({ action: 'CLIENT_SECRET_REVOKED', targetId: id })
+        .lean();
+      expect(revokedAudit?.metadata).toEqual({ reason: 'admin_granted', count: 2 });
+    });
+
+    it('1st revoke fails => 5xx, admin NOT granted, S still works (fail-closed)', async () => {
+      const { id, s } = await tenantAdminClient();
+      jest
+        .spyOn(moduleRef.get(ClientCredentialService), 'revokeAll')
+        .mockRejectedValueOnce(new Error('mongo down'));
+      expect((await grant(id)).statusCode).toBeGreaterThanOrEqual(500);
+      expect((await clientModel.findOne({ clientId: id }).lean())?.allowedResources).toEqual([
+        'api',
+      ]);
+      expect(await liveCreds(id)).toBe(1);
+      expect((await auth(id, s)).statusCode).toBe(400);
+    });
+
+    it('2nd revoke fails => 5xx + failure audit secret_revoke_failed; super_admin recovers with DELETE secrets/:v', async () => {
+      const { id } = await tenantAdminClient();
+      const svc = moduleRef.get(ClientCredentialService);
+      const real = svc.revokeAll.bind(svc);
+      let sneaked = '';
+      jest
+        .spyOn(svc, 'revokeAll')
+        .mockImplementationOnce(async (clientId, now) => {
+          const n = await real(clientId, now);
+          sneaked = (await svc.createSecret(clientId)).secret;
+          return n;
+        })
+        .mockRejectedValueOnce(new Error('mongo down'));
+      expect((await grant(id)).statusCode).toBeGreaterThanOrEqual(500);
+      expect((await clientModel.findOne({ clientId: id }).lean())?.allowedResources).toEqual([
+        'api',
+        'admin',
+      ]);
+      expect(
+        await auditModel
+          .findOne({ action: 'ADMIN_CLIENT_UPDATED', targetId: id, result: 'failure' })
+          .lean(),
+      ).toMatchObject({ reason: 'secret_revoke_failed', actorId: superA });
+      expect(
+        await auditModel.countDocuments({
+          action: 'ADMIN_CLIENT_UPDATED',
+          targetId: id,
+          actorId: superA,
+          result: 'success',
+        }),
+      ).toBe(0);
+      expect((await auth(id, sneaked)).statusCode).toBe(400); // the documented residual
+      expect(
+        (await call('DELETE', `/admin/clients/${id}/secrets/2`, await tok(superA))).statusCode,
+      ).toBe(204);
+      expect((await auth(id, sneaked)).statusCode).toBe(401);
+    });
+
+    it('rule A: a public client can never get admin (super_admin POST/PATCH => 400, DB unchanged)', async () => {
+      const sp = await tok(superA);
+      const count = await clientModel.countDocuments();
+      const created = await call(
+        'POST',
+        '/admin/clients',
+        sp,
+        publicSpa({ allowedResources: ['api', 'admin'] }),
+      );
+      expect(created.statusCode).toBe(400);
+      expect(created.json().error).toBe('invalid_request');
+      expect(await clientModel.countDocuments()).toBe(count);
+
+      const id = await mkClient(publicSpa());
+      const before = JSON.stringify(await clientModel.findOne({ clientId: id }).lean());
+      const patched = await call('PATCH', `/admin/clients/${id}`, sp, {
+        allowedResources: ['api', 'admin'],
+      });
+      expect(patched.statusCode).toBe(400);
+      expect(patched.json().error).toBe('invalid_request');
+      expect(JSON.stringify(await clientModel.findOne({ clientId: id }).lean())).toBe(before);
+
+      // Confidential create with admin by super_admin stays allowed (fe-admin / BFF case).
+      expect(
+        (await call('POST', '/admin/clients', sp, confidential({ allowedResources: ['admin'] })))
+          .statusCode,
+      ).toBe(201);
+    });
+
+    it('grant on a client of another tenant => 404, its secret untouched', async () => {
+      const id = await mkClient(confidential(), tadminA);
+      await moduleRef.get(ClientCredentialService).createSecret(id);
+      // Move it to tenant B: super_admin of A (token tenant = A) must not reach its secrets.
+      await clientModel.updateOne({ clientId: id }, { $set: { tenantId: TENANT_B } });
+      const res = await grant(id);
+      expect(res.statusCode).toBe(404);
+      expect(await liveCreds(id)).toBe(1);
+    });
+  });
+
   describe('run 29 QA (tester) — /token grant paths after disable (DEBT-125)', () => {
     const tokenPost = (clientId: string, secret: string, fields: Record<string, string>) =>
       app.inject({
@@ -1497,6 +1699,95 @@ describe('Admin API B6.3a (clients, secrets, resources) on real Mongo + Redis', 
         })
         .lean();
       expect(changed.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+  describe('run 30 QA (tester) — DEBT-137 rule A on every write path + DEBT-161 real race', () => {
+    it('public client: admin alone / duplicated / by tenant_admin => refused, DB unchanged', async () => {
+      const sp = await tok(superA);
+      const id = await mkClient(publicSpa());
+      const before = JSON.stringify(await clientModel.findOne({ clientId: id }).lean());
+      for (const allowedResources of [['admin'], ['admin', 'admin'], ['admin', 'api']]) {
+        const res = await call('PATCH', `/admin/clients/${id}`, sp, { allowedResources });
+        expect(res.statusCode).toBe(400);
+      }
+      const byTenantAdmin = await call('PATCH', `/admin/clients/${id}`, await tok(tadminA), {
+        allowedResources: ['admin'],
+      });
+      expect(byTenantAdmin.statusCode).toBe(403);
+      expect(
+        (
+          await call(
+            'POST',
+            '/admin/clients',
+            await tok(tadminA),
+            publicSpa({ allowedResources: ['admin'] }),
+          )
+        ).statusCode,
+      ).toBe(403);
+      expect(JSON.stringify(await clientModel.findOne({ clientId: id }).lean())).toBe(before);
+    });
+
+    it('legacy public client already holding admin (pre-run-30 data): re-sending admin => 400', async () => {
+      const id = await mkClient(publicSpa());
+      await clientModel.updateOne(
+        { clientId: id },
+        { $set: { allowedResources: ['api', 'admin'] } },
+      );
+      const res = await call('PATCH', `/admin/clients/${id}`, await tok(superA), {
+        allowedResources: ['api', 'admin'],
+        scopes: ['openid'],
+      });
+      expect(res.statusCode).toBe(400);
+      expect((await clientModel.findOne({ clientId: id }).lean())?.scopes).toEqual([
+        'openid',
+        'api.read',
+      ]);
+    });
+
+    it('DEBT-161: concurrent disable+disable => same disabledAt everywhere; disable+enable => only 200/409, response never contradicts the stamp', async () => {
+      const sp = await tok(superA);
+      for (let i = 0; i < 10; i++) {
+        const id = await mkClient(confidential());
+        const [a, b] = await Promise.all([
+          call('PATCH', `/admin/clients/${id}`, sp, { disabled: true }),
+          call('PATCH', `/admin/clients/${id}`, sp, { disabled: true }),
+        ]);
+        expect([a.statusCode, b.statusCode]).toEqual([200, 200]);
+        const db = await clientModel.findOne({ clientId: id }).lean();
+        expect(a.json().disabledAt).toBe(db!.disabledAt!.toISOString());
+        expect(b.json().disabledAt).toBe(db!.disabledAt!.toISOString());
+      }
+      let conflicts = 0;
+      for (let i = 0; i < 15; i++) {
+        const id = await mkClient(confidential());
+        const auditsBefore = await auditModel.countDocuments({
+          action: 'ADMIN_CLIENT_UPDATED',
+          targetId: id,
+          result: 'success',
+        });
+        const [dis, en] = await Promise.all([
+          call('PATCH', `/admin/clients/${id}`, sp, { disabled: true }),
+          call('PATCH', `/admin/clients/${id}`, sp, { disabled: false }),
+        ]);
+        expect([200, 409]).toContain(dis.statusCode);
+        expect(en.statusCode).toBe(200);
+        if (dis.statusCode === 409) {
+          conflicts++;
+          expect(dis.json().error).toBe('conflict');
+        } else {
+          expect(dis.json().disabled).toBe(true);
+          expect(typeof dis.json().disabledAt).toBe('string');
+        }
+        const auditsAfter = await auditModel.countDocuments({
+          action: 'ADMIN_CLIENT_UPDATED',
+          targetId: id,
+          result: 'success',
+        });
+        // A 409 never leaves a success audit behind for the disable request.
+        expect(auditsAfter - auditsBefore).toBe(dis.statusCode === 200 ? 2 : 1);
+      }
+      // Informational: how often the matchedCount=0 branch was hit by the real race.
+      console.info(`DEBT-161 race: ${conflicts}/15 disable requests got 409`);
     });
   });
 });

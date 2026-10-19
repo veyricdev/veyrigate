@@ -9,6 +9,7 @@ import type { TenantContext } from '../identity/tenant-context/tenant-context';
 import { TenantScopedRepository } from '../identity/tenant-context/tenant-scoped.repository';
 import { adminResourceIdentifier } from '../oauth/token/token.service';
 import { ResourceService } from '../resources/resource.service';
+import { ClientCredentialService } from './client-credential.service';
 import { validateRedirectUriFormat, validateRedirectUriList } from './redirect-uri.validator';
 
 export type ClientType = 'public' | 'confidential';
@@ -84,6 +85,25 @@ export class ForbiddenClientConfigError extends Error {
   }
 }
 
+/** DEBT-161: a concurrent PATCH changed the client between the update and the disable stamp. */
+export class ConcurrentClientUpdateError extends Error {
+  constructor() {
+    super('the client was modified concurrently; retry');
+    this.name = 'ConcurrentClientUpdateError';
+  }
+}
+
+/**
+ * DEBT-137: `admin` was granted (the update is applied) but revoking the secrets issued meanwhile
+ * failed (=> 5xx + failure audit). Recovery: super_admin `DELETE /admin/clients/:id/secrets/:v`.
+ */
+export class AdminGrantSecretRevokeError extends Error {
+  constructor(readonly cause: unknown) {
+    super('admin resource granted but revoking the previous client secrets failed');
+    this.name = 'AdminGrantSecretRevokeError';
+  }
+}
+
 /**
  * A CORS allowlist entry must be exactly a serialized origin (B6.3a): what a browser sends in
  * `Origin` — scheme + host + optional port, no path/query/fragment/trailing slash/wildcard — and
@@ -131,6 +151,8 @@ export class ClientService {
     // Only the admin writes need it (resource existence + `admin` resource rule) and they fail
     // closed without it. Optional so the OAuth-only wirings (`new ClientService(model, cfg)`) stay.
     @Optional() private readonly resources?: ResourceService,
+    // DEBT-137: granting `admin` revokes every secret; fails closed without it.
+    @Optional() private readonly credentials?: ClientCredentialService,
   ) {
     const app = config.getOrThrow<AppConfig>('app');
     this.allowHttpLocalhost = app.nodeEnv !== 'production';
@@ -185,7 +207,8 @@ export class ClientService {
     input: AdminCreateClientInput,
     actor: ClientWriteActor,
   ): Promise<Client> {
-    await this.assertAllowedResources(input.allowedResources ?? [], actor);
+    const grantsAdmin = await this.assertAllowedResources(input.allowedResources ?? [], actor);
+    if (grantsAdmin) assertAdminCapableType(input.clientType);
     return this.create({ ...input, clientId: randomUUID(), tenantId: ctx.tenantId });
   }
 
@@ -226,10 +249,30 @@ export class ClientService {
     clientId: string,
     patch: AdminClientPatch,
     actor: ClientWriteActor,
-  ): Promise<{ before: Client; after: Client } | null> {
+  ): Promise<{
+    before: Client;
+    after: Client;
+    /** DEBT-137: this PATCH made the client admin-capable (every secret was revoked). */
+    adminGranted?: boolean;
+    secretsRevoked?: number;
+  } | null> {
     this.validateConfig(patch);
-    if (patch.allowedResources !== undefined) {
-      await this.assertAllowedResources(patch.allowedResources, actor);
+    const grantsAdmin =
+      patch.allowedResources !== undefined &&
+      (await this.assertAllowedResources(patch.allowedResources, actor));
+    // DEBT-137: super_admin turning a client admin-capable. Secrets/redirects a tenant_admin set up
+    // beforehand must not yield `aud=admin` tokens: only a confidential client may get `admin`, and
+    // every secret is revoked BEFORE the update (failure => 5xx, nothing granted) and AGAIN after
+    // it (catches a secret issued in between; from then on `assertMayModify` stops tenant_admin).
+    let adminGranted = false;
+    let secretsRevoked = 0;
+    if (grantsAdmin) {
+      const current = await this.getForTenant(ctx, clientId);
+      if (!current) return null;
+      assertAdminCapableType(current.clientType);
+      const adminIds = await this.adminResourceIds();
+      adminGranted = !(current.allowedResources ?? []).some((id) => adminIds.includes(id));
+      if (adminGranted) secretsRevoked = await this.revokeAllSecrets(clientId);
     }
     // A client that can already obtain `aud=admin` tokens is super_admin-only for EVERY write
     // (else tenant_admin could repoint its redirect URIs / take its secret => escalation). Checked
@@ -262,20 +305,43 @@ export class ClientService {
       }
       return null;
     }
+    if (adminGranted) {
+      // 2nd pass right after the grant (before the disable stamp, which may still throw 409).
+      try {
+        secretsRevoked += await this.revokeAllSecrets(clientId);
+      } catch (err) {
+        throw new AdminGrantSecretRevokeError(err);
+      }
+    }
     if (patch.disabled === true) {
-      const now = new Date();
+      let disabledAt = before.disabledAt ?? new Date();
       if (before.disabledAt == null) {
-        await this.repo.updateOne(
+        const stamp = await this.repo.updateOne(
           ctx,
           { ...filter, disabledAt: null },
-          { $set: { disabledAt: now } },
+          { $set: { disabledAt } },
         );
+        // DEBT-161: the stamp lost a race (a concurrent disable already stamped, or a concurrent
+        // enable / admin grant made the filter miss). Report what the DB holds, never a disable
+        // that did not happen; thrown before the caller revokes families or audits success.
+        if (stamp.matchedCount !== 1) {
+          const current = await this.getForTenant(ctx, clientId);
+          if (current?.disabledAt == null) throw new ConcurrentClientUpdateError();
+          disabledAt = current.disabledAt;
+        }
       }
-      set.disabledAt = before.disabledAt ?? now;
+      set.disabledAt = disabledAt;
     }
     const after = { ...before, ...set } as Client;
     if (unsetFrontchannel) delete after.frontchannelLogoutUri;
-    return { before, after };
+    return adminGranted ? { before, after, adminGranted, secretsRevoked } : { before, after };
+  }
+
+  private revokeAllSecrets(clientId: string): Promise<number> {
+    if (!this.credentials) {
+      throw new Error('ClientService: ClientCredentialService is required to grant admin');
+    }
+    return this.credentials.revokeAll(clientId, new Date());
   }
 
   /** Non-atomic variant for the secret endpoints: refuse when `client` can obtain admin tokens. */
@@ -324,8 +390,8 @@ export class ClientService {
   private async assertAllowedResources(
     resourceIds: readonly string[],
     actor: ClientWriteActor,
-  ): Promise<void> {
-    if (resourceIds.length === 0) return;
+  ): Promise<boolean> {
+    if (resourceIds.length === 0) return false;
     if (!this.resources || !this.issuer) {
       throw new Error(
         'ClientService: ResourceService and app.issuer are required for admin writes',
@@ -340,9 +406,11 @@ export class ClientService {
         `allowedResources entry is not a known resource: ${missing}`,
       );
     }
-    if (found.some((r) => r.identifier === adminIdentifier) && !isSuperAdmin(actor)) {
+    const grantsAdmin = found.some((r) => r.identifier === adminIdentifier);
+    if (grantsAdmin && !isSuperAdmin(actor)) {
       throw new ForbiddenClientConfigError('only super_admin may allow the admin resource');
     }
+    return grantsAdmin;
   }
 }
 
@@ -354,6 +422,13 @@ const PATCHABLE_ARRAYS = [
   'allowedResources',
   'scopes',
 ] as const;
+
+/** DEBT-137 rule A: a public client has no secret to revoke, so it can never get `admin`. */
+function assertAdminCapableType(type: ClientType): void {
+  if (type !== 'confidential') {
+    throw new InvalidClientConfigError('the admin resource requires a confidential client');
+  }
+}
 
 function isSuperAdmin(actor: ClientWriteActor): boolean {
   return actor.roles.includes('super_admin');

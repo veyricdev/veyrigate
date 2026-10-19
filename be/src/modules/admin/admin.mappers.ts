@@ -1,6 +1,7 @@
 import type { ClientCredential } from '../clients/client-credential.service';
 import {
   type Client,
+  ConcurrentClientUpdateError,
   ForbiddenClientConfigError,
   InvalidClientConfigError,
 } from '../clients/client.service';
@@ -227,5 +228,6 @@ export function toAdminError(err: unknown): unknown {
   }
   if (err instanceof ForbiddenClientConfigError) return AdminAuthError.forbidden();
   if (err instanceof DuplicateError) return AdminAuthError.conflict(`${err.entity} already exists`);
+  if (err instanceof ConcurrentClientUpdateError) return AdminAuthError.conflict(err.message);
   return err;
 }

@@ -257,7 +257,7 @@ export async function seedDevUser(
 }
 
 /** Run an upsert, swallowing only the E11000 a lost concurrent-insert race produces. */
-async function upsert(run: () => Promise<unknown>): Promise<void> {
+export async function upsert(run: () => Promise<unknown>): Promise<void> {
   try {
     await run();
   } catch (err) {

@@ -29,6 +29,19 @@ export function adminResourceIdentifier(issuer: string): string {
   return new URL('/admin/', issuer).href;
 }
 
+/**
+ * DEBT-172 (DEBT-137 rule A enforced at runtime): only a confidential client may obtain an
+ * `aud=admin` token, whatever its stored `allowedResources` says (data written before run 30, a
+ * direct DB write, a seed re-point). `clientType` unknown => forbidden (fail-closed).
+ */
+export function adminTargetForbidden(
+  clientType: string | undefined,
+  resource: string | undefined,
+  adminIdentifier: string,
+): boolean {
+  return resource === adminIdentifier && clientType !== 'confidential';
+}
+
 /** The successful `/token` response body (RFC 6749 ?5.1 + OIDC). */
 export interface TokenResponse {
   access_token: string;
@@ -52,7 +65,8 @@ export class TokenService {
   private readonly issuer: string;
   private readonly accessTokenTtl: number;
   private readonly refreshTokenTtl: number;
-  private readonly adminResource: string;
+  /** `adminResourceIdentifier(issuer)`; also read by the refresh grant (DEBT-172). */
+  readonly adminResource: string;
 
   constructor(
     @InjectModel('RefreshToken') private readonly refreshTokens: Model<Record<string, unknown>>,
@@ -86,6 +100,10 @@ export class TokenService {
     // An access token must target a concrete resource; a code with no bound resource (the public
     // client case) cannot mint one, and RefreshToken.resource is schema-required (fail-closed).
     if (!data.resource) {
+      throw new TokenError('invalid_target');
+    }
+    // DEBT-172: a public client never redeems an `aud=admin` code (the code is already consumed).
+    if (adminTargetForbidden(client.clientType, data.resource, this.adminResource)) {
       throw new TokenError('invalid_target');
     }
     const resource = data.resource;

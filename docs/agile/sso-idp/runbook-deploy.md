@@ -155,3 +155,16 @@ khoá được client hợp lệ.
 - Thiếu/rỗng/`false` ⇒ mặc định TẮT (dùng IP socket). Chỉ dùng khi KHÔNG có proxy trước app.
 - **TUYỆT ĐỐI không** `TRUST_PROXY=true` — tin mọi `X-Forwarded-For` ⇒ client spoof IP vượt
   bucket. App **từ chối khởi động** nếu gặp `true`, một số, hoặc IP/CIDR sai (`parseTrustProxy`).
+
+## 6. Sau emergency rotate — kiểm `KEY_LOCAL_DIR` (DEBT-163, dev `LocalKeyProvider`)
+
+Emergency rotate ghi `keys.json` mới rồi mới xoá PEM cũ (best-effort). Process chết giữa hai bước, hoặc
+`rm` lỗi (log ERROR), có thể để lại `<oldKid>.pem` — **private key đã lộ** — trong thư mục.
+
+- Sau `POST /admin/keys/rotate {mode:'emergency'}`: `KEY_LOCAL_DIR` chỉ còn `<newKid>.pem` + `keys.json`
+  (`newKid` trong response/audit `SIGNING_KEY_ROTATED`).
+- Khi khởi động, `LocalKeyProvider.init()` log **WARN** `Private key file(s) not in keys.json (orphans,
+  not deleted): <kid>, ...` (chỉ kid, không đường dẫn/nội dung). Code **không tự xoá**.
+- Xử lý: xác nhận kid **không** có trong `keys.json` và **chính là kid đã biết bị lộ** (`oldKid` của lần
+  emergency) rồi mới xoá thủ công `<kid>.pem`. Thư mục dùng chung nhiều process ⇒ orphan khác có thể là
+  PEM vừa tạo của process đang rotate: KHÔNG xoá kid không xác định được nguồn gốc.

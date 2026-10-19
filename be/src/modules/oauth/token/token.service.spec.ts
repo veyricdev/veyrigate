@@ -125,7 +125,8 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
 
   it('auth_time in access token only when resource is the admin identifier (D3)', async () => {
     const { response: admin } = await buildService().issueForAuthorizationCode(
-      client(),
+      // aud=admin requires a confidential client (DEBT-172).
+      client({ clientType: 'confidential', tokenEndpointAuthMethod: 'client_secret_basic' }),
       codeData({ resource: ADMIN_RESOURCE }),
     );
     const adminAt = await verifier.verify(admin.access_token, ADMIN_RESOURCE);
@@ -156,9 +157,16 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
     expect(res.id_token).toBeUndefined();
   });
 
+  it('DEBT-172: an aud=admin code for a PUBLIC client => invalid_target, nothing signed', async () => {
+    await expect(
+      buildService().issueForAuthorizationCode(client(), codeData({ resource: ADMIN_RESOURCE })),
+    ).rejects.toMatchObject({ code: 'invalid_target' });
+  });
+
   it('authTime absent => no auth_time claim fabricated (fail-closed for step-up)', async () => {
     const { response: res } = await buildService().issueForAuthorizationCode(
-      client(),
+      // aud=admin requires a confidential client (DEBT-172).
+      client({ clientType: 'confidential', tokenEndpointAuthMethod: 'client_secret_basic' }),
       codeData({ resource: ADMIN_RESOURCE, authTime: undefined }),
     );
     const access = await verifier.verify(res.access_token, ADMIN_RESOURCE);

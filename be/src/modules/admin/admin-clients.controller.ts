@@ -16,7 +16,7 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { HttpRequest } from '../../common/http/http.types';
 import { ClientCredentialService } from '../clients/client-credential.service';
-import { type Client, ClientService } from '../clients/client.service';
+import { AdminGrantSecretRevokeError, type Client, ClientService } from '../clients/client.service';
 import { AdminAuthError, AdminAuthErrorFilter } from '../identity/tenant-context/admin-auth.errors';
 import {
   type AdminActor,
@@ -129,19 +129,29 @@ export class AdminClientsController {
       // Disabling the client that issued this admin token would lock the caller out of the API.
       throw AdminAuthError.conflict('cannot disable the client issuing this admin token');
     }
-    const res = await this.clients
-      .updateForTenant(ctx, clientId, dto, actor)
-      .catch((err: unknown) => {
-        throw toAdminError(err);
-      });
-    if (!res) throw AdminAuthError.notFound();
-
     const base = {
       ...adminAuditBase(req, ctx),
       targetType: 'client',
       targetId: clientId,
       clientId,
     };
+    const res = await this.clients
+      .updateForTenant(ctx, clientId, dto, actor)
+      .catch(async (err: unknown) => {
+        if (err instanceof AdminGrantSecretRevokeError) {
+          // DEBT-137: `admin` is granted but a secret may have survived => 5xx + failure audit.
+          await this.audit
+            .record({
+              ...base,
+              action: AuditAction.ADMIN_CLIENT_UPDATED,
+              result: 'failure',
+              reason: 'secret_revoke_failed',
+            })
+            .catch(() => undefined);
+        }
+        throw toAdminError(err);
+      });
+    if (!res) throw AdminAuthError.notFound();
     // DEBT-125 / Q-29.3: EVERY disable revokes all refresh families of the client (also when it was
     // already disabled: the retry path). Order update -> revoke -> audit; a revoke failure leaves
     // the client disabled (fail-closed: `findByClientId` already refuses it) and is a 5xx.
@@ -169,6 +179,7 @@ export class AdminClientsController {
       ...(dto.disabled !== undefined && dto.disabled !== wasDisabled
         ? { disabled: dto.disabled }
         : {}),
+      ...(res.adminGranted ? { adminGranted: true } : {}),
     };
     await this.audit.record({
       ...base,
@@ -176,6 +187,14 @@ export class AdminClientsController {
       result: 'success',
       metadata,
     });
+    if (res.secretsRevoked) {
+      await this.audit.record({
+        ...base,
+        action: AuditAction.CLIENT_SECRET_REVOKED,
+        result: 'success',
+        metadata: { reason: 'admin_granted', count: res.secretsRevoked },
+      });
+    }
     if (revoked > 0) {
       await this.audit.record({
         ...base,

@@ -1,6 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { createPrivateKey, createPublicKey, generateKeyPairSync, randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { KeyObject } from 'node:crypto';
 import type {
@@ -48,6 +48,33 @@ export class LocalKeyProvider implements KeyProvider {
     if (!entries.some((e) => e.status === 'active')) {
       entries.push(await this.createKey());
       await this.writeState(entries);
+    }
+    await this.warnOrphanPems(entries);
+  }
+
+  /**
+   * DEBT-163: a `<kid>.pem` not referenced by `keys.json` (e.g. an emergency rotate that died after
+   * `writeState` but before `removePem` left the compromised key on disk) is reported once at WARN
+   * (kids only, no path/content) and NEVER deleted: in a shared dir it may be another process's
+   * just-created PEM. A `readdir` failure only warns; it never fails `init`.
+   */
+  private async warnOrphanPems(entries: KeyEntry[]): Promise<void> {
+    let files: string[];
+    try {
+      files = await readdir(this.dir);
+    } catch {
+      this.logger.warn('Could not list the key directory to check for orphan private keys');
+      return;
+    }
+    const known = new Set(entries.map((e) => e.kid));
+    const orphans = files
+      .filter((f) => f.endsWith('.pem'))
+      .map((f) => f.slice(0, -'.pem'.length))
+      .filter((kid) => !known.has(kid));
+    if (orphans.length) {
+      this.logger.warn(
+        `Private key file(s) not in ${STATE_FILE} (orphans, not deleted): ${orphans.join(', ')}`,
+      );
     }
   }
 

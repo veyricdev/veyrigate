@@ -131,6 +131,15 @@ export class ClientCredentialService {
     return res.matchedCount === 1;
   }
 
+  /** Revoke every not-yet-revoked version at once (DEBT-137); returns how many were revoked. */
+  async revokeAll(clientId: string, now: Date): Promise<number> {
+    const res = await this.credentials.updateMany(
+      { clientId, revokedAt: null },
+      { $set: { revokedAt: now } },
+    );
+    return res.modifiedCount;
+  }
+
   /**
    * Verify a presented secret against every currently-valid credential of `clientId`
    * (overlap-aware). Always performs at least one Argon2 verify — even for an unknown

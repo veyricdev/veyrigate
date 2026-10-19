@@ -46,6 +46,40 @@ Behaviour:
 - **Note (dev-only)**: if the email already exists (e.g. registered by hand), the seed **overwrites**
   its password hash. Acceptable because the tool is dev-only and refuses production.
 
+## Bootstrap seed (`db:seed`, B6.4)
+
+Seeds the admin bootstrap on top of the dev seed: tenant `default-tenant`, resource `admin`
+(`${ISSUER}/admin/`, scopes `admin.read admin.write`), the `ADMIN_SEED_EMAIL` user as `super_admin` of
+`default-tenant`, the confidential client `fe-admin` (`client_secret_basic`, redirect
+`http://localhost:3000/auth/callback`, resource `admin`) and — via `seedDev` — `fe-sso-test` + `demo`/`other`.
+Dev/test only (`NODE_ENV=development|test`; production is refused before connecting — DEBT-164).
+
+```sh
+# be/.env (git-ignored)
+ADMIN_SEED_EMAIL=admin@example.com
+ADMIN_SEED_PASSWORD=<12..128 chars>   # stricter than the user rule: this is a super_admin
+# ADMIN_SEED_PASSWORD is read by `db:seed` only — the app does not need it (empty is fine to boot, DEBT-169)
+pnpm build && pnpm db:sync-indexes && pnpm db:seed
+```
+
+- **Secret shown once**: when `fe-admin` has no active credential the CLI creates one and prints
+  `fe-admin client_secret (shown once): <secret>` on stdout — the only place it appears (not logged,
+  not audited, not written to a file). Re-runs print nothing and never rotate it.
+- **Lost the secret while it is still active**: revoke every `fe-admin` credential, then re-run
+  `pnpm db:seed` (prints a new one):
+  `db.clientcredentials.updateMany({clientId:'fe-admin', revokedAt:null}, {$set:{revokedAt:new Date()}})`.
+- **Resource `admin` re-point is refused (DEBT-137)**: if no `admin` resource carries `${ISSUER}/admin/`
+  yet (absent, created via the API with another identifier, or an ISSUER change) and a client other than
+  `fe-admin` already lists `admin` (or `fe-admin` itself while the old identifier is not an `/admin/`
+  URI), the seed throws before any write: that client would become admin-capable without the admin-API
+  checks. Remove the reference first. At runtime a public client never gets `aud=admin` (DEBT-172).
+- **Re-run never resets the admin**: an existing admin user keeps its password and any lock
+  (`$setOnInsert`); `fe-admin` is insert-only too (API edits / a disable survive).
+- **Recovery when no super_admin is left (DEBT-142)**: re-running re-activates the admin membership in
+  `default-tenant` and re-adds `super_admin`.
+- Fails (and stops before creating `fe-admin`) if the admin identifier is already registered under another
+  `resourceId`. Two concurrent runs could each create and print a secret — run it once, sequentially.
+
 ## Signing keys (`KEY_PROVIDER=local`, dev-only)
 
 `LocalKeyProvider` keeps PEMs + `keys.json` in `KEY_LOCAL_DIR` and refuses `NODE_ENV=production`.

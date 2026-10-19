@@ -279,7 +279,11 @@ export class TokenController {
     try {
       const response = await this.refresh.issueForRefresh(
         refreshToken,
-        { clientId: client.clientId, allowedResources: client.allowedResources },
+        {
+          clientId: client.clientId,
+          allowedResources: client.allowedResources,
+          clientType: client.clientType,
+        },
         { scope: body.get('scope'), resource: body.get('resource') },
         audit,
       );

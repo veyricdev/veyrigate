@@ -15,6 +15,7 @@ import {
 import { AuthorizationCodeService } from '../code/authorization-code.service';
 import { ConsentService } from '../consent/consent.service';
 import { SessionService } from '../../sessions/session.service';
+import { adminResourceIdentifier, adminTargetForbidden } from '../token/token.service';
 
 /** Raw `/authorize` query parameters (already string-typed by the HTTP layer). */
 export interface AuthorizeParams {
@@ -308,7 +309,12 @@ export class AuthorizeService {
       !client ||
       !isRegisteredRedirectUri(client.redirectUris, ctx.redirectUri) ||
       (ctx.resource !== undefined &&
-        (await this.resources.resolveForClient(client.allowedResources, ctx.resource)) === null)
+        (adminTargetForbidden(
+          client.clientType,
+          ctx.resource,
+          adminResourceIdentifier(this.issuer),
+        ) ||
+          (await this.resources.resolveForClient(client.allowedResources, ctx.resource)) === null))
     ) {
       return null;
     }
@@ -440,7 +446,15 @@ export class AuthorizeService {
     try {
       // Map identifier (URI) -> resourceId -> allowedResources (never compare the URI directly).
       const resource = await this.resources.resolveForClient(client.allowedResources, raw);
-      if (!resource) {
+      // DEBT-172: a public client never gets `aud=admin`, even if its config lists `admin`.
+      if (
+        !resource ||
+        adminTargetForbidden(
+          client.clientType,
+          resource.identifier,
+          adminResourceIdentifier(this.issuer),
+        )
+      ) {
         throw new AuthorizeRedirectError('invalid_target', 'Unknown or disallowed resource.');
       }
       return resource.identifier;

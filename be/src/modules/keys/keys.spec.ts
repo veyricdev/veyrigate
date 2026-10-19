@@ -668,4 +668,40 @@ describe('Keys (B1.9, INV-19)', () => {
       expect(reads).toBe(2);
     });
   });
+
+  describe('DEBT-163: init warns (kid only) about PEMs missing from keys.json, never deletes', () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('orphan.pem + valid state => exactly one WARN naming the kid, file kept; tmp files ignored', async () => {
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      await writeFile(join(dir, 'orphan.pem'), 'not-a-real-key');
+      await writeFile(join(dir, 'keys.json.leftover.tmp'), '[]');
+      await new LocalKeyProvider(dir).init();
+      expect(warn).toHaveBeenCalledTimes(1);
+      const msg = String(warn.mock.calls[0][0]);
+      expect(msg).toContain('orphan');
+      expect(msg).not.toContain(dir);
+      expect(msg).not.toContain('not-a-real-key');
+      expect(msg).not.toContain('leftover');
+      const { kid } = await provider.getSigningKey();
+      expect(msg).not.toContain(kid);
+      expect(await readdir(dir)).toContain('orphan.pem');
+    });
+
+    it('no orphan (fresh dir, and after rotations) => no WARN', async () => {
+      await provider.rotate('normal', 60);
+      await provider.rotate('emergency', 60);
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      await new LocalKeyProvider(dir).init();
+      const fresh = await mkdtemp(join(tmpdir(), 'vg-keys-fresh-'));
+      try {
+        await new LocalKeyProvider(fresh).init();
+      } finally {
+        await rm(fresh, { recursive: true, force: true });
+      }
+      expect(warn).not.toHaveBeenCalled();
+    });
+  });
 });
