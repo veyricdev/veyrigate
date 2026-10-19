@@ -229,6 +229,24 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
       expect(ctx!.redirectUri).toBe('https://app.example.com/callback');
     });
 
+    it('DEBT-189 (F1): not signed in + max_age => context still carries reauthAfter = now - max_age', async () => {
+      const ctxOf = async (extra: Record<string, string>) => {
+        const before = Date.now();
+        const outcome = await service.handle(params(extra), null);
+        if (outcome.kind !== 'login_required') throw new Error('expected login_required');
+        return { before, after: Date.now(), ctx: (await contexts.consume(outcome.requestId))! };
+      };
+      const sixty = await ctxOf({ max_age: '60' });
+      expect(sixty.ctx.reauthAfter).toBeGreaterThanOrEqual(sixty.before - 60_000);
+      expect(sixty.ctx.reauthAfter).toBeLessThanOrEqual(sixty.after - 60_000);
+      const zero = await ctxOf({ max_age: '0' });
+      expect(zero.ctx.reauthAfter).toBeGreaterThanOrEqual(zero.before);
+      // prompt=login wins over a looser max_age (max of both demands).
+      const both = await ctxOf({ max_age: '600', prompt: 'login' });
+      expect(both.ctx.reauthAfter).toBeGreaterThanOrEqual(both.before);
+      expect((await ctxOf({})).ctx.reauthAfter).toBeUndefined();
+    });
+
     it('signed in + valid, no consent => consent_required; context echoes state/nonce; request_id != state (C8)', async () => {
       const p = params({
         state: 'the-rp-state',

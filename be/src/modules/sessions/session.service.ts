@@ -34,6 +34,11 @@ export interface CreateSessionOptions {
   deviceLabel?: string;
   /** See `SessionData.amr`. Set by server code only, never from request input. */
   amr?: string[];
+  /**
+   * ms epoch of the actual authentication when it happened upstream (a federated `auth_time`,
+   * DEBT-189). Server-only; the caller clamps it to `<= now`. Default: now.
+   */
+  authTime?: number;
 }
 
 const sessKey = (ref: string): string => `sess:${ref}`;
@@ -127,7 +132,7 @@ export class SessionService {
     const data: SessionData = {
       userId,
       tenantId,
-      authTime: now,
+      authTime: opts.authTime ?? now,
       createdAt: now,
       lastSeenAt: now,
       device: opts.deviceLabel ? { label: opts.deviceLabel } : {},

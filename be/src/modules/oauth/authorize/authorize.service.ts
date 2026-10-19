@@ -213,7 +213,7 @@ export class AuthorizeService {
           scope,
           resource,
           params,
-          reauthRequired ? Date.now() : undefined,
+          this.reauthAfter(prompt.has('login'), maxAge),
         );
         await this.recordAuthorize(client, audit, session?.userId, 'login_required');
         return { kind: 'login_required', requestId };
@@ -488,6 +488,17 @@ export class AuthorizeService {
       );
     }
     return n;
+  }
+
+  /**
+   * DEBT-189 (F1): the instant a resumed session must have authenticated at/after -- the strictest
+   * of `prompt=login` (now) and `max_age` (now - max_age), with or without a current session, so an
+   * old upstream (federated) authentication can never satisfy `max_age`. undefined when neither.
+   */
+  private reauthAfter(promptLogin: boolean, maxAge: number | undefined): number | undefined {
+    if (!promptLogin && maxAge === undefined) return undefined;
+    const now = Date.now();
+    return promptLogin ? now : now - maxAge! * 1000;
   }
 
   private maxAgeExceeded(maxAge: number | undefined, session: SessionView | null): boolean {

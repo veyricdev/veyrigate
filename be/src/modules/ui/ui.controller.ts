@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Get,
@@ -17,7 +16,6 @@ import {
 } from '@nestjs/common';
 import { IsEmail, IsOptional, IsString, Length } from 'class-validator';
 import { ConfigService } from '@nestjs/config';
-import { generateToken } from '../../common/crypto/crypto.util';
 import { buildCsp, safeCspOrigin } from '../../common/http/csp';
 import type { HttpReply, HttpRequest } from '../../common/http/http.types';
 import type { AppConfig, SessionConfig } from '../../config/configuration';
@@ -36,7 +34,7 @@ import {
   FEDERATION_PROVIDERS,
   type FederationProviders,
 } from '../federation/providers';
-import { CsrfGuard, CsrfService } from './csrf.service';
+import { ANON_COOKIE, CsrfGuard, CsrfService, formCsrfIdentity } from './csrf.service';
 import { HtmlExceptionFilter } from './html-exception.filter';
 import { requestIdFromReturnTo, safeReturnTo } from './return-to';
 
@@ -71,8 +69,6 @@ class LogoutDto extends FormDto {
 
 type UiRequest = HttpRequest;
 type UiReply = HttpReply;
-
-const ANON_COOKIE = 'idp_csrf';
 
 @Controller()
 @UseFilters(HtmlExceptionFilter)
@@ -470,21 +466,8 @@ export class UiController {
     delete req.cookies?.[SESSION_COOKIE];
     return false;
   }
-  private identity(req: UiRequest, reply?: UiReply): string {
-    const session = this.sessionCookie.read(req);
-    if (session) return session;
-    let anon = req.cookies?.[ANON_COOKIE];
-    if (!anon) {
-      if (!reply) throw new BadRequestException('Invalid form submission.');
-      anon = generateToken();
-      reply.setCookie(ANON_COOKIE, anon, {
-        httpOnly: true,
-        sameSite: 'lax',
-        secure: this.secure,
-        path: '/',
-      });
-    }
-    return anon;
+  private identity(req: UiRequest, reply: UiReply): string {
+    return formCsrfIdentity(this.sessionCookie.read(req), req, reply, this.secure);
   }
   private async limit(name: string, req: UiRequest, account?: string) {
     const result = await this.rateLimit.hit(

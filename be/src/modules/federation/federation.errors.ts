@@ -19,8 +19,6 @@ export type FederationErrorCode =
   | 'reauth_required'
   /** No provider-verified email for a new account. */
   | 'email_unverified'
-  /** The verified email already belongs to a local account (no auto-link, INV-22 / B5.3). */
-  | 'email_conflict'
   /** Account locked (admin or brute-force). */
   | 'account_locked'
   /** Lost a provisioning race and could not recover; the user may simply retry. */

@@ -146,19 +146,19 @@ describe('Google ID token verification (B5.1, F3)', () => {
     );
     await expect(
       verifyGoogleIdToken(p, fresh, { nonce: NONCE, reauthSince: since }),
-    ).resolves.toBeTruthy();
+    ).resolves.toMatchObject({ authTime: Math.floor(since / 1000) });
+    expect(await verifyGoogleIdToken(p, none, { nonce: NONCE })).not.toHaveProperty('authTime');
   });
 });
 
 describe('authorize URL (B5.1)', () => {
-  it('Google: PKCE S256 + nonce, max_age=0 only on reauth; base is the hard-coded endpoint', async () => {
+  it('Google: PKCE S256 + nonce, max_age only with reauthAfter (seconds since it); base is the hard-coded endpoint', async () => {
     const { jwks } = await keySet();
     const leg = {
       state: 's',
       nonce: 'n',
       codeChallenge: 'c',
       redirectUri: 'http://localhost:4000/auth/google/callback',
-      reauth: false,
     };
     const plain = new URL(buildAuthorizeUrl(google(jwks), leg));
     expect(plain.origin + plain.pathname).toBe(GOOGLE.authorizeUrl);
@@ -172,8 +172,17 @@ describe('authorize URL (B5.1)', () => {
       code_challenge_method: 'S256',
       nonce: 'n',
     });
-    const reauth = new URL(buildAuthorizeUrl(google(jwks), { ...leg, reauth: true }));
+    const reauth = new URL(buildAuthorizeUrl(google(jwks), { ...leg, reauthAfter: Date.now() }));
     expect(reauth.searchParams.get('max_age')).toBe('0');
+    // DEBT-189 (F2): max_age = whole seconds elapsed since the demand, never negative.
+    const sixty = new URL(
+      buildAuthorizeUrl(google(jwks), { ...leg, reauthAfter: Date.now() - 60_000 }),
+    );
+    expect(['60', '61']).toContain(sixty.searchParams.get('max_age'));
+    const future = new URL(
+      buildAuthorizeUrl(google(jwks), { ...leg, reauthAfter: Date.now() + 60_000 }),
+    );
+    expect(future.searchParams.get('max_age')).toBe('0');
   });
 
   it('GitHub: no nonce/max_age, scopes read:user user:email', () => {
@@ -183,7 +192,7 @@ describe('authorize URL (B5.1)', () => {
         nonce: 'n',
         codeChallenge: 'c',
         redirectUri: 'r',
-        reauth: true,
+        reauthAfter: Date.now(),
       }),
     );
     expect(url.origin + url.pathname).toBe(GITHUB.authorizeUrl);

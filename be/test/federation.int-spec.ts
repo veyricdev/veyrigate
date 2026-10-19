@@ -8,7 +8,14 @@ import { Test, type TestingModule } from '@nestjs/testing';
 import { jest } from '@jest/globals';
 import { Eta } from 'eta';
 import IORedis from 'ioredis';
-import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT, type JWK } from 'jose';
+import {
+  createLocalJWKSet,
+  createRemoteJWKSet,
+  exportJWK,
+  generateKeyPair,
+  SignJWT,
+  type JWK,
+} from 'jose';
 import type { Model } from 'mongoose';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -45,7 +52,7 @@ import { KEY_PROVIDER } from '../src/modules/keys/key-provider';
 import { LocalKeyProvider } from '../src/modules/keys/local-key-provider';
 import { TokenSigner } from '../src/modules/keys/token-signer';
 import { TokenVerifier } from '../src/modules/keys/token-verifier';
-import { MAILER } from '../src/modules/mailer/mailer';
+import { MAILER, type MailMessage } from '../src/modules/mailer/mailer';
 import { AuthorizeController } from '../src/modules/oauth/authorize/authorize.controller';
 import { AuthorizeRequestContextService } from '../src/modules/oauth/authorize/authorize-request-context.service';
 import { AuthorizeService } from '../src/modules/oauth/authorize/authorize.service';
@@ -115,12 +122,15 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
   let utModel: Model<Record<string, unknown>>;
   let auditModel: Model<Record<string, unknown>>;
 
+  const mails: MailMessage[] = [];
+
   // --- mock provider state ---
   const grants = new Map<string, Grant>();
   const ghTokens = new Map<string, NonNullable<Grant['gh']>>();
   const mock = {
     tokenStatus: 200,
     tokenDelayMs: 0,
+    tokenPad: 0,
     ghTokenBody: undefined as unknown,
     issuedSecrets: [] as string[],
     // Tester (run 32): raw response override per path (3xx, oversized body); hits for leak checks.
@@ -204,7 +214,14 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       }
       const idToken = await signGoogle(grant, (grant.claims?.sub as string) ?? code);
       mock.issuedSecrets.push(idToken);
-      return [200, { access_token: G_ACCESS, id_token: idToken }];
+      return [
+        200,
+        {
+          access_token: G_ACCESS,
+          id_token: idToken,
+          ...(mock.tokenPad ? { pad: 'p'.repeat(mock.tokenPad) } : {}),
+        },
+      ];
     }
     const gh = ghTokens.get((auth ?? '').replace(/^Bearer /, ''));
     if (!gh) return [401, { message: 'Bad credentials' }];
@@ -446,7 +463,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
           inject: [ConfigService],
           useFactory: () => buildFederationProviders({}),
         },
-        { provide: MAILER, useValue: { send: async () => undefined } },
+        { provide: MAILER, useValue: { send: async (m: MailMessage) => void mails.push(m) } },
         { provide: KEY_PROVIDER, useValue: keyProvider },
         { provide: RedisService, useValue: new RedisService(redis) },
         { provide: ConfigService, useValue: cfg },
@@ -498,7 +515,14 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
 
   afterAll(async () => {
     if (redis) {
-      for (const p of ['authz_ctx:*', 'authz_code:*', 'fed_state:*', 'sess_rp:*', 'rl:*']) {
+      for (const p of [
+        'authz_ctx:*',
+        'authz_code:*',
+        'fed_state:*',
+        'fed_link:*',
+        'sess_rp:*',
+        'rl:*',
+      ]) {
         const keys = await redis.keys(p);
         if (keys.length) await redis.del(...keys);
       }
@@ -520,6 +544,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
   afterEach(() => {
     mock.tokenStatus = 200;
     mock.tokenDelayMs = 0;
+    mock.tokenPad = 0;
     mock.ghTokenBody = undefined;
     mock.raw = undefined;
     mock.hits = [];
@@ -892,24 +917,19 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       ).toBe(1);
     });
 
-    it('verified email already used by a local account => 409, 0 new User, 0 FI (no auto-link)', async () => {
+    it('verified email already used by a local account => 302 /auth/link (pending), 0 new User, 0 FI, no session (no auto-link)', async () => {
       const email = `${RUN}-taken@example.com`;
       const local = await users.create({ email, password: 'some local password' });
       const sub = `${RUN}-taken`;
       const { res } = await socialLogin('google', (await rpAuthorize()).requestId, {
         claims: { sub, email },
       });
-      expect(res.statusCode).toBe(409);
-      expectNoSession(res);
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toBe('/auth/link');
+      expect(cookieOf(res, SESSION_COOKIE)).toBeUndefined();
       expect(await userModel.countDocuments({ email })).toBe(1);
       expect(await fiModel.countDocuments({ providerId: sub })).toBe(0);
       expect(await fiModel.countDocuments({ userId: local.sub })).toBe(0);
-      expect(
-        await auditModel.countDocuments({
-          action: 'AUTH_LOGIN_FAILED',
-          reason: 'federated_email_conflict',
-        }),
-      ).toBeGreaterThanOrEqual(1);
     });
 
     it.each([
@@ -962,17 +982,18 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       );
       expect(await utModel.countDocuments({ userId: fis[0].userId })).toBe(1);
       for (const res of results) {
-        if (res.statusCode === 302) {
+        if (res.statusCode === 302 && res.headers.location !== '/auth/link') {
           const live = await sessions.get(cookieOf(res, SESSION_COOKIE)!.value);
           expect(live?.userId).toBe(winner);
         } else {
           // Loser: "please retry" (503), or — while the winner's user exists but is not linked
-          // yet — the safe email-conflict stop (409). Either way nothing is linked or created.
-          expect([503, 409]).toContain(res.statusCode);
-          expectNoSession(res);
+          // yet — a pending link (302 /auth/link, B5.3). Either way nothing is linked or created.
+          if (res.statusCode === 302) expect(res.headers.location).toBe('/auth/link');
+          else expect(res.statusCode).toBe(503);
+          expect(cookieOf(res, SESSION_COOKIE)).toBeUndefined();
         }
       }
-      expect(results.some((r) => r.statusCode === 302)).toBe(true);
+      expect(results.some((r) => cookieOf(r, SESSION_COOKIE) !== undefined)).toBe(true);
     }
 
     it('race: 2 parallel callbacks of the same identity x10 => exactly 1 User, 1 FI, 1 membership', async () => {
@@ -1032,6 +1053,99 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       );
       expect(rp.searchParams.get('code')).toBeTruthy();
       expect(rp.searchParams.get('state')).toBe(RP_STATE);
+    });
+
+    // ---- run 33 T1 (DEBT-189, F1-F4): max_age without an IdP session
+    const nowSec = () => Math.floor(Date.now() / 1000);
+
+    it('max_age=60, no session: start sends max_age~60; auth_time=now-3600 => reauth_required page, no session', async () => {
+      const { requestId } = await rpAuthorize({ max_age: '60' });
+      const s = await start('google', requestId);
+      const sent = Number(s.location!.searchParams.get('max_age'));
+      expect(sent).toBeGreaterThanOrEqual(60);
+      expect(sent).toBeLessThanOrEqual(62);
+      const stale = grant('google', s.location!, {
+        claims: { sub: `${RUN}-ma-stale`, auth_time: nowSec() - 3600 },
+      });
+      const res = await callback('google', stale, { idp_fed: s.fed! });
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toContain('requires a fresh sign-in');
+      expectNoSession(res);
+      expect(await fiModel.countDocuments({ providerId: `${RUN}-ma-stale` })).toBe(0);
+    });
+
+    it('max_age=60, no session: auth_time=now-10 => code; ID token auth_time = provider auth_time (not callback time)', async () => {
+      const { requestId } = await rpAuthorize({ max_age: '60' });
+      const s = await start('google', requestId);
+      const authTime = nowSec() - 10;
+      const g = grant('google', s.location!, {
+        claims: { sub: `${RUN}-ma-fresh`, auth_time: authTime },
+      });
+      const cb = await callback('google', g, { idp_fed: s.fed! });
+      expect(cb.statusCode).toBe(302);
+      const sid = cookieOf(cb, SESSION_COOKIE)!.value;
+      expect(Math.abs((await sessions.get(sid))!.authTime - authTime * 1000)).toBeLessThanOrEqual(
+        1000,
+      );
+      const idToken = await exchange(await resumeToRp(cb.headers.location as string, sid));
+      expect(Math.abs((idToken.auth_time as number) - authTime)).toBeLessThanOrEqual(1);
+    });
+
+    it('auth_time inside the 60s skew before reauthAfter => accepted and clamped up, so resume still issues a code (F3)', async () => {
+      const { requestId } = await rpAuthorize({ max_age: '60' });
+      const ctx = (await contexts.peek(requestId))!;
+      const s = await start('google', requestId);
+      // 30s older than the demand: within skew, so Google's answer is accepted...
+      const authTime = Math.floor((ctx.reauthAfter! - 30_000) / 1000);
+      const g = grant('google', s.location!, {
+        claims: { sub: `${RUN}-ma-skew`, auth_time: authTime },
+      });
+      const cb = await callback('google', g, { idp_fed: s.fed! });
+      expect(cb.statusCode).toBe(302);
+      const sid = cookieOf(cb, SESSION_COOKIE)!.value;
+      // ...and the session is clamped to reauthAfter, never earlier (else resume => login_required).
+      expect((await sessions.get(sid))!.authTime).toBe(ctx.reauthAfter);
+      const rp = await resumeToRp(cb.headers.location as string, sid);
+      expect(rp.searchParams.get('code')).toBeTruthy();
+      expect(rp.searchParams.get('error')).toBeNull();
+    });
+
+    it('a future auth_time is clamped down to now (never later than the callback)', async () => {
+      const { requestId } = await rpAuthorize({ max_age: '60' });
+      const s = await start('google', requestId);
+      const g = grant('google', s.location!, {
+        claims: { sub: `${RUN}-ma-future`, auth_time: nowSec() + 30 },
+      });
+      const before = Date.now();
+      const cb = await callback('google', g, { idp_fed: s.fed! });
+      expect(cb.statusCode).toBe(302);
+      const live = (await sessions.get(cookieOf(cb, SESSION_COOKIE)!.value))!;
+      expect(live.authTime).toBeLessThanOrEqual(Date.now());
+      expect(live.authTime).toBeGreaterThanOrEqual(before);
+    });
+
+    it('max_age without session: GitHub hidden on the login page and its start => 400 reauth_required', async () => {
+      const { requestId, returnTo } = await rpAuthorize({ max_age: '3600' });
+      const page = await loginPage(returnTo);
+      expect(page.body).toContain('/auth/google/start');
+      expect(page.body).not.toContain('/auth/github/start');
+      const s = await start('github', requestId);
+      expect(s.res.statusCode).toBe(400);
+      expect(s.res.body).toContain('requires a fresh sign-in');
+      expect(s.res.headers.location).toBeUndefined();
+    });
+
+    it('no max_age / prompt: Google without auth_time still signs in (session authTime = now)', async () => {
+      const { requestId } = await rpAuthorize();
+      const s = await start('google', requestId);
+      expect(s.location!.searchParams.has('max_age')).toBe(false);
+      const before = Date.now();
+      const g = grant('google', s.location!, { claims: { sub: `${RUN}-ma-none` } });
+      const cb = await callback('google', g, { idp_fed: s.fed! });
+      expect(cb.statusCode).toBe(302);
+      expect(
+        (await sessions.get(cookieOf(cb, SESSION_COOKIE)!.value))!.authTime,
+      ).toBeGreaterThanOrEqual(before);
     });
   });
 
@@ -1105,6 +1219,672 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       expect(secrets.length).toBeGreaterThan(6);
       for (const secret of secrets) {
         for (const h of haystacks) expect(h.includes(secret)).toBe(false);
+      }
+    });
+  });
+
+  // ------------------------------------------------------------------ run 33 T2 (B5.3, F5-F14)
+  describe('account linking (B5.3, INV-22)', () => {
+    const PASSWORD = 'local password 123';
+    let seq = 0;
+
+    /** A local account; `password: null` => federated-only (no passwordHash). */
+    async function localUser(
+      opts: { password?: string | null; verified?: boolean; lockedUntil?: Date } = {},
+    ) {
+      const email = `${RUN}-link-${++seq}@example.com`;
+      const password = opts.password === undefined ? PASSWORD : opts.password;
+      const user = await users.create(
+        password === null ? { email, emailVerifiedAt: new Date() } : { email, password },
+      );
+      if (password !== null && opts.verified !== false) await users.verifyEmail(user.sub);
+      await moduleRef.get(UserTenantService).addMembership(user.sub, DEFAULT_TENANT_ID);
+      if (opts.lockedUntil) await users.updateStatus(user.sub, { lockedUntil: opts.lockedUntil });
+      return { ...user, email };
+    }
+
+    /** RP -> Google leg with the local email -> pending link. */
+    async function linkLeg(email: string, extra: Record<string, string> = {}) {
+      const sub = `${RUN}-lk-${generateToken(6)}`;
+      const { requestId } = await rpAuthorize(extra);
+      const leg = await socialLogin('google', requestId, {
+        claims: { sub, email, auth_time: Math.floor(Date.now() / 1000) },
+      });
+      expect(leg.res.statusCode).toBe(302);
+      expect(leg.res.headers.location).toBe('/auth/link');
+      expect(cookieOf(leg.res, SESSION_COOKIE)).toBeUndefined();
+      const link = cookieOf(leg.res, 'idp_link')!;
+      return { sub, requestId, fed: leg.fed, link: link.value, linkCookie: link, res: leg.res };
+    }
+
+    const linkPage = (cookies: Record<string, string>) =>
+      app.inject({ method: 'GET', url: '/auth/link', cookies });
+
+    /** GET the page (for _csrf + idp_csrf), then POST the password. */
+    async function submitLink(
+      leg: { link: string; fed: string },
+      password: string,
+      over: { cookies?: Record<string, string>; payload?: Record<string, string> } = {},
+    ) {
+      const page = await linkPage({ idp_link: leg.link, idp_fed: leg.fed });
+      expect(page.statusCode).toBe(200);
+      const csrf = page.body.match(/name="_csrf" value="([^"]+)"/)![1];
+      return app.inject({
+        method: 'POST',
+        url: '/auth/link',
+        cookies: {
+          idp_link: leg.link,
+          idp_fed: leg.fed,
+          idp_csrf: cookieOf(page, 'idp_csrf')!.value,
+          ...over.cookies,
+        },
+        payload: { _csrf: csrf, password, ...over.payload },
+      });
+    }
+
+    const linkedAudits = (userId: string) =>
+      auditModel.countDocuments({ action: 'ACCOUNT_LINKED', targetId: userId });
+
+    /** Nothing linked for this provider identity / account. */
+    async function expectNotLinked(sub: string, userId: string) {
+      expect(await fiModel.countDocuments({ providerId: sub })).toBe(0);
+      expect(await fiModel.countDocuments({ userId })).toBe(0);
+      expect(await linkedAudits(userId)).toBe(0);
+    }
+
+    const expectFailedPage = (res: Res) => {
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toContain('The account could not be linked. Please sign in again.');
+      expect(cookieOf(res, SESSION_COOKIE)).toBeUndefined();
+      expect(res.headers.location).toBeUndefined();
+    };
+
+    it('(a) happy path: password of THAT account => FI, ACCOUNT_LINKED, resume => code => ID token sub = local user; next social login goes straight in', async () => {
+      const local = await localUser();
+      const leg = await linkLeg(local.email);
+      // F6: the token lives only in an HttpOnly cookie scoped to /auth/ — never in URL/HTML.
+      expect(leg.linkCookie).toMatchObject({
+        httpOnly: true,
+        sameSite: 'Lax',
+        path: '/auth/',
+        maxAge: 600,
+      });
+      expect(leg.res.headers.location).not.toContain(leg.link);
+      expect(await fiModel.countDocuments({ providerId: leg.sub })).toBe(0);
+
+      const page = await linkPage({ idp_link: leg.link, idp_fed: leg.fed });
+      expect(page.statusCode).toBe(200);
+      expect(page.headers['cache-control']).toBe('no-store');
+      expect(page.headers['content-security-policy']).toBe(
+        buildCsp({ formAction: ['https://rp.example.com'] }),
+      );
+      expect(page.body).toContain(local.email);
+      expect(page.body).toContain('Google');
+      expect(page.body).not.toContain(leg.link);
+      expect(page.body).not.toContain(leg.sub);
+      expect(page.body).not.toMatch(/name="email"/);
+      expect(page.body).toContain(
+        `href="${`/login?returnTo=${encodeURIComponent(`/authorize?request_id=${leg.requestId}`)}`}"`,
+      );
+
+      const res = await submitLink(leg, PASSWORD);
+      expect(res.statusCode).toBe(302);
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.headers.location).toBe(
+        `/authorize?request_id=${encodeURIComponent(leg.requestId)}`,
+      );
+      expect(cookieOf(res, 'idp_link')).toMatchObject({ value: '', path: '/auth/' });
+      const sid = cookieOf(res, SESSION_COOKIE)!.value;
+      const live = (await sessions.get(sid))!;
+      expect(live.userId).toBe(local.sub);
+      expect(live.amr).toEqual(['pwd']);
+
+      const fi = await fiModel.findOne({ provider: 'google', providerId: leg.sub }).lean();
+      expect(String(fi?.userId)).toBe(local.sub);
+      expect(fi).toMatchObject({ email: local.email, emailVerified: true });
+      const audit = await auditModel
+        .findOne({ action: 'ACCOUNT_LINKED', targetId: local.sub })
+        .lean();
+      expect(audit).toMatchObject({
+        actorType: 'user',
+        actorId: local.sub,
+        targetType: 'user',
+        result: 'success',
+        metadata: { provider: 'google' },
+      });
+      expect(JSON.stringify(audit)).not.toContain(leg.sub);
+      expect(JSON.stringify(audit)).not.toContain(local.email);
+
+      const idToken = await exchange(await resumeToRp(res.headers.location as string, sid));
+      expect(idToken.sub).toBe(local.sub);
+      expect(idToken.amr).toEqual(['pwd']);
+
+      const again = await socialLogin('google', (await rpAuthorize()).requestId, {
+        claims: { sub: leg.sub, email: local.email },
+      });
+      expect(again.res.statusCode).toBe(302);
+      expect(again.res.headers.location).toMatch(/^\/authorize\?request_id=/);
+      expect((await sessions.get(cookieOf(again.res, SESSION_COOKIE)!.value))!.userId).toBe(
+        local.sub,
+      );
+    });
+
+    it('(b) wrong password => generic page, no FI/audit/session; the pending link is burnt (the right password afterwards also fails)', async () => {
+      const local = await localUser();
+      const leg = await linkLeg(local.email);
+      const bad = await submitLink(leg, 'not the password');
+      expectFailedPage(bad);
+      expect(bad.body).toContain(
+        `/login?returnTo=${encodeURIComponent(`/authorize?request_id=${leg.requestId}`)}`.replace(
+          /&/g,
+          '&amp;',
+        ),
+      );
+      expect(await contexts.peek(leg.requestId)).not.toBeNull();
+      expect((await linkPage({ idp_link: leg.link, idp_fed: leg.fed })).statusCode).toBe(400);
+      expect((await users.findById(local.sub))?.failedLoginCount).toBe(1);
+      await expectNotLinked(leg.sub, local.sub);
+    });
+
+    it.each([
+      ['admin lock', () => ADMIN_LOCKED_UNTIL],
+      ['brute-force lock', () => new Date(Date.now() + 10 * 60_000)],
+    ])('(c) %s with the CORRECT password => generic page, not linked', async (_n, until) => {
+      const local = await localUser({ lockedUntil: until() });
+      const leg = await linkLeg(local.email);
+      expectFailedPage(await submitLink(leg, PASSWORD));
+      await expectNotLinked(leg.sub, local.sub);
+    });
+
+    it('(d) federated-only account (no password) => generic page, not linked', async () => {
+      const local = await localUser({ password: null });
+      const leg = await linkLeg(local.email);
+      expectFailedPage(await submitLink(leg, PASSWORD));
+      await expectNotLinked(leg.sub, local.sub);
+    });
+
+    it('(e) unverified local account (pre-hijack) with the CORRECT password => generic page, never linked', async () => {
+      const local = await localUser({ verified: false });
+      const leg = await linkLeg(local.email);
+      expectFailedPage(await submitLink(leg, PASSWORD));
+      await expectNotLinked(leg.sub, local.sub);
+    });
+
+    it('F11: link page and failure page are byte-identical for password / federated-only / locked / unverified targets', async () => {
+      const targets = [
+        await localUser(),
+        await localUser({ password: null }),
+        await localUser({ lockedUntil: ADMIN_LOCKED_UNTIL }),
+        await localUser({ verified: false }),
+      ];
+      const pages: string[] = [];
+      const fails: string[] = [];
+      const statuses = new Set<number>();
+      for (const t of targets) {
+        const leg = await linkLeg(t.email);
+        const norm = (body: string) =>
+          body
+            .replace(/name="_csrf" value="[^"]+"/, '')
+            .split(t.email)
+            .join('<email>')
+            .split(encodeURIComponent(leg.requestId))
+            .join('<rid>')
+            .split(leg.requestId)
+            .join('<rid>');
+        const page = await linkPage({ idp_link: leg.link, idp_fed: leg.fed });
+        pages.push(norm(page.body));
+        const res = await submitLink(leg, 'an attacker guess 1');
+        statuses.add(res.statusCode);
+        fails.push(norm(res.body));
+        await expectNotLinked(leg.sub, t.sub);
+      }
+      expect(new Set(pages).size).toBe(1);
+      expect(new Set(fails).size).toBe(1);
+      expect([...statuses]).toEqual([400]);
+    });
+
+    it('(f) replay of POST /auth/link after success => generic page, still exactly 1 FI and 1 audit', async () => {
+      const local = await localUser();
+      const leg = await linkLeg(local.email);
+      expect((await submitLink(leg, PASSWORD)).statusCode).toBe(302);
+      const page = await linkPage({ idp_link: leg.link, idp_fed: leg.fed });
+      expect(page.statusCode).toBe(400);
+      const replay = await app.inject({
+        method: 'POST',
+        url: '/auth/link',
+        cookies: { idp_link: leg.link, idp_fed: leg.fed, idp_csrf: 'x' },
+        payload: { _csrf: (await moduleRef.get(CsrfService)).token('x'), password: PASSWORD },
+      });
+      expectFailedPage(replay);
+      expect(await fiModel.countDocuments({ userId: local.sub })).toBe(1);
+      expect(await linkedAudits(local.sub)).toBe(1);
+    });
+
+    it('(g) foreign or missing idp_fed => GET 400; POST generic page and the pending link is consumed', async () => {
+      const local = await localUser();
+      const leg = await linkLeg(local.email);
+      expect((await linkPage({ idp_link: leg.link, idp_fed: generateToken() })).statusCode).toBe(
+        400,
+      );
+      expect((await linkPage({ idp_link: leg.link })).statusCode).toBe(400);
+      const foreign = await submitLink(leg, PASSWORD, { cookies: { idp_fed: generateToken() } });
+      expectFailedPage(foreign);
+      expect(await redis.exists(`fed_link:${sha256(leg.link)}`)).toBe(0);
+      expect((await linkPage({ idp_link: leg.link, idp_fed: leg.fed })).statusCode).toBe(400);
+      await expectNotLinked(leg.sub, local.sub);
+
+      const leg2 = await linkLeg(local.email);
+      const page = await linkPage({ idp_link: leg2.link, idp_fed: leg2.fed });
+      const csrf = page.body.match(/name="_csrf" value="([^"]+)"/)![1];
+      const missing = await app.inject({
+        method: 'POST',
+        url: '/auth/link',
+        cookies: { idp_link: leg2.link, idp_csrf: cookieOf(page, 'idp_csrf')!.value },
+        payload: { _csrf: csrf, password: PASSWORD },
+      });
+      expectFailedPage(missing);
+      await expectNotLinked(leg2.sub, local.sub);
+    });
+
+    it('(h) missing or wrong _csrf => 403, nothing consumed or linked', async () => {
+      const local = await localUser();
+      const leg = await linkLeg(local.email);
+      for (const payload of [{ password: PASSWORD }, { password: PASSWORD, _csrf: 'forged' }]) {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/auth/link',
+          cookies: { idp_link: leg.link, idp_fed: leg.fed, idp_csrf: generateToken() },
+          payload,
+        });
+        expect(res.statusCode).toBe(403);
+        expect(cookieOf(res, SESSION_COOKIE)).toBeUndefined();
+      }
+      await expectNotLinked(leg.sub, local.sub);
+      expect(await redis.exists(`fed_link:${sha256(leg.link)}`)).toBe(1);
+    });
+
+    it('(i) expired pending link => GET 400 and POST generic page, not linked', async () => {
+      const local = await localUser();
+      const leg = await linkLeg(local.email);
+      const page = await linkPage({ idp_link: leg.link, idp_fed: leg.fed });
+      const csrf = page.body.match(/name="_csrf" value="([^"]+)"/)![1];
+      expect(await redis.del(`fed_link:${sha256(leg.link)}`)).toBe(1); // TTL elapsed
+      expect((await linkPage({ idp_link: leg.link, idp_fed: leg.fed })).statusCode).toBe(400);
+      const res = await app.inject({
+        method: 'POST',
+        url: '/auth/link',
+        cookies: {
+          idp_link: leg.link,
+          idp_fed: leg.fed,
+          idp_csrf: cookieOf(page, 'idp_csrf')!.value,
+        },
+        payload: { _csrf: csrf, password: PASSWORD },
+      });
+      expectFailedPage(res);
+      await expectNotLinked(leg.sub, local.sub);
+    });
+
+    it('(j) email changed between callback and POST => not linked (old email no longer signs in; a new owner of it is a different user)', async () => {
+      const local = await localUser();
+      const leg = await linkLeg(local.email);
+      await users.changeEmail(local.sub, `${RUN}-moved-${seq}@example.com`);
+      expectFailedPage(await submitLink(leg, PASSWORD));
+      await expectNotLinked(leg.sub, local.sub);
+
+      // The email now belongs to someone else who knows their own password: signed in as THEM,
+      // but the identity is never attached to either account (user mismatch).
+      const victim = await localUser();
+      const leg2 = await linkLeg(victim.email);
+      await users.changeEmail(victim.sub, `${RUN}-moved2-${seq}@example.com`);
+      const other = await users.create({ email: victim.email, password: 'other password 456' });
+      await users.verifyEmail(other.sub);
+      const res = await submitLink(leg2, 'other password 456');
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toContain('could not be linked');
+      expect((await sessions.get(cookieOf(res, SESSION_COOKIE)!.value))!.userId).toBe(other.sub);
+      await expectNotLinked(leg2.sub, victim.sub);
+      await expectNotLinked(leg2.sub, other.sub);
+    });
+
+    it('(k) provider email NOT verified + email of a local account => email_unverified, no pending link', async () => {
+      const local = await localUser();
+      const { res } = await socialLogin('google', (await rpAuthorize()).requestId, {
+        claims: { sub: `${RUN}-lk-unv`, email: local.email, email_verified: false },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toContain('verified email address is required');
+      expect(cookieOf(res, 'idp_link')).toBeUndefined();
+      expectNoSession(res);
+      await expectNotLinked(`${RUN}-lk-unv`, local.sub);
+    });
+
+    it('(l) prompt=login context: linking with the password satisfies the re-auth demand => code', async () => {
+      const local = await localUser();
+      const leg = await linkLeg(local.email, { prompt: 'login' });
+      const res = await submitLink(leg, PASSWORD);
+      expect(res.statusCode).toBe(302);
+      const rp = await resumeToRp(
+        res.headers.location as string,
+        cookieOf(res, SESSION_COOKIE)!.value,
+      );
+      expect(rp.searchParams.get('code')).toBeTruthy();
+      expect(rp.searchParams.get('error')).toBeNull();
+    });
+
+    it('(m) two parallel POSTs of the same pending link => exactly one links', async () => {
+      const local = await localUser();
+      const leg = await linkLeg(local.email);
+      const page = await linkPage({ idp_link: leg.link, idp_fed: leg.fed });
+      const csrf = page.body.match(/name="_csrf" value="([^"]+)"/)![1];
+      const post = () =>
+        app.inject({
+          method: 'POST',
+          url: '/auth/link',
+          cookies: {
+            idp_link: leg.link,
+            idp_fed: leg.fed,
+            idp_csrf: cookieOf(page, 'idp_csrf')!.value,
+          },
+          payload: { _csrf: csrf, password: PASSWORD },
+        });
+      const results = await Promise.all([post(), post(), post()]);
+      expect(results.filter((r) => r.statusCode === 302)).toHaveLength(1);
+      expect(await fiModel.countDocuments({ userId: local.sub })).toBe(1);
+      expect(await linkedAudits(local.sub)).toBe(1);
+    });
+
+    it('the email is never taken from the form: an extra `email` field is rejected, nothing linked', async () => {
+      const victim = await localUser();
+      const attacker = await localUser();
+      const leg = await linkLeg(victim.email);
+      const res = await submitLink(leg, PASSWORD, { payload: { email: attacker.email } });
+      expect(res.statusCode).toBe(400);
+      expect(cookieOf(res, SESSION_COOKIE)).toBeUndefined();
+      await expectNotLinked(leg.sub, victim.sub);
+      await expectNotLinked(leg.sub, attacker.sub);
+    });
+
+    it('Redis failure creating the pending link => 500 first-party, no cookie, nothing linked (fail-closed)', async () => {
+      const local = await localUser();
+      jest
+        .spyOn(FederationStateStore.prototype, 'createLink')
+        .mockRejectedValueOnce(new Error('redis down'));
+      const { res } = await socialLogin('google', (await rpAuthorize()).requestId, {
+        claims: { sub: `${RUN}-lk-redis`, email: local.email },
+      });
+      expect(res.statusCode).toBe(500);
+      expect(res.body).not.toContain('redis down');
+      expect(cookieOf(res, 'idp_link')).toBeUndefined();
+      expectNoSession(res);
+      await expectNotLinked(`${RUN}-lk-redis`, local.sub);
+    });
+
+    it('F12: link failures log fixed codes only (no email, providerId, token)', async () => {
+      const logged: string[] = [];
+      for (const level of ['log', 'warn', 'error', 'debug', 'verbose'] as const) {
+        jest.spyOn(Logger.prototype, level).mockImplementation((...args: unknown[]) => {
+          logged.push(JSON.stringify(args));
+        });
+      }
+      const local = await localUser();
+      const leg = await linkLeg(local.email);
+      expectFailedPage(await submitLink(leg, 'not the password'));
+      expect(logged.some((l) => l.includes('federation link failed: credentials'))).toBe(true);
+      for (const secret of [local.email, leg.sub, leg.link, leg.fed]) {
+        for (const l of logged) expect(l.includes(secret)).toBe(false);
+      }
+    });
+
+    // ---- tester (run 33): risk-matrix additions (abuse linking, max_age local + federation)
+    const nowS = () => Math.floor(Date.now() / 1000);
+
+    it('T33-1 max_age=60 context: linking with the password satisfies max_age => code; ID token auth_time = link time', async () => {
+      const local = await localUser();
+      const leg = await linkLeg(local.email, { max_age: '60' });
+      const before = nowS();
+      const res = await submitLink(leg, PASSWORD);
+      expect(res.statusCode).toBe(302);
+      const sid = cookieOf(res, SESSION_COOKIE)!.value;
+      const rp = await resumeToRp(res.headers.location as string, sid);
+      expect(rp.searchParams.get('error')).toBeNull();
+      const idToken = await exchange(rp);
+      expect(idToken.sub).toBe(local.sub);
+      expect(idToken.auth_time as number).toBeGreaterThanOrEqual(before - 1);
+    });
+
+    it('T33-2 local login (no federation): max_age=60 without session => code; a session older than max_age cannot resume (login_required, no code)', async () => {
+      const local = await localUser();
+      const { returnTo } = await rpAuthorize({ max_age: '60' });
+      const page = await loginPage(returnTo);
+      const csrf = page.body.match(/name="_csrf" value="([^"]+)"/)![1];
+      const before = nowS();
+      const res = await app.inject({
+        method: 'POST',
+        url: '/login',
+        cookies: { idp_csrf: cookieOf(page, 'idp_csrf')!.value },
+        payload: { _csrf: csrf, email: local.email, password: PASSWORD, returnTo },
+      });
+      expect(res.statusCode).toBe(302);
+      const sid = cookieOf(res, SESSION_COOKIE)!.value;
+      const rp = await resumeToRp(res.headers.location as string, sid);
+      expect(rp.searchParams.get('error')).toBeNull();
+      const idToken = await exchange(rp);
+      expect(idToken.sub).toBe(local.sub);
+      expect(idToken.auth_time as number).toBeGreaterThanOrEqual(before - 1);
+
+      // A session authenticated 1 h ago: /authorize?max_age=60 sends it to /login...
+      const stale = await sessions.create(local.sub, DEFAULT_TENANT_ID, {
+        amr: ['pwd'],
+        authTime: Date.now() - 3_600_000,
+      });
+      const { requestId } = await rpAuthorize({ max_age: '60' }, stale.id);
+      // ...and replaying the context with that stale session is refused to the RP (no code).
+      const direct = await app.inject({
+        method: 'GET',
+        url: `/authorize?request_id=${encodeURIComponent(requestId)}`,
+        cookies: { [SESSION_COOKIE]: stale.id },
+      });
+      expect(direct.statusCode).toBe(302);
+      const loc = new URL(direct.headers.location as string);
+      expect(loc.searchParams.get('error')).toBe('login_required');
+      expect(loc.searchParams.get('code')).toBeNull();
+    });
+
+    it('T33-3 POST /auth/link shares the REAL `login` account bucket with /login (pending email): exhausted => 429 on both, the pending link is NOT consumed', async () => {
+      const local = await localUser();
+      const leg = await linkLeg(local.email);
+      const key = `rl:login:account:${sha256(local.email.trim().toLowerCase())}`;
+      await redis.set(key, '999999', 'PX', 60_000);
+      try {
+        const blocked = await submitLink(leg, PASSWORD);
+        expect(blocked.statusCode).toBe(429);
+        expect(cookieOf(blocked, SESSION_COOKIE)).toBeUndefined();
+        // Same bucket as the password form: /login for that email is throttled too.
+        const { returnTo } = await rpAuthorize();
+        const page = await loginPage(returnTo);
+        const csrf = page.body.match(/name="_csrf" value="([^"]+)"/)![1];
+        const viaLogin = await app.inject({
+          method: 'POST',
+          url: '/login',
+          cookies: { idp_csrf: cookieOf(page, 'idp_csrf')!.value },
+          payload: { _csrf: csrf, email: local.email, password: PASSWORD, returnTo },
+        });
+        expect(viaLogin.statusCode).toBe(429);
+        await expectNotLinked(leg.sub, local.sub);
+        expect((await users.findById(local.sub))?.failedLoginCount ?? 0).toBe(0);
+      } finally {
+        await redis.del(key);
+      }
+      // 429 happened before consume: the same pending link still completes afterwards.
+      expect((await submitLink(leg, PASSWORD)).statusCode).toBe(302);
+      expect(await fiModel.countDocuments({ providerId: leg.sub, userId: local.sub })).toBe(1);
+    });
+
+    it('T33-4 one provider identity, two pending links (email changed at the provider): first completed wins; the second => signed in but NOT linked, 1 FI, no audit', async () => {
+      const a = await localUser();
+      const b = await localUser();
+      const sub = `${RUN}-dup-${generateToken(6)}`;
+      const legFor = async (email: string) => {
+        const { requestId } = await rpAuthorize();
+        const l = await socialLogin('google', requestId, {
+          claims: { sub, email, auth_time: nowS() },
+        });
+        expect(l.res.headers.location).toBe('/auth/link');
+        return { link: cookieOf(l.res, 'idp_link')!.value, fed: l.fed };
+      };
+      const legA = await legFor(a.email);
+      const legB = await legFor(b.email);
+      expect((await submitLink(legB, PASSWORD)).statusCode).toBe(302);
+      const res = await submitLink(legA, PASSWORD);
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toContain('You are signed in, but the account could not be linked.');
+      expect((await sessions.get(cookieOf(res, SESSION_COOKIE)!.value))!.userId).toBe(a.sub);
+      expect(await fiModel.countDocuments({ providerId: sub })).toBe(1);
+      expect(String((await fiModel.findOne({ providerId: sub }).lean())?.userId)).toBe(b.sub);
+      expect(await linkedAudits(a.sub)).toBe(0);
+      expect(await linkedAudits(b.sub)).toBe(1);
+    });
+
+    it('T33-5 a session already in the browser (another user, e.g. planted) is rotated away; the new session belongs to the link target', async () => {
+      const other = await localUser();
+      const target = await localUser();
+      const planted = await sessions.create(other.sub, DEFAULT_TENANT_ID, { amr: ['pwd'] });
+      const leg = await linkLeg(target.email);
+      const cookies = { idp_link: leg.link, idp_fed: leg.fed, [SESSION_COOKIE]: planted.id };
+      const page = await linkPage(cookies);
+      expect(page.statusCode).toBe(200);
+      const csrf = page.body.match(/name="_csrf" value="([^"]+)"/)![1];
+      const res = await app.inject({
+        method: 'POST',
+        url: '/auth/link',
+        cookies: {
+          ...cookies,
+          ...(cookieOf(page, 'idp_csrf') ? { idp_csrf: cookieOf(page, 'idp_csrf')!.value } : {}),
+        },
+        payload: { _csrf: csrf, password: PASSWORD },
+      });
+      expect(res.statusCode).toBe(302);
+      const sid = cookieOf(res, SESSION_COOKIE)!.value;
+      expect(sid).not.toBe(planted.id);
+      expect(await sessions.get(planted.id)).toBeNull();
+      expect((await sessions.get(sid))!.userId).toBe(target.sub);
+      expect(await fiModel.countDocuments({ providerId: leg.sub, userId: target.sub })).toBe(1);
+      expect(await fiModel.countDocuments({ userId: other.sub })).toBe(0);
+    });
+
+    it('DEBT-186 (F10): a federated-only user sets a password via /forgot => password login works + AUTH_PASSWORD_RESET audited', async () => {
+      const local = await localUser({ password: null });
+      mails.length = 0;
+      await moduleRef.get(AuthenticationService).forgotPassword(local.email);
+      const token = mails[0]?.text.match(/token=([A-Za-z0-9_-]+)/)?.[1];
+      expect(token).toBeTruthy();
+      await moduleRef.get(AuthenticationService).resetPassword(token!, 'brand new password 1');
+      const established = await moduleRef
+        .get(AuthenticationService)
+        .login(local.email, 'brand new password 1', {});
+      expect(established.session.userId).toBe(local.sub);
+      expect(
+        await auditModel.countDocuments({
+          action: 'AUTH_PASSWORD_RESET',
+          actorId: local.sub,
+          result: 'success',
+        }),
+      ).toBe(1);
+    });
+  });
+
+  // ------------------------------------------------------------------ run 33 T4' (DEBT-190a, DEBT-191)
+  describe('provisioning compensation + provider fetch limits (F15, F16)', () => {
+    it.each(['deleteById', 'deleteMembership'] as const)(
+      'F15: %s failing during compensation never masks the original error; both undo steps run',
+      async (method) => {
+        const sub = `${RUN}-comp-${method}`;
+        const s = await start('google', (await rpAuthorize()).requestId);
+        const g = grant('google', s.location!, { claims: { sub } });
+        jest
+          .spyOn(FederatedIdentityService.prototype, 'link')
+          .mockRejectedValueOnce(new Error('ORIGINAL-link-failure'));
+        const delUser = jest.spyOn(UserService.prototype, 'deleteById');
+        const delMember = jest.spyOn(UserTenantService.prototype, 'deleteMembership');
+        const failing = new Error('COMPENSATION-failure');
+        if (method === 'deleteById') delUser.mockRejectedValueOnce(failing);
+        else delMember.mockRejectedValueOnce(failing);
+        await expect(
+          moduleRef.get(FederationService).callback('google', g, { binding: s.fed }, {}),
+        ).rejects.toThrow('ORIGINAL-link-failure');
+        expect(delUser).toHaveBeenCalledTimes(1);
+        expect(delMember).toHaveBeenCalledTimes(1);
+        expect(await fiModel.countDocuments({ providerId: sub })).toBe(0);
+        // The step that did NOT fail really ran.
+        const user = await userModel.findOne({ email: `${sub}@example.com` }).lean();
+        if (method === 'deleteById') {
+          expect(await utModel.countDocuments({ userId: user!._id })).toBe(0);
+        } else {
+          expect(user).toBeNull();
+        }
+      },
+    );
+
+    it('F16: an 8 MB streamed token body => 502 and the IdP stops reading early (socket closed)', async () => {
+      let written = 0;
+      let closed = false;
+      mock.raw = (path, res) => {
+        if (path !== '/g/token') return false;
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.on('close', () => (closed = true));
+        const chunk = Buffer.alloc(64 * 1024, 0x41);
+        void (async () => {
+          res.write('{"x":"');
+          for (let i = 0; i < 128 && !closed; i++) {
+            written += chunk.length;
+            if (!res.write(chunk)) {
+              await new Promise((r) => {
+                res.once('drain', r);
+                res.once('close', r);
+              });
+            }
+          }
+          if (!closed) res.end('"}');
+        })();
+        return true;
+      };
+      const { res } = await socialLogin('google', (await rpAuthorize()).requestId, {
+        claims: { sub: `${RUN}-cap` },
+      });
+      expect(res.statusCode).toBe(502);
+      expectNoSession(res);
+      for (let i = 0; i < 50 && !closed; i++) await new Promise((r) => setTimeout(r, 20));
+      expect(closed).toBe(true);
+      expect(written).toBeLessThan(8 * 1024 * 1024);
+    });
+
+    it('F16: a valid token response just under 64 KB still signs in', async () => {
+      mock.tokenPad = 60 * 1024;
+      const { res } = await socialLogin('google', (await rpAuthorize()).requestId, {
+        claims: { sub: `${RUN}-undercap` },
+      });
+      expect(res.statusCode).toBe(302);
+    });
+
+    it('F16: remote JWKS refusing connections (ECONNREFUSED) => 502, no session, no user', async () => {
+      const probe = createServer();
+      await new Promise<void>((r) => probe.listen(0, '127.0.0.1', r));
+      const port = (probe.address() as AddressInfo).port;
+      await new Promise((r) => probe.close(r));
+      const original = registry.google.jwks;
+      registry.google.jwks = createRemoteJWKSet(new URL(`http://127.0.0.1:${port}/certs`), {
+        timeoutDuration: 500,
+      });
+      try {
+        const sub = `${RUN}-jwks-refused`;
+        const { res } = await socialLogin('google', (await rpAuthorize()).requestId, {
+          claims: { sub },
+        });
+        expect(res.statusCode).toBe(502);
+        expectNoSession(res);
+        expect(await userModel.countDocuments({ email: `${sub}@example.com` })).toBe(0);
+      } finally {
+        registry.google.jwks = original;
       }
     });
   });
@@ -1237,7 +2017,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       ).toBe(0);
     });
 
-    it('Google JWKS unavailable (non-timeout error) => fail-closed (no 302, no session, no user)', async () => {
+    it('Google JWKS unavailable (non-timeout network error) => 502 fail-closed (no session, no user) (DEBT-191)', async () => {
       const original = registry.google.jwks;
       registry.google.jwks = (async () => {
         throw new Error('ECONNREFUSED');
@@ -1247,7 +2027,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
         const { res } = await socialLogin('google', (await rpAuthorize()).requestId, {
           claims: { sub },
         });
-        expect([400, 502]).toContain(res.statusCode);
+        expect(res.statusCode).toBe(502);
         expectNoSession(res);
         expect(await userModel.countDocuments({ email: `${sub}@example.com` })).toBe(0);
       } finally {
@@ -1272,21 +2052,22 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       }
     });
 
-    it('email conflict is case-insensitive and also applies to an UNVERIFIED local account (no link)', async () => {
+    it('email match is case-insensitive and also applies to an UNVERIFIED local account (pending link only, no FI)', async () => {
       const lower = `${RUN}-case@example.com`;
       const local = await users.create({ email: lower, password: 'local password 123' });
       const { res } = await socialLogin('google', (await rpAuthorize()).requestId, {
         claims: { sub: `${RUN}-case`, email: lower.toUpperCase() },
       });
-      expect(res.statusCode).toBe(409);
-      expectNoSession(res);
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toBe('/auth/link');
+      expect(cookieOf(res, SESSION_COOKIE)).toBeUndefined();
       expect(await fiModel.countDocuments({ userId: local.sub })).toBe(0);
       expect(await fiModel.countDocuments({ providerId: `${RUN}-case` })).toBe(0);
       expect(await userModel.countDocuments({ email: lower })).toBe(1);
       expect((await userModel.findOne({ email: lower }).lean())?.emailVerifiedAt).toBeUndefined();
     });
 
-    it('cross-provider: same numeric id at Google and GitHub => two distinct accounts; GitHub with a Google-provisioned email => 409 (no auto-link)', async () => {
+    it('cross-provider: same numeric id at Google and GitHub => two distinct accounts; GitHub with a Google-provisioned email => pending link, no FI (no auto-link)', async () => {
       const id = 400_000 + Math.floor(Math.random() * 100_000);
       const gEmail = `${RUN}-xp-g@example.com`;
       const g = await socialLogin('google', (await rpAuthorize()).requestId, {
@@ -1304,8 +2085,9 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       const conflict = await socialLogin('github', (await rpAuthorize()).requestId, {
         gh: { id: id + 1, emails: [{ email: gEmail, primary: true, verified: true }] },
       });
-      expect(conflict.res.statusCode).toBe(409);
-      expectNoSession(conflict.res);
+      expect(conflict.res.statusCode).toBe(302);
+      expect(conflict.res.headers.location).toBe('/auth/link');
+      expect(cookieOf(conflict.res, SESSION_COOKIE)).toBeUndefined();
       expect(await fiModel.countDocuments({ provider: 'github', providerId: String(id + 1) })).toBe(
         0,
       );
@@ -1386,24 +2168,18 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       expect((await start('github', requestId)).res.statusCode).toBe(400);
     });
 
-    it('DEBT-189 (known gap, accepted -> run 33): max_age WITHOUT an IdP session is not forwarded; a 30-day-old Google auth yields ID token auth_time = now', async () => {
+    it('DEBT-189 closed (run 33): max_age WITHOUT an IdP session is forwarded; a 30-day-old Google auth is refused', async () => {
       const sub = `${RUN}-debt189`;
       for (const maxAge of ['60', '0']) {
         const { requestId } = await rpAuthorize({ max_age: maxAge });
         const s = await start('google', requestId);
-        // Gap: no max_age forwarded to Google and no auth_time requirement on the ID token.
-        expect(s.location!.searchParams.get('max_age')).toBeNull();
+        expect(s.location!.searchParams.get('max_age')).not.toBeNull();
         const old = grant('google', s.location!, {
           claims: { sub, auth_time: now() - 30 * 86400 },
         });
         const cb = await callback('google', old, { idp_fed: s.fed! });
-        expect(cb.statusCode).toBe(302);
-        const idToken = await exchange(
-          await resumeToRp(cb.headers.location as string, cookieOf(cb, SESSION_COOKIE)!.value),
-        );
-        // The ID token claims a fresh authentication although the upstream one is 30 days old.
-        expect(idToken.auth_time as number).toBeGreaterThanOrEqual(now() - 60);
-        expect(idToken.amr).toEqual(['fed']);
+        expect(cb.statusCode).toBe(400);
+        expectNoSession(cb);
       }
     });
   });

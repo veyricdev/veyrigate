@@ -1,4 +1,4 @@
-import { jwtVerify } from 'jose';
+import { errors, jwtVerify } from 'jose';
 import { constantTimeEqual } from '../../common/crypto/crypto.util';
 import { FederationError } from './federation.errors';
 import type { FederationProvider, GithubProvider, GoogleProvider } from './providers';
@@ -9,6 +9,8 @@ export interface ProviderIdentity {
   providerId: string;
   /** Present only when the provider asserts it verified (Google `email_verified`, GitHub primary+verified). */
   email?: string;
+  /** Google `auth_time` (s epoch) when present; GitHub never has one (DEBT-192). */
+  authTime?: number;
 }
 
 export interface AuthorizeLeg {
@@ -16,8 +18,8 @@ export interface AuthorizeLeg {
   nonce: string;
   codeChallenge: string;
   redirectUri: string;
-  /** Re-authentication demanded by the RP context (Google only: `max_age=0`, F8). */
-  reauth: boolean;
+  /** ms epoch the provider login must be at/after (Google only: sent as `max_age`, DEBT-189 F2). */
+  reauthAfter?: number;
 }
 
 export interface ExchangeInput {
@@ -45,7 +47,9 @@ export function buildAuthorizeUrl(provider: FederationProvider, leg: AuthorizeLe
   };
   if (provider.name === 'google') {
     params.nonce = leg.nonce;
-    if (leg.reauth) params.max_age = '0';
+    if (leg.reauthAfter !== undefined) {
+      params.max_age = String(Math.max(0, Math.floor((Date.now() - leg.reauthAfter) / 1000)));
+    }
   }
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   return url.href;
@@ -107,7 +111,9 @@ export async function verifyGoogleIdToken(
       requiredClaims: ['exp', 'iat', 'sub', 'nonce'],
     }));
   } catch (err) {
-    if ((err as { code?: string }).code === 'ERR_JWKS_TIMEOUT') {
+    // DEBT-191 (F16): a JWKS fetch that never got an answer (network error, timeout) is the
+    // provider being unavailable (502); every JOSE verification failure is a bad identity.
+    if (!(err instanceof errors.JOSEError) || err.code === 'ERR_JWKS_TIMEOUT') {
       throw new FederationError('provider_unavailable');
     }
     throw new FederationError('invalid_identity');
@@ -130,7 +136,11 @@ export async function verifyGoogleIdToken(
     }
   }
   const verified = payload.email_verified === true && typeof payload.email === 'string';
-  return { providerId: payload.sub, ...(verified ? { email: payload.email as string } : {}) };
+  return {
+    providerId: payload.sub,
+    ...(verified ? { email: payload.email as string } : {}),
+    ...(typeof payload.auth_time === 'number' ? { authTime: payload.auth_time } : {}),
+  };
 }
 
 async function exchangeGithub(

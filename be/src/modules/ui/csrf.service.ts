@@ -1,11 +1,32 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHmac } from 'node:crypto';
-import { constantTimeEqual } from '../../common/crypto/crypto.util';
+import { constantTimeEqual, generateToken } from '../../common/crypto/crypto.util';
+import type { HttpReply, HttpRequest } from '../../common/http/http.types';
 import type { SecurityConfig } from '../../config/configuration';
 import { SessionCookie } from '../sessions/session.cookie';
 
-const ANON_COOKIE = 'idp_csrf';
+export const ANON_COOKIE = 'idp_csrf';
+
+/**
+ * CSRF identity of an HTML form page (shared by `/login`-style pages and `/auth/link`): the session
+ * cookie when present, else the anonymous `idp_csrf` cookie, minted on `reply` when missing.
+ * `CsrfGuard` verifies the posted token against the same identity.
+ */
+export function formCsrfIdentity(
+  session: string | undefined,
+  req: HttpRequest,
+  reply: HttpReply,
+  secure: boolean,
+): string {
+  if (session) return session;
+  let anon = req.cookies?.[ANON_COOKIE];
+  if (!anon) {
+    anon = generateToken();
+    reply.setCookie(ANON_COOKIE, anon, { httpOnly: true, sameSite: 'lax', secure, path: '/' });
+  }
+  return anon;
+}
 
 interface CsrfRequest {
   body?: { _csrf?: unknown };
