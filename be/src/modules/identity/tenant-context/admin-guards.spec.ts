@@ -54,7 +54,12 @@ describe('StepUpGuard (B6.2) behind AdminTokenGuard (unit, stubbed collaborators
         {
           provide: ClientService,
           useValue: {
-            findByClientId: async () => ({ allowedResources: ['admin'], tenantId: 'tenant-A' }),
+            findByClientId: async () => ({
+              allowedResources: ['admin'],
+              tenantId: 'tenant-A',
+              clientType: 'confidential',
+              tokenEndpointAuthMethod: 'client_secret_basic',
+            }),
           },
         },
         { provide: ResourceService, useValue: { identifiersFor: async () => [ADMIN_AUD] } },

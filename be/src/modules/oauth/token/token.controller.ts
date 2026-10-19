@@ -283,6 +283,7 @@ export class TokenController {
           clientId: client.clientId,
           allowedResources: client.allowedResources,
           clientType: client.clientType,
+          tokenEndpointAuthMethod: client.tokenEndpointAuthMethod,
         },
         { scope: body.get('scope'), resource: body.get('resource') },
         audit,

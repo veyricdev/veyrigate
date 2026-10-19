@@ -16,7 +16,12 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { HttpRequest } from '../../common/http/http.types';
 import { ClientCredentialService } from '../clients/client-credential.service';
-import { AdminGrantSecretRevokeError, type Client, ClientService } from '../clients/client.service';
+import {
+  AdminGrantAbortedError,
+  AdminGrantSecretRevokeError,
+  type Client,
+  ClientService,
+} from '../clients/client.service';
 import { AdminAuthError, AdminAuthErrorFilter } from '../identity/tenant-context/admin-auth.errors';
 import {
   type AdminActor,
@@ -125,6 +130,14 @@ export class AdminClientsController {
     if (Object.values(dto).every((v) => v === undefined)) {
       throw AdminAuthError.invalidRequest('empty update');
     }
+    // DEBT-167: a disable is its own PATCH, so a 409 on the disable stamp never follows a write of
+    // other fields (the main update of a disable-only PATCH changes nothing).
+    if (
+      dto.disabled === true &&
+      Object.entries(dto).some(([k, v]) => k !== 'disabled' && v !== undefined)
+    ) {
+      throw AdminAuthError.invalidRequest('disable must be sent alone');
+    }
     if (dto.disabled === true && clientId === actor.clientId) {
       // Disabling the client that issued this admin token would lock the caller out of the API.
       throw AdminAuthError.conflict('cannot disable the client issuing this admin token');
@@ -138,16 +151,32 @@ export class AdminClientsController {
     const res = await this.clients
       .updateForTenant(ctx, clientId, dto, actor)
       .catch(async (err: unknown) => {
-        if (err instanceof AdminGrantSecretRevokeError) {
+        if (err instanceof AdminGrantSecretRevokeError || err instanceof AdminGrantAbortedError) {
           // DEBT-137: `admin` is granted but a secret may have survived => 5xx + failure audit.
+          // DEBT-170: the grant aborted after the 1st revoke pass (404 / DB error) => nothing
+          // granted, but the revoked secrets are audited. Counts only, never secret material.
+          const granted = err instanceof AdminGrantSecretRevokeError;
+          const count = err.secretsRevoked;
+          if (count > 0) {
+            await this.audit
+              .record({
+                ...base,
+                action: AuditAction.CLIENT_SECRET_REVOKED,
+                result: 'success',
+                metadata: { reason: granted ? 'admin_granted' : 'admin_grant_aborted', count },
+              })
+              .catch(() => undefined);
+          }
           await this.audit
             .record({
               ...base,
               action: AuditAction.ADMIN_CLIENT_UPDATED,
               result: 'failure',
-              reason: 'secret_revoke_failed',
+              reason: granted ? 'secret_revoke_failed' : 'admin_grant_aborted',
+              metadata: { count },
             })
             .catch(() => undefined);
+          if (!granted) throw err.cause === undefined ? AdminAuthError.notFound() : err.cause;
         }
         throw toAdminError(err);
       });

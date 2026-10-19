@@ -87,6 +87,8 @@ const CODE_CHALLENGE_RE = /^[A-Za-z0-9_-]{43,128}$/;
 @Injectable()
 export class AuthorizeService {
   private readonly issuer: string;
+  /** The admin API's resource identifier, derived once from the issuer (DEBT-175). */
+  private readonly adminAud: string;
 
   constructor(
     private readonly clients: ClientService,
@@ -99,6 +101,7 @@ export class AuthorizeService {
     config: ConfigService,
   ) {
     this.issuer = config.getOrThrow<AppConfig>('app').issuer;
+    this.adminAud = adminResourceIdentifier(this.issuer);
   }
 
   get issuerUrl(): string {
@@ -309,11 +312,7 @@ export class AuthorizeService {
       !client ||
       !isRegisteredRedirectUri(client.redirectUris, ctx.redirectUri) ||
       (ctx.resource !== undefined &&
-        (adminTargetForbidden(
-          client.clientType,
-          ctx.resource,
-          adminResourceIdentifier(this.issuer),
-        ) ||
+        (adminTargetForbidden(client, ctx.resource, this.adminAud) ||
           (await this.resources.resolveForClient(client.allowedResources, ctx.resource)) === null))
     ) {
       return null;
@@ -446,15 +445,8 @@ export class AuthorizeService {
     try {
       // Map identifier (URI) -> resourceId -> allowedResources (never compare the URI directly).
       const resource = await this.resources.resolveForClient(client.allowedResources, raw);
-      // DEBT-172: a public client never gets `aud=admin`, even if its config lists `admin`.
-      if (
-        !resource ||
-        adminTargetForbidden(
-          client.clientType,
-          resource.identifier,
-          adminResourceIdentifier(this.issuer),
-        )
-      ) {
+      // DEBT-172/174: a non-admin-capable client never gets `aud=admin`, even if it lists `admin`.
+      if (!resource || adminTargetForbidden(client, resource.identifier, this.adminAud)) {
         throw new AuthorizeRedirectError('invalid_target', 'Unknown or disallowed resource.');
       }
       return resource.identifier;

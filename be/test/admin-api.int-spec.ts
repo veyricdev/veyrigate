@@ -1514,7 +1514,13 @@ describe('Admin API B6.3a (clients, secrets, resources) on real Mongo + Redis', 
         await auditModel
           .findOne({ action: 'ADMIN_CLIENT_UPDATED', targetId: id, result: 'failure' })
           .lean(),
-      ).toMatchObject({ reason: 'secret_revoke_failed', actorId: superA });
+      ).toMatchObject({ reason: 'secret_revoke_failed', actorId: superA, metadata: { count: 1 } });
+      // DEBT-170: the 1st pass revoked S; that revocation is audited even though the 2nd failed.
+      expect(
+        (await auditModel.find({ action: 'CLIENT_SECRET_REVOKED', targetId: id }).lean()).map(
+          (r) => r.metadata,
+        ),
+      ).toEqual([{ reason: 'admin_granted', count: 1 }]);
       expect(
         await auditModel.countDocuments({
           action: 'ADMIN_CLIENT_UPDATED',
@@ -1528,6 +1534,116 @@ describe('Admin API B6.3a (clients, secrets, resources) on real Mongo + Redis', 
         (await call('DELETE', `/admin/clients/${id}/secrets/2`, await tok(superA))).statusCode,
       ).toBe(204);
       expect((await auth(id, sneaked)).statusCode).toBe(401);
+    });
+
+    const abortAudits = async (id: string) => ({
+      revoked: await auditModel.find({ action: 'CLIENT_SECRET_REVOKED', targetId: id }).lean(),
+      failed: await auditModel
+        .find({ action: 'ADMIN_CLIENT_UPDATED', targetId: id, result: 'failure' })
+        .lean(),
+      success: await auditModel.countDocuments({
+        action: 'ADMIN_CLIENT_UPDATED',
+        targetId: id,
+        result: 'success',
+      }),
+    });
+
+    it('DEBT-170: client gone between the 1st revoke pass and the update => 404 + CLIENT_SECRET_REVOKED{admin_grant_aborted,count} + failure audit', async () => {
+      const { id, s } = await tenantAdminClient();
+      const svc = moduleRef.get(ClientCredentialService);
+      const real = svc.revokeAll.bind(svc);
+      jest.spyOn(svc, 'revokeAll').mockImplementationOnce(async (clientId, now) => {
+        const n = await real(clientId, now);
+        await clientModel.deleteOne({ clientId }); // concurrent delete
+        return n;
+      });
+      const res = await grant(id);
+      expect(res.statusCode).toBe(404);
+      expect(res.json()).toEqual({ error: 'not_found' });
+      expect(await liveCreds(id)).toBe(0); // the revocation stands (fail-closed)
+      const a = await abortAudits(id);
+      expect(a.revoked).toHaveLength(1);
+      expect(a.revoked[0]).toMatchObject({
+        actorId: superA,
+        result: 'success',
+        metadata: { reason: 'admin_grant_aborted', count: 1 },
+      });
+      expect(a.failed).toHaveLength(1);
+      expect(a.failed[0]).toMatchObject({ reason: 'admin_grant_aborted', metadata: { count: 1 } });
+      expect(a.success).toBe(0);
+      expect(JSON.stringify(await auditModel.find({ targetId: id }).lean())).not.toContain(s);
+    });
+
+    it('DEBT-170: the update throws after the 1st revoke pass => 5xx, admin NOT granted, same audits', async () => {
+      const { id, s } = await tenantAdminClient();
+      jest.spyOn(clientModel, 'findOneAndUpdate').mockImplementationOnce(
+        () =>
+          ({
+            lean: () => ({ exec: () => Promise.reject(new Error('mongo down')) }),
+          }) as never,
+      );
+      const res = await grant(id);
+      expect(res.statusCode).toBeGreaterThanOrEqual(500);
+      expect(res.body).not.toContain('mongo down');
+      expect((await clientModel.findOne({ clientId: id }).lean())?.allowedResources).toEqual([
+        'api',
+      ]);
+      expect(await liveCreds(id)).toBe(0);
+      const a = await abortAudits(id);
+      expect(a.revoked.map((r) => r.metadata)).toEqual([
+        { reason: 'admin_grant_aborted', count: 1 },
+      ]);
+      expect(a.failed.map((r) => [r.reason, r.metadata])).toEqual([
+        ['admin_grant_aborted', { count: 1 }],
+      ]);
+      expect(a.success).toBe(0);
+      expect(JSON.stringify(await auditModel.find({ targetId: id }).lean())).not.toContain(s);
+    });
+
+    it('DEBT-170: no secret to revoke + client gone => plain 404, no abort audit', async () => {
+      const id = await mkClient(confidential());
+      const svc = moduleRef.get(ClientCredentialService);
+      jest.spyOn(svc, 'revokeAll').mockImplementationOnce(async (clientId) => {
+        await clientModel.deleteOne({ clientId });
+        return 0;
+      });
+      expect((await grant(id)).statusCode).toBe(404);
+      const a = await abortAudits(id);
+      expect(a.revoked).toHaveLength(0);
+      expect(a.failed).toHaveLength(0);
+    });
+
+    it('DEBT-167: disabled:true with any other field => 400, DB unchanged; disabled:false + field => 200', async () => {
+      const sp = await tok(superA);
+      const id = await mkClient(confidential());
+      const before = JSON.stringify(await clientModel.findOne({ clientId: id }).lean());
+      for (const extra of [
+        { redirectUris: ['https://rp.example.com/other'] },
+        { scopes: ['openid'] },
+        { allowedResources: ['api', 'admin'] },
+        { frontchannelLogoutUri: null },
+      ]) {
+        const res = await call('PATCH', `/admin/clients/${id}`, sp, { disabled: true, ...extra });
+        expect({ extra, status: res.statusCode, json: res.json() }).toEqual({
+          extra,
+          status: 400,
+          json: { error: 'invalid_request', error_description: 'disable must be sent alone' },
+        });
+      }
+      expect(JSON.stringify(await clientModel.findOne({ clientId: id }).lean())).toBe(before);
+      expect(
+        await auditModel.countDocuments({ targetId: id, action: 'ADMIN_CLIENT_UPDATED' }),
+      ).toBe(0);
+
+      expect((await call('PATCH', `/admin/clients/${id}`, sp, { disabled: true })).statusCode).toBe(
+        200,
+      );
+      const enabled = await call('PATCH', `/admin/clients/${id}`, sp, {
+        disabled: false,
+        scopes: ['openid'],
+      });
+      expect(enabled.statusCode).toBe(200);
+      expect(enabled.json()).toMatchObject({ disabled: false, scopes: ['openid'] });
     });
 
     it('rule A: a public client can never get admin (super_admin POST/PATCH => 400, DB unchanged)', async () => {
@@ -1774,6 +1890,9 @@ describe('Admin API B6.3a (clients, secrets, resources) on real Mongo + Redis', 
         if (dis.statusCode === 409) {
           conflicts++;
           expect(dis.json().error).toBe('conflict');
+          // DEBT-167: a 409 never follows a write of another field (a disable is sent alone).
+          const after = await clientModel.findOne({ clientId: id }).lean();
+          expect(after?.disabledAt ?? null).toBeNull();
         } else {
           expect(dis.json().disabled).toBe(true);
           expect(typeof dis.json().disabledAt).toBe('string');

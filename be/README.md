@@ -68,11 +68,16 @@ pnpm build && pnpm db:sync-indexes && pnpm db:seed
 - **Lost the secret while it is still active**: revoke every `fe-admin` credential, then re-run
   `pnpm db:seed` (prints a new one):
   `db.clientcredentials.updateMany({clientId:'fe-admin', revokedAt:null}, {$set:{revokedAt:new Date()}})`.
-- **Resource `admin` re-point is refused (DEBT-137)**: if no `admin` resource carries `${ISSUER}/admin/`
-  yet (absent, created via the API with another identifier, or an ISSUER change) and a client other than
-  `fe-admin` already lists `admin` (or `fe-admin` itself while the old identifier is not an `/admin/`
-  URI), the seed throws before any write: that client would become admin-capable without the admin-API
-  checks. Remove the reference first. At runtime a public client never gets `aud=admin` (DEBT-172).
+- **Resource `admin` is never re-pointed (DEBT-137/173)**: the seed only inserts `admin` (`$setOnInsert`;
+  a re-run keeps its identifier and any scopes edited since). If `admin` already exists with another
+  identifier (created via the API, or an ISSUER change — including `fe-admin`'s own), the seed throws
+  before any write; fix or delete that resource (and the clients referencing it), then re-run. If `admin`
+  does not exist but a client already lists it, the seed also throws (that client would become
+  admin-capable without the admin-API checks). At runtime only a confidential client authenticating with
+  a secret ever gets or uses `aud=admin` (DEBT-172/174).
+- **Indexes (DEBT-176)**: the seed first creates any missing index of every model (`createIndexes`,
+  never drops); duplicated data or a conflicting index => it stops before any write. `db:sync-indexes`
+  stays the recommended first step (it also drops indexes no longer in the schemas).
 - **Re-run never resets the admin**: an existing admin user keeps its password and any lock
   (`$setOnInsert`); `fe-admin` is insert-only too (API edits / a disable survive).
 - **Recovery when no super_admin is left (DEBT-142)**: re-running re-activates the admin membership in

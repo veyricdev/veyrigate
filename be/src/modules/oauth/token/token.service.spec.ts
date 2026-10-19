@@ -12,7 +12,7 @@ import type { AuditService } from '../../security/audit/audit.service';
 import { AuditAction } from '../../security/audit/audit-action.enum';
 import type { Client } from '../../clients/client.service';
 import type { AuthorizationCodeData } from '../code/authorization-code.service';
-import { adminResourceIdentifier, TokenService } from './token.service';
+import { adminResourceIdentifier, isAdminCapableClient, TokenService } from './token.service';
 import { TokenError } from './token.errors';
 
 const ISSUER = 'http://localhost:4000';
@@ -61,6 +61,22 @@ function codeData(overrides: Partial<AuthorizationCodeData> = {}): Authorization
     ...overrides,
   };
 }
+
+describe('isAdminCapableClient (DEBT-174 allowlist)', () => {
+  it.each([
+    [{ clientType: 'confidential', tokenEndpointAuthMethod: 'client_secret_basic' }, true],
+    [{ clientType: 'confidential', tokenEndpointAuthMethod: 'client_secret_post' }, true],
+    [{ clientType: 'confidential', tokenEndpointAuthMethod: 'none' }, false],
+    [{ clientType: 'confidential' }, false],
+    [{ clientType: 'confidential', tokenEndpointAuthMethod: 'private_key_jwt' }, false],
+    [{ clientType: 'public', tokenEndpointAuthMethod: 'client_secret_basic' }, false],
+    [{ clientType: 'public', tokenEndpointAuthMethod: 'none' }, false],
+    [{ tokenEndpointAuthMethod: 'client_secret_basic' }, false],
+    [{}, false],
+  ])('%o => %s (missing/unknown field => fail-closed)', (client, expected) => {
+    expect(isAdminCapableClient(client as Partial<Client>)).toBe(expected);
+  });
+});
 
 describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
   let dir: string;

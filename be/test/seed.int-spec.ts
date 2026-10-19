@@ -306,30 +306,54 @@ describe('db:seed bootstrap (B6.4) on real Mongo', () => {
       await expectRefusedNoWrite(null);
     });
 
-    it('legacy (non-admin) `admin` referenced only by fe-admin => refused (fe-admin was tenant-editable)', async () => {
+    it('legacy (non-admin) `admin` referenced only by fe-admin => refused, identifier unchanged (fe-admin was tenant-editable)', async () => {
       await connection
         .collection('resources')
         .insertOne({ resourceId: 'admin', identifier: LEGACY, scopes: [] });
       await insertClient('fe-admin', 'confidential');
       await expect(seedBootstrap(connection, ADMIN, ISSUER, 'test')).rejects.toThrow(
+        /refusing to point resource 'admin'.*already exists with identifier/,
+      );
+      expect(
+        (await connection.collection('resources').findOne({ resourceId: 'admin' }))?.identifier,
+      ).toBe(LEGACY);
+    });
+
+    it('legacy `admin` referenced by nobody => still refused (the seed never re-points it)', async () => {
+      await connection
+        .collection('resources')
+        .insertOne({ resourceId: 'admin', identifier: LEGACY, scopes: [] });
+      await expectRefusedNoWrite(LEGACY);
+    });
+
+    it('ISSUER change => refused even with fe-admin alone on `admin` (DEBT-173: no fe-admin exception), identifier unchanged', async () => {
+      const OLD = adminResourceIdentifier('http://localhost:4100');
+      await seedBootstrap(connection, ADMIN, 'http://localhost:4100', 'test');
+      const before = await counts();
+      const err = await seedBootstrap(connection, ADMIN, ISSUER, 'test').catch((e: Error) => e);
+      expect((err as Error).message).toContain(`already exists with identifier ${OLD}`);
+      expect(
+        (await connection.collection('resources').findOne({ resourceId: 'admin' }))?.identifier,
+      ).toBe(OLD);
+      expect(await counts()).toEqual(before);
+      // Operator path: deleting only the stale resource is not enough while fe-admin still lists
+      // `admin` (a dangling reference => refused too).
+      await connection.collection('resources').deleteOne({ resourceId: 'admin' });
+      await expect(seedBootstrap(connection, ADMIN, ISSUER, 'test')).rejects.toThrow(
         /client fe-admin already references it/,
       );
     });
 
-    it('ISSUER change with another client on `admin` => refused; fe-admin alone => re-pointed', async () => {
-      await seedBootstrap(connection, ADMIN, 'http://localhost:4100', 'test');
-      await insertClient('other-admin-bff', 'confidential');
-      await expect(seedBootstrap(connection, ADMIN, ISSUER, 'test')).rejects.toThrow(
-        /client other-admin-bff/,
-      );
-      expect(
-        (await connection.collection('resources').findOne({ resourceId: 'admin' }))?.identifier,
-      ).toBe(adminResourceIdentifier('http://localhost:4100'));
-      await connection.collection('clients').deleteOne({ clientId: 'other-admin-bff' });
+    it('same ISSUER re-run => idempotent; scopes edited on `admin` since are not reset ($setOnInsert)', async () => {
       await seedBootstrap(connection, ADMIN, ISSUER, 'test');
-      expect(
-        (await connection.collection('resources').findOne({ resourceId: 'admin' }))?.identifier,
-      ).toBe(ADMIN_AUD);
+      await connection
+        .collection('resources')
+        .updateOne({ resourceId: 'admin' }, { $set: { scopes: ['admin.read'] } });
+      const before = await counts();
+      await expect(seedBootstrap(connection, ADMIN, ISSUER, 'test')).resolves.toEqual({});
+      expect(await counts()).toEqual(before);
+      const admin = await connection.collection('resources').findOne({ resourceId: 'admin' });
+      expect(admin).toMatchObject({ identifier: ADMIN_AUD, scopes: ['admin.read'] });
     });
 
     it('already pointed at the admin identifier => other referrers are not a reason to refuse', async () => {

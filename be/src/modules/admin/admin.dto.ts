@@ -150,7 +150,11 @@ export class UpdateClientDto extends ClientFieldsDto {
   @MaxLength(MAX_LEN)
   frontchannelLogoutUri?: string | null;
 
-  @ApiPropertyOptional({ description: 'true disables the client (reversible).' })
+  @ApiPropertyOptional({
+    description:
+      'true disables the client (reversible) and must be sent alone (any other field => 400); ' +
+      'false re-enables it and may be combined with other fields.',
+  })
   @IfPresent()
   @IsBoolean()
   disabled?: boolean;

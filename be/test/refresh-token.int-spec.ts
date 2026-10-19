@@ -1861,7 +1861,12 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       // Proof F1 is genuinely alive: its refresh token still rotates (200).
       const rotate = await refreshSvc.issueForRefresh(
         f1Refresh,
-        { clientId: CLIENT, allowedResources: [RESOURCE_ID] },
+        {
+          clientId: CLIENT,
+          allowedResources: [RESOURCE_ID],
+          clientType: 'public',
+          tokenEndpointAuthMethod: 'none',
+        },
         {},
         {},
       );

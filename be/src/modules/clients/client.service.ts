@@ -98,9 +98,28 @@ export class ConcurrentClientUpdateError extends Error {
  * failed (=> 5xx + failure audit). Recovery: super_admin `DELETE /admin/clients/:id/secrets/:v`.
  */
 export class AdminGrantSecretRevokeError extends Error {
-  constructor(readonly cause: unknown) {
+  constructor(
+    readonly cause: unknown,
+    /** Secrets already revoked by the 1st pass (DEBT-170: audited by the caller). */
+    readonly secretsRevoked = 0,
+  ) {
     super('admin resource granted but revoking the previous client secrets failed');
     this.name = 'AdminGrantSecretRevokeError';
+  }
+}
+
+/**
+ * DEBT-170: the 1st revoke pass of an `admin` grant already revoked `secretsRevoked` secrets, then
+ * the main update found no client (`cause` undefined => 404) or failed (`cause` => 5xx). Nothing was
+ * granted; the revocation stands (fail-closed) and the caller audits it.
+ */
+export class AdminGrantAbortedError extends Error {
+  constructor(
+    readonly secretsRevoked: number,
+    readonly cause?: unknown,
+  ) {
+    super('admin grant aborted after revoking the client secrets');
+    this.name = 'AdminGrantAbortedError';
   }
 }
 
@@ -294,23 +313,31 @@ export class ClientService {
       ? { clientId, allowedResources: { $nin: adminIds } }
       : { clientId };
 
-    const before = await this.repo.findOneAndUpdate(ctx, filter, {
-      ...(Object.keys(set).length ? { $set: set } : {}),
-      ...(unsetFrontchannel ? { $unset: { frontchannelLogoutUri: 1 } } : {}),
-    });
+    let before: Client | null;
+    try {
+      before = await this.repo.findOneAndUpdate(ctx, filter, {
+        ...(Object.keys(set).length ? { $set: set } : {}),
+        ...(unsetFrontchannel ? { $unset: { frontchannelLogoutUri: 1 } } : {}),
+      });
+    } catch (err) {
+      // DEBT-170: secrets revoked by the 1st pass must not vanish from the audit trail.
+      if (secretsRevoked > 0) throw new AdminGrantAbortedError(secretsRevoked, err);
+      throw err;
+    }
     if (!before) {
       // Same-tenant re-read only: a client of another tenant stays an opaque 404.
       if (adminIds.length && (await this.getForTenant(ctx, clientId))) {
         throw new ForbiddenClientConfigError('only super_admin may modify an admin client');
       }
+      if (secretsRevoked > 0) throw new AdminGrantAbortedError(secretsRevoked);
       return null;
     }
     if (adminGranted) {
-      // 2nd pass right after the grant (before the disable stamp, which may still throw 409).
+      // 2nd pass right after the grant (a grant never carries `disabled:true`, DEBT-167).
       try {
         secretsRevoked += await this.revokeAllSecrets(clientId);
       } catch (err) {
-        throw new AdminGrantSecretRevokeError(err);
+        throw new AdminGrantSecretRevokeError(err, secretsRevoked);
       }
     }
     if (patch.disabled === true) {

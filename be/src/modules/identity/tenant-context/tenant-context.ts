@@ -18,10 +18,10 @@ import type { Model, Types } from 'mongoose';
 import { bearerToken } from '../../../common/http/bearer';
 import type { HttpRequest } from '../../../common/http/http.types';
 import type { AppConfig } from '../../../config/configuration';
-import { ClientService } from '../../clients/client.service';
+import { type Client, ClientService } from '../../clients/client.service';
 import { type AccessTokenClaims, TokenVerifier } from '../../keys/token-verifier';
 import { isAccessTokenLive } from '../../oauth/access-token-liveness';
-import { adminResourceIdentifier } from '../../oauth/token/token.service';
+import { adminResourceIdentifier, isAdminCapableClient } from '../../oauth/token/token.service';
 import { ResourceService } from '../../resources/resource.service';
 import { SessionCookie } from '../../sessions/session.cookie';
 import { SessionService } from '../../sessions/session.service';
@@ -168,7 +168,7 @@ export class AdminTokenGuard implements CanActivate {
       throw AdminAuthError.invalidToken();
     }
     // Capture the client the liveness gate already loads (one lookup, same snapshot for the tenant).
-    const seen: { client?: { tenantId: string } | null } = {};
+    const seen: { client?: Client | null } = {};
     const live = await isAccessTokenLive(
       claims,
       {
@@ -179,6 +179,9 @@ export class AdminTokenGuard implements CanActivate {
       this.resources,
     );
     if (!live || !seen.client) throw AdminAuthError.invalidToken();
+    // DEBT-173(3): an `aud=admin` token minted before its client stopped being admin-capable (type /
+    // auth method changed in DB) is refused at use too. Same opaque 401 as a non-live token.
+    if (!isAdminCapableClient(seen.client)) throw AdminAuthError.invalidToken();
 
     if (!claims.scope.split(' ').includes(scope)) {
       throw AdminAuthError.insufficientScope(scope);

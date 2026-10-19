@@ -7,6 +7,7 @@ import { AuditService } from '../../security/audit/audit.service';
 import { TokenService, adminTargetForbidden, type TokenResponse } from './token.service';
 import { TokenError } from './token.errors';
 import { ResourceService } from '../../resources/resource.service';
+import type { Client } from '../../clients/client.service';
 
 /**
  * A rotation could not produce a successor. The HTTP layer (Task 3) maps this to `invalid_grant`
@@ -116,7 +117,10 @@ export class RefreshTokenService {
    */
   async issueForRefresh(
     value: string,
-    client: { clientId: string; allowedResources: string[]; clientType?: string },
+    client: Pick<
+      Client,
+      'clientId' | 'allowedResources' | 'clientType' | 'tokenEndpointAuthMethod'
+    >,
     request: { scope?: string; resource?: string },
     audit: AuditCtx = {},
   ): Promise<TokenResponse> {
@@ -134,12 +138,12 @@ export class RefreshTokenService {
     // holds resourceIds (spec §7), so the client's allowed resourceIds are resolved to their
     // identifiers first and the URI is matched against those — never a resourceId directly
     // (confused-deputy guard). A Mongo failure here propagates (fail-closed, no rotation).
-    // DEBT-172: a non-confidential client never refreshes an `aud=admin` family: the admin
+    // DEBT-172/174: a non-admin-capable client never refreshes an `aud=admin` family: the admin
     // identifier is dropped from its allowlist, so the token classifies as invalid (invalid_grant)
     // exactly like a resource the client lost (not reuse; nothing is rotated or burned).
     const allowedIdentifiers = (
       await this.resources.identifiersFor(client.allowedResources)
-    ).filter((id) => !adminTargetForbidden(client.clientType, id, this.tokens.adminResource));
+    ).filter((id) => !adminTargetForbidden(client, id, this.tokens.adminResource));
     const original = (await this.refreshTokens
       .findOne({
         tokenHash,

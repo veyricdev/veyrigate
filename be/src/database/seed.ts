@@ -23,8 +23,9 @@ import { adminResourceIdentifier } from '../modules/oauth/token/token.service';
  *
  * Seeds, idempotently (upserts keyed by stable keys; a re-run converges, never duplicates):
  *   1. tenant `default-tenant` (`$setOnInsert`, same as `TenantService.seedDefault`);
- *   2. resource `admin` (`adminResourceIdentifier(issuer)`, scopes `admin.read/admin.write`) +
- *      `demo`/`other` and client `fe-sso-test` via `seedDev` (one source of truth);
+ *   2. resource `admin` (`adminResourceIdentifier(issuer)`, scopes `admin.read/admin.write`),
+ *      INSERT-ONLY (`$setOnInsert`): the seed never re-points nor resets an existing `admin`
+ *      (DEBT-173) + `demo`/`other` and client `fe-sso-test` via `seedDev` (one source of truth);
  *   3. the admin user (`ADMIN_SEED_EMAIL`/`ADMIN_SEED_PASSWORD`) with `super_admin` in the default
  *      tenant. An EXISTING user keeps its password and lock (`$setOnInsert`); the membership is
  *      re-activated and `super_admin` re-added (recovery path when no super_admin is left);
@@ -84,15 +85,6 @@ export function buildFeAdminClient(): Omit<Client, 'frontchannelLogoutUri'> {
   };
 }
 
-/** An admin API identifier for SOME issuer (`<origin>/admin/`): what an ISSUER change leaves. */
-function isAdminIdentifierShape(identifier: string): boolean {
-  try {
-    return adminResourceIdentifier(identifier) === identifier;
-  } catch {
-    return false;
-  }
-}
-
 function model<T>(connection: Connection, name: string): Model<T> {
   return (connection.models[name] as Model<T> | undefined) ?? connection.model<T>(name);
 }
@@ -121,32 +113,50 @@ export async function seedBootstrap(
   const clientModel = model<Client>(connection, 'Client');
   const credentialModel = model<ClientCredential>(connection, 'ClientCredential');
 
-  // 0. Re-point guard, BEFORE any write (DEBT-137 via seed, run 30 retry 1). When no `admin`
-  // resource carries the admin identifier yet (absent, created via the API with another identifier,
-  // or seeded under another ISSUER), the upsert in step 2 makes EVERY client already referencing `admin` admin-capable
-  // without rule A (public => refused) / rule B (secrets revoked): such a client may be a
-  // tenant_admin's public SPA or a confidential client whose secret it knows. Refuse (no write) and
-  // let the operator clean up. Only exception: `fe-admin` when every existing `admin` resource is
-  // itself an admin identifier (ISSUER change: fe-admin was already admin-capable, hence
-  // super_admin-only). Check-then-write race with a concurrent API write: the runtime guard
-  // (DEBT-172) still refuses `aud=admin` to public clients.
-  if (
-    !(await resourceModel
-      .exists({ resourceId: ADMIN_RESOURCE_ID, identifier: adminIdentifier })
-      .exec())
-  ) {
-    const previous = await resourceModel
-      .find({ resourceId: ADMIN_RESOURCE_ID })
-      .select('identifier')
-      .lean<Pick<Resource, 'identifier'>[]>()
-      .exec();
-    const issuerMove =
-      previous.length > 0 && previous.every((r) => isAdminIdentifierShape(r.identifier));
+  // Unique indexes BEFORE any write (DEBT-176): on a DB never synced, two concurrent runs would
+  // otherwise both insert. `createIndexes` only creates what is missing (never drops, unlike
+  // `db:sync-indexes`). A failure (duplicates already present, conflicting index) => no write.
+  for (const { name, schema } of MODELS) {
+    const m = connection.models[name] ?? connection.model(name, schema);
+    try {
+      await m.createIndexes();
+    } catch (err) {
+      // Only the model + error code: an E11000 message would echo the duplicated value (PII).
+      const code =
+        (err as { code?: unknown; codeName?: unknown }).codeName ??
+        (err as { code?: unknown }).code;
+      throw new Error(
+        `seed: ensuring the ${name} indexes failed (${String(code ?? 'error')}) — remove ` +
+          'duplicated documents / run `pnpm db:sync-indexes` first; nothing was written',
+      );
+    }
+  }
+
+  // 0. Guard, BEFORE any write (DEBT-137/173 via seed). The seed NEVER re-points `admin` (step 2 is
+  // insert-only), so:
+  //  (i) `admin` exists with another identifier (created via the API, or seeded under another
+  //      ISSUER) => refuse, whoever references it — no exception: the operator fixes or deletes
+  //      the record, then re-runs;
+  // (ii) `admin` does not exist but a client already references it => refuse (the insert would make
+  //      that client admin-capable without rule A / rule B).
+  // No check-then-write race with the API: while `admin` is absent, tenant_admin cannot attach it
+  // (`assertAllowedResources` needs the resource), and an existing `admin` is never rewritten here.
+  const admins = await resourceModel
+    .find({ resourceId: ADMIN_RESOURCE_ID })
+    .select('identifier')
+    .lean<Pick<Resource, 'identifier'>[]>()
+    .exec();
+  const foreign = admins.find((r) => r.identifier !== adminIdentifier);
+  if (foreign) {
+    throw new Error(
+      `seed: refusing to point resource '${ADMIN_RESOURCE_ID}' at ${adminIdentifier}: it already ` +
+        `exists with identifier ${foreign.identifier} (the seed never re-points it) — fix or ` +
+        'delete that resource (and the clients referencing it) first',
+    );
+  }
+  if (admins.length === 0) {
     const referrer = await clientModel
-      .findOne({
-        allowedResources: ADMIN_RESOURCE_ID,
-        ...(issuerMove ? { clientId: { $ne: FE_ADMIN_CLIENT_ID } } : {}),
-      })
+      .findOne({ allowedResources: ADMIN_RESOURCE_ID })
       .select('clientId')
       .lean<Pick<Client, 'clientId'>>()
       .exec();
@@ -177,7 +187,13 @@ export async function seedBootstrap(
     resourceModel
       .updateOne(
         { resourceId: ADMIN_RESOURCE_ID },
-        { $set: { identifier: adminIdentifier, scopes: ['admin.read', 'admin.write'] } },
+        {
+          $setOnInsert: {
+            resourceId: ADMIN_RESOURCE_ID,
+            identifier: adminIdentifier,
+            scopes: ['admin.read', 'admin.write'],
+          },
+        },
         { upsert: true },
       )
       .exec(),

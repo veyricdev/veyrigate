@@ -30,16 +30,28 @@ export function adminResourceIdentifier(issuer: string): string {
 }
 
 /**
- * DEBT-172 (DEBT-137 rule A enforced at runtime): only a confidential client may obtain an
- * `aud=admin` token, whatever its stored `allowedResources` says (data written before run 30, a
- * direct DB write, a seed re-point). `clientType` unknown => forbidden (fail-closed).
+ * The single "may this client hold `aud=admin`" invariant (DEBT-172/174/175, DEBT-137 rule A), checked
+ * at every issuance point (`/authorize`, consent, `/token`, refresh) AND at use (`AdminTokenGuard`)
+ * against the client's CURRENT stored config. Allowlist: confidential AND a secret-based token
+ * endpoint auth method. A missing/unknown field or `none` => not admin-capable (fail-closed).
  */
+export function isAdminCapableClient(
+  client: Partial<Pick<Client, 'clientType' | 'tokenEndpointAuthMethod'>>,
+): boolean {
+  return (
+    client.clientType === 'confidential' &&
+    (client.tokenEndpointAuthMethod === 'client_secret_basic' ||
+      client.tokenEndpointAuthMethod === 'client_secret_post')
+  );
+}
+
+/** `resource` is the admin API and the client may not hold `aud=admin` (see `isAdminCapableClient`). */
 export function adminTargetForbidden(
-  clientType: string | undefined,
+  client: Partial<Pick<Client, 'clientType' | 'tokenEndpointAuthMethod'>>,
   resource: string | undefined,
   adminIdentifier: string,
 ): boolean {
-  return resource === adminIdentifier && clientType !== 'confidential';
+  return resource === adminIdentifier && !isAdminCapableClient(client);
 }
 
 /** The successful `/token` response body (RFC 6749 ?5.1 + OIDC). */
@@ -102,8 +114,8 @@ export class TokenService {
     if (!data.resource) {
       throw new TokenError('invalid_target');
     }
-    // DEBT-172: a public client never redeems an `aud=admin` code (the code is already consumed).
-    if (adminTargetForbidden(client.clientType, data.resource, this.adminResource)) {
+    // DEBT-172/174: a non-admin-capable client never redeems an `aud=admin` code (already consumed).
+    if (adminTargetForbidden(client, data.resource, this.adminResource)) {
       throw new TokenError('invalid_target');
     }
     const resource = data.resource;
