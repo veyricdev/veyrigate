@@ -50,3 +50,6 @@
 - CLI `db:seed` ma trận env (dist) 33/33: thiếu `ADMIN_SEED_PASSWORD` nay lỗi từ zod seed (`is required`), 11/129 ⇒ exit 1, biên 12/128 ⇒ exit 0; CLI re-point có referrer public ⇒ exit 1, 0 ghi; không lộ password. `.env.example` copy (rỗng / bỏ dòng / env cũ có giá trị) ⇒ qua validation; đối chứng thiếu `CSRF_SECRET` ⇒ exit 1.
 - 🟡 mở DEBT-176: 2 CLI song song trên DB chưa `db:sync-indexes` ⇒ nhân đôi user super_admin/fe-admin/resources (4/6 vòng); có index ⇒ chỉ credential (DEBT-164). Không chặn (README yêu cầu sync-indexes, dev|test). Cổng → **orchestrator** đóng run 30.
 
+
+## orchestrator — 2026-10-19 (đóng run)
+- Phiên trước bị ngắt giữa backend-dev; orchestrator xác nhận không có mutation treo rồi giao resume. Mọi cổng PASS. Commit `e950419`.

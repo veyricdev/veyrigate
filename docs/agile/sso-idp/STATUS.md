@@ -2,9 +2,9 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `30-B6.4` — cổng: **orchestrator (đóng run)**. Tester lượt 2 **PASS**: unit 262, int 705/705 (3 PoC `seed-risk*` xanh + 8 test biến thể `admin-target-risk`), FE 240, E2E 12/12; CLI `db:seed` ma trận env 33/33; `.env.example` boot OK (DEBT-169). Mở 🟡 DEBT-176. Task 2 DEBT-143 hoãn (cùng DEBT-124).
-- **Vòng lặp (run 30)**: tech-lead=1 (PASS), BE dev=2, senior=2 (PASS, PASS), tester=2 (FAIL, PASS)
-- **Run vừa đóng**: `29-B6.3c` ✅ 4/4 — BE unit 254 + int 660, FE 240, E2E 12. Xem `runs/29-B6.3c/summary.md`.
+- **Run hiện tại**: — (run 30 đã đóng, `e950419`). M5 lane BE (B6.1–B6.5) xong; còn A4–A6 (fe-admin, Q3 mở) và M6/M7.
+- **Vòng lặp (run 30)**: tech-lead=1, BE dev=3, senior=2, tester=2 (FAIL → PASS)
+- **Run vừa đóng**: `30-B6.4` ✅ 3/3 — BE unit 262 + int 705, FE 240, E2E 12. Xem `runs/30-B6.4/summary.md`.
 - **Việc tiếp theo**: T6/T7 (plan §7) hoặc M5 (B5 federation, B6 admin API). Debt đáng chú ý: DEBT-103/104/109 (gom kiểm callback FE), DEBT-095, DEBT-054/096.
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
@@ -30,6 +30,7 @@
 | [27](runs/27-B6.3a/summary.md) | M5 | B6.3a admin API: clients, secrets, resources | ✅ BE 826 + FE 240 + E2E 12 | `b9370c1` |
 | [28](runs/28-B6.3b/summary.md) | M5 | B6.3b admin users, families, consents, audit | ✅ BE 868 + FE 240 + E2E 12 | `c9791aa` |
 | [29](runs/29-B6.3c/summary.md) | M5 | B6.3c keys + tenants (+ DEBT-125/132/145/154) | ✅ BE 914 + FE 240 + E2E 12 | `dc7704d` |
+| [30](runs/30-B6.4/summary.md) | M5 | B6.4 seed (+ DEBT-137/161/163/169/172) | ✅ BE 967 + FE 240 + E2E 12 | `e950419` |
 
 ## Chặn / cần người quyết định
 
