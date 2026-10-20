@@ -28,3 +28,6 @@
 - DEBT-215 đã xác nhận bằng test thật: replay sau từ chối ⇒ 1 `TOKEN_REUSE_DETECTED` count 0. Không có bypass hay token, nên chỉ là nhiễu SOC, giữ 🟡 (không FAIL).
 - Mutation `subjectFailure` coi khoá tạm là khoá ⇒ 3 RED (gồm 1 test tester). Khôi phục bằng cp, sha256 khớp.
 - Chạy thật: typecheck/lint sạch; BE unit 317/317; int 38 suite 964/964; fe-sso-test 240/240; E2E 16/16. Grep ma trận: 169 tham chiếu, không có tham chiếu chết. **PASS** (`test-report.md`). Không có debt mới. Cổng → orchestrator đóng run.
+
+## orchestrator — 2026-10-20 (đóng run)
+- Mọi cổng PASS. Commit `a80855b`.
