@@ -2,9 +2,9 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `39-X2-T7` — cổng: **orchestrator đóng run** (tester PASS). Task 0–4 ✅. **Tester Task 4 + nghiệm thu: PASS** (`runs/39-X2-T7/test-report.md`): BE unit 382 + int 1199, FE 269, E2E FULL 21 passed ×2 liên tiếp (1.8m) + 2 spec mới `--repeat-each=3` 15 passed; grep output E2E 0 `code=`/`state=`/`eyJ`/secret. Đóng DEBT-246/247/248 (DEBT-247: `context.route` đo được không chặn redirect hop ⇒ dùng CDP `Fetch.failRequest`, 0 hit :3000). `security-matrix.md` có truy vết E2E (SE5–7, AD1, INV-4/10/11/26/28, consent). CI YAML parse OK. Debt mới DEBT-249/250 💭.
+- **Run hiện tại**: — (run 39 đã đóng, `d8da71c`). Còn lại M7: B7.5 runbook + diễn tập; bị chặn: B7.3 (Q5), X3 (Q8), A4–A9 fe-admin (Q3).
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `38-B7.4` ✅ 6/6 — BE unit 366 + int 1193, FE 240, E2E 16, audit high 0. Xem `runs/38-B7.4/summary.md`.
+- **Run vừa đóng**: `39-X2-T7` ✅ 5/5 — BE unit 382 + int 1199, FE 269, E2E 21. Xem `runs/39-X2-T7/summary.md`.
 - **Việc tiếp theo**: sau M6 → M7 hardening (B7.*, T7, X2/X3/X5); A4–A6 fe-admin chờ Q3 (plan §12). Debt đáng chú ý: DEBT-124/143 (super_admin xuyên tenant), DEBT-140 (audit OAuth chưa gắn tenant), DEBT-177, DEBT-095, DEBT-054/096.
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
@@ -39,6 +39,7 @@
 | [36](runs/36-B7.1c/summary.md) | M7 | B7.1c refresh/login re-check (+ DEBT-116/141/187/207/210/211/213) | ✅ BE 1281 + FE 240 + E2E 16 | `a80855b` |
 | [37](runs/37-B7.2/summary.md) | M7 | B7.2 observability (+ DEBT-215) | ✅ BE 1363 + FE 240 + E2E 16 | `9a37dbf` |
 | [38](runs/38-B7.4/summary.md) | M7 | B7.4 supply chain & config (+ DEBT-219/223/224) | ✅ BE 1559 + FE 240 + E2E 16 | `11786b9` |
+| [39](runs/39-X2-T7/summary.md) | M7 | X2 E2E đầy đủ + T7 + X5 truy vết | ✅ BE 1581 + FE 269 + E2E 21 | `d8da71c` |
 
 ## Chặn / cần người quyết định
 

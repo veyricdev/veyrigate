@@ -37,3 +37,6 @@
 - Task 4: `security-matrix.md` thêm tham chiếu E2E ở SE5/SE6/SE7/AD1, INV-4/10/11/26/28 + mục "Run 39" (gồm consent). Vòng grep run 34: trước `ok=259 bad=17`, sau `ok=276 bad=17` (17 BAD có sẵn là describe lồng/ô rút gọn, test tồn tại ⇒ DEBT-250); mục mới `ok=7 bad=0`. CI: `ci.yml`/`codeql.yml` parse OK; job `e2e` = `playwright test` toàn `./tests`, không dùng `secrets.`, `E2E_FE_ADMIN_SECRET` từ `env.ts`, RP cổng động (không xung đột).
 - Nghiệm thu: BE typecheck/lint sạch; unit 382/382; int FULL 1199/1199 (301 s); FE 269/269; E2E FULL 21 passed ×2 liên tiếp (1.8m, wall 110 s mỗi lần, seed `unchanged` cả hai); `--repeat-each=3` 2 spec mới 15 passed (1.9m). Grep log E2E: `code=`/`state=`/`eyJ`/`client_secret`/giá trị secret = 0.
 - Debt mới: DEBT-249 💭 (CDP ⇒ helper admin chỉ Chromium), DEBT-250 💭 (vòng grep ma trận không xử lý describe lồng). Không sửa `be/src`/`fe-sso-test/src`, không drop/FLUSH/compose, không commit. Không còn tiến trình tester khởi động.
+
+## orchestrator — 2026-10-20 (đóng run)
+- Mọi cổng PASS. Commit `d8da71c`.
