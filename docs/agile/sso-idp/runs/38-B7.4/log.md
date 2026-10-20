@@ -90,3 +90,6 @@
   - echo path thô;
   - không vào metric.
 - Không còn process do tester khởi động (:5173/:4000 trống, không phải dừng gì). Không commit.
+
+## orchestrator — 2026-10-20 (đóng run)
+- Mọi cổng PASS. Commit `11786b9`.
