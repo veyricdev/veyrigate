@@ -16,6 +16,8 @@ regexes = [
   # e2e/config/env.ts: CSRF secret + admin seed password of the hermetic E2E stack (never prod).
   '''e2e-csrf-secret-0123456789abcdef0123456789abcdef''',
   '''e2e-admin-password''',
+  # e2e/config/env.ts: fe-admin client secret seeded only on the E2E DB sso-idp-e2e (run 39).
+  '''e2e-fe-admin-secret-0123456789abcdef0123456789abcdef''',
   # be/test/full-app.ts: CSRF secret of the in-process integration-test app.
   '''full-app-csrf-secret-not-a-real-secret''',
 ]

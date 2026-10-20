@@ -61,3 +61,26 @@ describe("returnTo validation (open-redirect defence, Task 2)", () => {
     expect(sanitizeReturnTo("/profile")).toBe(DEFAULT_RETURN_TO);
   });
 });
+describe("returnTo open-redirect variants (T7)", () => {
+  const variants = [
+    "//evil",
+    "//evil/path",
+    "/\\evil",
+    "%2F%2Fevil",
+    "/%2F%2Fevil",
+    "/%2f%2fevil",
+    "/%5Cevil",
+    "/%5cevil",
+    "javascript:alert(1)",
+    "JavaScript:alert(1)",
+    "https://evil/profile",
+    "http://localhost:5174/profile",
+    "http://localhost:5173/profile",
+    " /profile",
+  ];
+  for (const v of variants) {
+    it(`collapses ${JSON.stringify(v)} to "/"`, () => {
+      expect(sanitizeReturnTo(v, ORIGIN)).toBe(DEFAULT_RETURN_TO);
+    });
+  }
+});

@@ -35,3 +35,13 @@ describe("returnTo transient store (validate on write AND read)", () => {
     expect(takeReturnTo(memStore(), ORIGIN)).toBe("/");
   });
 });
+describe("returnTo transient: tampered values never leave the origin (T7)", () => {
+  for (const v of ["//evil", "/\\evil", "%2F%2Fevil", "/%2F%2Fevil", "javascript:alert(1)", "https://evil/"]) {
+    it(`write and read of ${JSON.stringify(v)} both yield "/"`, () => {
+      const written = memStore();
+      saveReturnTo(written, v, ORIGIN);
+      expect(written.getItem("oidc:return_to")).toBe("/");
+      expect(takeReturnTo(memStore({ "oidc:return_to": v }), ORIGIN)).toBe("/");
+    });
+  }
+});

@@ -45,6 +45,16 @@ export const E2E_MONGO_URI = "mongodb://localhost:27017/sso-idp-e2e?directConnec
 export const E2E_REDIS_URL = "redis://localhost:6379/2";
 
 /**
+ * Admin of the E2E stack (run 39, Q-39.1). Non-secret placeholders valid only on `sso-idp-e2e`:
+ * `pnpm -C be seed:e2e-admin` (BE webServer) resets the admin password/lock and gives `fe-admin` a
+ * credential for `E2E_FE_ADMIN_SECRET` (refuses unless NODE_ENV=test and DB `sso-idp-e2e`). Tests
+ * use them to obtain an admin token through the real `fe-admin` OAuth flow (`client_secret_basic`).
+ */
+export const ADMIN_SEED_EMAIL = "admin@example.com";
+export const ADMIN_SEED_PASSWORD = "e2e-admin-password";
+export const E2E_FE_ADMIN_SECRET = "e2e-fe-admin-secret-0123456789abcdef0123456789abcdef";
+
+/**
  * Full BE env for the E2E run. Includes every var `envSchema` requires (no defaults) plus
  * `SESSION_COOKIE_SECURE=false` (http) and `NODE_ENV=test` (not production, so the cookie-secure
  * guard and the seed`s production block both allow the run). Federation/admin/CSRF values are
@@ -77,8 +87,9 @@ export function beEnv(): Record<string, string> {
     GOOGLE_CLIENT_SECRET: "",
     GITHUB_CLIENT_ID: "",
     GITHUB_CLIENT_SECRET: "",
-    ADMIN_SEED_EMAIL: "admin@example.com",
-    ADMIN_SEED_PASSWORD: "e2e-admin-password",
+    ADMIN_SEED_EMAIL,
+    ADMIN_SEED_PASSWORD,
+    E2E_FE_ADMIN_SECRET,
     CSRF_SECRET: "e2e-csrf-secret-0123456789abcdef0123456789abcdef",
     RATE_LIMIT_WINDOW: "60",
     RATE_LIMIT_MAX: "1000",

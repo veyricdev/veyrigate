@@ -1,4 +1,5 @@
-// F20 (run 33, INV-23): fail if test-only federation wiring leaked into the production build.
+// F20 (run 33, INV-23): fail if test-only federation wiring (or the run-39 E2E admin seed) leaked
+// into the production build.
 // Run after `pnpm -C be build`, before the E2E server starts. Scans every file under be/dist/.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
@@ -6,7 +7,7 @@ import { exit, stderr, stdout } from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 const dist = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'dist');
-const MARKERS = ['__E2E_MOCK_PROVIDER__', 'e2e-main'];
+const MARKERS = ['__E2E_MOCK_PROVIDER__', 'e2e-main', 'seed-e2e-admin'];
 
 function* walk(dir) {
   for (const name of readdirSync(dir)) {

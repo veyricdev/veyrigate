@@ -8,6 +8,7 @@
     "build:css": "tailwindcss -i src/styles.css -o src/public/styles.css --minify",
     "start": "node dist/main.js",
     "start:e2e": "ts-node test/e2e/e2e-main.ts",
+    "seed:e2e-admin": "ts-node test/e2e/seed-e2e-admin.ts",
     "start:dev": "nest start --watch",
     "lint": "eslint src test",
     "typecheck": "tsc --noEmit",

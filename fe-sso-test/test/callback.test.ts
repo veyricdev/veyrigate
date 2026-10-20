@@ -220,4 +220,48 @@ describe("handleCallback", () => {
     await expect(handleCallback(okParams(), config(), d)).rejects.toThrow(/expired/);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  // T7: the remaining reject branches, each proven to stop before `/token` (or, for the nonce
+  // that is only known after the exchange, before any session is stored).
+  it("rejects a missing state (code present) and never calls /token", async () => {
+    const fetchImpl = vi.fn();
+    const d = await deps(fetchImpl as unknown as typeof fetch);
+    const p = new URLSearchParams({ code: "abc", iss: ISSUER });
+    await expect(handleCallback(p, config(), d)).rejects.toThrow(/missing code or state/);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(d.tokens.get()).toBeNull();
+  });
+
+  it("rejects an empty iss and never calls /token", async () => {
+    const fetchImpl = vi.fn();
+    const d = await deps(fetchImpl as unknown as typeof fetch);
+    await expect(handleCallback(okParams({ iss: "" }), config(), d)).rejects.toThrow(/iss missing/);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("rejects an iss that only differs by a trailing slash (exact match) and never calls /token", async () => {
+    const fetchImpl = vi.fn();
+    const d = await deps(fetchImpl as unknown as typeof fetch);
+    await expect(
+      handleCallback(okParams({ iss: `${ISSUER}/` }), config(), d),
+    ).rejects.toThrow(/mix-up/);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("rejects a state when no login is in progress (no transient) and never calls /token", async () => {
+    const fetchImpl = vi.fn();
+    const d = await deps(fetchImpl as unknown as typeof fetch, memStore());
+    await expect(handleCallback(okParams(), config(), d)).rejects.toThrow(/missing transient/);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("rejects an id_token with no nonce claim and stores no session", async () => {
+    const idToken = await signIdToken(keys, { omitNonce: true });
+    const fetchImpl = vi.fn().mockResolvedValue(
+      tokenResponse({ access_token: "at", token_type: "Bearer", expires_in: 900, id_token: idToken }),
+    );
+    const d = await deps(fetchImpl as unknown as typeof fetch);
+    await expect(handleCallback(okParams(), config(), d)).rejects.toThrow(/nonce/);
+    expect(d.tokens.get()).toBeNull();
+  });
 });
