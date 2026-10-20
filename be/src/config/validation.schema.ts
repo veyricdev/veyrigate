@@ -91,6 +91,14 @@ export const envSchema = z
     // Non-empty so an empty env can never auto-approve by matching an empty stored version.
     CONSENT_POLICY_VERSION: z.string().min(1).default('1'),
     CONSENT_TERMS_VERSION: z.string().min(1).default('1'),
+
+    // Bearer token for `GET /metrics` (B7.2, Q-37.1). Unset/empty => the route is not registered
+    // (404, fail-closed); when set it must be a long random value (>= 32 chars).
+    METRICS_TOKEN: z
+      .string()
+      .optional()
+      .transform((v) => (v ? v : undefined))
+      .pipe(z.string().min(32).optional()),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV === 'production' && !env.SESSION_COOKIE_SECURE) {

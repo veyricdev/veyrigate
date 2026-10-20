@@ -80,6 +80,11 @@ export interface MailerConfig {
   smtpUrl: string;
 }
 
+/** `/metrics` bearer token (B7.2); undefined => the route is not registered. */
+export interface MetricsConfig {
+  token?: string;
+}
+
 export interface Config {
   app: AppConfig;
   database: DatabaseConfig;
@@ -92,6 +97,7 @@ export interface Config {
   mailer: MailerConfig;
   client: ClientConfig;
   consent: ConsentConfig;
+  metrics: MetricsConfig;
 }
 
 /**
@@ -149,6 +155,9 @@ export function buildConfig(env: Env): Config {
     consent: {
       policyVersion: env.CONSENT_POLICY_VERSION,
       termsVersion: env.CONSENT_TERMS_VERSION,
+    },
+    metrics: {
+      token: env.METRICS_TOKEN,
     },
   };
 }

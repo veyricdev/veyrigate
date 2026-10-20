@@ -5,16 +5,19 @@ import { HttpStatus } from '@nestjs/common';
  * The global `OAuthExceptionFilter` maps errors by HTTP status, so it cannot emit these
  * grant-specific codes ? the `/token` controller renders `TokenError` directly instead.
  */
-export type TokenErrorCode =
-  | 'invalid_request'
-  | 'invalid_client'
-  | 'invalid_grant'
-  | 'unauthorized_client'
-  | 'unsupported_grant_type'
-  | 'invalid_scope'
-  | 'invalid_target'
-  | 'temporarily_unavailable'
-  | 'server_error';
+export const TOKEN_ERROR_CODES = [
+  'invalid_request',
+  'invalid_client',
+  'invalid_grant',
+  'unauthorized_client',
+  'unsupported_grant_type',
+  'invalid_scope',
+  'invalid_target',
+  'temporarily_unavailable',
+  'server_error',
+] as const;
+/** Finite set: also the `error` label of `sso_token_endpoint_errors_total` (B7.2). */
+export type TokenErrorCode = (typeof TOKEN_ERROR_CODES)[number];
 
 /**
  * Domain error for `/token`. Deliberately NOT an `HttpException`: the controller owns the exact

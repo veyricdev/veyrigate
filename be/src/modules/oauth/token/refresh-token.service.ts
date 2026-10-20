@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Types, type Model } from 'mongoose';
 import { sha256 } from '../../../common/crypto/crypto.util';
@@ -32,6 +32,8 @@ export interface RotationResult {
   /** Session binding inherited by the family (DEBT-037): set as `sid` on the minted access token so
    * an active logout of the originating session makes it inactive. Undefined for pre-B4.7 families. */
   sessionRef?: string;
+  /** `_id` of the doc this rotation consumed (DEBT-215 marker target); never a hash or token. */
+  rotatedFromId: Types.ObjectId;
 }
 
 /** Request-level context carried into audit records (never contains hash/token). */
@@ -95,6 +97,8 @@ export interface FamilySummary {
  */
 @Injectable()
 export class RefreshTokenService {
+  private readonly logger = new Logger(RefreshTokenService.name);
+
   constructor(
     @InjectModel('RefreshToken') private readonly refreshTokens: Model<Record<string, unknown>>,
     private readonly tokens: TokenService,
@@ -246,11 +250,32 @@ export class RefreshTokenService {
         requestId: audit.requestId,
         metadata: { resource: result.resource, familyId: result.familyId },
       });
+    // DEBT-215: once the family is dead, unlink the consumed doc from its (undelivered) successor so
+    // an RP retry of the refused token is a plain invalid_grant, not a false TOKEN_REUSE_DETECTED.
+    // Only AFTER a successful revoke: if the revoke failed, the successor may be alive and a replay
+    // must still sweep it through reuse detection (DEBT-067). Best effort: a failure only means a
+    // false reuse alert later, the family is already dead.
+    const unlinkSuccessor = () =>
+      this.refreshTokens
+        .updateOne(
+          { _id: result.rotatedFromId, replacedBy: { $ne: null } },
+          { $set: { replacedBy: null } },
+        )
+        .exec()
+        .then(
+          () => undefined,
+          (err: unknown) =>
+            this.logger.warn(`refused refresh: unlink failed: ${(err as Error).message}`),
+        );
     let reason: string | null;
     try {
       reason = await recheck(result.userId);
     } catch (err) {
-      await this.revokeFamily(result.familyId, result.clientId, new Date()).catch(() => undefined);
+      const revoked = await this.revokeFamily(result.familyId, result.clientId, new Date()).then(
+        () => true,
+        () => false,
+      );
+      if (revoked) await unlinkSuccessor();
       await refuse('recheck_failed').catch(() => undefined);
       throw err;
     }
@@ -261,6 +286,7 @@ export class RefreshTokenService {
       await refuse(reason).catch(() => undefined); // DEBT-067: keep the refusal audit.
       throw err;
     }
+    await unlinkSuccessor();
     await refuse(reason);
     throw new RefreshRotationError();
   }
@@ -402,6 +428,7 @@ export class RefreshTokenService {
       newRefreshToken: minted.token,
       // Carry the family's session binding out so the minted access token gets `sid` (DEBT-037).
       sessionRef: old.sessionRef ?? undefined,
+      rotatedFromId: old._id,
     };
   }
 

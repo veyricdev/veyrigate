@@ -2,6 +2,7 @@ import { Controller, HttpStatus, Logger, Post, Req, Res } from '@nestjs/common';
 import { FormParseError, assertFormContentType, parseForm } from '../../../common/http/form';
 import type { HttpRequest } from '../../../common/http/http.types';
 import { deriveS256Challenge } from '../../../common/crypto/pkce.util';
+import { observeTokenError, type TokenEndpoint } from '../../../common/metrics/metrics';
 import {
   ClientAuthRateLimitedError,
   ClientAuthenticationService,
@@ -72,7 +73,7 @@ export class TokenController {
     try {
       return await this.handle(req, reply);
     } catch (err) {
-      return this.renderError(req, reply, err);
+      return this.renderError('token', req, reply, err);
     }
   }
 
@@ -90,7 +91,7 @@ export class TokenController {
     try {
       return await this.handleRevoke(req, reply);
     } catch (err) {
-      return this.renderError(req, reply, err);
+      return this.renderError('revoke', req, reply, err);
     }
   }
 
@@ -448,7 +449,25 @@ export class TokenController {
     }
   }
 
-  private renderError(req: HttpRequest, reply: TokenReply, err: unknown): unknown {
+  private renderError(
+    endpoint: TokenEndpoint,
+    req: HttpRequest,
+    reply: TokenReply,
+    err: unknown,
+  ): unknown {
+    // B7.2: one count per error response (429 included); never throws into the response path.
+    try {
+      observeTokenError(
+        endpoint,
+        err instanceof ClientAuthRateLimitedError
+          ? 'temporarily_unavailable'
+          : err instanceof TokenError
+            ? err.code
+            : 'server_error',
+      );
+    } catch (metricsErr) {
+      this.logger.error(`token metrics failed: ${(metricsErr as Error).message}`);
+    }
     // Client-auth failure rate limit (DEBT-029/039): 429 + Retry-After, no WWW-Authenticate, no
     // echo of input. The counter is NOT incremented by this 429 (window expires on its own).
     if (err instanceof ClientAuthRateLimitedError) {

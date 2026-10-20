@@ -1,0 +1,44 @@
+# SSO IdP alert rules (B7.2, spec #16 / §10). Every expression is wrapped in sum(...) so it is
+# correct with several app instances. Summaries never template a label (no identifiers).
+# Check: promtool check rules ops/prometheus/alerts.yml && promtool test rules ops/prometheus/alerts.test.yml
+groups:
+  - name: sso-idp
+    rules:
+      - alert: SsoTokenReuseDetected
+        expr: sum(increase(sso_audit_events_total{action="TOKEN_REUSE_DETECTED",result="failure"}[5m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: Refresh token reuse detected (a refresh family was revoked)
+          description: A rotated refresh token was replayed in the last 5 minutes. Check the TOKEN_REUSE_DETECTED audit events.
+
+      - alert: SsoEmergencyKeyRotation
+        expr: sum(increase(sso_signing_key_rotations_total{mode="emergency",result="success"}[5m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: Emergency signing key rotation performed
+          description: The previous signing key was dropped from JWKS; every token it signed is now invalid. Check the SIGNING_KEY_ROTATED audit events.
+
+      - alert: SsoTokenErrorRatioHigh
+        expr: >-
+          sum(rate(sso_token_endpoint_errors_total{endpoint="token"}[5m]))
+          / sum(rate(sso_http_request_duration_seconds_count{route="/token"}[5m])) > 0.25
+          and sum(rate(sso_http_request_duration_seconds_count{route="/token"}[5m])) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: More than 25% of /token requests end in an OAuth error
+          description: Break down sso_token_endpoint_errors_total by error to see which code grows.
+
+      - alert: SsoHttp5xxRatioHigh
+        expr: >-
+          sum(rate(sso_http_request_duration_seconds_count{status_class="5xx"}[5m]))
+          / sum(rate(sso_http_request_duration_seconds_count[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: More than 5% of HTTP requests fail with 5xx
+          description: Fail-closed paths (DB/Redis/KMS down) answer 5xx; check dependencies and logs.

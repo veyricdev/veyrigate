@@ -13,6 +13,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { deriveS256Challenge } from '../src/common/crypto/pkce.util';
+import { registry } from '../src/common/metrics/metrics';
 import { MODELS } from '../src/database/mongo/models';
 import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
 import { RedisService } from '../src/database/redis/redis.service';
@@ -529,6 +530,16 @@ describe('/token code grant re-check after the family insert (run 35 Task 3)', (
         }).toString(),
       });
 
+    const reuseCounter = async () => {
+      const values = (await registry.getSingleMetric('sso_audit_events_total')!.get()).values;
+      return values.find(
+        (v) =>
+          v.labels.action === AuditAction.TOKEN_REUSE_DETECTED && v.labels.result === 'failure',
+      )!.value;
+    };
+    const reuseAudits = (clientId: string) =>
+      auditModel.find({ action: AuditAction.TOKEN_REUSE_DETECTED, clientId }).lean<AuditEvent[]>();
+
     const refreshedAudits = (userId: string) =>
       auditModel
         .find({ action: AuditAction.TOKEN_REFRESHED, actorId: userId })
@@ -571,6 +582,8 @@ describe('/token code grant re-check after the family insert (run 35 Task 3)', (
       expect(replay.json().error).toBe(
         reason === 'client_disabled' ? 'invalid_client' : 'invalid_grant',
       );
+      // DEBT-215: an RP retry of the refused token is not reported as reuse.
+      expect(await reuseAudits(clientId)).toHaveLength(0);
     }
 
     it('control: nothing changed => 200, one TOKEN_REFRESHED success, successor alive', async () => {
@@ -640,8 +653,6 @@ describe('/token code grant re-check after the family insert (run 35 Task 3)', (
 
     // ---- run 36 tester: risk matrix additions (identity/lock kind, exposure, state/replay,
     // dependency failure, concurrency). Each pins one invariant the dev tests did not cover.
-    const reuseAudits = (clientId: string) =>
-      auditModel.find({ action: AuditAction.TOKEN_REUSE_DETECTED, clientId }).lean<AuditEvent[]>();
     const failedLogins = async (userId: string, n: number) => {
       for (let i = 0; i < n; i++) await app.get(UserService).recordFailedLogin(userId);
     };
@@ -717,6 +728,24 @@ describe('/token code grant re-check after the family insert (run 35 Task 3)', (
       expect((await familyDocs(userId)).every((d) => d.revokedAt)).toBe(true);
     });
 
+    it('DEBT-215/067: re-check DB error AND revokeFamily throws => no unlink; replay sweeps the live successor via reuse', async () => {
+      const { clientId, userId, rt } = await firstRefresh();
+      jest
+        .spyOn(app.get(UserTenantService), 'isActiveMember')
+        .mockRejectedValueOnce(new Error('mongo down'));
+      jest.spyOn(refresh, 'revokeFamily').mockRejectedValueOnce(new Error('mongo down'));
+      const res = await refreshReq(clientId, rt);
+      expect(res.statusCode).toBe(500);
+      expect(res.body).not.toMatch(/access_token|refresh_token/);
+      expect((await familyDocs(userId)).filter((d) => !d.revokedAt)).toHaveLength(1);
+      jest.restoreAllMocks();
+      const replay = await refreshReq(clientId, rt);
+      expect(replay.statusCode).toBe(400);
+      expect(replay.json().access_token).toBeUndefined();
+      expect((await familyDocs(userId)).every((d) => d.revokedAt)).toBe(true);
+      expect(await reuseAudits(clientId)).toHaveLength(1);
+    });
+
     it('tester: user vanished right after rotate => invalid_grant, reason user_locked, family dead', async () => {
       const { clientId, userId, rt } = await firstRefresh();
       afterRotate((_cid, uid) => conn.model('User').deleteOne({ _id: new Types.ObjectId(uid) }));
@@ -749,14 +778,14 @@ describe('/token code grant re-check after the family insert (run 35 Task 3)', (
       expect((await familyDocs(userId)).every((d) => d.revokedAt)).toBe(true);
     });
 
-    // DEBT-215 (senior 🟡): PIN the current behaviour so a fix flips this test knowingly. A replay of
-    // the old token after a post-rotate refusal is classified as reuse => one TOKEN_REUSE_DETECTED
-    // (count 0: the family is already dead). No bypass: no token, family stays dead.
+    // DEBT-215 (fixed run 37): after a post-rotate refusal killed the family, the old doc no longer
+    // points at a successor, so an RP retry of the refused token is a plain invalid_grant: no
+    // TOKEN_REUSE_DETECTED audit, no reuse metric. No bypass: no token, family stays dead.
     it.each([
       ['recheck_failed (500)', 'fail'],
       ['user_locked (400)', 'lock'],
     ])(
-      'tester DEBT-215 pin: replay after %s => invalid_grant, no token, false TOKEN_REUSE_DETECTED (count 0)',
+      'DEBT-215: replay after %s => invalid_grant, no token, NO TOKEN_REUSE_DETECTED (audit or metric)',
       async (_n, kind) => {
         const { clientId, userId, rt } = await firstRefresh();
         if (kind === 'fail') {
@@ -770,16 +799,119 @@ describe('/token code grant re-check after the family insert (run 35 Task 3)', (
         expect(first.statusCode).toBe(kind === 'fail' ? 500 : 400);
         expect(await reuseAudits(clientId)).toHaveLength(0);
         jest.restoreAllMocks();
+        const reuseMetric = await reuseCounter();
         const replay = await refreshReq(clientId, rt);
         expect(replay.statusCode).toBe(400);
         expect(replay.json().error).toBe('invalid_grant');
         expect(replay.body).not.toMatch(/access_token|refresh_token/);
-        const reuse = await reuseAudits(clientId);
-        expect(reuse).toHaveLength(1);
-        expect(reuse[0].metadata).toMatchObject({ count: 0 });
-        expect(JSON.stringify(reuse[0])).not.toContain(rt);
+        expect(await reuseAudits(clientId)).toHaveLength(0);
+        expect(await reuseCounter()).toBe(reuseMetric);
+        const docs = await familyDocs(userId);
+        expect(docs).toHaveLength(2);
+        expect(docs.every((d) => d.revokedAt)).toBe(true);
+        // Forensics kept: the successor still links to its parent.
+        expect(docs.some((d) => d.parentId != null)).toBe(true);
+      },
+    );
+
+    // ---- run 37 tester: DEBT-215 under concurrency (state: retry/concurrent; exposure: reuse alert).
+    const PARALLEL = 6;
+    const tokenOut = /access_token|refresh_token/;
+
+    it.each([
+      ['recheck_failed (500)', 'fail'],
+      ['user_locked (400)', 'lock'],
+    ])(
+      'tester DEBT-215: parallel RP retries after a %s refusal => all invalid_grant, 0 reuse audit/metric, family dead',
+      async (_n, kind) => {
+        const { clientId, userId, rt } = await firstRefresh();
+        if (kind === 'fail') {
+          jest
+            .spyOn(app.get(UserTenantService), 'isActiveMember')
+            .mockRejectedValueOnce(new Error('mongo down'));
+        } else {
+          afterRotate((_cid, uid) => lockOnly(uid));
+        }
+        expect((await refreshReq(clientId, rt)).statusCode).toBe(kind === 'fail' ? 500 : 400);
+        jest.restoreAllMocks();
+        const reuseMetric = await reuseCounter();
+        const replays = await Promise.all(
+          Array.from({ length: PARALLEL }, () => refreshReq(clientId, rt)),
+        );
+        for (const r of replays) {
+          expect(r.statusCode).toBe(400);
+          expect(r.json().error).toBe('invalid_grant');
+          expect(r.body).not.toMatch(tokenOut);
+        }
+        expect(await reuseAudits(clientId)).toHaveLength(0);
+        expect(await reuseCounter()).toBe(reuseMetric);
         expect((await familyDocs(userId)).every((d) => d.revokedAt)).toBe(true);
       },
     );
+
+    it('tester DEBT-215: REAL reuse replayed in parallel (token rotated OK) => all 400, reuse still reported, successor revoked', async () => {
+      const { clientId, userId, rt } = await firstRefresh();
+      const ok = await refreshReq(clientId, rt);
+      expect(ok.statusCode).toBe(200);
+      const successor = ok.json().refresh_token as string;
+      const reuseMetric = await reuseCounter();
+      const replays = await Promise.all(
+        Array.from({ length: PARALLEL }, () => refreshReq(clientId, rt)),
+      );
+      for (const r of replays) {
+        expect(r.statusCode).toBe(400);
+        expect(r.json().error).toBe('invalid_grant');
+        expect(r.body).not.toMatch(tokenOut);
+      }
+      const reuse = await reuseAudits(clientId);
+      expect(reuse.length).toBeGreaterThanOrEqual(1);
+      expect(await reuseCounter()).toBe(reuseMetric + reuse.length);
+      expect((await familyDocs(userId)).every((d) => d.revokedAt)).toBe(true);
+      const after = await refreshReq(clientId, successor);
+      expect(after.statusCode).toBe(400);
+      expect(after.body).not.toMatch(tokenOut);
+    });
+
+    it('tester DEBT-215: parallel first use of one token => at most one 200, losers report reuse and kill the winner too', async () => {
+      const { clientId, userId, rt } = await firstRefresh();
+      const reuseMetric = await reuseCounter();
+      const res = await Promise.all(
+        Array.from({ length: PARALLEL }, () => refreshReq(clientId, rt)),
+      );
+      const winners = res.filter((r) => r.statusCode === 200);
+      expect(winners.length).toBeLessThanOrEqual(1);
+      expect(res.filter((r) => r.statusCode !== 200).every((r) => r.statusCode === 400)).toBe(true);
+      const reuse = await reuseAudits(clientId);
+      expect(reuse.length).toBeGreaterThanOrEqual(1);
+      expect(await reuseCounter()).toBe(reuseMetric + reuse.length);
+      expect((await familyDocs(userId)).every((d) => d.revokedAt)).toBe(true);
+      if (winners.length === 1) {
+        const next = await refreshReq(clientId, winners[0].json().refresh_token as string);
+        expect(next.statusCode).toBe(400);
+      }
+    });
+
+    it('tester DEBT-215: replay racing the refusal (before unlink) => no token, family dead, at most one reuse', async () => {
+      const { clientId, userId, rt } = await firstRefresh();
+      let raced: Awaited<ReturnType<typeof refreshReq>> | undefined;
+      afterRotate(async (_cid, uid) => {
+        await lockOnly(uid);
+        // Old doc is revoked + linked, family not yet revoked: the replay lands in the reuse path.
+        raced = await refreshReq(clientId, rt);
+      });
+      const first = await refreshReq(clientId, rt);
+      jest.restoreAllMocks();
+      expect(first.statusCode).toBe(400);
+      expect(first.body).not.toMatch(tokenOut);
+      expect(raced!.statusCode).toBe(400);
+      expect(raced!.body).not.toMatch(tokenOut);
+      expect((await reuseAudits(clientId)).length).toBeLessThanOrEqual(1);
+      expect((await familyDocs(userId)).every((d) => d.revokedAt)).toBe(true);
+      // After the refusal finished (unlinked), one more retry is a plain invalid_grant.
+      const before = (await reuseAudits(clientId)).length;
+      const late = await refreshReq(clientId, rt);
+      expect(late.json().error).toBe('invalid_grant');
+      expect(await reuseAudits(clientId)).toHaveLength(before);
+    });
   });
 });

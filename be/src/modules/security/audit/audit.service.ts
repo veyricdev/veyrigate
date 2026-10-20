@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import type { Model, QueryFilter } from 'mongoose';
 import { randomUUID } from 'node:crypto';
+import { observeAuditEvent } from '../../../common/metrics/metrics';
 import type { TenantContext } from '../../identity/tenant-context/tenant-context';
 import { ALERT_ACTIONS, type AuditAction } from './audit-action.enum';
 import type { AuditAlertListener, AuditEvent, AuditEventInput, AuditMetadata } from './audit.types';
@@ -121,6 +122,12 @@ export class AuditService {
       timestamp: new Date(),
     };
     await this.auditModel.create(event);
+    // B7.2: count only PERSISTED events; a metrics failure never fails the audit write.
+    try {
+      observeAuditEvent(event);
+    } catch (err) {
+      this.logger.error(`audit metrics failed: ${(err as Error).message}`);
+    }
 
     if (ALERT_ACTIONS.has(event.action)) {
       this.logger.warn(

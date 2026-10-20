@@ -248,3 +248,19 @@ describe('GOOGLE_* / GITHUB_* federation credentials (B5.1, F4)', () => {
     expect(Object.values(fed).every((v) => v === undefined)).toBe(true);
   });
 });
+
+describe('METRICS_TOKEN (B7.2, Q-37.1)', () => {
+  it('unset or empty → undefined (the /metrics route is not registered)', () => {
+    expect(buildConfig(validateEnv(BASE)).metrics).toEqual({ token: undefined });
+    expect(buildConfig(validateEnv({ ...BASE, METRICS_TOKEN: '' })).metrics.token).toBeUndefined();
+  });
+
+  it('>= 32 chars → kept', () => {
+    const token = 'a'.repeat(32);
+    expect(buildConfig(validateEnv({ ...BASE, METRICS_TOKEN: token })).metrics.token).toBe(token);
+  });
+
+  it('shorter than 32 chars → boot fails naming the variable', () => {
+    expect(() => validateEnv({ ...BASE, METRICS_TOKEN: 'a'.repeat(31) })).toThrow(/METRICS_TOKEN/);
+  });
+});

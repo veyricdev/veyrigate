@@ -3,10 +3,13 @@ import helmet from '@fastify/helmet';
 import fastifyStatic from '@fastify/static';
 import view from '@fastify/view';
 import { ValidationPipe } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Logger } from 'nestjs-pino';
 import { Eta } from 'eta';
 import { join } from 'node:path';
+import { registerMetrics } from './common/metrics/metrics.http';
+import type { MetricsConfig } from './config/configuration';
 import { ClientCorsService } from './modules/clients/client-cors.service';
 import { registerCorsPreflight } from './modules/clients/client-cors.helper';
 import { isDemoEnabled } from './modules/demo/demo.enabled';
@@ -43,6 +46,12 @@ export async function configureApp(app: NestFastifyApplication): Promise<void> {
     engine: { eta: new Eta({ views: join(__dirname, 'views'), autoEscape: true }) },
     root: join(__dirname, 'views'),
     layout: 'layout.eta',
+  });
+
+  // Prometheus (B7.2): latency hook for every route + `GET /metrics` only when METRICS_TOKEN is
+  // set. Shared with the integration test (same code under test); runs before Nest adds routes.
+  registerMetrics(app.getHttpAdapter().getInstance(), {
+    token: app.get(ConfigService).get<MetricsConfig>('metrics')?.token,
   });
 
   // Dynamic per-client CORS preflight (DEBT-019, spec §9.7). Shared with the integration tests so
