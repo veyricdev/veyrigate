@@ -2,9 +2,9 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `34-B7.1` — cổng: **tester PASS** → orchestrator đóng run (Task 1–4 xong; senior PASS 0 🔴, DEBT-205/206 mới; tester: `test-report.md`, không debt mới). T1 khoá `vg:int-lock` + `--testTimeout=20000` (DEBT-195/199/201/202 đóng); T2 ma trận §14/§15; T3 9 test mới (R1, SE12, AE4, AE6×4, AE8, INV-15) ⇒ ma trận `thiếu`=0, sửa lỗi sản phẩm INV-15 (`resource` lặp ở `/authorize` từng cấp code) trong `AuthorizeService.resolveResource`; T4 job CI `int` (mongo@27117 + redis@6479 + mailpit, chưa chạy runner thật). BE unit 303 + int 827 (+2 test INV-15 của tester), FE 240, E2E 16; ma trận 77 = 72 có/1 một phần/0 thiếu/3 lỗi sản phẩm/1 ngoài phạm vi. ⚠ Người dùng gỡ container thừa `funny_pascal` (Created, không chạy): `docker rm -v funny_pascal`. Debt sản phẩm hẹn B7.1 tách: run 35 B7.1b (DEBT-116/128/141/144/156 + 204, qua analyst), run 36 B7.1c (140/142/147/150/151/155/166/197).
+- **Run hiện tại**: — (run 34 đã đóng, `2007080`). Kế tiếp: run 35 = B7.1b lỗi sản phẩm: DEBT-116 (cross-tenant OAuth), 204/205 (tham số lặp), 128/141/144/156.
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `33-B5.3-X4` ✅ 4/4 — BE unit 303 + int 816, FE 240, E2E 16. Xem `runs/33-B5.3-X4/summary.md`.
+- **Run vừa đóng**: `34-B7.1` ✅ 4/4 — BE unit 303 + int 827, FE 240, E2E 16; ma trận §14/§15 72/77 có. Xem `runs/34-B7.1/summary.md`.
 - **Việc tiếp theo**: sau M6 → M7 hardening (B7.*, T7, X2/X3/X5); A4–A6 fe-admin chờ Q3 (plan §12). Debt đáng chú ý: DEBT-124/143 (super_admin xuyên tenant), DEBT-140 (audit OAuth chưa gắn tenant), DEBT-177, DEBT-095, DEBT-054/096.
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
@@ -34,6 +34,7 @@
 | [31](runs/31-admin-hardening/summary.md) | M5 | admin-hardening (DEBT-167/170/173–176/178) | ✅ BE 1001 + FE 240 + E2E 12 | `a299314` |
 | [32](runs/32-B5.1-B5.2/summary.md) | M6 | B5.1–B5.2 federation broker (+ DEBT-030) | ✅ BE 1083 + FE 240 + E2E 12 | `4c36371` |
 | [33](runs/33-B5.3-X4/summary.md) | M6 | B5.3 linking + X4 E2E (+ DEBT-184/186/189/191) | ✅ BE 1119 + FE 240 + E2E 16 | `b84fa92` |
+| [34](runs/34-B7.1/summary.md) | M7 | B7.1 security matrix + test infra + CI int (+ INV-15 fix) | ✅ BE 1130 + FE 240 + E2E 16 | `2007080` |
 
 ## Chặn / cần người quyết định
 

@@ -60,3 +60,6 @@
 - 2 test INV-15 (tester) trong `authorize.int-spec.ts`: mảng 1 phần tử/rỗng (service); `resource=A&resource=`, `resource[]=`, `resource%5B%5D=`, `resource[0]=` (HTTP). Mutation bỏ fix `typeof raw !== 'string'` (cp + sha256, khôi phục khớp) ⇒ 3/49 RED, đúng 3 test INV-15.
 - CI YAML parse OK (js-yaml 3.15.2 có sẵn), job `int` không `TEST_*`/secrets; chưa chạy runner thật.
 - Không debt mới. Đề nghị: orchestrator đóng run 34.
+
+## orchestrator — 2026-10-20 (đóng run)
+- Mọi cổng PASS. Commit `2007080`. Container lạc `funny_pascal` (do subagent tạo nhầm, xoá bị chặn quyền) — chờ người dùng xoá.
