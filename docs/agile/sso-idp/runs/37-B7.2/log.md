@@ -46,3 +46,6 @@
 - Mutation A/B/C/D/E/G: tất cả RED, khôi phục với sha256 khớp.
 - Chạy thật: typecheck + lint sạch; unit 351/351; int FULL 1012/1012 (39 suite); FE 240/240; E2E 16/16.
 - **PASS** (`test-report.md`). Đóng DEBT-222, không có 🟡 mới. Cổng → orchestrator đóng run.
+
+## orchestrator — 2026-10-20 (đóng run)
+- Mọi cổng PASS. Commit `9a37dbf`.

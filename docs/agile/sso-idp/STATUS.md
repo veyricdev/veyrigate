@@ -2,9 +2,9 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `37-B7.2` — cổng: **orchestrator đóng run** (tester **PASS**, senior PASS). B7.2 4/4: `/metrics` + bearer `METRICS_TOKEN`, metrics nghiệp vụ, `ops/` alert/dashboard + `ops-rules.spec`, DEBT-215 đóng. BE unit 351 + int 1012, FE 240, E2E 16. Tester đóng DEBT-222; mở DEBT-221/223/224 (không 🟡 mới). Muốn bật `/metrics` ở dev: tự thêm `METRICS_TOKEN` (≥32, `openssl rand -hex 32`) vào `be/.env`.
+- **Run hiện tại**: — (run 37 đã đóng, `9a37dbf`). Kế tiếp: B7.4 supply chain + DEBT-223/224 (B7.3 chờ Q5, X3 chờ Q8, A4–A6 chờ Q3).
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `36-B7.1c` ✅ 4/4 — BE unit 317 + int 964, FE 240, E2E 16. Xem `runs/36-B7.1c/summary.md`.
+- **Run vừa đóng**: `37-B7.2` ✅ 4/4 — BE unit 351 + int 1012, FE 240, E2E 16. Xem `runs/37-B7.2/summary.md`.
 - **Việc tiếp theo**: sau M6 → M7 hardening (B7.*, T7, X2/X3/X5); A4–A6 fe-admin chờ Q3 (plan §12). Debt đáng chú ý: DEBT-124/143 (super_admin xuyên tenant), DEBT-140 (audit OAuth chưa gắn tenant), DEBT-177, DEBT-095, DEBT-054/096.
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
@@ -37,6 +37,7 @@
 | [34](runs/34-B7.1/summary.md) | M7 | B7.1 security matrix + test infra + CI int (+ INV-15 fix) | ✅ BE 1130 + FE 240 + E2E 16 | `2007080` |
 | [35](runs/35-B7.1b/summary.md) | M7 | B7.1b cross-tenant OAuth, repeated params, code-grant recheck | ✅ BE 1252 + FE 240 + E2E 16 | `29c1a45` |
 | [36](runs/36-B7.1c/summary.md) | M7 | B7.1c refresh/login re-check (+ DEBT-116/141/187/207/210/211/213) | ✅ BE 1281 + FE 240 + E2E 16 | `a80855b` |
+| [37](runs/37-B7.2/summary.md) | M7 | B7.2 observability (+ DEBT-215) | ✅ BE 1363 + FE 240 + E2E 16 | `9a37dbf` |
 
 ## Chặn / cần người quyết định
 
