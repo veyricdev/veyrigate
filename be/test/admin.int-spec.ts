@@ -494,7 +494,9 @@ describe('Admin API guard (B6.1) + step-up (B6.2) on real Mongo + Redis', () => 
     });
 
     it('tenant_admin of A with a SUSPENDED membership => 403 forbidden', async () => {
-      const res = await me(await tokenFor(suspendedA));
+      // Run 35 (DEBT-116): the real /authorize no longer issues a code to a suspended member, so the
+      // guard (defence in depth) is exercised with a hand-signed token of the same shape.
+      const res = await me(await signed(suspendedA));
       expect(res.statusCode).toBe(403);
       expect(res.json()).toEqual({ error: 'forbidden' });
     });
@@ -513,7 +515,8 @@ describe('Admin API guard (B6.1) + step-up (B6.2) on real Mongo + Redis', () => 
       const outsider = (
         (await userModel.create({ email: `${RUN}-out@example.com` }))._id as Types.ObjectId
       ).toHexString();
-      const res = await me(await tokenFor(outsider));
+      // Run 35 (DEBT-116): a non-member gets no code from /authorize; hand-signed, as above.
+      const res = await me(await signed(outsider));
       expect(res.statusCode).toBe(403);
       expect(res.json()).toEqual({ error: 'forbidden' });
     });

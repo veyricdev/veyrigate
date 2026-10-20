@@ -34,6 +34,8 @@ import {
 } from '../src/modules/oauth/authorize/authorize.service';
 import { AuthorizationCodeService } from '../src/modules/oauth/code/authorization-code.service';
 import { ConsentService, type Consent } from '../src/modules/oauth/consent/consent.service';
+import { UserTenantService, type UserTenant } from '../src/modules/identity/user-tenant.service';
+import { seedOAuthUser } from './oauth-fixtures';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -120,7 +122,10 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
       codes,
       sessionsRp,
       config(),
+      new UserTenantService(connection.model<UserTenant>('UserTenant')),
     );
+    // Run 35 (DEBT-116): the signed-in owner is a real active member of the client's tenant.
+    signedIn.userId = await seedOAuthUser(connection, { tenantId: 'tenant-A' });
 
     await clients.create({
       clientId: `${RUN}-client`,
@@ -302,7 +307,7 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
       // A fresh session so this test owns its own consent/ref; proves AuthorizeService.issueCode
       // carries session.ref into the code (the binding local/global logout later revokes against).
       const sess: SessionView = {
-        userId: new Types.ObjectId().toHexString(),
+        userId: await seedOAuthUser(connection, { tenantId: 'tenant-A' }),
         authTime: Date.now(),
         ref: `sref-${Date.now()}`,
       };
@@ -494,6 +499,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
         SessionService,
         SessionCookie,
         AuditService,
+        UserTenantService,
         HtmlExceptionFilter,
         { provide: RedisService, useValue: new RedisService(httpRedis) },
         { provide: ConfigService, useValue: cfg },
@@ -538,6 +544,9 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
     if (httpApp) await httpApp.close();
   });
 
+  /** Run 35 (DEBT-116): a real user with an ACTIVE membership in the client's tenant (tenant-A). */
+  const member = () => seedOAuthUser(httpClientModel.db, { tenantId: 'tenant-A' });
+
   const fullQuery = (extra = '') =>
     `/authorize?response_type=code&client_id=${RUN}-http` +
     `&redirect_uri=${encodeURIComponent('https://app.example.com/callback')}` +
@@ -560,7 +569,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
     );
     const requestId = new URLSearchParams(returnTo.split('?')[1]).get('request_id')!;
 
-    const { id } = await sessionSvc.create(`${new Types.ObjectId().toHexString()}`, 'tenant-A');
+    const { id } = await sessionSvc.create(`${await member()}`, 'tenant-A');
     const resumed = await httpApp.inject({
       method: 'GET',
       url: `/authorize?request_id=${encodeURIComponent(requestId)}`,
@@ -683,7 +692,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
   // Sign in as a fresh ObjectId-backed user and fetch the consent screen for a fresh /authorize.
   // Returns the session cookie id, the parsed _csrf + request_id, and the raw response.
   async function openConsent(extra = '') {
-    const userId = new Types.ObjectId().toHexString();
+    const userId = await member();
     const { id } = await sessionSvc.create(userId, 'tenant-A');
     const res = await httpApp.inject({
       method: 'GET',
@@ -811,7 +820,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
   });
 
   it('already-covered consent => GET /authorize skips the screen and 302s a code immediately', async () => {
-    const userId = new Types.ObjectId().toHexString();
+    const userId = await member();
     await consentSvc.grant(
       userId,
       `${RUN}-http`,
@@ -840,7 +849,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
   });
 
   it('prompt=consent still shows the screen even when consent already covers the request', async () => {
-    const userId = new Types.ObjectId().toHexString();
+    const userId = await member();
     await consentSvc.grant(
       userId,
       `${RUN}-http`,
@@ -861,7 +870,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
   });
 
   it('prompt=none + no consent => 302 error=consent_required (fail-closed, no UI)', async () => {
-    const userId = new Types.ObjectId().toHexString();
+    const userId = await member();
     const { id } = await sessionSvc.create(userId, 'tenant-A');
     const res = await httpApp.inject({
       method: 'GET',
@@ -878,7 +887,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
   });
 
   it('prompt=none + already covered => 302 a code (success case, OIDC Core, no error)', async () => {
-    const userId = new Types.ObjectId().toHexString();
+    const userId = await member();
     await consentSvc.grant(
       userId,
       `${RUN}-http`,
@@ -957,7 +966,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
   // sessions by replaying another user's form fields.
   it('cross-session: user B submitting user A s request_id + A s _csrf => 403, no code, no consent', async () => {
     const { userId: userA, sessionId: sessA, csrf: csrfA, requestId } = await openConsent();
-    const userB = new Types.ObjectId().toHexString();
+    const userB = await member();
     const { id: sessB } = await sessionSvc.create(userB, 'tenant-A');
 
     const post = await httpApp.inject({
@@ -981,7 +990,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
   // to A. Either outcome is acceptable as long as nothing is ever attributed to user A.
   it('cross-session: user B with B s own _csrf submitting A s request_id never writes consent for A', async () => {
     const { userId: userA, sessionId: sessA, requestId } = await openConsent();
-    const userB = new Types.ObjectId().toHexString();
+    const userB = await member();
     const { id: sessB } = await sessionSvc.create(userB, 'tenant-A');
     // Mint a _csrf valid for B's session by opening B's own consent screen.
     const bScreen = await httpApp.inject({
@@ -1025,7 +1034,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
       scopes: ['openid', 'profile'],
       tenantId: 'tenant-A',
     });
-    const userId = new Types.ObjectId().toHexString();
+    const userId = await member();
     // Consent already covers each resource on its own, so only the duplicate can stop a code.
     for (const res of [RES_A, RES_B]) {
       await consentSvc.grant(
@@ -1088,7 +1097,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
       scopes: ['openid', 'profile'],
       tenantId: 'tenant-A',
     });
-    const userId = new Types.ObjectId().toHexString();
+    const userId = await member();
     await consentSvc.grant(
       userId,
       clientId,

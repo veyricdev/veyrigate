@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ClientsModule } from '../clients/clients.module';
+import { IdentityModule } from '../identity/identity.module';
 import { KeysModule } from '../keys/keys.module';
 import { ResourcesModule } from '../resources/resources.module';
 import { SessionsModule } from '../sessions/sessions.module';
@@ -27,7 +28,7 @@ import { CsrfGuard, CsrfService } from '../ui/csrf.service';
  * so no `UiModule` DI import is needed.
  */
 @Module({
-  imports: [ClientsModule, ResourcesModule, SessionsModule, KeysModule],
+  imports: [ClientsModule, ResourcesModule, SessionsModule, KeysModule, IdentityModule],
   controllers: [
     AuthorizeController,
     TokenController,

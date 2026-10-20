@@ -31,6 +31,9 @@ import { TokenController } from '../src/modules/oauth/token/token.controller';
 import { IntrospectController } from '../src/modules/oauth/introspect/introspect.controller';
 import { TokenService } from '../src/modules/oauth/token/token.service';
 import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
+import { UserService } from '../src/modules/identity/user.service';
+import { UserTenantService } from '../src/modules/identity/user-tenant.service';
+import { ConsentService } from '../src/modules/oauth/consent/consent.service';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -61,6 +64,7 @@ function cfgFor(trustProxyEnv?: string): ConfigService {
       sessionAbsoluteTtl: 2592000,
     },
     client: { secretGraceTtl: 3600 },
+    consent: { policyVersion: '1', termsVersion: '1' },
     security,
   };
   return { getOrThrow: (ns: string) => base[ns] } as unknown as ConfigService;
@@ -105,6 +109,9 @@ async function buildApp(keyDir: string, trustProxyEnv?: string): Promise<NestFas
       ClientCredentialService,
       ClientAuthenticationService,
       ClientCorsService,
+      UserService,
+      UserTenantService,
+      ConsentService,
       AuditService,
       RateLimitService,
       TokenSigner,

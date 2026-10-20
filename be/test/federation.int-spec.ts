@@ -509,7 +509,10 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       redirectUris: [REDIRECT],
       allowedResources: ['api'],
       scopes: ['openid', 'api.read'],
-      tenantId: 'tenant-A',
+      // Run 35 (DEBT-116, Q35.2): a provisioned/linked user is a member of `default-tenant` only and
+      // membership is never auto-granted, so the RP of these end-to-end flows lives there (as the
+      // seeded dev client does). Cross-tenant refusal is covered in oauth-tenant-isolation.int-spec.
+      tenantId: DEFAULT_TENANT_ID,
     });
   }, 60_000);
 
@@ -2181,6 +2184,121 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
         expect(cb.statusCode).toBe(400);
         expectNoSession(cb);
       }
+    });
+  });
+
+  // ------------------------------------------------------------------ cross-tenant (run 35 tester)
+  // DEBT-212 + senior nit 1: the real login legs (password form and federated Google) into an RP of
+  // ANOTHER tenant. The user only ever holds `default-tenant` (Q35.2: never auto-granted), so the
+  // resume after login must end in access_denied at the RP with the original state and no code.
+  describe('cross-tenant RP after a real login (run 35, DEBT-116/212, MT1)', () => {
+    const CLIENT_B = `${RUN}-spa-b`;
+
+    beforeAll(async () => {
+      await moduleRef.get(ClientService).create({
+        clientId: CLIENT_B,
+        clientType: 'public',
+        tokenEndpointAuthMethod: 'none',
+        redirectUris: [REDIRECT],
+        allowedResources: ['api'],
+        scopes: ['openid', 'api.read'],
+        tenantId: 'tenant-B',
+      });
+    });
+
+    const codeCount = async () => (await redis.keys('authz_code:*')).length;
+
+    const expectDeniedAtRp = (res: { statusCode: number; headers: Record<string, unknown> }) => {
+      expect(res.statusCode).toBe(302);
+      const rp = new URL(res.headers.location as string);
+      expect(rp.origin + rp.pathname).toBe(REDIRECT);
+      expect(rp.searchParams.get('error')).toBe('access_denied');
+      expect(rp.searchParams.get('state')).toBe(RP_STATE);
+      expect(rp.searchParams.get('iss')).toBe(ISSUER);
+      expect(rp.searchParams.get('code')).toBeNull();
+      expect(rp.href).not.toContain('tenant-B');
+    };
+
+    async function passwordLogin(email: string, password: string, returnTo: string) {
+      const page = await loginPage(returnTo);
+      const csrf = page.body.match(/name="_csrf" value="([^"]+)"/)![1];
+      const res = await app.inject({
+        method: 'POST',
+        url: '/login',
+        cookies: { idp_csrf: cookieOf(page, 'idp_csrf')!.value },
+        payload: { _csrf: csrf, email, password, returnTo },
+      });
+      expect(res.statusCode).toBe(302);
+      return {
+        location: res.headers.location as string,
+        sid: cookieOf(res, SESSION_COOKIE)!.value,
+      };
+    }
+
+    it('password login form => resume => access_denied for a default-tenant-only user, no code, no membership granted', async () => {
+      const email = `${RUN}-xt-local@example.com`;
+      const local = await users.create({ email, password: 'correct horse battery' });
+      await users.verifyEmail(local.sub);
+      await moduleRef.get(UserTenantService).addMembership(local.sub, DEFAULT_TENANT_ID);
+      const { returnTo } = await rpAuthorize({ client_id: CLIENT_B });
+      const { location, sid } = await passwordLogin(email, 'correct horse battery', returnTo);
+      expect(location).toBe(returnTo);
+      const before = await codeCount();
+      expectDeniedAtRp(
+        await app.inject({ method: 'GET', url: location, cookies: { [SESSION_COOKIE]: sid } }),
+      );
+      expect(await codeCount()).toBe(before);
+      expect(await utModel.countDocuments({ tenantId: 'tenant-B', userId: local.sub })).toBe(0);
+      const audit = await auditModel
+        .findOne({ action: 'OAUTH_AUTHORIZE', actorId: local.sub, result: 'failure' })
+        .lean();
+      expect(audit).toMatchObject({
+        reason: 'not_member',
+        tenantId: 'tenant-B',
+        clientId: CLIENT_B,
+      });
+    });
+
+    it('Google federated (new user) => resume => access_denied; provisioned into default-tenant only', async () => {
+      const sub = `${RUN}-xt-g`;
+      const { requestId } = await rpAuthorize({ client_id: CLIENT_B });
+      const { res } = await socialLogin('google', requestId, { claims: { sub } });
+      expect(res.statusCode).toBe(302);
+      const sid = cookieOf(res, SESSION_COOKIE)!.value;
+      const user = await userModel.findOne({ email: `${sub}@example.com` }).lean();
+      expect(user).toBeTruthy();
+      const before = await codeCount();
+      expectDeniedAtRp(
+        await app.inject({
+          method: 'GET',
+          url: res.headers.location as string,
+          cookies: { [SESSION_COOKIE]: sid },
+        }),
+      );
+      expect(await codeCount()).toBe(before);
+      expect(await utModel.countDocuments({ userId: user!._id })).toBe(1);
+      expect(await utModel.countDocuments({ userId: user!._id, tenantId: 'tenant-B' })).toBe(0);
+      // A fresh /authorize to the same tenant-B RP with the live federated session is refused too.
+      expectDeniedAtRp(
+        await app.inject({
+          method: 'GET',
+          url: authorizeQuery({ client_id: CLIENT_B }),
+          cookies: { [SESSION_COOKIE]: sid },
+        }),
+      );
+    });
+
+    it('control: a password user who IS an active member of tenant-B resumes to a code at the tenant-B RP', async () => {
+      const email = `${RUN}-xt-member@example.com`;
+      const member = await users.create({ email, password: 'correct horse battery' });
+      await users.verifyEmail(member.sub);
+      await moduleRef.get(UserTenantService).addMembership(member.sub, 'tenant-B');
+      const { returnTo } = await rpAuthorize({ client_id: CLIENT_B });
+      const { location, sid } = await passwordLogin(email, 'correct horse battery', returnTo);
+      const rp = await resumeToRp(location, sid);
+      expect(rp.origin + rp.pathname).toBe(REDIRECT);
+      expect(rp.searchParams.get('code')).toBeTruthy();
+      expect(rp.searchParams.get('state')).toBe(RP_STATE);
     });
   });
 });

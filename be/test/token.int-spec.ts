@@ -32,6 +32,10 @@ import { TokenController } from '../src/modules/oauth/token/token.controller';
 import { TokenService } from '../src/modules/oauth/token/token.service';
 import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
 import { ResourceService } from '../src/modules/resources/resource.service';
+import { UserService } from '../src/modules/identity/user.service';
+import { UserTenantService } from '../src/modules/identity/user-tenant.service';
+import { ConsentService } from '../src/modules/oauth/consent/consent.service';
+import { seedCodeGrant } from './oauth-fixtures';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -60,6 +64,7 @@ const cfg = {
         sessionAbsoluteTtl: SESSION_ABSOLUTE_TTL,
       };
     if (ns === 'client') return { secretGraceTtl: 3600 };
+    if (ns === 'consent') return { policyVersion: '1', termsVersion: '1' };
     if (ns === 'security')
       return {
         rateLimitWindow: 60,
@@ -125,7 +130,11 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
       authTime: 1_700_000_000_000,
       sessionRef: await liveSessionRef(),
     };
-    return codes.create({ ...base, ...overrides } as never);
+    const data = { ...base, ...overrides };
+    // Run 35: the code grant re-checks the owner (real user, active member of the client's
+    // tenant) and a covered consent, so a directly minted code needs both.
+    await seedCodeGrant(refreshModel.db, data as never, 'tenant-A');
+    return codes.create(data as never);
   };
 
   beforeAll(async () => {
@@ -154,6 +163,9 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
         ClientCredentialService,
         ClientAuthenticationService,
         ClientCorsService,
+        UserService,
+        UserTenantService,
+        ConsentService,
         AuditService,
         RateLimitService,
         TokenSigner,

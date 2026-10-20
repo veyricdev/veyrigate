@@ -47,6 +47,7 @@ import { AuthorizeRequestContextService } from '../src/modules/oauth/authorize/a
 import { AuthorizeService } from '../src/modules/oauth/authorize/authorize.service';
 import { AuthorizationCodeService } from '../src/modules/oauth/code/authorization-code.service';
 import { ConsentService } from '../src/modules/oauth/consent/consent.service';
+import { seedCodeGrant } from './oauth-fixtures';
 import { IntrospectController } from '../src/modules/oauth/introspect/introspect.controller';
 import { LogoutService } from '../src/modules/oauth/logout/logout.service';
 import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
@@ -1710,6 +1711,12 @@ describe('Admin API B6.3a (clients, secrets, resources) on real Mongo + Redis', 
     /** A code minted the way `/authorize` mints it, bound to a live session of tadminA. */
     async function mintCode(clientId: string): Promise<string> {
       const { session } = await sessions.create(tadminA, DEFAULT_TENANT_ID);
+      // Run 35: the code grant re-checks the owner's membership in the client's tenant + consent.
+      await seedCodeGrant(
+        clientModel.db,
+        { userId: tadminA, clientId, resource: API_AUD, scope: 'openid offline_access api.read' },
+        TENANT_A,
+      );
       return (
         await moduleRef.get(AuthorizationCodeService).create({
           clientId,

@@ -37,6 +37,7 @@ import { AuthorizeController } from '../src/modules/oauth/authorize/authorize.co
 import { AuthorizeRequestContextService } from '../src/modules/oauth/authorize/authorize-request-context.service';
 import { AuthorizeService } from '../src/modules/oauth/authorize/authorize.service';
 import { AuthorizationCodeService } from '../src/modules/oauth/code/authorization-code.service';
+import { seedCodeGrant } from './oauth-fixtures';
 import { ConsentService } from '../src/modules/oauth/consent/consent.service';
 import { LogoutService } from '../src/modules/oauth/logout/logout.service';
 import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
@@ -182,6 +183,12 @@ describe('DEBT-174 HTTP matrix: 9 client shapes x 4 aud=admin gates (run 31 QA)'
     sha256((await app.get(SessionService).create(userId, DEFAULT_TENANT_ID)).id);
 
   const mintCode = async (): Promise<string> => {
+    // Run 35: the code grant re-checks the owner's membership + consent (code minted directly).
+    await seedCodeGrant(
+      db,
+      { userId, clientId: RP, resource: ADMIN_AUD, scope: 'openid admin.read' },
+      DEFAULT_TENANT_ID,
+    );
     const { code } = await app.get(AuthorizationCodeService).create({
       clientId: RP,
       redirectUri: RP_REDIRECT,

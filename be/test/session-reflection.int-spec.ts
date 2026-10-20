@@ -39,6 +39,8 @@ import { AuthorizeRequestContextService } from '../src/modules/oauth/authorize/a
 import { AuthenticationService } from '../src/modules/authentication/authentication.service';
 import { UserService } from '../src/modules/identity/user.service';
 import { UserTenantService } from '../src/modules/identity/user-tenant.service';
+import { ConsentService } from '../src/modules/oauth/consent/consent.service';
+import { seedCodeGrant } from './oauth-fixtures';
 import { MAILER } from '../src/modules/mailer/mailer';
 
 const MONGO_URI =
@@ -68,6 +70,7 @@ const cfg = {
         sessionAbsoluteTtl: 2592000,
       };
     if (ns === 'client') return { secretGraceTtl: 3600 };
+    if (ns === 'consent') return { policyVersion: '1', termsVersion: '1' };
     // B7.1 SE12: UiController (real POST /logout) reads these.
     if (ns === 'session') return { cookieSecure: false };
     if (ns === 'security')
@@ -104,6 +107,12 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
   let appSecret = '';
   let userId = '';
 
+  /** Run 35: a directly minted code's owner must pass the code grant re-check (user/member/consent). */
+  const createCode = async (data: Record<string, unknown>) => {
+    await seedCodeGrant(userModel.db, data as never, 'tenant-A');
+    return codes.create(data as never);
+  };
+
   /** Decode a JWT payload without verifying the signature (test-only inspection). */
   const payloadOf = (jwt: string): Record<string, unknown> =>
     JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString('utf8'));
@@ -131,7 +140,7 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
   async function grantForSession(scope = 'openid profile offline_access') {
     const u = userId;
     const { session } = await sessions.create(u, 'tenant-A');
-    const { code } = await codes.create({
+    const { code } = await createCode({
       clientId: APP_CLIENT,
       redirectUri: REDIRECT,
       codeChallenge: CHALLENGE,
@@ -201,6 +210,7 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
         AuthenticationService,
         UserService,
         UserTenantService,
+        ConsentService,
         { provide: MAILER, useValue: { send: async () => undefined } },
         { provide: KEY_PROVIDER, useValue: provider },
         { provide: RedisService, useValue: new RedisService(redis) },
@@ -376,7 +386,7 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
   it('DEBT-052: re-login keeps the old offline_access family alive (refresh rotates, AT active)', async () => {
     const u = userId;
     const { id: oldId, session } = await sessions.create(u, 'tenant-A');
-    const { code } = await codes.create({
+    const { code } = await createCode({
       clientId: APP_CLIENT,
       redirectUri: REDIRECT,
       codeChallenge: CHALLENGE,
@@ -417,7 +427,7 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
     const refreshModel = app.get<Model<Record<string, unknown>>>(getModelToken('RefreshToken'));
     for (let k = 0; k < 10; k++) {
       const { id, session } = await sessions.create(userId, 'tenant-A');
-      const { code } = await codes.create({
+      const { code } = await createCode({
         clientId: APP_CLIENT,
         redirectUri: REDIRECT,
         codeChallenge: CHALLENGE,

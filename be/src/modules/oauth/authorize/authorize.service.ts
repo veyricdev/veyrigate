@@ -15,6 +15,7 @@ import {
 import { AuthorizationCodeService } from '../code/authorization-code.service';
 import { ConsentService } from '../consent/consent.service';
 import { SessionService } from '../../sessions/session.service';
+import { UserTenantService } from '../../identity/user-tenant.service';
 import { adminResourceIdentifier, adminTargetForbidden } from '../token/token.service';
 
 /** Raw `/authorize` query parameters (already string-typed by the HTTP layer). */
@@ -75,6 +76,42 @@ export type AuthorizeOutcome =
   /** Consent already satisfied (or just granted): a code was issued, redirect it to the RP. */
   | { kind: 'code_issued'; redirectUri: string; code: string; state?: string };
 
+/**
+ * The `/authorize` parameters this IdP recognises (DEBT-204/205). RFC 6749 §3.1: a recognised
+ * parameter MUST NOT appear more than once; an unrecognised one is ignored (even if repeated).
+ */
+export const AUTHORIZE_PARAM_KEYS = [
+  'response_type',
+  'client_id',
+  'redirect_uri',
+  'scope',
+  'resource',
+  'state',
+  'nonce',
+  'code_challenge',
+  'code_challenge_method',
+  'prompt',
+  'max_age',
+  'request_id',
+] as const;
+
+/**
+ * First of `keys` whose value is neither absent nor a single string (Fastify parses a repeated
+ * query parameter into an array), or undefined when all are well-formed. Pure.
+ */
+export function repeatedParam(
+  params: object,
+  keys: readonly string[] = AUTHORIZE_PARAM_KEYS,
+): string | undefined {
+  const values = params as Record<string, unknown>;
+  return keys.find((k) => values[k] !== undefined && typeof values[k] !== 'string');
+}
+
+/** Phase 2 keys: every recognised one except those owned by Phase 1 / `resolveResource`. */
+const PHASE2_PARAM_KEYS = AUTHORIZE_PARAM_KEYS.filter(
+  (k) => k !== 'client_id' && k !== 'redirect_uri' && k !== 'resource',
+);
+
 /** PKCE S256 challenge: 43–128 chars of base64url (RFC 7636). */
 const CODE_CHALLENGE_RE = /^[A-Za-z0-9_-]{43,128}$/;
 
@@ -101,6 +138,7 @@ export class AuthorizeService {
     private readonly codes: AuthorizationCodeService,
     private readonly sessions: SessionService,
     config: ConfigService,
+    private readonly memberships: UserTenantService,
   ) {
     this.issuer = config.getOrThrow<AppConfig>('app').issuer;
     this.adminAud = adminResourceIdentifier(this.issuer);
@@ -159,6 +197,11 @@ export class AuthorizeService {
     audit: { ip?: string; userAgent?: string; requestId?: string } = {},
   ): Promise<AuthorizeOutcome> {
     // --- Phase 1: establish a trusted redirect_uri (INV-3). Failures here => error page. ---
+    // DEBT-205: a repeated client_id/redirect_uri arrives as an array. Refuse it BEFORE the lookup
+    // (Mongoose would cast an array to `$in`); no redirect_uri is trusted yet => error page.
+    if (repeatedParam(params, ['client_id', 'redirect_uri']) !== undefined) {
+      throw new AuthorizeErrorPage('repeated_parameter');
+    }
     const clientId = params.client_id;
     if (!clientId) {
       throw new AuthorizeErrorPage('missing_client_id');
@@ -178,6 +221,11 @@ export class AuthorizeService {
     // the error, which is required on the resume-after-login path where the inbound HTTP params
     // no longer carry `redirect_uri`/`state` (those live in the already-consumed context).
     try {
+      // DEBT-204/205: any other recognised parameter repeated => invalid_request to the trusted
+      // redirect_uri (no 500, no array reaching a context/code). `resource` keeps invalid_target.
+      if (repeatedParam(params, PHASE2_PARAM_KEYS) !== undefined) {
+        throw new AuthorizeRedirectError('invalid_request', 'Repeated parameter.');
+      }
       if (params.response_type !== 'code') {
         throw new AuthorizeRedirectError(
           'unsupported_response_type',
@@ -218,6 +266,12 @@ export class AuthorizeService {
         await this.recordAuthorize(client, audit, session?.userId, 'login_required');
         return { kind: 'login_required', requestId };
       }
+
+      // DEBT-116 / §9.10 / INV-24: the signed-in user must be an ACTIVE member of the client's
+      // tenant (taken from the client document only, never from the request/session). Checked
+      // before consent and before prompt=none => consent_required. No membership is ever granted
+      // here. `access_denied` is the same code as a user refusal: the RP learns no reason.
+      await this.assertMember(session.userId, client, audit);
 
       // Signed in + request valid (B4.2, spec section 9.4). Decide consent.
       // The owner is `session.userId` (authenticated), never any client-supplied value.
@@ -261,7 +315,8 @@ export class AuthorizeService {
     } catch (err) {
       if (err instanceof AuthorizeRedirectError) {
         err.redirectUri = redirectUri;
-        err.state = params.state;
+        // A repeated `state` is never echoed: the IdP does not pick one of the RP's values.
+        if (typeof params.state === 'string') err.state = params.state;
       }
       throw err;
     }
@@ -318,6 +373,17 @@ export class AuthorizeService {
           (await this.resources.resolveForClient(client.allowedResources, ctx.resource)) === null))
     ) {
       return null;
+    }
+    // DEBT-116 (MT2): the membership may have been suspended/removed since the screen rendered.
+    // Re-check against the re-resolved client's tenant BEFORE any consent write or code.
+    try {
+      await this.assertMember(session.userId, client, audit);
+    } catch (err) {
+      if (err instanceof AuthorizeRedirectError) {
+        err.redirectUri = ctx.redirectUri;
+        err.state = ctx.originalState;
+      }
+      throw err;
     }
     const requestedScopes = ctx.scope.split(' ').filter(Boolean);
     const versions = this.consents.currentVersions();
@@ -513,11 +579,23 @@ export class AuthorizeService {
     return maxAge === 0 || ageSec > maxAge;
   }
 
+  /** Not an active member of `client.tenantId` => audited `access_denied`. A DB fault propagates. */
+  private async assertMember(
+    userId: string,
+    client: Client,
+    audit: { ip?: string; userAgent?: string; requestId?: string },
+  ): Promise<void> {
+    if (await this.memberships.isActiveMember(userId, client.tenantId)) return;
+    await this.recordAuthorize(client, audit, userId, 'not_member', 'failure');
+    throw new AuthorizeRedirectError('access_denied', 'Access denied.');
+  }
+
   private async recordAuthorize(
     client: Client,
     audit: { ip?: string; userAgent?: string; requestId?: string },
     userId: string | undefined,
     outcome: string,
+    result: 'success' | 'failure' = 'success',
   ): Promise<void> {
     // Never log code_challenge / nonce / state (INV-20, tech-lead C7).
     await this.audit.record({
@@ -529,7 +607,8 @@ export class AuthorizeService {
       ip: audit.ip,
       userAgent: audit.userAgent,
       requestId: audit.requestId,
-      result: 'success',
+      result,
+      ...(result === 'failure' ? { reason: outcome } : {}),
       metadata: { outcome },
     });
   }

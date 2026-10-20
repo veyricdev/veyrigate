@@ -38,6 +38,7 @@ import { AuthorizeRequestContextService } from '../src/modules/oauth/authorize/a
 import { AuthorizeService } from '../src/modules/oauth/authorize/authorize.service';
 import { AuthorizationCodeService } from '../src/modules/oauth/code/authorization-code.service';
 import { ConsentService } from '../src/modules/oauth/consent/consent.service';
+import { seedCodeGrant } from './oauth-fixtures';
 import { LogoutService } from '../src/modules/oauth/logout/logout.service';
 import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
 import { TokenController } from '../src/modules/oauth/token/token.controller';
@@ -141,6 +142,12 @@ describe.each(MISFITS)(
     /** A live session + an authorization code bound to it (as `/authorize` would mint it). */
     const mintCode = async (resource: string): Promise<string> => {
       const { id } = await app.get(SessionService).create(userId, DEFAULT_TENANT_ID);
+      // Run 35: the code grant re-checks the owner's membership + consent (code minted directly).
+      await seedCodeGrant(
+        db,
+        { userId, clientId: SPA, resource, scope: 'openid admin.read' },
+        DEFAULT_TENANT_ID,
+      );
       const { code } = await app.get(AuthorizationCodeService).create({
         clientId: SPA,
         redirectUri: SPA_REDIRECT,

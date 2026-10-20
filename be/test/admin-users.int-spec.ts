@@ -851,10 +851,13 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
 
     /** Member of A with 3 grants: A×demo, A×other (same client), B×demo (tenant-B client). */
     async function fixture() {
-      const user = await mkUser({ [TENANT_A]: [] }, 'fam');
+      // Run 35 (DEBT-116): /authorize only serves active members of the client's tenant, so the
+      // B×demo grant is obtained while a member of B; the user then leaves B (not a member of B).
+      const user = await mkUser({ [TENANT_A]: [], [TENANT_B]: [] }, 'fam');
       const demo = await realFlow(user);
       const other = await realFlow(user, { resource: OTHER_AUD, sessionId: demo.sessionId });
       const foreign = await realFlow(user, { clientId: CLIENT_B, sessionId: demo.sessionId });
+      await moduleRef.get(UserTenantService).deleteMembership(user, TENANT_B);
       const familyOf = async (clientId: string, resource: string) =>
         (await refreshModel
           .findOne({ userId: new Types.ObjectId(user), clientId, resource })

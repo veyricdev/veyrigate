@@ -24,6 +24,7 @@ import {
   type AuthorizeOutcome,
   type AuthorizeParams,
   type SessionView,
+  repeatedParam,
 } from './authorize.service';
 
 /** POST body of the consent form. `approve` present => allow; absent/anything-else => deny. */
@@ -73,6 +74,11 @@ export class AuthorizeController {
       // Resume after login (spec Â§9.1): the return URL carries only `request_id`; the original
       // parameters live in the stored context. A missing/expired context cannot be redirected
       // (redirect_uri is gone) -> first-party error page.
+      // DEBT-205: a repeated request_id (array) never reaches the context store; no redirect_uri
+      // is known yet => first-party error page.
+      if (repeatedParam(params, ['request_id']) !== undefined) {
+        throw new AuthorizeErrorPage('repeated_parameter');
+      }
       if (params.request_id) {
         const resumed = await this.authorize.resume(params.request_id, session, audit);
         if (!resumed) return this.expiredPage(reply);

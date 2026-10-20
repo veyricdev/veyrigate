@@ -52,6 +52,7 @@ import { AuthorizeService } from '../src/modules/oauth/authorize/authorize.servi
 import { AuthorizeRequestContextService } from '../src/modules/oauth/authorize/authorize-request-context.service';
 import { AuthorizationCodeService } from '../src/modules/oauth/code/authorization-code.service';
 import { ConsentService } from '../src/modules/oauth/consent/consent.service';
+import { seedCodeGrant } from './oauth-fixtures';
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { SessionService } from '../src/modules/sessions/session.service';
@@ -276,6 +277,7 @@ describe('seed-dev: the seeded client works against the REAL /authorize + CORS p
         SessionService,
         SessionCookie,
         AuditService,
+        UserTenantService,
         ClientCorsService,
         HtmlExceptionFilter,
         { provide: RedisService, useValue: new RedisService(redis) },
@@ -432,6 +434,7 @@ describe('seed-dev: resourceId mapping works end-to-end on real seed data (Task 
           clientAuthFailClientMax: 100000,
         };
       if (ns === 'client') return { secretGraceTtl: 60 };
+      if (ns === 'consent') return { policyVersion: '1', termsVersion: '1' };
       throw new Error(`Unexpected config namespace: ${ns}`);
     },
   } as unknown as ConfigService;
@@ -462,6 +465,9 @@ describe('seed-dev: resourceId mapping works end-to-end on real seed data (Task 
         ClientCredentialService,
         ClientAuthenticationService,
         ClientCorsService,
+        UserService,
+        UserTenantService,
+        ConsentService,
         AuditService,
         RateLimitService,
         TokenSigner,
@@ -524,7 +530,7 @@ describe('seed-dev: resourceId mapping works end-to-end on real seed data (Task 
   /** Mint a code bound to a fresh live session for the seeded fe-sso-test client + demo resource. */
   async function firstTokens(): Promise<{ access: string; refresh: string }> {
     const { session } = await sessions.create(userId, DEFAULT_TENANT_ID);
-    const { code } = await codes.create({
+    const data = {
       clientId: 'fe-sso-test',
       redirectUri: 'http://localhost:5173/callback',
       codeChallenge: CHALLENGE,
@@ -533,7 +539,10 @@ describe('seed-dev: resourceId mapping works end-to-end on real seed data (Task 
       userId,
       authTime: session.authTime,
       sessionRef: session.ref,
-    } as never);
+    };
+    // Run 35: the code grant re-checks user/membership/consent of the owner.
+    await seedCodeGrant(userModel.db, data, DEFAULT_TENANT_ID);
+    const { code } = await codes.create(data as never);
     const res = await app.inject({
       method: 'POST',
       url: '/token',
@@ -1065,6 +1074,8 @@ describe('seed-dev: DEBT-100 consent for a 2nd resource (`other`) + INV-8 chain 
         ClientCredentialService,
         ClientAuthenticationService,
         ClientCorsService,
+        UserService,
+        UserTenantService,
         ResourceService,
         SessionService,
         SessionCookie,
@@ -1105,6 +1116,10 @@ describe('seed-dev: DEBT-100 consent for a 2nd resource (`other`) + INV-8 chain 
     // A real user the minted tokens' `sub` points at (liveness requires it to exist).
     const user = await userModel.create({ email: `debt100-${Date.now()}@example.com` });
     userId = (user._id as Types.ObjectId).toHexString();
+    // Run 35 (DEBT-116): the owner is an active member of the seeded client's tenant.
+    await userModel.db
+      .model('UserTenant')
+      .create({ userId: user._id, tenantId: DEFAULT_TENANT_ID });
   }, 60_000);
 
   afterAll(async () => {

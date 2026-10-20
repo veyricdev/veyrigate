@@ -349,7 +349,8 @@ describe('Admin API B6.3c (keys + tenants) on real Mongo + Redis', () => {
     superA = await mkUser({ [TENANT_A]: ['super_admin'] }, 'sa');
     tadminA = await mkUser({ [TENANT_A]: ['tenant_admin'] }, 'ta');
     tadminNoDoc = await mkUser({ [TENANT_NODOC]: ['tenant_admin'] }, 'tn');
-    endUser = await mkUser({ [DEFAULT_TENANT_ID]: [] }, 'eu');
+    // Run 35 (DEBT-116): the end user signs in to CLIENT_A, so it is a (role-less) member of its tenant.
+    endUser = await mkUser({ [TENANT_A]: [] }, 'eu');
   }, 60_000);
 
   afterAll(async () => {

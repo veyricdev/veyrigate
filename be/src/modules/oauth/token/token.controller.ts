@@ -14,8 +14,16 @@ import {
 } from '../../clients/client-auth-request';
 import { applyCors, requestOrigin } from '../../clients/client-cors.helper';
 import { ClientCorsService } from '../../clients/client-cors.service';
+import { ClientService } from '../../clients/client.service';
+import { isRegisteredRedirectUri } from '../../clients/redirect-uri.validator';
+import { UserTenantService } from '../../identity/user-tenant.service';
+import { UserService } from '../../identity/user.service';
 import { SessionService } from '../../sessions/session.service';
-import { AuthorizationCodeService } from '../code/authorization-code.service';
+import {
+  AuthorizationCodeService,
+  type AuthorizationCodeData,
+} from '../code/authorization-code.service';
+import { ConsentService } from '../consent/consent.service';
 import { TokenError } from './token.errors';
 import { TokenService } from './token.service';
 import { RefreshRotationError, RefreshTokenService } from './refresh-token.service';
@@ -50,6 +58,10 @@ export class TokenController {
     private readonly refresh: RefreshTokenService,
     private readonly cors: ClientCorsService,
     private readonly sessions: SessionService,
+    private readonly clients: ClientService,
+    private readonly users: UserService,
+    private readonly memberships: UserTenantService,
+    private readonly consents: ConsentService,
   ) {}
 
   @Post('/token')
@@ -237,6 +249,40 @@ export class TokenController {
       await this.tokens.recordIssued(client, data, 'failure', !!familyId, 'session_ended', audit);
       throw new TokenError('invalid_grant');
     }
+    // DEBT-116/128/141/144/156: re-read the CURRENT grant preconditions AFTER the family insert.
+    // Every revoking side (disable client, lock user, revoke consent) writes its state first and
+    // sweeps families second, so "insert, then re-read" leaves no interleaving where a family
+    // survives. A failure revokes the just-minted family and answers the same opaque invalid_grant
+    // (reason only in audit); an infra error revokes best-effort and fails closed (500).
+    let failure: string | null;
+    try {
+      failure = await this.recheckCodeGrant(client.clientId, data);
+    } catch (err) {
+      if (familyId) {
+        await this.refresh
+          .revokeFamily(familyId, client.clientId, new Date())
+          .catch(() => undefined);
+      }
+      await this.tokens
+        .recordIssued(client, data, 'failure', !!familyId, 'recheck_failed', audit)
+        .catch(() => undefined);
+      throw err;
+    }
+    if (failure !== null) {
+      if (familyId) {
+        try {
+          await this.refresh.revokeFamily(familyId, client.clientId, new Date());
+        } catch (err) {
+          // DEBT-067 pattern: keep the refusal audit even when the revoke throws.
+          await this.tokens
+            .recordIssued(client, data, 'failure', !!familyId, failure, audit)
+            .catch(() => undefined);
+          throw err;
+        }
+      }
+      await this.tokens.recordIssued(client, data, 'failure', !!familyId, failure, audit);
+      throw new TokenError('invalid_grant');
+    }
     // The session is live now: record `TOKEN_ISSUED success` right before the token leaves the
     // server (INV-25). If the audit write fails, revoke any minted family best-effort and fail
     // closed (500) — never return a token for which no `success` was recorded (no orphan grant).
@@ -251,6 +297,35 @@ export class TokenController {
       throw err;
     }
     return reply.status(HttpStatus.OK).send(response);
+  }
+
+  /**
+   * Current-state re-check of a code grant (run 35), in a fixed order; returns the first failing
+   * reason or null. The tenant comes from the client document just re-read (INV-24). Consent uses
+   * the full `isCovered` (scopes + policy/terms versions, Q35.5). DB faults propagate.
+   */
+  private async recheckCodeGrant(
+    clientId: string,
+    data: AuthorizationCodeData,
+  ): Promise<string | null> {
+    const fresh = await this.clients.findByClientId(clientId);
+    if (!fresh) return 'client_disabled';
+    if (!isRegisteredRedirectUri(fresh.redirectUris, data.redirectUri)) {
+      return 'redirect_uri_unregistered';
+    }
+    const user = await this.users.findById(data.userId);
+    if (!user || (user.lockedUntil && user.lockedUntil.getTime() > Date.now())) {
+      return 'user_locked';
+    }
+    if (!(await this.memberships.isActiveMember(data.userId, fresh.tenantId))) {
+      return 'not_member';
+    }
+    const consent = await this.consents.find(data.userId, clientId, data.resource);
+    const scopes = data.scope.split(' ').filter(Boolean);
+    if (!this.consents.isCovered(consent, scopes, this.consents.currentVersions())) {
+      return 'consent_revoked';
+    }
+    return null;
   }
 
   /**

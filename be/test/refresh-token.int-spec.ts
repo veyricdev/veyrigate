@@ -34,6 +34,8 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import { AuthenticationService } from '../src/modules/authentication/authentication.service';
 import { UserService } from '../src/modules/identity/user.service';
 import { UserTenantService } from '../src/modules/identity/user-tenant.service';
+import { ConsentService } from '../src/modules/oauth/consent/consent.service';
+import { seedCodeGrant } from './oauth-fixtures';
 import { MAILER, type MailMessage } from '../src/modules/mailer/mailer';
 import { isAccessTokenLive } from '../src/modules/oauth/access-token-liveness';
 
@@ -66,6 +68,7 @@ const cfg = {
         sessionAbsoluteTtl: 86400,
       };
     if (ns === 'client') return { secretGraceTtl: 3600 };
+    if (ns === 'consent') return { policyVersion: '1', termsVersion: '1' };
     if (ns === 'security')
       return {
         rateLimitWindow: 60,
@@ -122,6 +125,12 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       payload,
     });
 
+  /** Run 35: a directly minted code's owner must pass the code grant re-check (user/member/consent). */
+  const createCode = async (data: Record<string, unknown>) => {
+    await seedCodeGrant(refreshModel.db, data as never, 'tenant-A');
+    return codes.create(data as never);
+  };
+
   const mintCode = async (overrides: Record<string, unknown> = {}) => {
     const base: Record<string, unknown> = {
       clientId: CLIENT,
@@ -145,7 +154,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       'EX',
       3600,
     );
-    return codes.create(data as never);
+    return createCode(data as never);
   };
 
   /** Run the authorization_code flow once and return the first refresh token of a fresh family. */
@@ -336,6 +345,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
         AuthenticationService,
         UserService,
         UserTenantService,
+        ConsentService,
         { provide: MAILER, useValue: { send: async (_m: MailMessage) => undefined } },
         { provide: KEY_PROVIDER, useValue: provider },
         { provide: RedisService, useValue: new RedisService(redis) },
@@ -1320,7 +1330,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       await sessionSvc.recordClientForSession(session.ref, CLIENT);
 
       // Device A: mint a code bound to THIS session (same fields issueCode sets), then exchange it.
-      const { code } = await codes.create({
+      const { code } = await createCode({
         clientId: CLIENT,
         redirectUri: REDIRECT,
         codeChallenge: CHALLENGE,
@@ -1388,7 +1398,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       const user = await userSvc.createWithPasswordHash(email, 'x'.repeat(10));
       const userId = user.sub;
       const { session } = await sessionSvc.create(userId, 'tenant-A');
-      const { code } = await codes.create({
+      const { code } = await createCode({
         clientId: CLIENT,
         redirectUri: REDIRECT,
         codeChallenge: CHALLENGE,
@@ -1554,7 +1564,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
     it('a /token family inserted during the reset window is revoked by the SWEEP (dies RED without SWEEP)', async () => {
       const { userId, sessionRef } = await seedUser();
       const resetToken = await seedResetToken(userId);
-      const { code } = await codes.create({
+      const { code } = await createCode({
         clientId: CLIENT,
         redirectUri: REDIRECT,
         codeChallenge: CHALLENGE,
@@ -1625,7 +1635,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
     }> {
       const userId = new Types.ObjectId().toHexString();
       const { id: sessionId, session } = await sessionSvc.create(userId, 'tenant-A');
-      const { code } = await codes.create({
+      const { code } = await createCode({
         clientId: CLIENT,
         redirectUri: REDIRECT,
         codeChallenge: CHALLENGE,
@@ -1787,7 +1797,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       // must still run (§15 inv. 29 covers EVERY code grant, not only refresh-minting ones).
       const userId = new Types.ObjectId().toHexString();
       const { session } = await sessionSvc.create(userId, 'tenant-A');
-      const { code } = await codes.create({
+      const { code } = await createCode({
         clientId: CLIENT_NO_REFRESH,
         redirectUri: REDIRECT,
         codeChallenge: CHALLENGE,
@@ -1831,7 +1841,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       const { session } = await sessionSvc.create(userId, 'tenant-A');
       const mintCodeForSession = async () =>
         (
-          await codes.create({
+          await createCode({
             clientId: CLIENT,
             redirectUri: REDIRECT,
             codeChallenge: CHALLENGE,
