@@ -578,6 +578,45 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
     expect(dead.statusCode).toBe(400);
   });
 
+  it('B7.1 R1/INV-10: N=5 CONCURRENT refresh of one RT => at most one 200, others invalid_grant, at most one successor usable', async () => {
+    const rt = await firstRefresh();
+    const root = await refreshModel
+      .findOne({ tokenHash: sha256(rt) })
+      .lean<Record<string, unknown>>();
+    const familyId = root!.familyId as string;
+
+    const results = await Promise.all(Array.from({ length: 5 }, () => refreshReq(rt)));
+    const statuses = results.map((r) => r.statusCode);
+    expect(statuses.every((s) => s === 200 || s === 400)).toBe(true); // never a 5xx
+    const winners = results.filter((r) => r.statusCode === 200);
+    expect(winners.length).toBeLessThanOrEqual(1);
+    for (const r of results.filter((x) => x.statusCode === 400)) {
+      expect(r.json().error).toBe('invalid_grant');
+    }
+
+    // Every successor actually handed out: at most one is still usable.
+    const usable = (
+      await Promise.all(winners.map((w) => refreshReq(w.json().refresh_token as string)))
+    ).filter((r) => r.statusCode === 200);
+    expect(usable.length).toBeLessThanOrEqual(1);
+
+    // No two live children of the same parent were ever minted from the one RT.
+    const children = await refreshModel
+      .find({ familyId, parentId: root!._id })
+      .lean<Record<string, unknown>[]>();
+    expect(children.length).toBeLessThanOrEqual(1);
+
+    // Losers replayed a now-rotated value => reuse branch: family revoked + alert for this family.
+    const reuse = await auditModel
+      .find({ action: AuditAction.TOKEN_REUSE_DETECTED, 'metadata.familyId': familyId })
+      .lean();
+    if (reuse.length > 0) {
+      const fam = await refreshModel.find({ familyId }).lean<Record<string, unknown>[]>();
+      expect(fam.every((d) => d.revokedAt)).toBe(true);
+      expect(fam.some((d) => d.familyRevokedAt)).toBe(true);
+    }
+  });
+
   it('expired refresh => invalid_grant, family NOT revoked, no reuse audit', async () => {
     const rt = await firstRefresh();
     await refreshModel.updateOne(

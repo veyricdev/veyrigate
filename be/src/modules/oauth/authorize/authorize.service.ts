@@ -446,6 +446,11 @@ export class AuthorizeService {
     client: Client,
   ): Promise<string | undefined> {
     if (raw === undefined) return undefined;
+    // INV-15 (B7.1): a repeated `resource` query param arrives as an array; Mongoose would cast it
+    // to `$in` and bind whichever resource matched first. One grant binds exactly one resource.
+    if (typeof raw !== 'string') {
+      throw new AuthorizeRedirectError('invalid_target', 'Only one resource parameter is allowed.');
+    }
     try {
       // Map identifier (URI) -> resourceId -> allowedResources (never compare the URI directly).
       const resource = await this.resources.resolveForClient(client.allowedResources, raw);

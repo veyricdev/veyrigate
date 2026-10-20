@@ -191,6 +191,18 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
       ).rejects.toMatchObject({ error: 'invalid_target' });
     });
 
+    it('B7.1 INV-15 (tester): resource as a 1-element or empty array => invalid_target with state, never bound', async () => {
+      for (const resource of [['https://api.example.com/'], []]) {
+        await expect(
+          service.handle(params({ resource: resource as never, state: 'st-arr' }), signedIn),
+        ).rejects.toMatchObject({
+          error: 'invalid_target',
+          redirectUri: 'https://app.example.com/callback',
+          state: 'st-arr',
+        });
+      }
+    });
+
     it('rejects a scope not registered for the client', async () => {
       await expect(
         service.handle(params({ scope: 'openid admin.write' }), signedIn),
@@ -995,5 +1007,145 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
     }
     await sessionSvc.revoke(sessA);
     await sessionSvc.revoke(sessB);
+  });
+
+  it('B7.1 INV-15: repeated resource (two allowed, non-admin) with live session + consent => no code, no array context, no 5xx', async () => {
+    const RES_A = `https://a.${RUN}.example/`;
+    const RES_B = `https://b.${RUN}.example/`;
+    const clientId = `${RUN}-tworesource`;
+    const resources = new ResourceService(httpApp.get<Model<Resource>>(getModelToken('Resource')));
+    await resources.create({ resourceId: `${RUN}-ra`, identifier: RES_A });
+    await resources.create({ resourceId: `${RUN}-rb`, identifier: RES_B });
+    await new ClientService(httpClientModel, cfg).create({
+      clientId,
+      clientType: 'public',
+      tokenEndpointAuthMethod: 'none',
+      redirectUris: ['https://app.example.com/callback'],
+      allowedResources: [`${RUN}-ra`, `${RUN}-rb`],
+      scopes: ['openid', 'profile'],
+      tenantId: 'tenant-A',
+    });
+    const userId = new Types.ObjectId().toHexString();
+    // Consent already covers each resource on its own, so only the duplicate can stop a code.
+    for (const res of [RES_A, RES_B]) {
+      await consentSvc.grant(
+        userId,
+        clientId,
+        res,
+        ['openid', 'profile'],
+        consentSvc.currentVersions(),
+        ['openid', 'profile'],
+      );
+    }
+    const { id } = await sessionSvc.create(userId, 'tenant-A');
+    const ctxBefore = new Set(await httpRedis.keys('authz_ctx:*'));
+
+    for (const [first, second] of [
+      [RES_A, RES_B],
+      [RES_B, RES_A],
+      [RES_A, RES_A],
+    ]) {
+      const res = await httpApp.inject({
+        method: 'GET',
+        url:
+          `/authorize?response_type=code&client_id=${clientId}` +
+          `&redirect_uri=${encodeURIComponent('https://app.example.com/callback')}` +
+          `&scope=${encodeURIComponent('openid profile')}&state=rp-state&nonce=rp-nonce` +
+          `&code_challenge=${VALID_CHALLENGE}&code_challenge_method=S256` +
+          `&resource=${encodeURIComponent(first)}&resource=${encodeURIComponent(second)}`,
+        cookies: { [SESSION_COOKIE]: id },
+      });
+      expect(res.statusCode).toBeLessThan(500);
+      if (res.statusCode === 302) {
+        const url = new URL(res.headers['location'] as string);
+        expect(url.searchParams.get('code')).toBeNull();
+        expect(url.searchParams.get('error')).toMatch(/^(invalid_target|invalid_request)$/);
+        expect(url.searchParams.get('state')).toBe('rp-state');
+        expect(url.searchParams.get('iss')).toBe(ISSUER);
+      } else {
+        expect(res.statusCode).toBe(400);
+      }
+    }
+    for (const key of await httpRedis.keys('authz_ctx:*')) {
+      if (ctxBefore.has(key)) continue;
+      const raw = await httpRedis.get(key);
+      expect(Array.isArray(raw ? JSON.parse(raw).resource : undefined)).toBe(false);
+    }
+    await sessionSvc.revoke(id);
+  });
+
+  it('B7.1 INV-15 (tester): resource[]= / resource[0]= / resource=A&resource= => no array binding, no 5xx', async () => {
+    const RES_A = `https://a2.${RUN}.example/`;
+    const clientId = `${RUN}-bracketres`;
+    const resources = new ResourceService(httpApp.get<Model<Resource>>(getModelToken('Resource')));
+    await resources.create({ resourceId: `${RUN}-ra2`, identifier: RES_A });
+    await new ClientService(httpClientModel, cfg).create({
+      clientId,
+      clientType: 'public',
+      tokenEndpointAuthMethod: 'none',
+      redirectUris: ['https://app.example.com/callback'],
+      allowedResources: [`${RUN}-ra2`],
+      scopes: ['openid', 'profile'],
+      tenantId: 'tenant-A',
+    });
+    const userId = new Types.ObjectId().toHexString();
+    await consentSvc.grant(
+      userId,
+      clientId,
+      RES_A,
+      ['openid', 'profile'],
+      consentSvc.currentVersions(),
+      ['openid', 'profile'],
+    );
+    const { id } = await sessionSvc.create(userId, 'tenant-A');
+    const ctxBefore = new Set(await httpRedis.keys('authz_ctx:*'));
+    const base =
+      `/authorize?response_type=code&client_id=${clientId}` +
+      `&redirect_uri=${encodeURIComponent('https://app.example.com/callback')}` +
+      `&scope=${encodeURIComponent('openid profile')}&state=rp-state&nonce=rp-nonce` +
+      `&code_challenge=${VALID_CHALLENGE}&code_challenge_method=S256`;
+    const a = encodeURIComponent(RES_A);
+
+    // Repeated key with an empty second value is still an array => must be rejected outright.
+    const dup = await httpApp.inject({
+      method: 'GET',
+      url: `${base}&resource=${a}&resource=`,
+      cookies: { [SESSION_COOKIE]: id },
+    });
+    expect(dup.statusCode).toBe(302);
+    const dupUrl = new URL(dup.headers['location'] as string);
+    expect(dupUrl.searchParams.get('code')).toBeNull();
+    expect(dupUrl.searchParams.get('error')).toBe('invalid_target');
+    expect(dupUrl.searchParams.get('state')).toBe('rp-state');
+
+    // Bracket forms: whatever the parser makes of them, a grant must never carry an array resource.
+    for (const extra of [`&resource[]=${a}`, `&resource%5B%5D=${a}`, `&resource[0]=${a}`]) {
+      const res = await httpApp.inject({
+        method: 'GET',
+        url: base + extra,
+        cookies: { [SESSION_COOKIE]: id },
+      });
+      expect(res.statusCode).toBeLessThan(500);
+      if (res.statusCode === 302) {
+        const url = new URL(res.headers['location'] as string, 'http://x');
+        const code = url.searchParams.get('code');
+        if (code) {
+          const data = await codeSvc.consume(
+            code,
+            clientId,
+            'https://app.example.com/callback',
+            VALID_CHALLENGE,
+          );
+          expect(data).not.toBeNull();
+          expect(data!.resource === undefined || typeof data!.resource === 'string').toBe(true);
+        }
+      }
+    }
+    for (const key of await httpRedis.keys('authz_ctx:*')) {
+      if (ctxBefore.has(key)) continue;
+      const raw = await httpRedis.get(key);
+      expect(Array.isArray(raw ? JSON.parse(raw).resource : undefined)).toBe(false);
+    }
+    await sessionSvc.revoke(id);
   });
 });

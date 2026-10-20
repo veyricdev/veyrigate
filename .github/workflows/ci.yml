@@ -1,7 +1,7 @@
 name: CI
 
 # Chặn merge khi CI đỏ: cần bật branch protection trên GitHub
-# (Settings → Branches → require status checks "quality"). Không cấu hình được trong repo.
+# (Settings → Branches → require status checks "quality", "int", "e2e"). Không cấu hình được trong repo.
 on:
   push:
     branches: [develop, main]
@@ -51,6 +51,67 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+  # Integration suite bảo mật (B7.1): chạy `pnpm -C be test:int` y như local, trên service giống
+  # vg-test-* (mongo@27117, redis@6479) + Mailpit (mailer.int-spec). KHÔNG đặt TEST_MONGO_URI /
+  # TEST_REDIS_URL (override làm mọi spec dùng chung 1 DB, DEBT-203); không secret, không .env/keys
+  # (int-spec không nạp ConfigModule, khoá ký dùng mkdtemp). Mongo single-node: chưa có
+  # transaction/change stream, URI test dùng directConnection=true. Khi cần replica set: thay
+  # service bằng step `docker run -d -p 27117:27017 mongo:7 --replSet rs0`, rồi
+  # `mongosh --port 27117 --eval 'rs.initiate({_id:"rs0",members:[{_id:0,host:"localhost:27017"}]})'`
+  # và chờ PRIMARY.
+  int:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27117:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval \"db.adminCommand('ping')\""
+          --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6479:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+      mailpit:
+        image: axllent/mailpit:v1.21
+        ports:
+          - 1025:1025
+          - 8025:8025
+        options: >-
+          --health-cmd "/mailpit readyz"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Enable corepack (pnpm)
+        run: corepack enable
+
+      - name: Get pnpm store path
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-
+
+      - name: Install
+        run: pnpm i --frozen-lockfile
+
+      - name: Integration tests (security suite)
+        run: pnpm -C be test:int
 
   # E2E thật (DEBT-004 / X1): Playwright 1 kịch bản login → /authorize → /token → claims.
   # Mongo single-node (chưa dùng transaction — DEBT-083) + Redis service. Env BE/FE đều là giá trị

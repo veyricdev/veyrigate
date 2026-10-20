@@ -1,3 +1,4 @@
+import cookie from '@fastify/cookie';
 import { ConfigService } from '@nestjs/config';
 import { MongooseModule, getModelToken } from '@nestjs/mongoose';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -29,6 +30,16 @@ import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.se
 import { ResourceService, type Resource } from '../src/modules/resources/resource.service';
 import { IntrospectController } from '../src/modules/oauth/introspect/introspect.controller';
 import { UserinfoController } from '../src/modules/oauth/userinfo/userinfo.controller';
+import { UiController } from '../src/modules/ui/ui.controller';
+import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
+import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
+import { SESSION_COOKIE, SessionCookie } from '../src/modules/sessions/session.cookie';
+import { LogoutService } from '../src/modules/oauth/logout/logout.service';
+import { AuthorizeRequestContextService } from '../src/modules/oauth/authorize/authorize-request-context.service';
+import { AuthenticationService } from '../src/modules/authentication/authentication.service';
+import { UserService } from '../src/modules/identity/user.service';
+import { UserTenantService } from '../src/modules/identity/user-tenant.service';
+import { MAILER } from '../src/modules/mailer/mailer';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -57,6 +68,8 @@ const cfg = {
         sessionAbsoluteTtl: 2592000,
       };
     if (ns === 'client') return { secretGraceTtl: 3600 };
+    // B7.1 SE12: UiController (real POST /logout) reads these.
+    if (ns === 'session') return { cookieSecure: false };
     if (ns === 'security')
       return {
         rateLimitWindow: 60,
@@ -64,6 +77,7 @@ const cfg = {
         // High thresholds so the client-auth failure limiter never fires in these tests.
         clientAuthFailIpMax: 100000,
         clientAuthFailClientMax: 100000,
+        csrfSecret: 'sessrefl-csrf-secret',
       };
     throw new Error(`unexpected ns ${ns}`);
   },
@@ -83,6 +97,7 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
   let codes: AuthorizationCodeService;
   let sessions: SessionService;
   let signer: TokenSigner;
+  let csrf: CsrfService;
   let userModel: Model<Record<string, unknown>>;
   let clientModel: Model<Client>;
   let resourceModel: Model<Resource>;
@@ -161,7 +176,7 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
         }),
         MongooseModule.forFeature(MODELS),
       ],
-      controllers: [TokenController, IntrospectController, UserinfoController],
+      controllers: [TokenController, IntrospectController, UserinfoController, UiController],
       providers: [
         TokenService,
         RefreshTokenService,
@@ -176,6 +191,17 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
         RateLimitService,
         TokenSigner,
         TokenVerifier,
+        // B7.1 SE12: the real POST /logout path (revoke families + session + SWEEP).
+        SessionCookie,
+        CsrfService,
+        CsrfGuard,
+        HtmlExceptionFilter,
+        LogoutService,
+        AuthorizeRequestContextService,
+        AuthenticationService,
+        UserService,
+        UserTenantService,
+        { provide: MAILER, useValue: { send: async () => undefined } },
         { provide: KEY_PROVIDER, useValue: provider },
         { provide: RedisService, useValue: new RedisService(redis) },
         { provide: ConfigService, useValue: cfg },
@@ -183,12 +209,14 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
     }).compile();
 
     app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
+    await app.register(cookie);
     await app.init();
     await app.getHttpAdapter().getInstance().ready();
 
     codes = moduleRef.get(AuthorizationCodeService);
     sessions = moduleRef.get(SessionService);
     signer = moduleRef.get(TokenSigner);
+    csrf = moduleRef.get(CsrfService);
     userModel = app.get<Model<Record<string, unknown>>>(getModelToken('User'));
     clientModel = app.get<Model<Client>>(getModelToken('Client'));
     resourceModel = app.get<Model<Resource>>(getModelToken('Resource'));
@@ -383,5 +411,65 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
     expect(rotated.statusCode).toBe(200);
     const at2 = rotated.json().access_token as string;
     expect((await introspect(at2)).json().active).toBe(true);
+  });
+
+  it('B7.1 SE12: K=10 rounds of REAL concurrent POST /logout racing POST /token (code, offline_access) => no live family of the ended session survives', async () => {
+    const refreshModel = app.get<Model<Record<string, unknown>>>(getModelToken('RefreshToken'));
+    for (let k = 0; k < 10; k++) {
+      const { id, session } = await sessions.create(userId, 'tenant-A');
+      const { code } = await codes.create({
+        clientId: APP_CLIENT,
+        redirectUri: REDIRECT,
+        codeChallenge: CHALLENGE,
+        resource: RESOURCE,
+        scope: 'openid profile offline_access',
+        userId,
+        authTime: session.authTime,
+        sessionRef: session.ref,
+      } as never);
+      // Stagger the logout start by 0..90 ms across rounds so both orders (logout first / exchange
+      // first) and the overlapping middle are hit; each round is still two in-flight requests.
+      const [logout, tok] = await Promise.all([
+        new Promise((r) => setTimeout(r, k * 10)).then(() =>
+          app.inject({
+            method: 'POST',
+            url: '/logout',
+            headers: { cookie: `${SESSION_COOKIE}=${id}` },
+            payload: { _csrf: csrf.token(id) },
+          }),
+        ),
+        token(
+          form({
+            grant_type: 'authorization_code',
+            code,
+            redirect_uri: REDIRECT,
+            client_id: APP_CLIENT,
+            code_verifier: VERIFIER,
+          }),
+          { authorization: basic(APP_CLIENT, appSecret) },
+        ),
+      ]);
+      expect(logout.statusCode).toBe(302);
+      expect([200, 400]).toContain(tok.statusCode); // never a 5xx
+      expect(await sessions.get(id)).toBeNull();
+      // Invariant: no refresh doc bound to the ended session is still active (round tagged).
+      const live = await refreshModel.countDocuments({ sessionRef: session.ref, revokedAt: null });
+      expect({ round: k, token: tok.statusCode, live }).toEqual({
+        round: k,
+        token: tok.statusCode,
+        live: 0,
+      });
+      if (tok.statusCode === 200) {
+        const rt = tok.json().refresh_token as string;
+        expect(rt).toBeDefined();
+        const rotated = await token(form({ grant_type: 'refresh_token', refresh_token: rt }), {
+          authorization: basic(APP_CLIENT, appSecret),
+        });
+        expect(rotated.statusCode).toBe(400);
+        expect(rotated.json().error).toBe('invalid_grant');
+      } else {
+        expect(tok.json().error).toBe('invalid_grant');
+      }
+    }
   });
 });

@@ -122,6 +122,33 @@ describe('Authentication races on real Mongo (B2.4, C2-C6, C13)', () => {
     ).toHaveLength(1);
   });
 
+  it('B7.1 AE8: five concurrent verifyEmail with one token => exactly one success, one verification, one audit', async () => {
+    const email = 'verify-race@example.com';
+    await auth.register(email, 'correct password');
+    await new Promise((resolve) => setImmediate(resolve));
+    const link = messages.find((m) => m.to === email)?.text.match(/https:\/\/\S+/)?.[0];
+    const token = new URL(link!).searchParams.get('token')!;
+    const spy = jest.spyOn(users, 'verifyEmail');
+
+    const results = await Promise.allSettled(
+      Array.from({ length: 5 }, () => auth.verifyEmail(token)),
+    );
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+    expect(rejected).toHaveLength(4);
+    for (const r of rejected) {
+      expect((r.reason as Error).message).toBe('This link is invalid or expired.');
+    }
+    expect(spy).toHaveBeenCalledTimes(1); // emailVerifiedAt written by exactly one caller
+    expect((await users.findByEmail(email))?.emailVerifiedAt).toBeInstanceOf(Date);
+    expect(
+      audit.record.mock.calls.filter(
+        ([event]) => (event as { action: AuditAction }).action === AuditAction.AUTH_EMAIL_VERIFIED,
+      ),
+    ).toHaveLength(1);
+    spy.mockRestore();
+  });
+
   it('builds mail links from ISSUER and never from request-controlled hosts', async () => {
     await auth.register('host@example.com', 'correct password');
     await new Promise((resolve) => setImmediate(resolve));

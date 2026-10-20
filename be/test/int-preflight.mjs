@@ -1,6 +1,11 @@
+import console from 'node:console';
+import { randomUUID } from 'node:crypto';
 import net from 'node:net';
+import os from 'node:os';
 import process from 'node:process';
+import { setInterval } from 'node:timers';
 import { URL } from 'node:url';
+import Redis from 'ioredis';
 
 /**
  * Jest globalSetup for `test:int` (DEBT-070).
@@ -16,6 +21,17 @@ import { URL } from 'node:url';
  */
 
 const PROBE_TIMEOUT_MS = 2000;
+
+// Single-run lock (DEBT-201): two concurrent `test:int` runs share vg-test-redis
+// and the 127.0.0.1 rate-limit buckets, so they corrupt each other. Only this
+// key is touched — never FLUSH, never other keys. Released by int-teardown.mjs.
+export const LOCK_KEY = 'vg:int-lock';
+const LOCK_TTL_MS = 120_000;
+const HEARTBEAT_MS = 30_000;
+// Extend only while we still hold the lock (value compare), so a stale run can
+// never extend a lock that expired and was taken by someone else.
+const EXTEND_LUA =
+  "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('PEXPIRE', KEYS[1], ARGV[2]) else return 0 end";
 
 /**
  * Resolve host/port from an override URI (e.g. `TEST_MONGO_URI`) so the probe
@@ -73,4 +89,35 @@ export default async function intPreflight() {
         `  docker start vg-test-mongo vg-test-redis\n`,
     );
   }
+  await acquireLock();
+}
+
+async function acquireLock() {
+  const redis = new Redis(process.env.TEST_REDIS_URL ?? 'redis://localhost:6479', {
+    lazyConnect: true,
+    maxRetriesPerRequest: 1,
+    connectTimeout: PROBE_TIMEOUT_MS,
+  });
+  const token = `${os.hostname()}:${process.pid}:${randomUUID()}`;
+  try {
+    await redis.connect();
+    const ok = await redis.set(LOCK_KEY, token, 'PX', LOCK_TTL_MS, 'NX');
+    if (ok !== 'OK') {
+      const [holder, ttl] = await Promise.all([redis.get(LOCK_KEY), redis.pttl(LOCK_KEY)]);
+      throw new Error(
+        `another test:int is running (holder=${holder}, ttl=${ttl}ms); ` +
+          `if stale: docker exec vg-test-redis redis-cli DEL ${LOCK_KEY}`,
+      );
+    }
+  } catch (err) {
+    redis.disconnect();
+    throw err;
+  }
+  const heartbeat = setInterval(() => {
+    redis.eval(EXTEND_LUA, 1, LOCK_KEY, token, LOCK_TTL_MS).catch((err) => {
+      console.warn(`[int-preflight] lock heartbeat failed: ${err.message}`);
+    });
+  }, HEARTBEAT_MS);
+  heartbeat.unref();
+  globalThis.__VG_INT_LOCK__ = { redis, token, heartbeat };
 }

@@ -364,4 +364,128 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
       expect(await sessions.listByUser(user.sub)).toHaveLength(1);
     });
   });
+
+  describe('B7.1 AE6/INV-27 + AE4: no account enumeration at the HTTP layer', () => {
+    const PASSWORD = 'correct password'; // test-only value for throwaway int DB users.
+    let seq = 0;
+    const fresh = () => `b71-${++seq}-${Date.now()}@example.com`;
+
+    /** GET the form (anon CSRF cookie + token), then POST it with `payload`. */
+    const submit = async (path: string, payload: Record<string, string>) => {
+      const page = await form(path);
+      return app.inject({
+        method: 'POST',
+        url: path,
+        headers: { cookie: page.cookie },
+        payload: { _csrf: page.csrf, ...payload },
+      });
+    };
+    /** What a client can observe: status, body (CSRF token / CSP nonce masked), Set-Cookie names. */
+    const observable = (res: Awaited<ReturnType<typeof submit>>) => ({
+      status: res.statusCode,
+      body: res.body
+        .replace(/name="_csrf" value="[^"]+"/g, 'name="_csrf" value="X"')
+        .replace(/nonce="[^"]+"/g, 'nonce="X"'),
+      setCookies: [res.headers['set-cookie'] ?? []]
+        .flat()
+        .map((c) => String(c).split('=')[0])
+        .sort(),
+    });
+    /** Register over HTTP and return the verification token from the captured mail. */
+    const registerAndToken = async (email: string) => {
+      expect((await submit('/register', { email, password: PASSWORD })).statusCode).toBe(201);
+      await new Promise((resolve) => setImmediate(resolve));
+      const link = messages.find((m) => m.to === email)?.text.match(/https:\/\/\S+/)?.[0];
+      expect(link).toBeDefined();
+      return new URL(link!).searchParams.get('token')!;
+    };
+
+    beforeAll(async () => {
+      // Earlier tests (and suites) share the 127.0.0.1 rate-limit buckets; start from zero.
+      const keys = await redis.keys('rl:*');
+      if (keys.length) await redis.del(...keys);
+    });
+
+    it('AE6: POST /login unknown email, wrong password and unverified-correct password are byte-identical', async () => {
+      const verified = await users.create({ email: fresh(), password: PASSWORD });
+      await users.verifyEmail(verified.sub);
+      const unverified = await users.create({ email: fresh(), password: PASSWORD });
+
+      const unknown = observable(
+        await submit('/login', { email: fresh(), password: PASSWORD, returnTo: '/' }),
+      );
+      const wrong = observable(
+        await submit('/login', {
+          email: verified.email,
+          password: 'wrong password',
+          returnTo: '/',
+        }),
+      );
+      const notVerified = observable(
+        await submit('/login', { email: unverified.email, password: PASSWORD, returnTo: '/' }),
+      );
+      expect(unknown.status).toBe(401);
+      expect(wrong).toEqual(unknown);
+      expect(notVerified).toEqual(unknown);
+    });
+
+    it('AE6: POST /register with a new vs an already-registered email is byte-identical', async () => {
+      const existing = await users.create({ email: fresh(), password: PASSWORD });
+      const created = observable(await submit('/register', { email: fresh(), password: PASSWORD }));
+      const taken = observable(
+        await submit('/register', { email: existing.email, password: PASSWORD }),
+      );
+      expect(created.status).toBe(201);
+      expect(taken).toEqual(created);
+    });
+
+    it('AE6: POST /forgot for an existing vs an unknown email is byte-identical', async () => {
+      const existing = await users.create({ email: fresh(), password: PASSWORD });
+      await users.verifyEmail(existing.sub);
+      const known = observable(await submit('/forgot', { email: existing.email }));
+      const unknown = observable(await submit('/forgot', { email: fresh() }));
+      expect(known.status).toBe(201);
+      expect(unknown).toEqual(known);
+    });
+
+    it('AE6: POST /verify-email with an unknown vs an already-used token is byte-identical', async () => {
+      const token = await registerAndToken(fresh());
+      expect((await submit('/verify-email', { token })).statusCode).toBe(201);
+      const used = observable(await submit('/verify-email', { token }));
+      const unknown = observable(
+        await submit('/verify-email', { token: 'x'.repeat(token.length) }),
+      );
+      expect(used.status).toBe(400);
+      expect(unknown).toEqual(used);
+    });
+
+    it('AE4: correct password before email verification => generic 401, no session, AUTH_LOGIN_FAILED; works after verify', async () => {
+      const email = fresh();
+      const token = await registerAndToken(email);
+      const user = (await users.findByEmail(email))!;
+
+      const before = await submit('/login', { email, password: PASSWORD, returnTo: '/' });
+      const wrong = await submit('/login', { email, password: 'wrong password', returnTo: '/' });
+      expect(before.statusCode).toBe(401);
+      expect(observable(before)).toEqual(observable(wrong));
+      expect(observable(before).setCookies).not.toContain('idp_session');
+      expect(await sessions.listByUser(user.sub)).toEqual([]);
+      expect(
+        await auditModel.exists({ action: AuditAction.AUTH_LOGIN_SUCCESS, actorId: user.sub }),
+      ).toBeNull();
+      expect(
+        await auditModel.countDocuments({
+          action: AuditAction.AUTH_LOGIN_FAILED,
+          targetId: user.sub,
+          reason: 'invalid_credentials',
+        }),
+      ).toBe(2);
+
+      expect((await submit('/verify-email', { token })).statusCode).toBe(201);
+      const after = await submit('/login', { email, password: PASSWORD, returnTo: '/' });
+      expect(after.statusCode).toBe(302);
+      expect(observable(after).setCookies).toContain('idp_session');
+      expect(await sessions.listByUser(user.sub)).toHaveLength(1);
+    });
+  });
 });
