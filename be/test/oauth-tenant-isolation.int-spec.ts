@@ -369,4 +369,48 @@ describe('OAuth tenant isolation at /authorize + POST /authorize/consent (MT1/MT
     expect(loc.searchParams.get('code')).toBeTruthy();
     expect(loc.searchParams.get('state')).toBe('rp-state');
   });
+
+  it('DEBT-211: not_member (GET /authorize and POST approve) Location is byte-identical to a real user deny', async () => {
+    const consentPost = async (sid: string, page: { body: string }, approve: boolean) =>
+      app.inject({
+        method: 'POST',
+        url: '/authorize/consent',
+        cookies: { [SESSION_COOKIE]: sid },
+        payload: {
+          _csrf: page.body.match(/name="_csrf" value="([^"]+)"/)![1],
+          request_id: page.body.match(/name="request_id" value="([^"]+)"/)![1],
+          ...(approve ? { approve: 'true' } : {}),
+        },
+      });
+    // Real deny by an active member.
+    const member = await seedOAuthUser(conn, { tenantId: TENANT_B });
+    const memberSid = await sessionOf(member);
+    const denyPage = await get(authorizeUrl(CLIENT_B), memberSid);
+    expect(denyPage.statusCode).toBe(200);
+    const deny = await consentPost(memberSid, denyPage, false);
+    expect(deny.statusCode).toBe(302);
+    const denyLocation = deny.headers['location'] as string;
+    expect(new URL(denyLocation).searchParams.has('error_description')).toBe(false);
+
+    // not_member at GET /authorize.
+    const outsider = await seedOAuthUser(conn, { tenantId: TENANT_A });
+    const atAuthorize = await get(authorizeUrl(CLIENT_B), await sessionOf(outsider));
+    expectAccessDenied(atAuthorize);
+    expect(atAuthorize.headers['location']).toBe(denyLocation);
+
+    // not_member at POST approve (membership suspended after the screen rendered).
+    const leaver = await seedOAuthUser(conn, { tenantId: TENANT_B });
+    const leaverSid = await sessionOf(leaver);
+    const page = await get(authorizeUrl(CLIENT_B), leaverSid);
+    expect(page.statusCode).toBe(200);
+    await conn
+      .model('UserTenant')
+      .updateOne(
+        { userId: new Types.ObjectId(leaver), tenantId: TENANT_B },
+        { $set: { status: 'suspended' } },
+      );
+    const atConsent = await consentPost(leaverSid, page, true);
+    expectAccessDenied(atConsent);
+    expect(atConsent.headers['location']).toBe(denyLocation);
+  });
 });

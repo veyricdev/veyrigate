@@ -49,7 +49,8 @@ export class AuthorizeRedirectError extends Error {
 
   constructor(
     readonly error: AuthorizeOAuthError,
-    readonly errorDescription: string,
+    /** Omitted => no `error_description` (DEBT-211: not_member looks exactly like a user deny). */
+    readonly errorDescription?: string,
   ) {
     super(error);
     this.name = 'AuthorizeRedirectError';

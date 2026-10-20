@@ -154,6 +154,23 @@ export class AuthenticationService {
       DEFAULT_TENANT_ID,
       { amr: ['pwd'], ...(context.deviceLabel ? { deviceLabel: context.deviceLabel } : {}) },
     );
+    // DEBT-141 (run 36 G5): a lock (any kind) can still land between the reset above and
+    // `establish`. The locking side writes `lockedUntil` first and sweeps sessions second, so
+    // re-reading AFTER the session exists leaves no interleaving where it survives. Locked/gone =>
+    // kill the new session (tombstone), same generic failure, no counter bump, no success audit.
+    // A DB error kills it best-effort and propagates (500, no cookie).
+    let fresh: Awaited<ReturnType<UserService['findById']>>;
+    try {
+      fresh = await this.users.findById(user.sub);
+    } catch (err) {
+      await this.sessions.revoke(established.id).catch(() => undefined);
+      throw err;
+    }
+    if (!fresh || (fresh.lockedUntil && fresh.lockedUntil > new Date())) {
+      await this.sessions.revoke(established.id);
+      await recordFailed();
+      throw new UnauthorizedException(GENERIC_LOGIN_ERROR);
+    }
     await this.audit.record({
       actorType: 'user',
       actorId: user.sub,

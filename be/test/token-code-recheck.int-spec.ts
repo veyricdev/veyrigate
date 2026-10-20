@@ -22,7 +22,7 @@ import { ClientCredentialService } from '../src/modules/clients/client-credentia
 import { ClientService, type Client } from '../src/modules/clients/client.service';
 import { DEFAULT_TENANT_ID } from '../src/modules/identity/tenant.service';
 import { UserTenantService } from '../src/modules/identity/user-tenant.service';
-import { UserService } from '../src/modules/identity/user.service';
+import { ADMIN_LOCKED_UNTIL, UserService } from '../src/modules/identity/user.service';
 import { KEY_PROVIDER } from '../src/modules/keys/key-provider';
 import { LocalKeyProvider } from '../src/modules/keys/local-key-provider';
 import { TokenSigner } from '../src/modules/keys/token-signer';
@@ -208,13 +208,24 @@ describe('/token code grant re-check after the family insert (run 35 Task 3)', (
     );
     await refresh.revokeForConsent(userId, clientId, RESOURCE, new Date());
   };
+  // Run 36 G1: only an ADMIN lock (or a vanished user) refuses a grant; a brute-force lock does not.
   const lockOnly = (userId: string) =>
+    conn
+      .model('User')
+      .updateOne(
+        { _id: new Types.ObjectId(userId) },
+        { $set: { lockedUntil: ADMIN_LOCKED_UNTIL } },
+      );
+  const tempLock = (userId: string) =>
     conn
       .model('User')
       .updateOne(
         { _id: new Types.ObjectId(userId) },
         { $set: { lockedUntil: new Date(Date.now() + 3_600_000) } },
       );
+  // Admin removes the resource from the client's allowlist (DEBT-210).
+  const dropResource = (clientId: string) =>
+    clientModel.updateOne({ clientId }, { $set: { allowedResources: [] } });
   const suspend = (userId: string) =>
     conn
       .model('UserTenant')
@@ -391,6 +402,40 @@ describe('/token code grant re-check after the family insert (run 35 Task 3)', (
     expect((await exchange(clientId, code)).statusCode).toBe(200);
   });
 
+  it('G1: a brute-force (temporary) lock does NOT refuse the code grant nor the refresh; family alive', async () => {
+    const { clientId, userId, code } = await issueCode();
+    await tempLock(userId);
+    const res = await exchange(clientId, code);
+    expect(res.statusCode).toBe(200);
+    const rt = res.json().refresh_token as string;
+    const refreshed = await app.inject({
+      method: 'POST',
+      url: '/token',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      payload: new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: clientId,
+        refresh_token: rt,
+      }).toString(),
+    });
+    expect(refreshed.statusCode).toBe(200);
+    const docs = await familyDocs(userId);
+    expect(docs).toHaveLength(2);
+    expect(docs.filter((d) => !d.revokedAt)).toHaveLength(1);
+  });
+
+  it('DEBT-210: resource removed from the client allowlist after the code => invalid_grant, reason resource_not_allowed', async () => {
+    const { clientId, userId, code } = await issueCode();
+    await dropResource(clientId);
+    await expectRefused(await exchange(clientId, code), userId, 'resource_not_allowed');
+  });
+
+  it('DEBT-210 race: resource removed right after the family insert => invalid_grant, family revoked', async () => {
+    const { clientId, userId, code } = await issueCode();
+    afterInsert((cid) => dropResource(cid));
+    await expectRefused(await exchange(clientId, code), userId, 'resource_not_allowed');
+  });
+
   it('DEBT-116: membership suspended after the code => invalid_grant, reason not_member', async () => {
     const { clientId, userId, code } = await issueCode();
     await suspend(userId);
@@ -415,6 +460,7 @@ describe('/token code grant re-check after the family insert (run 35 Task 3)', (
         ),
       (_cid: string, uid: string) => lockOnly(uid),
       (_cid: string, uid: string) => suspend(uid),
+      (cid: string) => dropResource(cid),
       (cid: string, uid: string) => revokeConsent(cid, uid),
     ]) {
       const { clientId, code } = await issueCode();
@@ -458,5 +504,282 @@ describe('/token code grant re-check after the family insert (run 35 Task 3)', (
     const retry = await exchange(clientId, code);
     expect(retry.statusCode).toBe(400);
     expect(retry.json().error).toBe('invalid_grant');
+  });
+
+  // Run 36 Task 2 (DEBT-207, G4): the refresh grant re-reads client / user (admin lock) /
+  // membership AFTER rotate; a failure revokes the whole family and answers the opaque invalid_grant.
+  describe('refresh grant re-check after rotate (run 36 Task 2)', () => {
+    /** Code grant once => a live first refresh token of a fresh family. */
+    async function firstRefresh(): Promise<{ clientId: string; userId: string; rt: string }> {
+      const { clientId, userId, code } = await issueCode();
+      const res = await exchange(clientId, code);
+      expect(res.statusCode).toBe(200);
+      return { clientId, userId, rt: res.json().refresh_token as string };
+    }
+
+    const refreshReq = (clientId: string, rt: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/token',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        payload: new URLSearchParams({
+          grant_type: 'refresh_token',
+          client_id: clientId,
+          refresh_token: rt,
+        }).toString(),
+      });
+
+    const refreshedAudits = (userId: string) =>
+      auditModel
+        .find({ action: AuditAction.TOKEN_REFRESHED, actorId: userId })
+        .lean<AuditEvent[]>();
+
+    /** Run `mutate` right AFTER the real rotate (spy calls the original first). */
+    function afterRotate(mutate: (clientId: string, userId: string) => Promise<unknown>) {
+      const original = refresh.rotate.bind(refresh);
+      return jest
+        .spyOn(refresh, 'rotate')
+        .mockImplementationOnce(async (...args: Parameters<RefreshTokenService['rotate']>) => {
+          const out = await original(...args);
+          await mutate(out.clientId, out.userId);
+          return out;
+        });
+    }
+
+    async function expectRefreshRefused(
+      clientId: string,
+      userId: string,
+      rt: string,
+      res: { statusCode: number; body: string },
+      reason: string,
+    ): Promise<void> {
+      // Reference body from a live client (the case's own client may be disabled by now).
+      const bogus = (await refreshReq(await mkClient(), 'bogus-refresh-token')).body;
+      expect(JSON.parse(bogus).error).toBe('invalid_grant');
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toBe(bogus);
+      const docs = await familyDocs(userId);
+      expect(docs).toHaveLength(2); // original + the successor minted by rotate
+      expect(docs.every((d) => d.revokedAt)).toBe(true);
+      const audits = await refreshedAudits(userId);
+      expect(audits).toHaveLength(1);
+      expect(audits[0]).toMatchObject({ result: 'failure', reason });
+      expect(JSON.stringify(audits[0])).not.toContain(rt);
+      // Replay of the old token gets no token (a disabled client already fails client auth).
+      const replay = await refreshReq(clientId, rt);
+      expect(replay.json().access_token).toBeUndefined();
+      expect(replay.json().error).toBe(
+        reason === 'client_disabled' ? 'invalid_client' : 'invalid_grant',
+      );
+    }
+
+    it('control: nothing changed => 200, one TOKEN_REFRESHED success, successor alive', async () => {
+      const { clientId, userId, rt } = await firstRefresh();
+      const res = await refreshReq(clientId, rt);
+      expect(res.statusCode).toBe(200);
+      const audits = await refreshedAudits(userId);
+      expect(audits).toHaveLength(1);
+      expect(audits[0].result).toBe('success');
+      expect((await familyDocs(userId)).filter((d) => !d.revokedAt)).toHaveLength(1);
+    });
+
+    it('race: admin lock written right after rotate => invalid_grant, family revoked, reason user_locked', async () => {
+      const { clientId, userId, rt } = await firstRefresh();
+      afterRotate((_cid, uid) => lockOnly(uid));
+      const res = await refreshReq(clientId, rt);
+      await expectRefreshRefused(clientId, userId, rt, res, 'user_locked');
+    });
+
+    it('race: membership suspended right after rotate => invalid_grant, family revoked, reason not_member', async () => {
+      const { clientId, userId, rt } = await firstRefresh();
+      afterRotate((_cid, uid) => suspend(uid));
+      const res = await refreshReq(clientId, rt);
+      await expectRefreshRefused(clientId, userId, rt, res, 'not_member');
+    });
+
+    it('race: client disabled (state write only) right after rotate => invalid_grant, family revoked, reason client_disabled', async () => {
+      const { clientId, userId, rt } = await firstRefresh();
+      afterRotate((cid) =>
+        clientModel.updateOne({ clientId: cid }, { $set: { disabledAt: new Date() } }),
+      );
+      const res = await refreshReq(clientId, rt);
+      await expectRefreshRefused(clientId, userId, rt, res, 'client_disabled');
+    });
+
+    it('race: client disabled + sweep right after rotate => invalid_grant, every family doc revoked', async () => {
+      const { clientId, userId, rt } = await firstRefresh();
+      afterRotate((cid) => disableClient(cid));
+      const res = await refreshReq(clientId, rt);
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('invalid_grant');
+      expect((await familyDocs(userId)).every((d) => d.revokedAt)).toBe(true);
+    });
+
+    it('G1 control: a brute-force (temporary) lock right after rotate => 200, family alive', async () => {
+      const { clientId, userId, rt } = await firstRefresh();
+      afterRotate((_cid, uid) => tempLock(uid));
+      const res = await refreshReq(clientId, rt);
+      expect(res.statusCode).toBe(200);
+      expect((await familyDocs(userId)).filter((d) => !d.revokedAt)).toHaveLength(1);
+    });
+
+    it('fail-closed: a DB error in the refresh re-check => 500, no token, family revoked, audit recheck_failed', async () => {
+      const { clientId, userId, rt } = await firstRefresh();
+      jest
+        .spyOn(app.get(UserTenantService), 'isActiveMember')
+        .mockRejectedValueOnce(new Error('mongo down secret-detail'));
+      const res = await refreshReq(clientId, rt);
+      expect(res.statusCode).toBe(500);
+      expect(res.body).not.toContain('access_token');
+      expect(res.body).not.toContain('secret-detail');
+      expect((await familyDocs(userId)).every((d) => d.revokedAt)).toBe(true);
+      const audits = await refreshedAudits(userId);
+      expect(audits).toHaveLength(1);
+      expect(audits[0]).toMatchObject({ result: 'failure', reason: 'recheck_failed' });
+    });
+
+    // ---- run 36 tester: risk matrix additions (identity/lock kind, exposure, state/replay,
+    // dependency failure, concurrency). Each pins one invariant the dev tests did not cover.
+    const reuseAudits = (clientId: string) =>
+      auditModel.find({ action: AuditAction.TOKEN_REUSE_DETECTED, clientId }).lean<AuditEvent[]>();
+    const failedLogins = async (userId: string, n: number) => {
+      for (let i = 0; i < n; i++) await app.get(UserService).recordFailedLogin(userId);
+    };
+
+    it('tester G1: brute-force after an ADMIN lock cannot downgrade it => code grant still refused (user_locked)', async () => {
+      const { clientId, userId, code } = await issueCode();
+      await lockOnly(userId);
+      await failedLogins(userId, 7);
+      const u = await app.get(UserService).findById(userId);
+      expect(u?.lockedUntil?.getTime()).toBe(ADMIN_LOCKED_UNTIL.getTime());
+      await expectRefused(await exchange(clientId, code), userId, 'user_locked');
+    });
+
+    it('tester G1: brute-force after an ADMIN lock cannot downgrade it => refresh still refused, family dead', async () => {
+      const { clientId, userId, rt } = await firstRefresh();
+      await lockOnly(userId);
+      await failedLogins(userId, 7);
+      const res = await refreshReq(clientId, rt);
+      await expectRefreshRefused(clientId, userId, rt, res, 'user_locked');
+    });
+
+    it('tester G1: a brute-force lock reached through real failed logins (>=5) keeps refresh alive', async () => {
+      const { clientId, userId, rt } = await firstRefresh();
+      await failedLogins(userId, 6);
+      const u = await app.get(UserService).findById(userId);
+      expect(u?.lockedUntil && u.lockedUntil > new Date()).toBe(true);
+      expect(u?.lockedUntil?.getTime()).not.toBe(ADMIN_LOCKED_UNTIL.getTime());
+      const res = await refreshReq(clientId, rt);
+      expect(res.statusCode).toBe(200);
+      expect(res.json().refresh_token).toBeTruthy();
+    });
+
+    it('tester exposure: a refused refresh (reason or recheck_failed) never signs a token', async () => {
+      const sign = jest.spyOn(tokens, 'signTokensForRefresh');
+      const a = await firstRefresh();
+      sign.mockClear();
+      afterRotate((_cid, uid) => lockOnly(uid));
+      const refused = await refreshReq(a.clientId, a.rt);
+      expect(refused.statusCode).toBe(400);
+      expect(sign).not.toHaveBeenCalled();
+
+      const b = await firstRefresh();
+      sign.mockClear();
+      jest
+        .spyOn(app.get(UserTenantService), 'isActiveMember')
+        .mockRejectedValueOnce(new Error('mongo down'));
+      const failed = await refreshReq(b.clientId, b.rt);
+      expect(failed.statusCode).toBe(500);
+      expect(sign).not.toHaveBeenCalled();
+      for (const r of [refused, failed]) {
+        expect(r.body).not.toMatch(/access_token|refresh_token|id_token/);
+      }
+    });
+
+    it('tester DEBT-067: revokeFamily throws on a refusal => 500, no token, refusal audit kept; replay of the old token gets nothing', async () => {
+      const { clientId, userId, rt } = await firstRefresh();
+      const sign = jest.spyOn(tokens, 'signTokensForRefresh');
+      sign.mockClear();
+      afterRotate((_cid, uid) => lockOnly(uid));
+      jest.spyOn(refresh, 'revokeFamily').mockRejectedValueOnce(new Error('mongo down'));
+      const res = await refreshReq(clientId, rt);
+      expect(res.statusCode).toBe(500);
+      expect(res.body).not.toMatch(/access_token|refresh_token/);
+      expect(sign).not.toHaveBeenCalled();
+      const audits = await refreshedAudits(userId);
+      expect(audits).toHaveLength(1);
+      expect(audits[0]).toMatchObject({ result: 'failure', reason: 'user_locked' });
+      jest.restoreAllMocks();
+      const replay = await refreshReq(clientId, rt);
+      expect(replay.statusCode).toBe(400);
+      expect(replay.json().access_token).toBeUndefined();
+      // The successor (value never delivered) is swept by reuse detection on that replay.
+      expect((await familyDocs(userId)).every((d) => d.revokedAt)).toBe(true);
+    });
+
+    it('tester: user vanished right after rotate => invalid_grant, reason user_locked, family dead', async () => {
+      const { clientId, userId, rt } = await firstRefresh();
+      afterRotate((_cid, uid) => conn.model('User').deleteOne({ _id: new Types.ObjectId(uid) }));
+      const res = await refreshReq(clientId, rt);
+      await expectRefreshRefused(clientId, userId, rt, res, 'user_locked');
+    });
+
+    it('tester cross-tenant: membership of the client tenant removed (user still active elsewhere) => not_member', async () => {
+      const { clientId, userId, rt } = await firstRefresh();
+      await conn.model('UserTenant').create({
+        userId: new Types.ObjectId(userId),
+        tenantId: DEFAULT_TENANT_ID,
+        status: 'active',
+      });
+      await conn
+        .model('UserTenant')
+        .deleteOne({ userId: new Types.ObjectId(userId), tenantId: TENANT });
+      const res = await refreshReq(clientId, rt);
+      await expectRefreshRefused(clientId, userId, rt, res, 'not_member');
+    });
+
+    it('tester concurrency: 5 parallel refreshes of one token with an admin lock => no 200, whole family dead', async () => {
+      const { clientId, userId, rt } = await firstRefresh();
+      await lockOnly(userId);
+      const results = await Promise.all(Array.from({ length: 5 }, () => refreshReq(clientId, rt)));
+      for (const r of results) {
+        expect(r.statusCode).not.toBe(200);
+        expect(r.body).not.toMatch(/access_token|refresh_token/);
+      }
+      expect((await familyDocs(userId)).every((d) => d.revokedAt)).toBe(true);
+    });
+
+    // DEBT-215 (senior 🟡): PIN the current behaviour so a fix flips this test knowingly. A replay of
+    // the old token after a post-rotate refusal is classified as reuse => one TOKEN_REUSE_DETECTED
+    // (count 0: the family is already dead). No bypass: no token, family stays dead.
+    it.each([
+      ['recheck_failed (500)', 'fail'],
+      ['user_locked (400)', 'lock'],
+    ])(
+      'tester DEBT-215 pin: replay after %s => invalid_grant, no token, false TOKEN_REUSE_DETECTED (count 0)',
+      async (_n, kind) => {
+        const { clientId, userId, rt } = await firstRefresh();
+        if (kind === 'fail') {
+          jest
+            .spyOn(app.get(UserTenantService), 'isActiveMember')
+            .mockRejectedValueOnce(new Error('mongo down'));
+        } else {
+          afterRotate((_cid, uid) => lockOnly(uid));
+        }
+        const first = await refreshReq(clientId, rt);
+        expect(first.statusCode).toBe(kind === 'fail' ? 500 : 400);
+        expect(await reuseAudits(clientId)).toHaveLength(0);
+        jest.restoreAllMocks();
+        const replay = await refreshReq(clientId, rt);
+        expect(replay.statusCode).toBe(400);
+        expect(replay.json().error).toBe('invalid_grant');
+        expect(replay.body).not.toMatch(/access_token|refresh_token/);
+        const reuse = await reuseAudits(clientId);
+        expect(reuse).toHaveLength(1);
+        expect(reuse[0].metadata).toMatchObject({ count: 0 });
+        expect(JSON.stringify(reuse[0])).not.toContain(rt);
+        expect((await familyDocs(userId)).every((d) => d.revokedAt)).toBe(true);
+      },
+    );
   });
 });

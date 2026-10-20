@@ -873,6 +873,11 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
       };
     }
 
+    /** Run 36 (DEBT-207): the user left B, so a B×demo refresh is refused (not_member) and would
+     * itself revoke the family; "admin of A did not touch it" is asserted on the stored docs. */
+    const familyUntouched = async (familyId: string) =>
+      (await refreshModel.countDocuments({ familyId, revokedAt: null })) === 1;
+
     it('GET families: only clients of the token tenant, one row per family, exact key set, no tokenHash', async () => {
       const f = await fixture();
       const rotated = await refresh(f.demo.refresh_token!);
@@ -985,7 +990,7 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
         expect(res.statusCode).toBe(404);
         expect(res.body).toBe('{"error":"not_found"}');
       }
-      expect((await refresh(f.foreign.refresh_token!, CLIENT_B)).statusCode).toBe(200);
+      expect(await familyUntouched(f.foreignFamily)).toBe(true);
       expect((await refresh(strangerFlow.refresh_token!)).statusCode).toBe(200);
       expect((await refresh(f.demo.refresh_token!)).statusCode).toBe(200);
     });
@@ -1022,7 +1027,7 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
       expect(page.body).toContain('name="request_id"');
       expect((await refresh(f.demo.refresh_token!)).json().error).toBe('invalid_grant');
       expect((await refresh(f.other.refresh_token!)).statusCode).toBe(200);
-      expect((await refresh(f.foreign.refresh_token!, CLIENT_B)).statusCode).toBe(200);
+      expect(await familyUntouched(f.foreignFamily)).toBe(true);
       expect(
         await auditModel.findOne({ action: 'OAUTH_CONSENT_REVOKED', targetId: f.user }).lean(),
       ).toMatchObject({
@@ -1068,7 +1073,7 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
       }
       expect((await consentModel.findById(foreign!._id).lean())?.revokedAt ?? null).toBeNull();
       expect((await consentModel.findById(strangers!._id).lean())?.revokedAt ?? null).toBeNull();
-      expect((await refresh(f.foreign.refresh_token!, CLIENT_B)).statusCode).toBe(200);
+      expect(await familyUntouched(f.foreignFamily)).toBe(true);
     });
 
     it('cross-tenant user, step-up and scope on family/consent routes', async () => {
@@ -1098,7 +1103,14 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
         expect((await call(method, url, readOnly)).json().error).toBe('insufficient_scope');
       }
       expect((await refresh(f.demo.refresh_token!)).statusCode).toBe(200);
-      expect((await refresh(f.foreign.refresh_token!, CLIENT_B)).statusCode).toBe(200);
+      // Run 36 (DEBT-207, intended change): the user is no longer a member of CLIENT_B's tenant,
+      // so the refresh is refused and the whole B×demo family is revoked.
+      expect((await refresh(f.foreign.refresh_token!, CLIENT_B)).json().error).toBe(
+        'invalid_grant',
+      );
+      expect(
+        await refreshModel.countDocuments({ familyId: f.foreignFamily, revokedAt: null }),
+      ).toBe(0);
     });
   });
 

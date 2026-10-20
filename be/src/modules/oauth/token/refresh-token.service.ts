@@ -114,6 +114,13 @@ export class RefreshTokenService {
    * the access token carries the narrowed scope. Reuse/concurrency failures surface as
    * `RefreshRotationError` (mapped to `invalid_grant` by the controller); sign/audit failure after
    * the atomic swap fails closed (500, the token is gone → re-login; accepted, DEBT-032).
+   *
+   * DEBT-207 (run 36 G4): `recheck(userId)` is REQUIRED and runs right after a successful `rotate`
+   * and before signing. A returned reason (client disabled / admin lock / membership gone) revokes
+   * the whole family, audits `TOKEN_REFRESHED failure <reason>` and throws `RefreshRotationError`
+   * (opaque invalid_grant). A thrown recheck revokes best-effort, audits `recheck_failed`
+   * best-effort and rethrows (500, fail-closed). "Rotate, then re-read" mirrors the revoking
+   * side ("write state, then sweep"), so no interleaving leaves a usable successor.
    */
   async issueForRefresh(
     value: string,
@@ -122,6 +129,7 @@ export class RefreshTokenService {
       'clientId' | 'allowedResources' | 'clientType' | 'tokenEndpointAuthMethod'
     >,
     request: { scope?: string; resource?: string },
+    recheck: (userId: string) => Promise<string | null>,
     audit: AuditCtx = {},
   ): Promise<TokenResponse> {
     const tokenHash = sha256(value);
@@ -178,6 +186,7 @@ export class RefreshTokenService {
     // resource). Any invalid/reuse result throws here before any token is signed.
     // DEBT-105: hand the identifiers resolved for the pre-check to rotate (one lookup per refresh).
     const result = await this.rotate(value, client, audit, allowedIdentifiers);
+    await this.recheckAfterRotate(result, recheck, audit);
 
     // Access token uses the narrowed scope when the client asked to narrow; otherwise the full
     // granted scope. The descendant refresh keeps the original scope (done inside `rotate`).
@@ -216,6 +225,44 @@ export class RefreshTokenService {
       ...(idToken ? { id_token: idToken } : {}),
       refresh_token: result.newRefreshToken,
     };
+  }
+
+  /** DEBT-207: current-state re-check of a refresh after `rotate` (see `issueForRefresh`). */
+  private async recheckAfterRotate(
+    result: RotationResult,
+    recheck: (userId: string) => Promise<string | null>,
+    audit: AuditCtx,
+  ): Promise<void> {
+    const refuse = (reason: string) =>
+      this.audit.record({
+        actorType: 'user',
+        actorId: result.userId,
+        clientId: result.clientId,
+        action: AuditAction.TOKEN_REFRESHED,
+        result: 'failure',
+        reason,
+        ip: audit.ip,
+        userAgent: audit.userAgent,
+        requestId: audit.requestId,
+        metadata: { resource: result.resource, familyId: result.familyId },
+      });
+    let reason: string | null;
+    try {
+      reason = await recheck(result.userId);
+    } catch (err) {
+      await this.revokeFamily(result.familyId, result.clientId, new Date()).catch(() => undefined);
+      await refuse('recheck_failed').catch(() => undefined);
+      throw err;
+    }
+    if (reason === null) return;
+    try {
+      await this.revokeFamily(result.familyId, result.clientId, new Date());
+    } catch (err) {
+      await refuse(reason).catch(() => undefined); // DEBT-067: keep the refusal audit.
+      throw err;
+    }
+    await refuse(reason);
+    throw new RefreshRotationError();
   }
 
   /**

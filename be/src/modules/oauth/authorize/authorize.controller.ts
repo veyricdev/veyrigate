@@ -232,7 +232,9 @@ export class AuthorizeController {
   private buildErrorRedirect(err: AuthorizeRedirectError): string {
     const url = new URL(err.redirectUri!);
     url.searchParams.set('error', err.error);
-    url.searchParams.set('error_description', err.errorDescription);
+    if (err.errorDescription !== undefined) {
+      url.searchParams.set('error_description', err.errorDescription);
+    }
     if (err.state !== undefined) url.searchParams.set('state', err.state);
     url.searchParams.set('iss', this.authorize.issuerUrl);
     return url.toString();

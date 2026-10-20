@@ -587,7 +587,8 @@ export class AuthorizeService {
   ): Promise<void> {
     if (await this.memberships.isActiveMember(userId, client.tenantId)) return;
     await this.recordAuthorize(client, audit, userId, 'not_member', 'failure');
-    throw new AuthorizeRedirectError('access_denied', 'Access denied.');
+    // DEBT-211: no description, so the RP cannot tell "not a member" from "the user denied".
+    throw new AuthorizeRedirectError('access_denied');
   }
 
   private async recordAuthorize(

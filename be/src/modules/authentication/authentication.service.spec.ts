@@ -27,6 +27,7 @@ describe('AuthenticationService', () => {
     createWithPasswordHash: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
     findByEmail: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
     findByEmailForAuthentication: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
+    findById: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
     verifyEmail: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
     recordFailedLogin: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
     clearFailedLoginsIfUnlocked: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
@@ -244,6 +245,7 @@ describe('AuthenticationService', () => {
     );
     sessions.establish.mockResolvedValue({ id: 'new-id', session: {} });
     users.clearFailedLoginsIfUnlocked.mockResolvedValue(user);
+    users.findById.mockResolvedValue(user); // run 36: post-establish re-read (still unlocked)
     await expect(
       service.login('a@example.com', 'correct password', { oldSessionId: 'old' }),
     ).resolves.toMatchObject({ id: 'new-id' });

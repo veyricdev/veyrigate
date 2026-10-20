@@ -1917,6 +1917,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
           tokenEndpointAuthMethod: 'none',
         },
         {},
+        async () => null,
         {},
       );
       expect(rotate.access_token).toBeDefined();

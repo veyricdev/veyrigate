@@ -47,6 +47,7 @@ const ACCESS_TTL = 900;
 const REFRESH_TTL = 2592000;
 const REDIRECT = 'https://app.example.com/callback';
 const RESOURCE = 'https://api.example.com/';
+const RESOURCE_ID = 'res-api';
 const VERIFIER = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk'; // 43 chars, RFC 7636 example
 const CHALLENGE = deriveS256Challenge(VERIFIER);
 
@@ -191,12 +192,18 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
 
     clientModel = app.get<Model<Client>>(getModelToken('Client'));
     clientService = new ClientService(clientModel, cfg);
+    // Run 36 (DEBT-210): the code grant re-checks the bound resource against the client's
+    // allowlist (by resourceId), so the fixture clients really hold RESOURCE.
+    await moduleRef
+      .get(ResourceService)
+      .create({ resourceId: RESOURCE_ID, identifier: RESOURCE, scopes: [] });
     // public client (PKCE, auth method none)
     await clientService.create({
       clientId: `${RUN}-public`,
       clientType: 'public',
       tokenEndpointAuthMethod: 'none',
       redirectUris: [REDIRECT],
+      allowedResources: [RESOURCE_ID],
       grantTypes: ['authorization_code', 'refresh_token'],
       tenantId: 'tenant-A',
     });
@@ -206,6 +213,7 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
       clientType: 'public',
       tokenEndpointAuthMethod: 'none',
       redirectUris: [REDIRECT],
+      allowedResources: [RESOURCE_ID],
       grantTypes: ['refresh_token'],
       tenantId: 'tenant-A',
     });
@@ -215,6 +223,7 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
       clientType: 'confidential',
       tokenEndpointAuthMethod: 'client_secret_basic',
       redirectUris: [REDIRECT],
+      allowedResources: [RESOURCE_ID],
       grantTypes: ['authorization_code'],
       tenantId: 'tenant-A',
     });
@@ -751,7 +760,7 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
       redirectUris: [REDIRECT],
       postLogoutRedirectUris: [],
       allowedCorsOrigins: [],
-      allowedResources: [],
+      allowedResources: [RESOURCE_ID],
       scopes: [],
       tenantId: 'tenant-A',
     });

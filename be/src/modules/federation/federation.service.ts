@@ -187,6 +187,21 @@ export class FederationService {
       amr: ['fed'],
       authTime: upstreamAuthTime(identity, record.reauthAfter),
     });
+    // DEBT-187 (run 36 G5): a lock landing after `loginExisting` but before the session exists
+    // must still win (lock writes state first, sweeps second). Re-read now; locked/gone => kill
+    // the new session, audit `locked`, first-party `account_locked`. DB error => kill + 500.
+    let fresh: Awaited<ReturnType<UserService['findById']>>;
+    try {
+      fresh = await this.users.findById(userId);
+    } catch (err) {
+      await this.sessions.revoke(established.id).catch(() => undefined);
+      throw err;
+    }
+    if (!fresh || (fresh.lockedUntil && fresh.lockedUntil > new Date())) {
+      await this.sessions.revoke(established.id);
+      await this.recordFailed(provider.name, 'locked', audit, userId);
+      throw new FederationError('account_locked');
+    }
     await this.audit.record({
       actorType: 'user',
       actorId: userId,

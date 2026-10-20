@@ -14,18 +14,19 @@ import {
 } from '../../clients/client-auth-request';
 import { applyCors, requestOrigin } from '../../clients/client-cors.helper';
 import { ClientCorsService } from '../../clients/client-cors.service';
-import { ClientService } from '../../clients/client.service';
+import { ClientService, type Client } from '../../clients/client.service';
 import { isRegisteredRedirectUri } from '../../clients/redirect-uri.validator';
 import { UserTenantService } from '../../identity/user-tenant.service';
-import { UserService } from '../../identity/user.service';
+import { ADMIN_LOCKED_UNTIL, UserService } from '../../identity/user.service';
 import { SessionService } from '../../sessions/session.service';
 import {
   AuthorizationCodeService,
   type AuthorizationCodeData,
 } from '../code/authorization-code.service';
+import { ResourceService } from '../../resources/resource.service';
 import { ConsentService } from '../consent/consent.service';
 import { TokenError } from './token.errors';
-import { TokenService } from './token.service';
+import { TokenService, adminTargetForbidden } from './token.service';
 import { RefreshRotationError, RefreshTokenService } from './refresh-token.service';
 
 /** Reply members the `/token` controller needs (Fastify). Declared structurally like HttpReply. */
@@ -62,6 +63,7 @@ export class TokenController {
     private readonly users: UserService,
     private readonly memberships: UserTenantService,
     private readonly consents: ConsentService,
+    private readonly resources: ResourceService,
   ) {}
 
   @Post('/token')
@@ -213,15 +215,7 @@ export class TokenController {
       // Redis error on the re-check: revoke any minted family (best-effort) and record a
       // `TOKEN_ISSUED failure reason:'session_check_failed'` (best-effort — never masks the
       // original error), then fail closed (500). No token is returned, no audit claims success.
-      if (familyId) {
-        await this.refresh
-          .revokeFamily(familyId, client.clientId, new Date())
-          .catch(() => undefined);
-      }
-      await this.tokens
-        .recordIssued(client, data, 'failure', !!familyId, 'session_check_failed', audit)
-        .catch(() => undefined);
-      throw err;
+      return this.failClosed(client, data, familyId, 'session_check_failed', audit, err);
     }
     if (!live) {
       // Session ended during the exchange window: record exactly one
@@ -233,21 +227,12 @@ export class TokenController {
       // write is best-effort (never masks the revoke error); without this try/catch a throwing
       // revoke skips `recordIssued` entirely, losing the `TOKEN_ISSUED failure session_ended` for a
       // rejected grant. `finally` is unusable here (it would double-write on the success path).
-      if (familyId) {
-        try {
-          await this.refresh.revokeFamilyForEndedSession(familyId, client.clientId, new Date(), {
-            ip: req.ip,
-            requestId: req.id,
-          });
-        } catch (err) {
-          await this.tokens
-            .recordIssued(client, data, 'failure', !!familyId, 'session_ended', audit)
-            .catch(() => undefined);
-          throw err;
-        }
-      }
-      await this.tokens.recordIssued(client, data, 'failure', !!familyId, 'session_ended', audit);
-      throw new TokenError('invalid_grant');
+      return this.refuseGrant(client, data, familyId, 'session_ended', audit, (id) =>
+        this.refresh.revokeFamilyForEndedSession(id, client.clientId, new Date(), {
+          ip: req.ip,
+          requestId: req.id,
+        }),
+      );
     }
     // DEBT-116/128/141/144/156: re-read the CURRENT grant preconditions AFTER the family insert.
     // Every revoking side (disable client, lock user, revoke consent) writes its state first and
@@ -258,30 +243,10 @@ export class TokenController {
     try {
       failure = await this.recheckCodeGrant(client.clientId, data);
     } catch (err) {
-      if (familyId) {
-        await this.refresh
-          .revokeFamily(familyId, client.clientId, new Date())
-          .catch(() => undefined);
-      }
-      await this.tokens
-        .recordIssued(client, data, 'failure', !!familyId, 'recheck_failed', audit)
-        .catch(() => undefined);
-      throw err;
+      return this.failClosed(client, data, familyId, 'recheck_failed', audit, err);
     }
     if (failure !== null) {
-      if (familyId) {
-        try {
-          await this.refresh.revokeFamily(familyId, client.clientId, new Date());
-        } catch (err) {
-          // DEBT-067 pattern: keep the refusal audit even when the revoke throws.
-          await this.tokens
-            .recordIssued(client, data, 'failure', !!familyId, failure, audit)
-            .catch(() => undefined);
-          throw err;
-        }
-      }
-      await this.tokens.recordIssued(client, data, 'failure', !!familyId, failure, audit);
-      throw new TokenError('invalid_grant');
+      return this.refuseGrant(client, data, familyId, failure, audit);
     }
     // The session is live now: record `TOKEN_ISSUED success` right before the token leaves the
     // server (INV-25). If the audit write fails, revoke any minted family best-effort and fail
@@ -300,8 +265,75 @@ export class TokenController {
   }
 
   /**
+   * DEBT-213: refuse a code grant after the family insert. Revoke the family (if minted) via
+   * `revoke`; if that throws, record the refusal best-effort and rethrow (DEBT-067). Otherwise
+   * record exactly one `TOKEN_ISSUED failure <reason>` (not swallowed) and answer `invalid_grant`.
+   */
+  private async refuseGrant(
+    client: Client,
+    data: AuthorizationCodeData,
+    familyId: string | undefined,
+    reason: string,
+    audit: { ip?: string; requestId?: string },
+    revoke: (id: string) => Promise<unknown> = (id) =>
+      this.refresh.revokeFamily(id, client.clientId, new Date()),
+  ): Promise<never> {
+    if (familyId) {
+      try {
+        await revoke(familyId);
+      } catch (err) {
+        await this.tokens
+          .recordIssued(client, data, 'failure', true, reason, audit)
+          .catch(() => undefined);
+        throw err;
+      }
+    }
+    await this.tokens.recordIssued(client, data, 'failure', !!familyId, reason, audit);
+    throw new TokenError('invalid_grant');
+  }
+
+  /** Infra error while deciding: revoke (best-effort), audit `reason` (best-effort), rethrow (500). */
+  private async failClosed(
+    client: Client,
+    data: AuthorizationCodeData,
+    familyId: string | undefined,
+    reason: string,
+    audit: { ip?: string; requestId?: string },
+    err: unknown,
+  ): Promise<never> {
+    if (familyId) {
+      await this.refresh.revokeFamily(familyId, client.clientId, new Date()).catch(() => undefined);
+    }
+    await this.tokens
+      .recordIssued(client, data, 'failure', !!familyId, reason, audit)
+      .catch(() => undefined);
+    throw err;
+  }
+
+  /**
+   * Subject state a grant (code or refresh) still requires (run 36 G1). `user_locked` only for a
+   * vanished user or an ADMIN lock: a brute-force lock is attacker-triggerable and by design does
+   * not sweep sessions/families, so refusing on it would let anyone knowing the email kill the
+   * victim's grants. `not_member` when the membership in the client's tenant is no longer active.
+   */
+  private async subjectFailure(
+    userId: string,
+    tenantId: string,
+  ): Promise<'user_locked' | 'not_member' | null> {
+    const user = await this.users.findById(userId);
+    if (!user || user.lockedUntil?.getTime() === ADMIN_LOCKED_UNTIL.getTime()) {
+      return 'user_locked';
+    }
+    if (!(await this.memberships.isActiveMember(userId, tenantId))) {
+      return 'not_member';
+    }
+    return null;
+  }
+
+  /**
    * Current-state re-check of a code grant (run 35), in a fixed order; returns the first failing
-   * reason or null. The tenant comes from the client document just re-read (INV-24). Consent uses
+   * reason or null. The tenant comes from the client document just re-read (INV-24). The resource
+   * uses the same predicate as `decideConsent` (resolved by resourceId, DEBT-210). Consent uses
    * the full `isCovered` (scopes + policy/terms versions, Q35.5). DB faults propagate.
    */
   private async recheckCodeGrant(
@@ -313,13 +345,15 @@ export class TokenController {
     if (!isRegisteredRedirectUri(fresh.redirectUris, data.redirectUri)) {
       return 'redirect_uri_unregistered';
     }
-    const user = await this.users.findById(data.userId);
-    if (!user || (user.lockedUntil && user.lockedUntil.getTime() > Date.now())) {
-      return 'user_locked';
+    if (
+      data.resource &&
+      (adminTargetForbidden(fresh, data.resource, this.tokens.adminResource) ||
+        (await this.resources.resolveForClient(fresh.allowedResources, data.resource)) === null)
+    ) {
+      return 'resource_not_allowed';
     }
-    if (!(await this.memberships.isActiveMember(data.userId, fresh.tenantId))) {
-      return 'not_member';
-    }
+    const subject = await this.subjectFailure(data.userId, fresh.tenantId);
+    if (subject) return subject;
     const consent = await this.consents.find(data.userId, clientId, data.resource);
     const scopes = data.scope.split(' ').filter(Boolean);
     if (!this.consents.isCovered(consent, scopes, this.consents.currentVersions())) {
@@ -361,6 +395,12 @@ export class TokenController {
           tokenEndpointAuthMethod: client.tokenEndpointAuthMethod,
         },
         { scope: body.get('scope'), resource: body.get('resource') },
+        // DEBT-207: after rotate, the client (re-read), user and membership must still be valid.
+        async (userId) => {
+          const fresh = await this.clients.findByClientId(client.clientId);
+          if (!fresh) return 'client_disabled';
+          return this.subjectFailure(userId, fresh.tenantId);
+        },
         audit,
       );
       return reply.status(HttpStatus.OK).send(response);

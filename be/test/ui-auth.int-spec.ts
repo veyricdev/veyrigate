@@ -10,6 +10,7 @@ import { Eta } from 'eta';
 import IORedis from 'ioredis';
 import type { Model } from 'mongoose';
 import { join } from 'node:path';
+import { sha256 } from '../src/common/crypto/crypto.util';
 import { MODELS } from '../src/database/mongo/models';
 import { RedisService } from '../src/database/redis/redis.service';
 import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
@@ -311,6 +312,11 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
     };
 
     afterEach(() => jest.restoreAllMocks());
+    // Run 36: this block now posts more logins than the 20/min test bucket; start each from zero.
+    beforeEach(async () => {
+      const keys = await redis.keys('rl:*');
+      if (keys.length) await redis.del(...keys);
+    });
 
     it.each([
       ['admin lock (sentinel)', () => ADMIN_LOCKED_UNTIL],
@@ -348,6 +354,85 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
         ).toBe(2);
       },
     );
+
+    // Run 36 Task 3 (DEBT-141 login part): a lock landing right AFTER `establish` still wins.
+    const lockAfterEstablish = (lock: (userId: string) => Promise<unknown>) => {
+      const created: string[] = [];
+      const original = sessions.establish.bind(sessions);
+      jest
+        .spyOn(sessions, 'establish')
+        .mockImplementationOnce(async (...args: Parameters<SessionService['establish']>) => {
+          const out = await original(...args);
+          created.push(out.id);
+          await lock(args[1]);
+          return out;
+        });
+      return created;
+    };
+
+    it.each([
+      [
+        'admin lock + credential sweep',
+        async (uid: string) => {
+          await userModel.updateOne({ _id: uid }, { $set: { lockedUntil: ADMIN_LOCKED_UNTIL } });
+          await moduleRef.get(AuthenticationService).revokeAllUserCredentials(uid, new Date());
+        },
+      ],
+      [
+        'lockedUntil write only (brute-force lock)',
+        (uid: string) =>
+          userModel.updateOne(
+            { _id: uid },
+            { $set: { lockedUntil: new Date(Date.now() + 15 * 60_000) } },
+          ),
+      ],
+    ])(
+      'race: %s right after establish => generic 401 identical to a wrong password, session dead, no success audit',
+      async (_name, lock) => {
+        const user = await verifiedUser();
+        const wrong = await postLogin(user.email, 'wrong password');
+        await users.resetFailedLogins(user.sub);
+        const created = lockAfterEstablish(lock);
+
+        const res = await postLogin(user.email, LOGIN_PASSWORD);
+        expect(created).toHaveLength(1);
+        expect(res.statusCode).toBe(401);
+        expect(normalized(res.body)).toBe(normalized(wrong.body));
+        expect(sessionCookieSet(res.headers)).toBe(false);
+        expect(res.headers.location).toBeUndefined();
+        expect(await sessions.exists(sha256(created[0]))).toBe(false);
+        expect(await sessions.listByUser(user.sub)).toEqual([]);
+        expect((await userModel.findById(user.sub).lean())!.failedLoginCount).toBe(0);
+        expect(
+          await auditModel.exists({ action: AuditAction.AUTH_LOGIN_SUCCESS, actorId: user.sub }),
+        ).toBeNull();
+        expect(
+          await auditModel.exists({ action: AuditAction.SESSION_CREATED, actorId: user.sub }),
+        ).toBeNull();
+        expect(
+          await auditModel.countDocuments({
+            action: AuditAction.AUTH_LOGIN_FAILED,
+            targetId: user.sub,
+            reason: 'invalid_credentials',
+          }),
+        ).toBe(2);
+      },
+    );
+
+    it('fail-closed: a DB error re-reading the user after establish => 500, no session cookie, session dead', async () => {
+      const user = await verifiedUser();
+      const created = lockAfterEstablish(async () => {
+        jest.spyOn(users, 'findById').mockRejectedValueOnce(new Error('mongo down secret-detail'));
+      });
+      const res = await postLogin(user.email, LOGIN_PASSWORD);
+      expect(res.statusCode).toBe(500);
+      expect(res.body).not.toContain('secret-detail');
+      expect(sessionCookieSet(res.headers)).toBe(false);
+      expect(await sessions.exists(sha256(created[0]))).toBe(false);
+      expect(
+        await auditModel.exists({ action: AuditAction.AUTH_LOGIN_SUCCESS, actorId: user.sub }),
+      ).toBeNull();
+    });
 
     it('normal login still resets the counter and clears an EXPIRED lock, creating a session', async () => {
       const user = await verifiedUser();

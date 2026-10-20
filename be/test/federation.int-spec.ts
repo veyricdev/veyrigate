@@ -920,6 +920,92 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       ).toBe(1);
     });
 
+    // Run 36 Task 3 (DEBT-187/141): a lock landing between the pre-check and `establish` wins.
+    /** Spy `establish`: run the real one (capture the id), then `lock` the user. */
+    const lockAfterEstablish = (lock: (userId: string) => Promise<unknown>) => {
+      const created: string[] = [];
+      const original = sessions.establish.bind(sessions);
+      jest
+        .spyOn(sessions, 'establish')
+        .mockImplementationOnce(async (...args: Parameters<SessionService['establish']>) => {
+          const out = await original(...args);
+          created.push(out.id);
+          await lock(args[1]);
+          return out;
+        });
+      return created;
+    };
+
+    it.each([
+      [
+        'admin lock + credential sweep',
+        async (uid: string) => {
+          await users.updateStatus(uid, { lockedUntil: ADMIN_LOCKED_UNTIL });
+          await moduleRef.get(AuthenticationService).revokeAllUserCredentials(uid, new Date());
+        },
+      ],
+      [
+        'lockedUntil write only (brute-force lock)',
+        (uid: string) =>
+          userModel.updateOne(
+            { _id: uid },
+            { $set: { lockedUntil: new Date(Date.now() + 10 * 60_000) } },
+          ),
+      ],
+    ])(
+      'race: %s right after establish => account_locked page, the new session is dead, no success audit',
+      async (_name, lock) => {
+        const sub = `${RUN}-race-${generateToken(6)}`;
+        const first = await socialLogin('google', (await rpAuthorize()).requestId, {
+          claims: { sub },
+        });
+        const uid = (await sessions.get(cookieOf(first.res, SESSION_COOKIE)!.value))!.userId;
+        const successBefore = await auditModel.countDocuments({
+          action: 'AUTH_LOGIN_SUCCESS',
+          actorId: uid,
+        });
+        const created = lockAfterEstablish(lock);
+        const { res } = await socialLogin('google', (await rpAuthorize()).requestId, {
+          claims: { sub },
+        });
+        expect(created).toHaveLength(1);
+        expect(res.statusCode).toBe(403);
+        expectNoSession(res);
+        expect(await sessions.exists(sha256(created[0]))).toBe(false);
+        expect(
+          await auditModel.countDocuments({ action: 'AUTH_LOGIN_SUCCESS', actorId: uid }),
+        ).toBe(successBefore);
+        expect(
+          await auditModel.countDocuments({
+            action: 'SESSION_CREATED',
+            targetId: sha256(created[0]),
+          }),
+        ).toBe(0);
+        expect(
+          await auditModel.countDocuments({
+            action: 'AUTH_LOGIN_FAILED',
+            targetId: uid,
+            reason: 'locked',
+          }),
+        ).toBe(1);
+      },
+    );
+
+    it('fail-closed: a DB error re-reading the user after establish => 500, no session cookie, session dead', async () => {
+      const sub = `${RUN}-racedb-${generateToken(6)}`;
+      await socialLogin('google', (await rpAuthorize()).requestId, { claims: { sub } });
+      const created = lockAfterEstablish(async () => {
+        jest.spyOn(users, 'findById').mockRejectedValueOnce(new Error('mongo down secret-detail'));
+      });
+      const { res } = await socialLogin('google', (await rpAuthorize()).requestId, {
+        claims: { sub },
+      });
+      expect(res.statusCode).toBe(500);
+      expect(res.body).not.toContain('secret-detail');
+      expectNoSession(res);
+      expect(await sessions.exists(sha256(created[0]))).toBe(false);
+    });
+
     it('verified email already used by a local account => 302 /auth/link (pending), 0 new User, 0 FI, no session (no auto-link)', async () => {
       const email = `${RUN}-taken@example.com`;
       const local = await users.create({ email, password: 'some local password' });
@@ -1396,6 +1482,46 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       const local = await localUser({ lockedUntil: until() });
       const leg = await linkLeg(local.email);
       expectFailedPage(await submitLink(leg, PASSWORD));
+      await expectNotLinked(leg.sub, local.sub);
+    });
+
+    it('(c2) run 36: lock landing right after establish (login inside the link) => generic page, not linked, session dead', async () => {
+      const local = await localUser();
+      const leg = await linkLeg(local.email);
+      const created: string[] = [];
+      const original = sessions.establish.bind(sessions);
+      jest
+        .spyOn(sessions, 'establish')
+        .mockImplementationOnce(async (...args: Parameters<SessionService['establish']>) => {
+          const out = await original(...args);
+          created.push(out.id);
+          await users.updateStatus(local.sub, { lockedUntil: ADMIN_LOCKED_UNTIL });
+          return out;
+        });
+      expectFailedPage(await submitLink(leg, PASSWORD));
+      expect(created).toHaveLength(1);
+      expect(await sessions.exists(sha256(created[0]))).toBe(false);
+      await expectNotLinked(leg.sub, local.sub);
+    });
+
+    it('(c3) tester run 36: BRUTE-FORCE lock landing right after establish (login inside the link) => generic page, not linked, session dead', async () => {
+      const local = await localUser();
+      const leg = await linkLeg(local.email);
+      const created: string[] = [];
+      const original = sessions.establish.bind(sessions);
+      jest
+        .spyOn(sessions, 'establish')
+        .mockImplementationOnce(async (...args: Parameters<SessionService['establish']>) => {
+          const out = await original(...args);
+          created.push(out.id);
+          await users.updateStatus(local.sub, { lockedUntil: new Date(Date.now() + 15 * 60_000) });
+          return out;
+        });
+      const res = await submitLink(leg, PASSWORD);
+      expectFailedPage(res);
+      expect(cookieOf(res, SESSION_COOKIE)?.value ?? '').toBe('');
+      expect(created).toHaveLength(1);
+      expect(await sessions.exists(sha256(created[0]))).toBe(false);
       await expectNotLinked(leg.sub, local.sub);
     });
 
