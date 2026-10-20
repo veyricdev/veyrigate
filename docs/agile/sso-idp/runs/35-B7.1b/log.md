@@ -37,3 +37,6 @@
 - Mutation (cp + sha256 khớp): chỉ bỏ kiểm trên đường resume ⇒ đúng 4 test mới RED (suite cũ xanh ⇒ lỗ DEBT-212 có thật); tắt Phase 2 ⇒ 33 RED; tắt Phase 1 ⇒ 7 RED (test cũ `redirect_uri repeated` không bắt được, case mới bắt nhờ spy lookup).
 - Chạy thật: typecheck/lint OK; `pnpm -C be test` 317/317; `pnpm -C be test:int` 935/935 (38 suites, 866→935); `pnpm -C fe-sso-test test` 240/240; `pnpm -C e2e e2e` 16 passed (cổng trống, không dừng process nào). Ma trận đếm lại 75/77 `có`, 248 tham chiếu test đều tồn tại; MT1 thêm 4 test mới.
 - **PASS** (`test-report.md`). Đóng DEBT-212. Không 🟡 mới (DEBT-211 giữ mở). Không commit. Cổng → **orchestrator** đóng run.
+
+## orchestrator — 2026-10-20 (đóng run)
+- Mọi cổng PASS. Commit `29c1a45`.

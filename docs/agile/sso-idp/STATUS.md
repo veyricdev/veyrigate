@@ -2,9 +2,9 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `35-B7.1b` — cổng: **orchestrator** (tester **PASS**, xem `runs/35-B7.1b/test-report.md`; senior PASS). BE unit 317 + int 935, FE 240, E2E 16; ma trận 75/77 có (MT1/MT2/24b ⇒ có). Đóng DEBT-128/144/204/205/212; DEBT-116/141/156 một phần; 🟡 mở DEBT-211/213. **T4 (refresh + login re-check) = DEBT-207 → run 36.** Lưu ý Q35.2: client tenant ≠ default chỉ dùng được với membership seed/DB (DEBT-208).
+- **Run hiện tại**: — (run 35 đã đóng, `29c1a45`). Kế tiếp: run 36 = DEBT-207 (refresh + login re-check) + DEBT-210/213/211.
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `34-B7.1` ✅ 4/4 — BE unit 303 + int 827, FE 240, E2E 16; ma trận §14/§15 72/77 có. Xem `runs/34-B7.1/summary.md`.
+- **Run vừa đóng**: `35-B7.1b` ✅ 4/4 — BE unit 317 + int 935, FE 240, E2E 16; ma trận 75/77 có. Xem `runs/35-B7.1b/summary.md`.
 - **Việc tiếp theo**: sau M6 → M7 hardening (B7.*, T7, X2/X3/X5); A4–A6 fe-admin chờ Q3 (plan §12). Debt đáng chú ý: DEBT-124/143 (super_admin xuyên tenant), DEBT-140 (audit OAuth chưa gắn tenant), DEBT-177, DEBT-095, DEBT-054/096.
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
@@ -35,6 +35,7 @@
 | [32](runs/32-B5.1-B5.2/summary.md) | M6 | B5.1–B5.2 federation broker (+ DEBT-030) | ✅ BE 1083 + FE 240 + E2E 12 | `4c36371` |
 | [33](runs/33-B5.3-X4/summary.md) | M6 | B5.3 linking + X4 E2E (+ DEBT-184/186/189/191) | ✅ BE 1119 + FE 240 + E2E 16 | `b84fa92` |
 | [34](runs/34-B7.1/summary.md) | M7 | B7.1 security matrix + test infra + CI int (+ INV-15 fix) | ✅ BE 1130 + FE 240 + E2E 16 | `2007080` |
+| [35](runs/35-B7.1b/summary.md) | M7 | B7.1b cross-tenant OAuth, repeated params, code-grant recheck | ✅ BE 1252 + FE 240 + E2E 16 | `29c1a45` |
 
 ## Chặn / cần người quyết định
 
