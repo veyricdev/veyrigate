@@ -40,7 +40,7 @@ Mọi label đều có tập giá trị hữu hạn. Không có label userId/sub
 | `sso_signing_key_rotations_total` | Counter | `mode` (normal/emergency), `result` |
 | `sso_token_endpoint_errors_total` | Counter | `endpoint` (token/revoke), `error` (mã lỗi OAuth) |
 | `sso_http_request_duration_seconds` | Histogram | `method`, `route` (template, hoặc `__unmatched`), `status_class` (1xx…5xx) |
-| `process_*`, `nodejs_*` | mặc định prom-client | — |
+| `process_*`, `nodejs_*` | mặc định `@prometheus-io/client` | — |
 
 Mọi tổ hợp label hữu hạn của các counter được khởi tạo bằng 0 lúc khởi động. Nhờ vậy `increase()` thấy được ngay sự kiện đầu tiên.
 

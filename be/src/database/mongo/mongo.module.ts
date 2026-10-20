@@ -4,6 +4,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import type { AppConfig, DatabaseConfig } from '../../config/configuration';
 import { MODELS } from './models';
 import { MongoService } from './mongo.service';
+import { scrubUriCredentials } from '../../common/logger/error-log';
 
 /**
  * MongoDB (Mongoose) connection module (B1.4).
@@ -31,7 +32,9 @@ import { MongoService } from './mongo.service';
           retryDelay: 1000,
           connectionFactory: (connection: import('mongoose').Connection) => {
             connection.on('connected', () => logger.log('Mongo connected'));
-            connection.on('error', (err: Error) => logger.error(`Mongo error: ${err.message}`));
+            connection.on('error', (err: Error) =>
+              logger.error(`Mongo error: ${scrubUriCredentials(err.message)}`),
+            );
             connection.on('disconnected', () => logger.warn('Mongo disconnected'));
             return connection;
           },

@@ -19,6 +19,7 @@ import { TokenVerifier } from '../../keys/token-verifier';
 import { ResourceService } from '../../resources/resource.service';
 import { SessionService } from '../../sessions/session.service';
 import { isAccessTokenLive } from '../access-token-liveness';
+import { errorForLog } from '../../../common/logger/error-log';
 
 /** Reply members the `/introspect` controller needs (Fastify, structural). */
 interface IntrospectReply {
@@ -261,7 +262,7 @@ export class IntrospectController {
         : new IntrospectError('server_error', HttpStatus.INTERNAL_SERVER_ERROR);
     if (!(err instanceof IntrospectError)) {
       // Infrastructure failure (DB/KeyProvider/audit): fail-closed, no leak of details.
-      this.logger.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
+      this.logger.error(errorForLog(err));
     }
     if (error.code === 'invalid_client' && basicAuthHeader(req) !== undefined) {
       reply.header('WWW-Authenticate', 'Basic realm="introspect"');

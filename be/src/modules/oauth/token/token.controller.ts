@@ -29,6 +29,7 @@ import { ConsentService } from '../consent/consent.service';
 import { TokenError } from './token.errors';
 import { TokenService, adminTargetForbidden } from './token.service';
 import { RefreshRotationError, RefreshTokenService } from './refresh-token.service';
+import { errorForLog } from '../../../common/logger/error-log';
 
 /** Reply members the `/token` controller needs (Fastify). Declared structurally like HttpReply. */
 interface TokenReply {
@@ -485,7 +486,7 @@ export class TokenController {
         : new TokenError('server_error', HttpStatus.INTERNAL_SERVER_ERROR);
     if (!(err instanceof TokenError)) {
       // Infrastructure failure (sign/DB/Redis/audit): fail-closed, no token, no leak of details.
-      this.logger.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
+      this.logger.error(errorForLog(err));
     }
     // RFC 6749 §5.2: a 401 to a client authenticating via Basic must include WWW-Authenticate.
     if (tokenError.code === 'invalid_client' && basicAuthHeader(req) !== undefined) {

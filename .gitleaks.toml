@@ -1,0 +1,21 @@
+# gitleaks config (B7.4, run 38). Used by the CI `secrets` job and the optional pre-commit hook
+# (both v8.21.2; picked up automatically from the repo root). Default rules stay on; the allowlist
+# below only names exact, known FAKE values that are committed on purpose. Never allowlist a
+# directory (be/src, test/) or a real-looking secret: a real hit is removed and treated as leaked.
+title = "veyrigate gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known non-secret placeholders committed on purpose"
+regexTarget = "match"
+regexes = [
+  # CI e2e job env + e2e/.env.example: dev-user password of the throwaway CI database (ci.yml).
+  '''dev-password-123''',
+  # e2e/config/env.ts: CSRF secret + admin seed password of the hermetic E2E stack (never prod).
+  '''e2e-csrf-secret-0123456789abcdef0123456789abcdef''',
+  '''e2e-admin-password''',
+  # be/test/full-app.ts: CSRF secret of the in-process integration-test app.
+  '''full-app-csrf-secret-not-a-real-secret''',
+]

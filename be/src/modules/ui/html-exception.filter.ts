@@ -1,4 +1,5 @@
 import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus } from '@nestjs/common';
+import { clientErrorStatus } from '../../common/filters/oauth-exception.filter';
 
 interface Reply {
   status(code: number): Reply;
@@ -10,13 +11,17 @@ export class HtmlExceptionFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost): void {
     const reply = host.switchToHttp().getResponse<Reply>();
     const status =
-      exception instanceof HttpException ? exception.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
+      exception instanceof HttpException
+        ? exception.getStatus()
+        : (clientErrorStatus(exception) ?? HttpStatus.INTERNAL_SERVER_ERROR);
     const response = exception instanceof HttpException ? exception.getResponse() : undefined;
     const retryAfter =
       typeof response === 'object' && response && 'retryAfter' in response
         ? String((response as { retryAfter: unknown }).retryAfter)
         : undefined;
     if (status === 429 && retryAfter) reply.header('Retry-After', retryAfter);
+    // Error pages are per-request (may follow a credential form post): never cached (B7.4).
+    reply.header('Cache-Control', 'no-store');
     void reply.status(status).view('error.eta', {
       title: 'Request failed',
       message:

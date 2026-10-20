@@ -14,3 +14,12 @@ allowBuilds:
   '@scarf/scarf': false
   '@tailwindcss/oxide': true
   unrs-resolver: true
+
+# `pnpm audit` exceptions (B7.4, run 38). Every entry needs a reason and a re-review date; CI runs
+# `pnpm audit --audit-level high` fail-closed, so anything not listed here blocks the merge.
+auditConfig:
+  ignoreGhsas:
+    # braces <=3.0.3 (high, ReDoS) - no patched release yet. Dev-only (jest -> micromatch); the
+    # globs it parses are written by us in jest/CI config, never user input. Re-review by
+    # 2027-01-18 or as soon as a fix ships / jest drops it (DEBT-226).
+    - GHSA-vfj7-8cjw-p6xm

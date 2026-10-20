@@ -14,5 +14,7 @@ module.exports = {
   testEnvironment: 'node',
   moduleNameMapper: {
     '^src/(.*)$': '<rootDir>/src/$1',
+    // ESM-only dep of @fastify/static 10 that Jest cannot require() (see the shim).
+    '^content-disposition$': '<rootDir>/test/shims/content-disposition.cjs',
   },
 };

@@ -34,8 +34,9 @@ groups:
 
       - alert: SsoHttp5xxRatioHigh
         expr: >-
-          sum(rate(sso_http_request_duration_seconds_count{status_class="5xx"}[5m]))
-          / sum(rate(sso_http_request_duration_seconds_count[5m])) > 0.05
+          sum(rate(sso_http_request_duration_seconds_count{status_class="5xx",route!="/metrics"}[5m]))
+          / sum(rate(sso_http_request_duration_seconds_count{route!="/metrics"}[5m])) > 0.05
+          and sum(rate(sso_http_request_duration_seconds_count{route!="/metrics"}[5m])) > 0.1
         for: 5m
         labels:
           severity: critical

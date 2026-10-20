@@ -93,8 +93,8 @@ describe('metrics (B7.2 Task 2)', () => {
     expect(await registry.metrics()).not.toContain('made_up_code');
   });
 
-  it('never touches the prom-client global registry', async () => {
-    const { register } = await import('prom-client');
+  it('never touches the client library global registry', async () => {
+    const { register } = await import('@prometheus-io/client');
     expect(await register.metrics()).not.toContain('sso_');
   });
 });

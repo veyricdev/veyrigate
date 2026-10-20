@@ -4,6 +4,7 @@ import IORedis, { type RedisOptions } from 'ioredis';
 import type { DatabaseConfig } from '../../config/configuration';
 import { REDIS_CLIENT } from './redis.constants';
 import { RedisService } from './redis.service';
+import { scrubUriCredentials } from '../../common/logger/error-log';
 
 /**
  * Redis (ioredis) connection options for the single shared client (B1.4, DEBT-005).
@@ -43,7 +44,7 @@ const redisClientProvider: Provider = {
     const logger = new Logger('RedisClient');
     const database = config.getOrThrow<DatabaseConfig>('database');
     const client = new IORedis(database.redisUrl, buildRedisOptions(database));
-    client.on('error', (err) => logger.error(`Redis error: ${err.message}`));
+    client.on('error', (err) => logger.error(`Redis error: ${scrubUriCredentials(err.message)}`));
     client.on('connect', () => logger.log('Redis connected'));
     return client;
   },

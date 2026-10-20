@@ -1,10 +1,10 @@
-import { Counter, Histogram, Registry } from 'prom-client';
+import { Counter, Histogram, Registry } from '@prometheus-io/client';
 import { TOKEN_ERROR_CODES } from '../../modules/oauth/token/token.errors';
 import { AuditAction } from '../../modules/security/audit/audit-action.enum';
 import type { AuditEvent } from '../../modules/security/audit/audit.types';
 
 /**
- * Prometheus metrics (B7.2, spec #16). One module-level registry, never prom-client's global
+ * Prometheus metrics (B7.2, spec #16). One module-level registry, never the client library's global
  * `register` and never a Nest provider (no DI change for the ~25 int-specs). Every label has a
  * finite value set: no user/client/tenant id, email, IP, family, kid, reason, scope or raw path.
  */

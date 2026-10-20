@@ -41,7 +41,12 @@ export async function configureApp(app: NestFastifyApplication): Promise<void> {
   // Cookie parsing/serialisation for `idp_session` (B2.3). Unsigned on purpose:
   // the value is a 256-bit random ID, see SessionCookie.
   await app.register(cookie);
-  await app.register(fastifyStatic, { root: join(__dirname, 'public'), prefix: '/assets/' });
+  // `dotfiles: 'ignore'` (404): @fastify/static 10 defaults to 'allow' (B7.4, run 38).
+  await app.register(fastifyStatic, {
+    root: join(__dirname, 'public'),
+    prefix: '/assets/',
+    dotfiles: 'ignore',
+  });
   await app.register(view, {
     engine: { eta: new Eta({ views: join(__dirname, 'views'), autoEscape: true }) },
     root: join(__dirname, 'views'),

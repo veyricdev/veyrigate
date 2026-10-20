@@ -1,7 +1,7 @@
 import { Logger } from '@nestjs/common';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { collectDefaultMetrics } from 'prom-client';
+import { collectDefaultMetrics } from '@prometheus-io/client';
 import { httpDuration, registry } from './metrics';
 
 /** The app's Fastify instance (`fastify` itself is not a direct dependency of `be`). */

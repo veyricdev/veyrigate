@@ -14,9 +14,12 @@ import type { AppConfig } from '../../config/configuration';
  */
 
 /**
- * Redaction paths cover both request/response bodies and headers. Wildcards
- * (`*`) catch the field at any nesting depth. `remove: true` drops the field
- * entirely rather than replacing it with `[Redacted]`.
+ * Redaction paths cover both request/response bodies and headers. A wildcard
+ * (`*`) matches exactly ONE level (fast-redact): `*.password` catches
+ * `{ x: { password } }` but not `{ a: { b: { password } } }`, so a deeper
+ * sensitive field needs its own path. `remove: true` drops the field entirely
+ * rather than replacing it with `[Redacted]`. Message/stack TEXT is never seen
+ * by redaction: scrub it with `common/logger/error-log` before logging.
  */
 const REDACT_PATHS = [
   'req.headers.authorization',

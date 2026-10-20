@@ -1,7 +1,8 @@
 name: CI
 
 # Chặn merge khi CI đỏ: cần bật branch protection trên GitHub
-# (Settings → Branches → require status checks "quality", "int", "e2e"). Không cấu hình được trong repo.
+# (Settings → Branches → require status checks "quality", "int", "e2e", "secrets", "promtool" + CodeQL).
+# Không cấu hình được trong repo (DEBT-227).
 on:
   push:
     branches: [develop, main]
@@ -42,6 +43,12 @@ jobs:
 
       - name: Install
         run: pnpm i --frozen-lockfile
+
+      # Supply chain gate (B7.4): whole workspace incl. dev deps (they run here). Fail-closed: no
+      # --ignore-registry-errors, a registry outage turns the job red (rerun by hand). Accepted
+      # advisories live in pnpm-workspace.yaml auditConfig.ignoreGhsas, each with a reason.
+      - name: Dependency audit (high/critical)
+        run: pnpm audit --audit-level high
 
       - name: Lint
         run: pnpm lint
@@ -176,3 +183,46 @@ jobs:
           name: playwright-report
           path: e2e/playwright-report
           retention-days: 7
+
+  # Secret scan (B7.4, run 38): gitleaks over the WHOLE git history (fetch-depth: 0), same version as
+  # the optional pre-commit hook (.pre-commit-config.yaml). Run from the upstream image pinned by
+  # digest (not gitleaks-action: it needs a license for org-owned repos). `--redact` keeps any hit
+  # out of the job log; `--exit-code 1` fails the job on a finding. Known fake values are
+  # allowlisted, each with a reason, in .gitleaks.toml (picked up from the scanned repo root).
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # The repo is mounted into a third-party image: keep GITHUB_TOKEN out of .git/config (DEBT-232).
+          persist-credentials: false
+
+      - name: gitleaks (full history)
+        run: >-
+          docker run --rm -v "$PWD:/repo"
+          zricethezav/gitleaks:v8.21.2@sha256:0e99e8821643ea5b235718642b93bb32486af9c8162c8b8731f7cbdc951a7f46
+          git /repo --redact --exit-code 1 --no-banner --verbose
+
+  # Prometheus rules (DEBT-219): `promtool check rules` + `promtool test rules` from the upstream
+  # image pinned by digest (v3.15.0). Locally the Jest `ops-rules.spec` covers names/annotations only.
+  promtool:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: promtool check rules
+        run: >-
+          docker run --rm -v "$PWD/ops/prometheus:/ops/prometheus:ro" --entrypoint promtool
+          prom/prometheus:v3.15.0@sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e
+          check rules /ops/prometheus/alerts.yml
+
+      - name: promtool test rules
+        run: >-
+          docker run --rm -v "$PWD/ops/prometheus:/ops/prometheus:ro" --entrypoint promtool
+          prom/prometheus:v3.15.0@sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e
+          test rules /ops/prometheus/alerts.test.yml

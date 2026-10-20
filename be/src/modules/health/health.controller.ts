@@ -1,6 +1,7 @@
 import { Controller, Get, HttpCode, HttpStatus, Logger, Res } from '@nestjs/common';
 import { MongoService } from '../../database/mongo/mongo.service';
 import { RedisService } from '../../database/redis/redis.service';
+import { scrubUriCredentials } from '../../common/logger/error-log';
 
 /** Minimal structural view of the Fastify reply `/ready` needs (status + header). */
 interface HealthReply {
@@ -77,7 +78,9 @@ export class HealthController {
       ping.catch(() => undefined);
       return await Promise.race([ping, timeout]);
     } catch (err) {
-      this.logger.warn(`${dep} readiness check failed: ${(err as Error).message}`);
+      this.logger.warn(
+        `${dep} readiness check failed: ${scrubUriCredentials((err as Error).message)}`,
+      );
       return false;
     } finally {
       clearTimeout(timer);

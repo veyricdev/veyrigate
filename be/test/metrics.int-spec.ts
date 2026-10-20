@@ -13,7 +13,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Counter } from 'prom-client';
+import type { Counter } from '@prometheus-io/client';
 import { registerMetrics } from '../src/common/metrics/metrics.http';
 import { AdminClientsController } from '../src/modules/admin/admin-clients.controller';
 import { AdminUsersController } from '../src/modules/admin/admin-users.controller';

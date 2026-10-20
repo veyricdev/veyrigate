@@ -455,6 +455,8 @@ export class UiController {
   }
 
   private form(req: UiRequest, reply: UiReply, template: string, data: Record<string, unknown>) {
+    // Every form page carries a CSRF token (and often a one-time token): never cache it (B7.4).
+    reply.header('Cache-Control', 'no-store');
     const identity = this.identity(req, reply);
     return reply.view(template, { ...data, csrf: this.csrf.token(identity) });
   }

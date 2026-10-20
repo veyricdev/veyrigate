@@ -1,4 +1,4 @@
-# promtool unit tests for alerts.yml (B7.2). Not run in CI yet (DEBT-219):
+# promtool unit tests for alerts.yml (B7.2). Run in CI by the `promtool` job (ci.yml, DEBT-219):
 #   promtool test rules ops/prometheus/alerts.test.yml
 # Series start at 0 like the app exports them (every finite series is initialised to 0), so the
 # first real event is a 0 -> 1 step that increase() sees.
@@ -114,6 +114,26 @@ tests:
         values: '0+1x30'
       - series: 'sso_http_request_duration_seconds_count{method="GET",route="/authorize",status_class="2xx",instance="a"}'
         values: '0+99x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SsoHttp5xxRatioHigh
+        exp_alerts: []
+  # DEBT-223: low traffic (3 req/min = 0.05 rps < 0.1), all 5xx => no page at night.
+  - interval: 1m
+    input_series:
+      - series: 'sso_http_request_duration_seconds_count{method="GET",route="/authorize",status_class="5xx",instance="a"}'
+        values: '0+3x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SsoHttp5xxRatioHigh
+        exp_alerts: []
+  # DEBT-223: only the /metrics scrape fails (5xx) while real traffic is healthy => no alert.
+  - interval: 1m
+    input_series:
+      - series: 'sso_http_request_duration_seconds_count{method="GET",route="/metrics",status_class="5xx",instance="a"}'
+        values: '0+50x30'
+      - series: 'sso_http_request_duration_seconds_count{method="GET",route="/authorize",status_class="2xx",instance="a"}'
+        values: '0+50x30'
     alert_rule_test:
       - eval_time: 20m
         alertname: SsoHttp5xxRatioHigh
