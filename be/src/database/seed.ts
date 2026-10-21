@@ -3,6 +3,7 @@ import type { ConfigService } from '@nestjs/config';
 import { z } from 'zod';
 import { validateEnv } from '../config/validation.schema';
 import { MODELS } from './mongo/models';
+import { mongoTarget } from './mongo/sync-indexes';
 import { assertNotProduction, seedDev, upsert } from './seed-dev';
 import { DEFAULT_TENANT_ID } from '../modules/identity/tenant.service';
 import { normalizeEmail } from '../modules/identity/user.service';
@@ -264,6 +265,7 @@ async function main(): Promise<void> {
   assertNotProduction(process.env.NODE_ENV);
   const env = validateEnv(process.env);
   const admin = readAdminSeedConfig(process.env);
+  console.log(mongoTarget(env.MONGO_URI));
 
   const connection = await mongoose
     .createConnection(env.MONGO_URI, { autoIndex: false, serverSelectionTimeoutMS: 5000 })
