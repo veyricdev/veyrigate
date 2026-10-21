@@ -67,3 +67,6 @@
 - §4c bản mới (qua `d`, guard DB tồn tại) diễn tập lại trên `vg-test-mongo` DB `vg-drill-src/dst-1792569980`: mongosh mở DB "cũ" ⇒ chỉ `<db_mới>` bị thu hồi (active 0, tổng 4), DB cũ giữ 2 RT sống; tên gõ sai ⇒ `Error: DB không tồn tại`, exit 1, không tạo DB. Dọn đúng regex, còn `[]`. `drill-report.md` thêm B8 + chú thích B5 (bản §4c cũ); tham chiếu §4b-2/3/5 vẫn đúng số.
 - Grep âm runbook/report = 0; grep dương route/alert có thật. Không còn tiến trình/DB do tester tạo. Không sửa code sản phẩm, không commit.
 - Debt mới: không. Cổng → **orchestrator** (đóng run).
+
+## orchestrator — 2026-10-21 (đóng run)
+- Mọi cổng PASS (senior sau 2 retry). Commit `27b1a69`.

@@ -2,9 +2,9 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `40-B7.5` — cổng: **orchestrator (đóng run)** — tester nghiệm thu **PASS** (2026-10-21): typecheck/lint sạch, BE unit 401/401, `test:int` FULL 1203/1203 (45 suites), fuzz `mongoTarget` 300k URI 0 lộ, §4c qua `d` diễn tập lại trên `vg-drill-*` (DB cũ không bị đụng, tên sai ⇒ throw exit 1), không còn DB `vg-drill-*`. Senior lượt 3 PASS. Không debt mới (DEBT-263 💭 của senior). Thay đổi chưa commit kể từ `8e6c464`. Xem `runs/40-B7.5/log.md`. Phạm vi (M7): runbook vận hành + diễn tập.
+- **Run hiện tại**: — (run 40 đã đóng, `27b1a69`). Phần M7 không bị chặn đã xong. Còn lại cần người dùng quyết định: Q3 (A4–A9 fe-admin), Q5 (B7.3 KMS/Redis HA), Q7, Q8 (X3), Q9; X6 (M8) sau đó.
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `39-X2-T7` ✅ 5/5 — BE unit 382 + int 1199, FE 269, E2E 21. Xem `runs/39-X2-T7/summary.md`.
+- **Run vừa đóng**: `40-B7.5` ✅ 2/2 — BE unit 401 + int 1203; diễn tập runbook 4/4. Xem `runs/40-B7.5/summary.md`.
 - **Việc tiếp theo**: sau M6 → M7 hardening (B7.*, T7, X2/X3/X5); A4–A6 fe-admin chờ Q3 (plan §12). Debt đáng chú ý: DEBT-124/143 (super_admin xuyên tenant), DEBT-140 (audit OAuth chưa gắn tenant), DEBT-177, DEBT-095, DEBT-054/096.
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
@@ -40,6 +40,7 @@
 | [37](runs/37-B7.2/summary.md) | M7 | B7.2 observability (+ DEBT-215) | ✅ BE 1363 + FE 240 + E2E 16 | `9a37dbf` |
 | [38](runs/38-B7.4/summary.md) | M7 | B7.4 supply chain & config (+ DEBT-219/223/224) | ✅ BE 1559 + FE 240 + E2E 16 | `11786b9` |
 | [39](runs/39-X2-T7/summary.md) | M7 | X2 E2E đầy đủ + T7 + X5 truy vết | ✅ BE 1581 + FE 269 + E2E 21 | `d8da71c` |
+| [40](runs/40-B7.5/summary.md) | M7 | B7.5 runbook + diễn tập | ✅ BE 1604 | `27b1a69` |
 
 ## Chặn / cần người quyết định
 
