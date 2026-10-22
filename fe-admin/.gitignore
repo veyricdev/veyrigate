@@ -1,0 +1,7 @@
+dist/
+.output/
+.tanstack/
+.nitro/
+.env
+.env.*
+!.env.example

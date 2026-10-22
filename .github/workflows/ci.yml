@@ -59,6 +59,11 @@ jobs:
       - name: Test
         run: pnpm test
 
+      # fe-admin (A1/A2, run 41): production build needs no server env/secret (validated at server
+      # start, not at build); check:bundle fails if a server env name leaks into client assets.
+      - name: fe-admin build + client bundle scan
+        run: pnpm -C fe-admin build && pnpm -C fe-admin check:bundle
+
   # Integration suite bảo mật (B7.1): chạy `pnpm -C be test:int` y như local, trên service giống
   # vg-test-* (mongo@27117, redis@6479) + Mailpit (mailer.int-spec). KHÔNG đặt TEST_MONGO_URI /
   # TEST_REDIS_URL (override làm mọi spec dùng chung 1 DB, DEBT-203); không secret, không .env/keys
