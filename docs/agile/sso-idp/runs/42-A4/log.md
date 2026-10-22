@@ -40,3 +40,6 @@
 - Mutation (cp + sha256, khôi phục OK): GETDEL→GET, bỏ re-sanitize returnTo, bỏ kiểm XX khi refresh ⇒ RED.
 - Smoke Redis chết (fe-admin dev thật, Redis cổng đóng): có cookie ⇒ 500 generic + request id, không redirect, không xoá cookie, không lộ lỗi (DEBT-282 tái hiện); logout khi IdP chết ⇒ 500 (không phải 503) nhưng vẫn xoá cookie ⇒ mở **DEBT-289** 💭. Process tự khởi động đã dừng, :3000/:4000/:5173 trống.
 - Không sửa code sản phẩm. Cổng → orchestrator đóng run.
+
+## orchestrator — 2026-10-22 (đóng run)
+- Mọi cổng PASS. Commit `9d2de22`.
