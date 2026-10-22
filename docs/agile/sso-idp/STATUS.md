@@ -2,9 +2,9 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `43-A5` — cổng: **tester PASS** → orchestrator đóng run (senior PASS; tester: fe-admin 417 + 1 expected fail, E2E 27/27, root lint/typecheck/test xanh, audit high 0; mở DEBT-299 🟡). Lane ADMIN: snapshot OpenAPI + types, admin API client server-side (lỗi trả dạng union, xem log), TanStack Query + step-up (sessionStorage), DEBT-282/289 + `azp`. DEBT-281 → A6.1.
+- **Run hiện tại**: — (run 43 đã đóng, `3999ef3`). Kế tiếp: run 44 = A6.1 Clients UI (+ DEBT-281 E2E step-up, DEBT-296/297/299).
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `42-A4` ✅ 4/4 — fe-admin 237, E2E 25. Xem `runs/42-A4/summary.md`.
+- **Run vừa đóng**: `43-A5` ✅ 4/4 — fe-admin 417, E2E 27. Xem `runs/43-A5/summary.md`.
 - **Việc tiếp theo**: sau M6 → M7 hardening (B7.*, T7, X2/X3/X5); A4–A6 fe-admin chờ Q3 (plan §12). Debt đáng chú ý: DEBT-124/143 (super_admin xuyên tenant), DEBT-140 (audit OAuth chưa gắn tenant), DEBT-177, DEBT-095, DEBT-054/096.
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
@@ -43,6 +43,7 @@
 | [40](runs/40-B7.5/summary.md) | M7 | B7.5 runbook + diễn tập | ✅ BE 1604 | `27b1a69` |
 | [41](runs/41-A1-A3/summary.md) | M5 | A1–A3 fe-admin scaffold + env + UI | ✅ fe-admin 96 | `9851442` |
 | [42](runs/42-A4/summary.md) | M5 | A4 đăng nhập BFF fe-admin (+ DEBT-117/265/274/275) | ✅ fe-admin 237 + E2E 25 | `9d2de22` |
+| [43](runs/43-A5/summary.md) | M5 | A5 API layer fe-admin (+ DEBT-282/289) | ✅ fe-admin 417 + E2E 27 | `3999ef3` |
 
 ## Chặn / cần người quyết định
 

@@ -48,3 +48,6 @@
 - **PASS**: fe-admin 417 + 1 expected fail / 22 file (+103 test, 4 file mới); E2E full **27/27** (spec mới `admin-api-risk.spec.ts`: CSRF replay 7 biến thể × POST/GET ⇒ 403, control 200; id độc ⇒ `not_found` BE thật; input sai ⇒ lỗi chung, BE không bị gọi; không rò). Root lint/typecheck/test xanh (be 401, fe-sso-test 269); audit high 0 (1 ignore DEBT-226 có sẵn); build + check:bundle 0 hit.
 - `gen:api` không diff (sha256 ổn định); mutation snapshot (cp + sha256) ⇒ types đổi và spec `admin-openapi` đỏ kèm lệnh cập nhật ⇒ khôi phục, sha256 khớp.
 - Mở **DEBT-299** 🟡 [FE]: `saveIntent` thất bại không xoá intent cũ ⇒ khôi phục bản nháp cũ (giữ case `it.fails`). Không sửa code sản phẩm. Chi tiết: `test-report.md`. → **orchestrator** đóng run.
+
+## orchestrator — 2026-10-22 (đóng run)
+- Mọi cổng PASS. Commit `3999ef3`.
