@@ -258,16 +258,14 @@ export function createAuth(deps: AuthDeps) {
    * it, and only refreshes itself if the token is still the rejected one (RT single-use, run 43 F2).
    */
   async function refresh(key: string, opts: { staleAccessToken?: string } = {}): Promise<SessionData | null> {
-    const running = inflight.get(key);
-    if (running) {
+    // A forced caller keeps waiting while the refresh in flight hands back the rejected token (an
+    // ordinary refresh may keep a not-yet-expiring AT), then refreshes itself (DEBT-296).
+    for (let running = inflight.get(key); running; running = inflight.get(key)) {
       const shared = await running;
       if (!opts.staleAccessToken || shared?.tokens.accessToken !== opts.staleAccessToken) return shared;
     }
-    let p = inflight.get(key);
-    if (!p) {
-      p = doRefresh(key, opts.staleAccessToken).finally(() => inflight.delete(key));
-      inflight.set(key, p);
-    }
+    const p = doRefresh(key, opts.staleAccessToken).finally(() => inflight.delete(key));
+    inflight.set(key, p);
     return p;
   }
 

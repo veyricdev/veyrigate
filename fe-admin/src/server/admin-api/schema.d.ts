@@ -362,6 +362,32 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AdminClientViewDto: {
+            clientId: string;
+            tenantId: string;
+            /** @enum {string} */
+            clientType: "public" | "confidential";
+            /** @enum {string} */
+            tokenEndpointAuthMethod: "none" | "client_secret_basic" | "client_secret_post";
+            grantTypes: ("authorization_code" | "refresh_token")[];
+            redirectUris: string[];
+            postLogoutRedirectUris: string[];
+            frontchannelLogoutUri: string | null;
+            allowedCorsOrigins: string[];
+            allowedResources: string[];
+            scopes: string[];
+            disabled: boolean;
+            /** Format: date-time */
+            disabledAt: string | null;
+            /** Format: date-time */
+            createdAt: string | null;
+            /** Format: date-time */
+            updatedAt: string | null;
+        };
+        ClientPageViewDto: {
+            items: components["schemas"]["AdminClientViewDto"][];
+            nextCursor: string | null;
+        };
         CreateClientDto: {
             grantTypes?: ("authorization_code" | "refresh_token")[];
             redirectUris?: string[];
@@ -390,9 +416,38 @@ export interface components {
             allowedResources?: string[];
             scopes?: string[];
             /** @description null removes it. */
-            frontchannelLogoutUri?: Record<string, never> | null;
+            frontchannelLogoutUri?: string | null;
             /** @description true disables the client (reversible) and must be sent alone (any other field => 400); false re-enables it and may be combined with other fields. */
             disabled?: boolean;
+        };
+        AdminCredentialViewDto: {
+            version: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            expiresAt: string | null;
+            /** Format: date-time */
+            revokedAt: string | null;
+            /** @enum {string} */
+            status: "active" | "grace" | "expired" | "revoked";
+        };
+        CredentialListViewDto: {
+            items: components["schemas"]["AdminCredentialViewDto"][];
+        };
+        IssuedSecretViewDto: {
+            clientId: string;
+            version: number;
+            /** @description Plaintext, returned ONLY in this response. */
+            clientSecret: string;
+        };
+        AdminResourceViewDto: {
+            resourceId: string;
+            identifier: string;
+            scopes: string[];
+        };
+        ResourcePageViewDto: {
+            items: components["schemas"]["AdminResourceViewDto"][];
+            nextCursor: string | null;
         };
         CreateResourceDto: {
             resourceId: string;
@@ -453,7 +508,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ClientPageViewDto"];
+                };
             };
         };
     };
@@ -474,7 +531,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["AdminClientViewDto"];
+                };
             };
         };
     };
@@ -493,7 +552,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["AdminClientViewDto"];
+                };
             };
         };
     };
@@ -516,7 +577,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["AdminClientViewDto"];
+                };
             };
         };
     };
@@ -535,7 +598,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["CredentialListViewDto"];
+                };
             };
         };
     };
@@ -554,7 +619,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["IssuedSecretViewDto"];
+                };
             };
         };
     };
@@ -595,7 +662,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ResourcePageViewDto"];
+                };
             };
         };
     };

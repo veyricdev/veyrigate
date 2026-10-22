@@ -144,7 +144,12 @@ export class CreateClientDto extends ClientFieldsDto {
  * `tokenEndpointAuthMethod`, `tenantId` are immutable: not declared, so sending them is a 400.
  */
 export class UpdateClientDto extends ClientFieldsDto {
-  @ApiPropertyOptional({ maxLength: MAX_LEN, nullable: true, description: 'null removes it.' })
+  @ApiPropertyOptional({
+    type: String,
+    maxLength: MAX_LEN,
+    nullable: true,
+    description: 'null removes it.',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(MAX_LEN)

@@ -13,7 +13,14 @@ import {
   UseFilters,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiCreatedResponse,
+  ApiNoContentResponse,
+  ApiOkResponse,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
 import type { HttpRequest } from '../../common/http/http.types';
 import { ClientCredentialService } from '../clients/client-credential.service';
 import {
@@ -45,6 +52,12 @@ import {
   UpdateClientDto,
 } from './admin.dto';
 import { toAdminClient, toAdminCredential, toAdminError } from './admin.mappers';
+import {
+  AdminClientViewDto,
+  ClientPageViewDto,
+  CredentialListViewDto,
+  IssuedSecretViewDto,
+} from './admin.views';
 
 const REDIRECT_FIELDS = [
   'redirectUris',
@@ -80,6 +93,7 @@ export class AdminClientsController {
 
   @Get()
   @AdminScope('admin.read')
+  @ApiOkResponse({ type: ClientPageViewDto })
   async list(@Tenant() ctx: TenantContext, @Query() q: PageQueryDto) {
     const limit = q.limit ?? DEFAULT_PAGE_LIMIT;
     const rows = await this.clients.listForTenant(ctx, q.after, limit + 1);
@@ -88,6 +102,7 @@ export class AdminClientsController {
 
   @Get(':clientId')
   @AdminScope('admin.read')
+  @ApiOkResponse({ type: AdminClientViewDto })
   async get(@Tenant() ctx: TenantContext, @Param('clientId') clientId: string) {
     return toAdminClient(await this.mustFind(ctx, clientId));
   }
@@ -96,6 +111,7 @@ export class AdminClientsController {
   @AdminScope('admin.write')
   @RequireRecentAuth(5)
   @ApiOperation({ description: 'Never issues a secret: use POST /admin/clients/{id}/secrets.' })
+  @ApiCreatedResponse({ type: AdminClientViewDto })
   async create(
     @Tenant() ctx: TenantContext,
     @CurrentAdmin() actor: AdminActor,
@@ -120,6 +136,7 @@ export class AdminClientsController {
   @Patch(':clientId')
   @AdminScope('admin.write')
   @RequireRecentAuth(5)
+  @ApiOkResponse({ type: AdminClientViewDto })
   async update(
     @Tenant() ctx: TenantContext,
     @CurrentAdmin() actor: AdminActor,
@@ -255,6 +272,7 @@ export class AdminClientsController {
   @Get(':clientId/secrets')
   @AdminScope('admin.read')
   @ApiOperation({ description: 'Credential metadata only; a secret is never readable again.' })
+  @ApiOkResponse({ type: CredentialListViewDto })
   async listSecrets(@Tenant() ctx: TenantContext, @Param('clientId') clientId: string) {
     const client = await this.mustFind(ctx, clientId);
     const now = new Date();
@@ -271,6 +289,7 @@ export class AdminClientsController {
       'Creates the first secret, or rotates (previous versions stay valid for CLIENT_SECRET_GRACE_TTL). ' +
       'The plaintext `clientSecret` is returned ONLY in this response.',
   })
+  @ApiCreatedResponse({ type: IssuedSecretViewDto })
   async issueSecret(
     @Tenant() ctx: TenantContext,
     @CurrentAdmin() actor: AdminActor,
@@ -307,6 +326,7 @@ export class AdminClientsController {
     description:
       'Revokes this secret version immediately (no grace). Tokens already issued are NOT revoked.',
   })
+  @ApiNoContentResponse()
   async revokeSecret(
     @Tenant() ctx: TenantContext,
     @CurrentAdmin() actor: AdminActor,

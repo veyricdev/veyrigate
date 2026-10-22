@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { z } from "zod";
 
@@ -35,6 +36,7 @@ export interface StepUpIntent {
 
 /** Stores the allowlisted draft; false when it is invalid or storage is blocked. */
 export function saveIntent(schema: z.ZodType, intent: StepUpIntent): boolean {
+  clearIntent(); // an older unused draft must never outlive a newer one that failed (DEBT-299)
   const payload = schema.safeParse(intent.payload);
   if (!payload.success) return false;
   const { action, path, sub } = intent;
@@ -68,6 +70,22 @@ export function takeIntent<S extends z.ZodType>(schema: S, action: string, path:
   if (s.exp <= now || s.exp > now + TTL_MS || s.action !== action || s.path !== path || s.sub !== sub) return null;
   const payload = schema.safeParse(s.payload);
   return payload.success ? payload.data : null;
+}
+
+/**
+ * {@link takeIntent} for a form: read once after mount (null until then, or when there is none).
+ * Never call `takeIntent` in a `useState` initializer: StrictMode runs it twice and the second
+ * call gets null. The ref survives StrictMode's effect re-run, so the draft is taken only once.
+ */
+export function useStepUpDraft<S extends z.ZodType>(schema: S, action: string, path: string, sub: string): z.infer<S> | null {
+  const [draft, setDraft] = useState<z.infer<S> | null>(null);
+  const taken = useRef(false);
+  useEffect(() => {
+    if (taken.current) return;
+    taken.current = true;
+    setDraft(takeIntent(schema, action, path, sub));
+  }, [schema, action, path, sub]);
+  return draft;
 }
 
 /** Drops any pending draft (sign-out). */

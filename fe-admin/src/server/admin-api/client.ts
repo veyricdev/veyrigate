@@ -1,12 +1,19 @@
 import "@tanstack/react-start/server-only";
 import type { z } from "zod";
 import type { AdminApiErrorCode, AdminApiFailure } from "@/features/admin-api/types";
-import type { ListClientsParams } from "@/features/admin-api/inputs";
+import type { CreateClientParams, ListClientsParams } from "@/features/admin-api/inputs";
 import type { Auth } from "../auth/bff";
 import { PublicError, logServerError } from "../errors";
 import { fetchWithTimeout, type FetchFn } from "../oidc/discovery";
 import type { components } from "./schema";
-import { AdminClientSchema, ClientPageSchema, type AdminClient, type ClientPage } from "./schemas";
+import {
+  AdminClientSchema,
+  ClientPageSchema,
+  ResourcePageSchema,
+  type AdminClient,
+  type ClientPage,
+  type ResourcePage,
+} from "./schemas";
 
 /**
  * Server-side admin API client (plan A5, run 43 F2). No generic proxy: each method calls one fixed
@@ -56,12 +63,10 @@ export interface AdminCallContext {
   setCookie(value: string): void;
 }
 
-/** `UpdateClientDto` from the OpenAPI snapshot; `frontchannelLogoutUri` is mistyped there (DEBT-294). */
-export type ClientPatch = Omit<components["schemas"]["UpdateClientDto"], "frontchannelLogoutUri"> & {
-  frontchannelLogoutUri?: string | null;
-};
+/** `UpdateClientDto` from the OpenAPI snapshot. */
+export type ClientPatch = components["schemas"]["UpdateClientDto"];
 
-type Method = "GET" | "PATCH";
+type Method = "GET" | "POST" | "PATCH";
 interface Operation<T> {
   method: Method;
   /** Route template for logs (never the concrete id). */
@@ -108,12 +113,16 @@ export function createAdminApi(deps: AdminApiDeps) {
   async function read<T>(op: Operation<T>, res: Response): Promise<T> {
     const status = res.status;
     if (status >= 200 && status < 300) {
+      // A 2xx mutation was applied even when its body is unusable: report it as `uncertain` so the
+      // UI re-reads instead of re-sending (DEBT-297). Never log the body (it may hold a secret).
+      const mutation = op.method !== "GET";
       const body: unknown = await res.json().catch(() => undefined);
-      if (body === undefined) throw unavailable(op, new Error(`HTTP ${status}: body is not JSON`), false);
+      if (body === undefined) throw unavailable(op, new Error(`HTTP ${status}: body is not JSON`), mutation);
       const parsed = op.schema.safeParse(body);
-      // Contract drift is a bug, not an outage: generic 500 (logged by the boundary).
-      if (!parsed.success) throw new Error(`admin api ${op.method} ${op.route}: response schema mismatch`);
-      return parsed.data;
+      if (parsed.success) return parsed.data;
+      if (mutation) throw unavailable(op, new Error(`HTTP ${status}: response schema mismatch`), true);
+      // A GET off contract is a bug, not an outage: generic 500 (logged by the boundary).
+      throw new Error(`admin api ${op.method} ${op.route}: response schema mismatch`);
     }
     if (status >= 500) throw unavailable(op, new Error(`HTTP ${status}`), op.method !== "GET");
     if (status < 400) throw unavailable(op, new Error(`HTTP ${status}`), false); // 3xx (redirect: manual)
@@ -165,6 +174,19 @@ export function createAdminApi(deps: AdminApiDeps) {
         route: "/admin/clients/:clientId",
         path: clientPath(clientId),
         schema: AdminClientSchema,
+      });
+    },
+    /** `POST /admin/clients` (not idempotent: never re-sent; a timeout/5xx is `uncertain`). */
+    createClient(ctx: AdminCallContext, body: CreateClientParams): Promise<AdminClient> {
+      return call(ctx, { method: "POST", route: "/admin/clients", path: "/admin/clients", body, schema: AdminClientSchema });
+    },
+    /** First page (≤ 100) of the tenant's resources (`admin.read`). */
+    listResources(ctx: AdminCallContext): Promise<ResourcePage> {
+      return call(ctx, {
+        method: "GET",
+        route: "/admin/resources",
+        path: "/admin/resources?limit=100",
+        schema: ResourcePageSchema,
       });
     },
     updateClient(ctx: AdminCallContext, clientId: string, patch: ClientPatch): Promise<AdminClient> {

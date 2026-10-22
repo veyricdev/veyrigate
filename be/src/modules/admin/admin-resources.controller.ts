@@ -10,7 +10,7 @@ import {
   UseFilters,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { HttpRequest } from '../../common/http/http.types';
 import { AdminAuthError, AdminAuthErrorFilter } from '../identity/tenant-context/admin-auth.errors';
 import {
@@ -34,6 +34,7 @@ import {
   UpdateResourceDto,
 } from './admin.dto';
 import { toAdminError, toAdminResource } from './admin.mappers';
+import { ResourcePageViewDto } from './admin.views';
 
 /**
  * Admin API — resources (B6.3a). Resources are GLOBAL (spec §10, no `tenantId`): every admin may
@@ -53,6 +54,7 @@ export class AdminResourcesController {
 
   @Get()
   @AdminScope('admin.read')
+  @ApiOkResponse({ type: ResourcePageViewDto })
   async list(@Query() q: PageQueryDto) {
     const limit = q.limit ?? DEFAULT_PAGE_LIMIT;
     const rows = await this.resources.list(q.after, limit + 1);

@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { LayoutDashboardIcon } from "lucide-react";
+import { KeyRoundIcon, LayoutDashboardIcon } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -12,7 +12,10 @@ import {
 } from "@/components/ui/sidebar";
 
 // Grows with A6 (clients, resources, users, audit, keys); only routes that exist are listed.
-const NAV = [{ to: "/", label: "Dashboard", icon: LayoutDashboardIcon }] as const;
+const NAV = [
+  { to: "/", label: "Dashboard", icon: LayoutDashboardIcon },
+  { to: "/clients", label: "Clients", icon: KeyRoundIcon },
+] as const;
 
 export function AppSidebar() {
   return (
@@ -31,7 +34,7 @@ export function AppSidebar() {
                     <SidebarMenuButton asChild>
                       <Link
                         to={to}
-                        activeOptions={{ exact: true }}
+                        activeOptions={{ exact: to === "/" }}
                         activeProps={{ "data-active": true }}
                       >
                         <Icon aria-hidden="true" />

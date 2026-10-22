@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@t3-oss/env-core": "0.13.11",
+    "@tanstack/react-form": "1.33.5",
     "@tanstack/react-query": "5.104.1",
     "@tanstack/react-router": "1.170.41",
     "@tanstack/react-start": "1.168.60",

@@ -1,14 +1,14 @@
 // Step-up round-trip without losing the form + Query error policy (run 43 F3). The harness form
 // lives in test/ only (A5 ships no form; the real one is A6.1).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useState } from "react";
+import { StrictMode, Suspense, use, useState } from "react";
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { QueryClientProvider, useMutation, useQuery, type QueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { toast } from "sonner";
 import { createQueryClient } from "@/features/admin-api/query-client";
 import { adminKeys } from "@/features/admin-api/keys";
-import { clearIntent, startStepUp, takeIntent } from "@/features/admin-api/step-up";
+import { clearIntent, startStepUp, takeIntent, useStepUpDraft } from "@/features/admin-api/step-up";
 import { AdminRequestError, type AdminApiErrorCode } from "@/features/admin-api/types";
 import { SignOutButton } from "@/features/auth/sign-out-button";
 import { updateClient } from "@/features/admin-api/clients";
@@ -48,8 +48,15 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function Harness({ sub, path = PATH, submit }: { sub: string; path?: string; submit: (v: unknown) => Promise<unknown> }) {
-  const [restored] = useState(() => takeIntent(FormSchema, ACTION, path, sub));
+type HarnessProps = { sub: string; path?: string; submit: (v: unknown) => Promise<unknown> };
+
+/** Reads the draft once (StrictMode-safe), then (re)mounts the form with it. */
+function Harness(props: HarnessProps) {
+  const restored = useStepUpDraft(FormSchema, ACTION, props.path ?? PATH, props.sub);
+  return <HarnessForm key={restored ? "restored" : "blank"} {...props} restored={restored} />;
+}
+
+function HarnessForm({ sub, path = PATH, submit, restored }: HarnessProps & { restored: z.infer<typeof FormSchema> | null }) {
   const [redirectUris, setRedirectUris] = useState(restored?.redirectUris ?? "");
   const [secret, setSecret] = useState("");
   const mutation = useMutation({
@@ -81,11 +88,14 @@ function Harness({ sub, path = PATH, submit }: { sub: string; path?: string; sub
   );
 }
 
-const mount = (props: Parameters<typeof Harness>[0]) =>
+// StrictMode double-invokes initializers and effects: the draft must still be restored once.
+const mount = (props: HarnessProps) =>
   render(
-    <QueryClientProvider client={queryClient}>
-      <Harness {...props} />
-    </QueryClientProvider>,
+    <StrictMode>
+      <QueryClientProvider client={queryClient}>
+        <Harness {...props} />
+      </QueryClientProvider>
+    </StrictMode>,
   );
 const uris = () => (screen.getByLabelText("Redirect URIs") as HTMLInputElement).value;
 
@@ -128,6 +138,35 @@ describe("step-up round-trip", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(submit).toHaveBeenCalledTimes(1));
     expect(submit.mock.calls[0]![0]).toEqual({ redirectUris: "https://app.example/cb2", secret: "" });
+  });
+
+  it("draft is taken after commit: a mount render that suspends and is thrown away does not consume it", async () => {
+    await stepUpOnce();
+    let resolve!: () => void;
+    const pending = new Promise<void>((r) => (resolve = r));
+    function Slow() {
+      use(pending);
+      return null;
+    }
+    await act(async () => {
+      render(
+        <StrictMode>
+          <QueryClientProvider client={queryClient}>
+            <Suspense fallback={<p>Loading</p>}>
+              <Harness sub="u1" submit={vi.fn()} />
+              <Slow />
+            </Suspense>
+          </QueryClientProvider>
+        </StrictMode>,
+      );
+    });
+    expect(screen.getByText("Loading")).toBeTruthy();
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+      resolve();
+    });
+    await waitFor(() => expect(uris()).toBe("https://app.example/cb2"));
+    expect(screen.getByRole("status").textContent).toMatch(/submit again/);
   });
 
   it.each([

@@ -30,3 +30,8 @@ export async function adminCall<T>(fn: (api: AdminApi, ctx: AdminCallContext) =>
     throw err;
   }
 }
+
+/** Identifier of the admin API resource (BE: `new URL('/admin/', issuer)`); never sent to the browser. */
+export function adminResourceIdentifier(): string {
+  return new URL("/admin/", serverEnv().OIDC_ISSUER).href;
+}

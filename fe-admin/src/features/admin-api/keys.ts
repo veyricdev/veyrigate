@@ -8,4 +8,5 @@ export const adminKeys = {
     list: (params: ListClientsParams) => ["admin", "clients", "list", params] as const,
     detail: (clientId: string) => ["admin", "clients", "detail", clientId] as const,
   },
+  resources: ["admin", "resources"] as const,
 };

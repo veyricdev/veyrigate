@@ -9,6 +9,14 @@ const fakeApi = {
   listClients: vi.fn(async () => "list"),
   getClient: vi.fn(async () => "one"),
   updateClient: vi.fn(async () => "updated"),
+  createClient: vi.fn(async () => "created"),
+  listResources: vi.fn(async () => ({
+    items: [
+      { resourceId: "admin", identifier: "http://idp.test/admin/", scopes: ["admin.read"] },
+      { resourceId: "demo", identifier: "http://idp.test/demo/", scopes: [] },
+    ],
+    nextCursor: null,
+  })),
 };
 
 // createServerFn(...).inputValidator(schema).handler(fn): run the validator like Start does.
@@ -18,6 +26,7 @@ vi.mock("@tanstack/react-start", () => ({
       handler: (fn: (o: { data: unknown }) => unknown) => async (o: { data: unknown }) =>
         fn({ data: schema.parse(o.data) }),
     }),
+    handler: (fn: () => unknown) => async () => fn(),
   }),
 }));
 vi.mock("@tanstack/react-start/server", () => ({
@@ -28,10 +37,13 @@ vi.mock("@tanstack/react-start/server", () => ({
 type Fn = (o: { data: unknown }) => Promise<unknown>;
 
 describe("server functions", () => {
-  let fns: Record<"listClients" | "getClient" | "updateClient", Fn>;
+  let fns: Record<"listClients" | "getClient" | "updateClient" | "createClient" | "listResources", Fn>;
   beforeEach(async () => {
     vi.resetModules();
-    vi.doMock("@/server/admin-api/instance", () => ({ adminCall: adminCallSpy }));
+    vi.doMock("@/server/admin-api/instance", () => ({
+      adminCall: adminCallSpy,
+      adminResourceIdentifier: () => "http://idp.test/admin/",
+    }));
     fns = (await import("@/features/admin-api/clients")) as never;
     adminCallSpy.mockClear();
     for (const f of Object.values(fakeApi)) f.mockClear();
@@ -58,6 +70,38 @@ describe("server functions", () => {
     await fns.listClients({ data: { limit: 10 } });
     expect(fakeApi.listClients).toHaveBeenCalledWith({}, { limit: 10 });
     await expect(fns.listClients({ data: { limit: 1000 } })).rejects.toThrow();
+  });
+
+  it("createClient: strict body (no clientId/tenantId/secret/disabled/unknown), enums checked", async () => {
+    const ok = { clientType: "public", tokenEndpointAuthMethod: "none", redirectUris: ["https://a.example/cb"] };
+    for (const extra of [{ clientId: "x" }, { tenantId: "t2" }, { clientSecret: "s" }, { disabled: true }, { foo: 1 }]) {
+      await expect(fns.createClient({ data: { ...ok, ...extra } })).rejects.toThrow();
+    }
+    await expect(fns.createClient({ data: { ...ok, clientType: "admin" } })).rejects.toThrow();
+    await expect(fns.createClient({ data: { ...ok, tokenEndpointAuthMethod: "private_key_jwt" } })).rejects.toThrow();
+    await expect(fns.createClient({ data: { ...ok, redirectUris: Array(21).fill("https://a.example/cb") } })).rejects.toThrow();
+    expect(adminCallSpy).not.toHaveBeenCalled();
+    expect(await fns.createClient({ data: ok })).toEqual({ ok: true, data: "created" });
+    expect(fakeApi.createClient).toHaveBeenCalledWith({}, ok);
+  });
+
+  it("listResources: adminCapable computed server-side from the issuer (issuer itself not added)", async () => {
+    const res = (await fns.listResources({ data: undefined })) as { data: unknown };
+    expect(res.data).toEqual([
+      { resourceId: "admin", identifier: "http://idp.test/admin/", scopes: ["admin.read"], adminCapable: true },
+      { resourceId: "demo", identifier: "http://idp.test/demo/", scopes: [], adminCapable: false },
+    ]);
+  });
+});
+
+describe("adminResourceIdentifier", () => {
+  it("is <issuer origin>/admin/ like the BE (new URL('/admin/', issuer))", async () => {
+    vi.resetModules();
+    vi.doUnmock("@/server/admin-api/instance");
+    vi.doMock("@/server/env", () => ({ serverEnv: () => ({ OIDC_ISSUER: "https://idp.example/" }) }));
+    vi.doMock("@/server/auth/instance", () => ({ getAuth: () => ({}) }));
+    const { adminResourceIdentifier } = await import("@/server/admin-api/instance");
+    expect(adminResourceIdentifier()).toBe("https://idp.example/admin/");
   });
 });
 

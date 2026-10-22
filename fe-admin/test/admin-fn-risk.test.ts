@@ -16,6 +16,7 @@ vi.mock("@tanstack/react-start", () => ({
       handler: (fn: (o: { data: unknown }) => unknown) => async (o: { data: unknown }) =>
         fn({ data: schema.parse(o.data) }),
     }),
+    handler: (fn: () => unknown) => async () => fn(), // listResources: no input
   }),
 }));
 vi.mock("@/server/admin-api/instance", () => ({ adminCall: adminCallSpy }));

@@ -379,6 +379,13 @@ describe('Admin API B6.3a (clients, secrets, resources) on real Mongo + Redis', 
       expect(res.body).not.toContain('secretHash');
       expect(res.body).not.toContain('admin-test');
       expect(doc.components.schemas).toHaveProperty('CreateClientDto');
+      // DEBT-290/294: response schemas + typed nullable `frontchannelLogoutUri` in the served doc.
+      expect(doc.paths['/admin/clients/{clientId}'].get.responses['200'].content).toEqual({
+        'application/json': { schema: { $ref: '#/components/schemas/AdminClientViewDto' } },
+      });
+      expect(doc.components.schemas.UpdateClientDto.properties.frontchannelLogoutUri).toMatchObject(
+        { type: 'string', nullable: true },
+      );
     });
 
     it('pagination: limit + nextCursor walks every client of the tenant exactly once', async () => {

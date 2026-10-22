@@ -1,12 +1,14 @@
 // @vitest-environment node
 // Run 43: an unreachable IdP is a dead dependency (503, DEBT-289) while a wrong discovery document
 // stays a 500 (configuration, fail-closed); `azp` with a single `aud` (OIDC Core §3.1.3.7).
+// Run 44: forced refresh racing ordinary refreshes (DEBT-296).
 import type { Redis } from "ioredis";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ServiceUnavailableError, withErrorPage } from "@/server/errors";
 import { createDiscovery } from "@/server/oidc/discovery";
 import { connectTestRedis } from "./support/redis";
 import { APP_URL, ISSUER, callback, createFakeIdp, setCookies, signIn, startLogin, type FakeIdp } from "./support/fake-idp";
+import type { SessionLookup } from "@/server/session/store";
 
 let redis: Redis;
 let idp: FakeIdp;
@@ -104,5 +106,61 @@ describe("azp (DEBT-288 part)", () => {
   it("single aud with azp = this client => accepted", async () => {
     idp.idClaims = { azp: "fe-admin" };
     expect((await signIn(idp)).sid).not.toBe("");
+  });
+});
+
+describe("DEBT-296: forced refresh vs an ordinary refresh in flight", () => {
+  // An ordinary refresh (liveSession saw an expiring AT) re-reads the session, finds it fresh and
+  // hands back the SAME AT the admin API just refused. A forced caller waiting on it must not take
+  // that AT, nor a second ordinary refresh that starts right after (it would return it again).
+  // The second one lands in a microtask window, so every offset k is tried.
+  it("never returns the rejected AT, never ends the session", async () => {
+    const realGet = idp.store.get.bind(idp.store);
+    const plan: Array<(p: Promise<SessionLookup>) => Promise<SessionLookup>> = [];
+    idp.store.get = (k) => {
+      const step = plan.shift();
+      return step ? step(realGet(k)) : realGet(k);
+    };
+    const expiring = async (p: Promise<SessionLookup>): Promise<SessionLookup> => {
+      const r = await p;
+      return r.status === "ok" ? { ...r, data: { ...r.data, atExp: 0 } } : r;
+    };
+    const settle = () => new Promise((r) => setTimeout(r, 30));
+
+    for (let k = 0; k < 12; k++) {
+      const { sid } = await signIn(idp);
+      const key = idp.store.keyFor(sid);
+      const before = await realGet(key);
+      if (before.status !== "ok") throw new Error("no session");
+      const rejected = before.data.tokens.accessToken;
+      const request = () => new Request(`${APP_URL}/clients`, { headers: { cookie: `fea_sid=${sid}` } });
+      let release!: () => void;
+      const held = new Promise<void>((r) => (release = r));
+      plan.length = 0;
+      plan.push(expiring); // A: liveSession => ordinary refresh R1
+      plan.push(async (p) => {
+        const r = await p;
+        await held; // R1 re-read: fresh, returns the rejected AT
+        return r;
+      });
+      const a = idp.auth.accessToken(request());
+      await settle();
+      const forced = idp.auth.refreshRejected(key, rejected); // waits on R1
+      plan.push(async (p) => {
+        const r = await expiring(p);
+        await held;
+        for (let i = 0; i < k; i++) await null;
+        return r; // B: liveSession => ordinary refresh R2 once R1 is gone
+      });
+      const b = idp.auth.accessToken(request());
+      await settle();
+      release();
+      const fresh = await forced;
+      await Promise.all([a, b]);
+      expect(fresh, `k=${k}`).not.toBeNull();
+      expect(fresh, `k=${k}`).not.toBe(rejected);
+      expect(await redis.exists(key), `k=${k}`).toBe(1);
+    }
+    expect(idp.calls.revoke).toEqual([]);
   });
 });

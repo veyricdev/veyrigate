@@ -42,7 +42,14 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientPageViewDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -70,7 +77,14 @@
         },
         "responses": {
           "201": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminClientViewDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -99,7 +113,14 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminClientViewDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -135,7 +156,14 @@
         },
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminClientViewDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -164,7 +192,14 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialListViewDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -192,7 +227,14 @@
         ],
         "responses": {
           "201": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedSecretViewDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -271,7 +313,14 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResourcePageViewDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1038,6 +1087,130 @@
       }
     },
     "schemas": {
+      "AdminClientViewDto": {
+        "type": "object",
+        "properties": {
+          "clientId": {
+            "type": "string"
+          },
+          "tenantId": {
+            "type": "string"
+          },
+          "clientType": {
+            "type": "string",
+            "enum": [
+              "public",
+              "confidential"
+            ]
+          },
+          "tokenEndpointAuthMethod": {
+            "type": "string",
+            "enum": [
+              "none",
+              "client_secret_basic",
+              "client_secret_post"
+            ]
+          },
+          "grantTypes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "authorization_code",
+                "refresh_token"
+              ]
+            }
+          },
+          "redirectUris": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "postLogoutRedirectUris": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "frontchannelLogoutUri": {
+            "type": "string",
+            "nullable": true
+          },
+          "allowedCorsOrigins": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allowedResources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "disabled": {
+            "type": "boolean"
+          },
+          "disabledAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "clientId",
+          "tenantId",
+          "clientType",
+          "tokenEndpointAuthMethod",
+          "grantTypes",
+          "redirectUris",
+          "postLogoutRedirectUris",
+          "frontchannelLogoutUri",
+          "allowedCorsOrigins",
+          "allowedResources",
+          "scopes",
+          "disabled",
+          "disabledAt",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
+      "ClientPageViewDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminClientViewDto"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
       "CreateClientDto": {
         "type": "object",
         "properties": {
@@ -1165,7 +1338,7 @@
             }
           },
           "frontchannelLogoutUri": {
-            "type": "object",
+            "type": "string",
             "maxLength": 2048,
             "nullable": true,
             "description": "null removes it."
@@ -1175,6 +1348,119 @@
             "description": "true disables the client (reversible) and must be sent alone (any other field => 400); false re-enables it and may be combined with other fields."
           }
         }
+      },
+      "AdminCredentialViewDto": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "revokedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "grace",
+              "expired",
+              "revoked"
+            ]
+          }
+        },
+        "required": [
+          "version",
+          "createdAt",
+          "expiresAt",
+          "revokedAt",
+          "status"
+        ]
+      },
+      "CredentialListViewDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminCredentialViewDto"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "IssuedSecretViewDto": {
+        "type": "object",
+        "properties": {
+          "clientId": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "clientSecret": {
+            "type": "string",
+            "description": "Plaintext, returned ONLY in this response."
+          }
+        },
+        "required": [
+          "clientId",
+          "version",
+          "clientSecret"
+        ]
+      },
+      "AdminResourceViewDto": {
+        "type": "object",
+        "properties": {
+          "resourceId": {
+            "type": "string"
+          },
+          "identifier": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "resourceId",
+          "identifier",
+          "scopes"
+        ]
+      },
+      "ResourcePageViewDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminResourceViewDto"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
       },
       "CreateResourceDto": {
         "type": "object",

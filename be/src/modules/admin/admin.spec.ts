@@ -1,11 +1,17 @@
 import { jest } from '@jest/globals';
 import type { INestApplication } from '@nestjs/common';
+import { FastifyAdapter } from '@nestjs/platform-fastify';
+import { DocumentBuilder, SwaggerModule, type OpenAPIObject } from '@nestjs/swagger';
+import { Test } from '@nestjs/testing';
 import { InvalidClientConfigError, validateCorsOrigin } from '../clients/client.service';
 import { DuplicateError } from '../identity/identity.errors';
 import { AdminAuthError } from '../identity/tenant-context/admin-auth.errors';
+import { AdminTokenGuard } from '../identity/tenant-context/tenant-context';
 import { toPage } from './admin.dto';
 import { toAdminClient, toAdminCredential, toAdminError, toAdminResource } from './admin.mappers';
-import { isAdminOpenApiEnabled, registerAdminOpenApi } from './admin.openapi';
+import { adminOnly, isAdminOpenApiEnabled, registerAdminOpenApi } from './admin.openapi';
+import { AdminClientsController } from './admin-clients.controller';
+import { AdminResourcesController } from './admin-resources.controller';
 
 /** A stored doc polluted with internal/secret fields the mappers must never pass through. */
 const internals = { _id: 'oid', __v: 0, secretHash: '$argon2id$x', tokenHash: 'h', extra: 1 };
@@ -139,5 +145,103 @@ describe('admin OpenAPI gate (Q-27.1)', () => {
   it('development/test => enabled', () => {
     expect(isAdminOpenApiEnabled({ NODE_ENV: 'development' })).toBe(true);
     expect(isAdminOpenApiEnabled({ NODE_ENV: 'test' })).toBe(true);
+  });
+});
+
+describe('admin OpenAPI response schemas (DEBT-290/294)', () => {
+  type Schema = {
+    type?: string;
+    format?: string;
+    nullable?: boolean;
+    properties?: Record<string, Schema>;
+    items?: Schema;
+    $ref?: string;
+  };
+  let doc: OpenAPIObject;
+  beforeAll(async () => {
+    const moduleRef = await Test.createTestingModule({
+      controllers: [AdminClientsController, AdminResourcesController],
+    })
+      .overrideGuard(AdminTokenGuard)
+      .useValue({})
+      .useMocker(() => ({}))
+      .compile();
+    const app = moduleRef.createNestApplication(new FastifyAdapter());
+    doc = adminOnly(SwaggerModule.createDocument(app, new DocumentBuilder().build()));
+    await app.close();
+  });
+  const schema = (name: string) => doc.components!.schemas![name] as Schema;
+  const keys = (name: string) => Object.keys(schema(name).properties ?? {}).sort();
+  const ref = (path: string, method: string, status: string) =>
+    (
+      doc.paths[path] as Record<
+        string,
+        { responses: Record<string, { content?: Record<string, { schema: Schema }> }> }
+      >
+    )[method].responses[status].content?.['application/json'].schema.$ref;
+
+  it('mapper output keys == schema properties (adding a mapper field without schema => RED)', () => {
+    const client = toAdminClient({
+      clientId: 'c',
+      tenantId: 't',
+      clientType: 'public',
+      tokenEndpointAuthMethod: 'none',
+    } as never);
+    expect(keys('AdminClientViewDto')).toEqual(Object.keys(client).sort());
+    const cred = toAdminCredential(
+      { clientId: 'c', version: 1, createdAt: new Date() },
+      new Date(),
+    );
+    expect(keys('AdminCredentialViewDto')).toEqual(Object.keys(cred).sort());
+    expect(keys('AdminResourceViewDto')).toEqual(
+      Object.keys(
+        toAdminResource({ resourceId: 'r', identifier: 'https://r/', scopes: [] }),
+      ).sort(),
+    );
+    expect(keys('IssuedSecretViewDto')).toEqual(['clientId', 'clientSecret', 'version']);
+    expect(keys('ClientPageViewDto')).toEqual(['items', 'nextCursor']);
+    expect(keys('ResourcePageViewDto')).toEqual(['items', 'nextCursor']);
+    expect(keys('CredentialListViewDto')).toEqual(['items']);
+  });
+
+  it('dates are date-time strings, nullable fields carry a type', () => {
+    const c = schema('AdminClientViewDto').properties!;
+    for (const f of ['disabledAt', 'createdAt', 'updatedAt']) {
+      expect(c[f]).toMatchObject({ type: 'string', format: 'date-time', nullable: true });
+    }
+    expect(c.frontchannelLogoutUri).toMatchObject({ type: 'string', nullable: true });
+    expect(schema('ClientPageViewDto').properties!.nextCursor).toMatchObject({
+      type: 'string',
+      nullable: true,
+    });
+    const cr = schema('AdminCredentialViewDto').properties!;
+    expect(cr.createdAt).toMatchObject({ type: 'string', format: 'date-time' });
+    expect(cr.createdAt.nullable).toBeUndefined();
+    expect(cr.expiresAt).toMatchObject({ type: 'string', format: 'date-time', nullable: true });
+  });
+
+  it('DEBT-294: UpdateClientDto.frontchannelLogoutUri is string | null', () => {
+    expect(schema('UpdateClientDto').properties!.frontchannelLogoutUri).toMatchObject({
+      type: 'string',
+      nullable: true,
+    });
+  });
+
+  it('clients/secrets/resources operations reference the view schemas', () => {
+    const r = (n: string) => `#/components/schemas/${n}`;
+    expect(ref('/admin/clients', 'get', '200')).toBe(r('ClientPageViewDto'));
+    expect(ref('/admin/clients', 'post', '201')).toBe(r('AdminClientViewDto'));
+    expect(ref('/admin/clients/{clientId}', 'get', '200')).toBe(r('AdminClientViewDto'));
+    expect(ref('/admin/clients/{clientId}', 'patch', '200')).toBe(r('AdminClientViewDto'));
+    expect(ref('/admin/clients/{clientId}/secrets', 'get', '200')).toBe(r('CredentialListViewDto'));
+    expect(ref('/admin/clients/{clientId}/secrets', 'post', '201')).toBe(r('IssuedSecretViewDto'));
+    expect(
+      Object.keys(
+        (doc.paths['/admin/clients/{clientId}/secrets/{version}'] as Record<string, never>).delete[
+          'responses'
+        ],
+      ),
+    ).toEqual(['204']);
+    expect(ref('/admin/resources', 'get', '200')).toBe(r('ResourcePageViewDto'));
   });
 });

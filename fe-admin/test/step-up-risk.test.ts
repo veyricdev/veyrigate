@@ -106,10 +106,8 @@ describe("payload injected by hand is filtered by the form allowlist", () => {
     expect(assign).toHaveBeenCalledWith(`/auth/login?stepup=1&returnTo=${encodeURIComponent(PATH)}`);
   });
 
-  // DEBT-299 (known, not blocking: no auto-submit, the user reviews and a toast says the draft was
-  // lost): a failed save leaves an older unconsumed intent in place, which is then restored.
-  // `it.fails` turns red once saveIntent clears the key first; switch it back to `it` then.
-  it.fails("an older pending intent is not left behind when a newer draft cannot be saved", () => {
+  // DEBT-299: a failed save must not leave an older unconsumed intent in place to be restored.
+  it("an older pending intent is not left behind when a newer draft cannot be saved", () => {
     const assign = vi.fn();
     vi.stubGlobal("location", { ...window.location, assign });
     // 1st step-up saved draft A, but the user came back on another page (A not consumed).

@@ -96,6 +96,36 @@ describe("success", () => {
     expect(call!.body).toEqual({ redirectUris: ["https://app.example/cb2"] });
     expect(call!.headers.get("content-type")).toBe("application/json");
   });
+
+  it("create: POST /admin/clients once with the JSON body; response allowlisted", async () => {
+    const s = await session();
+    reply({ status: 201, body: { ...BE_CLIENT, clientSecret: "never-here" } });
+    const body = { clientType: "public" as const, tokenEndpointAuthMethod: "none" as const, redirectUris: ["https://a.example/cb"] };
+    expect(await api.createClient(s.ctx, body)).toEqual(BE_CLIENT);
+    expect(idp.calls.admin).toHaveLength(1);
+    const [call] = idp.calls.admin;
+    expect(call!.method).toBe("POST");
+    expect(call!.url.pathname + call!.url.search).toBe("/admin/clients");
+    expect(call!.body).toEqual(body);
+  });
+
+  it("create timeout / 5xx => unavailable + uncertain, never re-sent", async () => {
+    const s = await session();
+    reply({ status: 502, body: {} });
+    const err = (await failure(api.createClient(s.ctx, { clientType: "public", tokenEndpointAuthMethod: "none" }))) as AdminApiError;
+    expect(err.toFailure()).toMatchObject({ code: "unavailable", uncertain: true });
+    expect(idp.calls.admin).toHaveLength(1);
+  });
+
+  it("resources: GET /admin/resources?limit=100, items allowlisted", async () => {
+    const s = await session();
+    const item = { resourceId: "demo", identifier: "https://idp.example/demo/", scopes: ["read"] };
+    reply({ status: 200, body: { items: [{ ...item, tenantId: "t1" }], nextCursor: null } });
+    expect(await api.listResources(s.ctx)).toEqual({ items: [item], nextCursor: null });
+    const [call] = idp.calls.admin;
+    expect(call!.method).toBe("GET");
+    expect(call!.url.pathname + call!.url.search).toBe("/admin/resources?limit=100");
+  });
 });
 
 describe("error mapping (BE wire shape => code)", () => {
@@ -143,6 +173,8 @@ describe("error mapping (BE wire shape => code)", () => {
     ["PATCH 503", "PATCH", { status: 503, raw: "" }, true],
     ["GET 302", "GET", { status: 302, raw: "" }, false],
     ["GET 200 non-JSON", "GET", { status: 200, raw: "<html>" }, false],
+    ["PATCH 200 non-JSON (DEBT-297)", "PATCH", { status: 200, raw: "<html>" }, true],
+    ["PATCH 200 off-schema (DEBT-297)", "PATCH", { status: 200, body: { ...BE_CLIENT, redirectUris: "x" } }, true],
     ["PATCH 403 non-JSON", "PATCH", { status: 403, raw: "<html>" }, false],
     ["GET network error", "GET", "network-error", false],
     ["PATCH network error", "PATCH", "network-error", true],
@@ -176,7 +208,25 @@ describe("error mapping (BE wire shape => code)", () => {
     expect(err.message).toBe("admin api GET /admin/clients/:clientId: HTTP 418");
   });
 
-  it("response off-schema => plain Error (500), not unavailable", async () => {
+  it.each([
+    ["non-JSON", { status: 201, raw: "<html>BODY-CANARY" }],
+    ["off-schema", { status: 200, body: { ...BE_CLIENT, clientSecret: "BODY-CANARY", redirectUris: "BODY-CANARY" } }],
+  ] as const)("DEBT-297: mutation 2xx %s => uncertain; log = method + route only, never the body", async (_, r) => {
+    const s = await session();
+    reply(r);
+    const err = (await failure(api.updateClient(s.ctx, "app-1", { scopes: [] }))) as AdminApiError;
+    expect(err).toBeInstanceOf(AdminApiError);
+    expect(err.code).toBe("unavailable");
+    expect(err.uncertain).toBe(true);
+    expect(idp.calls.admin).toHaveLength(1);
+    expect(logged.join("\n")).toMatch(/admin api PATCH \/admin\/clients\/:clientId failed/);
+    for (const text of [logged.join("\n"), err.message, JSON.stringify(err.toFailure())]) {
+      expect(text).not.toContain("BODY-CANARY");
+      expect(text).not.toContain("app-1");
+    }
+  });
+
+  it("GET response off-schema => plain Error (500), not unavailable", async () => {
     const s = await session();
     reply({ status: 200, body: { ...BE_CLIENT, redirectUris: "not-an-array" } });
     const err = (await failure(api.getClient(s.ctx, "app-1"))) as Error;

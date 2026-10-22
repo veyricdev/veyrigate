@@ -72,7 +72,10 @@ export function beEnv(): Record<string, string> {
     MONGO_URI: E2E_MONGO_URI,
     REDIS_URL: E2E_REDIS_URL,
     REDIS_COMMAND_TIMEOUT_MS: "1000",
-    ACCESS_TOKEN_TTL: "900",
+    // Short on purpose (run 44, DEBT-281): fe-admin's BFF refreshes 60 s before expiry and a
+    // refresh-grant AT has no `auth_time`, so fe-admin-clients.spec.ts reaches `step_up_required`
+    // after ~1 min instead of waiting out the 5 min step-up window.
+    ACCESS_TOKEN_TTL: "120",
     REFRESH_TOKEN_TTL: "2592000",
     SESSION_IDLE_TTL: "28800",
     SESSION_ABSOLUTE_TTL: "2592000",
