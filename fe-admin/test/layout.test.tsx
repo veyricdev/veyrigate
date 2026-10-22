@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { RouterProvider, createMemoryHistory, createRouter } from "@tanstack/react-router";
 import { routeTree } from "@/routeTree.gen";
 import { getUiPrefs } from "@/features/theme/ui-prefs";
+import { getViewer } from "@/features/auth/viewer";
 import { themeClass } from "@/features/theme/theme";
 import { ThemeProvider, useTheme } from "@/features/theme/theme-provider";
 import { Route as RootRoute } from "@/routes/__root";
@@ -12,6 +13,13 @@ import { Route as RootRoute } from "@/routes/__root";
 // The real server fn needs the Start compiler/runtime; the root loader only needs its result.
 vi.mock("@/features/theme/ui-prefs", () => ({ getUiPrefs: vi.fn() }));
 const prefs = vi.mocked(getUiPrefs);
+// Root guard (run 42): signed-in admin unless a test says otherwise.
+vi.mock("@/features/auth/viewer", () => ({ getViewer: vi.fn() }));
+const viewer = vi.mocked(getViewer);
+// Browser build of the route boundary: the client branch passes errors through (the server branch,
+// which sanitises, is covered by error-boundary.test.tsx). Uncompiled, createIsomorphicFn would
+// always pick the server branch.
+vi.mock("@/lib/route-boundary", () => ({ safely: (_where: string, fn: () => Promise<unknown>) => fn() }));
 
 type Shell = (props: { children: ReactNode }) => ReactNode;
 const rootOptions = RootRoute.options as { shellComponent?: Shell };
@@ -48,6 +56,7 @@ function renderAt(path: string, { portalSafe = false } = {}) {
 
 beforeEach(() => {
   prefs.mockResolvedValue({ theme: "light", sidebarOpen: true });
+  viewer.mockResolvedValue({ sub: "u1", email: "admin@example.com", roles: ["super_admin"], tenantId: "t1" });
   document.cookie = "theme=; Max-Age=0; Path=/";
 });
 

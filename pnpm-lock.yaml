@@ -345,6 +345,12 @@ importers:
       clsx:
         specifier: 2.1.1
         version: 2.1.1
+      ioredis:
+        specifier: 6.0.0
+        version: 6.0.0(supports-color@8.1.1)
+      jose:
+        specifier: 6.2.12
+        version: 6.2.12
       lucide-react:
         specifier: 1.52.0
         version: 1.52.0(@types/react@19.3.0)(react@19.3.0)

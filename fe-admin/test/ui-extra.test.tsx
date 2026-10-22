@@ -5,9 +5,13 @@ import userEvent from "@testing-library/user-event";
 import { RouterProvider, createMemoryHistory, createRouter } from "@tanstack/react-router";
 import { routeTree } from "@/routeTree.gen";
 import { getUiPrefs } from "@/features/theme/ui-prefs";
+import { getViewer } from "@/features/auth/viewer";
 
 vi.mock("@/features/theme/ui-prefs", () => ({ getUiPrefs: vi.fn() }));
 const prefs = vi.mocked(getUiPrefs);
+// Root guard (run 42): signed-in admin unless a test says otherwise.
+vi.mock("@/features/auth/viewer", () => ({ getViewer: vi.fn() }));
+const viewer = vi.mocked(getViewer);
 
 function renderAt(path: string) {
   const router = createRouter({ routeTree, history: createMemoryHistory({ initialEntries: [path] }) });
@@ -17,6 +21,7 @@ function renderAt(path: string) {
 // Braces matter: a function returned from beforeEach is run by vitest as a teardown.
 beforeEach(() => {
   prefs.mockResolvedValue({ theme: "light", sidebarOpen: true });
+  viewer.mockResolvedValue({ sub: "u1", email: "admin@example.com", roles: ["super_admin"], tenantId: "t1" });
 });
 afterEach(() => {
   cleanup();

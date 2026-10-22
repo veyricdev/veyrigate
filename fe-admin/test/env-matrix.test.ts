@@ -13,9 +13,10 @@ const valid: Record<string, string> = {
   ADMIN_API_BASE_URL: "http://localhost:4000",
   ADMIN_API_RESOURCE: "http://localhost:4000/admin/",
   APP_URL: "http://localhost:3000",
+  SESSION_REDIS_URL: "redis://localhost:6379/1",
 };
 const NAMES = Object.keys(valid);
-const URL_NAMES = ["OIDC_ISSUER", "ADMIN_API_BASE_URL", "ADMIN_API_RESOURCE", "APP_URL"];
+const URL_NAMES = ["OIDC_ISSUER", "ADMIN_API_BASE_URL", "ADMIN_API_RESOURCE", "APP_URL", "SESSION_REDIS_URL"];
 const SECRET_NAMES = ["OIDC_CLIENT_SECRET", "SESSION_SECRET"];
 const PUBLIC_URL_NAMES = ["OIDC_ISSUER", "ADMIN_API_BASE_URL", "APP_URL"];
 const prod = {

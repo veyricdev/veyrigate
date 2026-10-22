@@ -11,6 +11,8 @@ leaking into the DOM, URL, or Web Storage.
 - **BE (:4000)** — `pnpm -C be build && db:sync-indexes && db:seed-dev && start` (from `dist`, no
   watch). Ready only when `GET http://127.0.0.1:4000/ready` returns 200 (Mongo + Redis up).
 - **FE (:5173)** — `pnpm -C fe-sso-test dev` (Vite, strictPort). Ready on `GET /`.
+- **fe-admin (:3000)** — `pnpm -C fe-admin dev` (admin BFF, strictPort), env from `feAdminEnv()`
+  (sessions in Redis `/2` under `fea:*`). Ready on `GET /` (redirect to its login route).
 
 All BE/FE env is injected via `webServer.env` (`config/env.ts`) — the suite never reads the real
 `be/.env`. It uses an isolated namespace so it never touches dev data:
@@ -30,6 +32,8 @@ keyset in `be/keys`.
 - `login.spec.ts` — X1 walking skeleton (login → claims).
 - `api-test.spec.ts` — T4 `/api-test`: A `/demo/me` 200, B wrong-aud probe (redirect chain) 401 with
   the same `sub` after the silent restore, C `/userinfo` 200.
+- `fe-admin.spec.ts` — fe-admin BFF login as the E2E admin (email shown, cookie httpOnly, no JWT in
+  Web Storage / HTML / `/_serverFn`), RP-initiated logout ends the IdP session; forged callback.
 - `lab.spec.ts` — dev-only `/lab` smoke: `/authorize` tampering scenarios, forged `state`, and the
   refresh-token replay (last: it revokes the token family).
 

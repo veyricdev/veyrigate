@@ -1,6 +1,7 @@
 import { Link, useRouter, type ErrorComponentProps } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SignOutButton } from "@/features/auth/sign-out-button";
 
 /**
  * Route error boundary. Error details only when `showDetails` (dev build); in production the
@@ -50,6 +51,17 @@ export function PagePending() {
       <Skeleton className="h-8 w-48" />
       <Skeleton className="h-4 w-full max-w-md" />
       <Skeleton className="h-4 w-full max-w-sm" />
+    </div>
+  );
+}
+
+/** Signed in without an admin role (UI gate; the admin API enforces it independently). */
+export function Forbidden() {
+  return (
+    <div className="mx-auto max-w-lg space-y-4 py-12 text-center">
+      <h1 className="text-xl font-semibold">Access denied</h1>
+      <p className="text-muted-foreground">Your account has no administrator role for this console.</p>
+      <SignOutButton variant="default" />
     </div>
   );
 }

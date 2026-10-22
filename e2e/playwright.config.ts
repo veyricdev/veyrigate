@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { defineConfig, devices } from "@playwright/test";
-import { beEnv, feEnv, BE_PORT, FE_PORT } from "./config/env";
+import { beEnv, feAdminEnv, feEnv, BE_PORT, FE_ADMIN_URL, FE_PORT } from "./config/env";
 
 /** Repo root (one level above this `e2e/` package) — webServer `pnpm -C <pkg>` resolves from here. */
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -16,6 +16,9 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
  *    Ready only when `GET /ready` returns 200 (Mongo + Redis both up). Probed on
  *    `127.0.0.1` because BE listens on `0.0.0.0` (IPv4) and `localhost` may resolve to `::1`.
  *  - FE (:5173): the fe-sso-test Vite dev server (strictPort). Ready on `GET /`.
+ *  - fe-admin (:3000, run 42): the admin BFF dev server (strictPort). Ready on `GET /` (the guard
+ *    answers a redirect to the login route; no cookie => no Redis or IdP call, so the probe has no
+ *    side effect).
  *
  * All BE/FE env is injected via `webServer.env` (hermetic: never reads the real `be/.env`, which
  * BE loads non-overriding). `reuseExistingServer` is opt-in via `E2E_REUSE=1` (then the running
@@ -57,6 +60,16 @@ export default defineConfig({
       stdout: "pipe",
       stderr: "pipe",
       env: feEnv(),
+    },
+    {
+      command: "pnpm -C fe-admin dev",
+      cwd: repoRoot,
+      url: `${FE_ADMIN_URL}/`,
+      timeout: 120_000,
+      reuseExistingServer: process.env.E2E_REUSE === "1",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: feAdminEnv(),
     },
   ],
 });

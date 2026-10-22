@@ -39,6 +39,9 @@ export const DEV_SEED_PASSWORD = process.env.DEV_SEED_PASSWORD;
 export const ISSUER = "http://localhost:4000";
 export const BE_PORT = 4000;
 export const FE_PORT = 5173;
+/** fe-admin BFF (run 42): fixed by the seeded `fe-admin` redirect_uri / post-logout URI. */
+export const FE_ADMIN_PORT = 3000;
+export const FE_ADMIN_URL = `http://localhost:${FE_ADMIN_PORT}`;
 
 /** E2E-only datastores on the shared containers (own namespace; never flushed). */
 export const E2E_MONGO_URI = "mongodb://localhost:27017/sso-idp-e2e?directConnection=true";
@@ -112,5 +115,23 @@ export function feEnv(): Record<string, string> {
     VITE_OIDC_SCOPE: "openid profile email offline_access",
     VITE_OIDC_RESOURCE: `${ISSUER}/demo/`,
     VITE_DEMO_API_URL: `${ISSUER}/demo/me`,
+  };
+}
+
+/**
+ * Server env for the fe-admin dev server (run 42). Hermetic like the BE: the real `fe-admin/.env`
+ * is never relied on. Sessions go to the E2E Redis db `/2` under the `fea:` prefix (never flushed);
+ * the client secret is the one `seed:e2e-admin` gives `fe-admin`. Non-secret placeholders.
+ */
+export function feAdminEnv(): Record<string, string> {
+  return {
+    OIDC_ISSUER: ISSUER,
+    OIDC_CLIENT_ID: "fe-admin",
+    OIDC_CLIENT_SECRET: E2E_FE_ADMIN_SECRET,
+    SESSION_SECRET: "e2e-fe-admin-session-secret-0123456789abcdef",
+    SESSION_REDIS_URL: E2E_REDIS_URL,
+    ADMIN_API_BASE_URL: ISSUER,
+    ADMIN_API_RESOURCE: `${ISSUER}/admin/`,
+    APP_URL: FE_ADMIN_URL,
   };
 }

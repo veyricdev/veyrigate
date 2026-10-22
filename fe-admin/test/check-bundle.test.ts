@@ -40,7 +40,7 @@ describe("check:bundle", () => {
     client({ "assets/index.js": "console.log('hello')", "assets/index.css": "body{}" });
     const r = run();
     expect(r.code).toBe(0);
-    expect(r.out).toMatch(/scanned 2 client files for 7 server env names \+ 0 canaries: 0 hit/);
+    expect(r.out).toMatch(/scanned 2 client files for 8 server env names \+ 0 canaries: 0 hit/);
   });
 
   it.each([
@@ -51,6 +51,7 @@ describe("check:bundle", () => {
     "ADMIN_API_BASE_URL",
     "ADMIN_API_RESOURCE",
     "APP_URL",
+    "SESSION_REDIS_URL",
   ])("fails when a nested client asset contains %s", (name) => {
     client({ "assets/index.js": "x", "assets/deep/chunk.js": `const k="${name}"` });
     const r = run();

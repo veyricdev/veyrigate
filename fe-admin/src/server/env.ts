@@ -21,8 +21,10 @@ function schema(production: boolean) {
     OIDC_ISSUER: publicUrl(),
     OIDC_CLIENT_ID: z.string(required).min(1, required),
     OIDC_CLIENT_SECRET: secret(),
-    // Q-41.3: only reserved for A4; the session store is decided there (DEBT-265).
+    // Keys the Redis session id (HMAC) and encrypts the token blob (AES-256-GCM via HKDF): run 42.
     SESSION_SECRET: secret(),
+    // Session store (Q-42.1, DEBT-265): Redis, keys prefixed `fea:`. Dev `/1`, E2E `/2`.
+    SESSION_REDIS_URL: url(),
     ADMIN_API_BASE_URL: publicUrl(),
     // Resource indicator (RFC 8707) the admin API access token is minted for.
     ADMIN_API_RESOURCE: url(),
@@ -35,10 +37,18 @@ function schema(production: boolean) {
 
 export type ServerEnv = ReturnType<typeof parseServerEnv>;
 
+/**
+ * Production = a production build (`import.meta.env.PROD`, set by `vite build` whatever NODE_ENV
+ * the server is started with) OR `NODE_ENV=production` (DEBT-274).
+ */
+export function isProduction(source: Source): boolean {
+  return import.meta.env.PROD === true || source.NODE_ENV === "production";
+}
+
 /** Validates `source` (copied, never mutated). Throws an error that names variables only. */
 export function parseServerEnv(source: Source) {
   return createEnv({
-    server: schema(source.NODE_ENV === "production"),
+    server: schema(isProduction(source)),
     runtimeEnv: { ...source },
     emptyStringAsUndefined: true,
     onValidationError: (issues) => {

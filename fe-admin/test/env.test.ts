@@ -10,6 +10,7 @@ const valid = {
   ADMIN_API_BASE_URL: "http://localhost:4000",
   ADMIN_API_RESOURCE: "http://localhost:4000/admin/",
   APP_URL: "http://localhost:3000",
+  SESSION_REDIS_URL: "redis://localhost:6379/1",
 };
 
 function captureError(fn: () => unknown): Error {
@@ -77,6 +78,18 @@ describe("parseServerEnv", () => {
     expect(parseServerEnv({ ...prod, OIDC_ISSUER: "https://idp.example.com" }).OIDC_ISSUER).toBe(
       "https://idp.example.com",
     );
+  });
+
+  it("a production build (import.meta.env.PROD) requires https even without NODE_ENV (DEBT-274)", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubEnv("PROD", true);
+    try {
+      expect(valid).not.toHaveProperty("NODE_ENV");
+      expect(captureError(() => parseServerEnv(valid)).message).toContain("OIDC_ISSUER");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(parseServerEnv(valid).OIDC_ISSUER).toBe("http://localhost:4000");
   });
 
   it("rejects an APP_URL with a path or trailing slash", () => {

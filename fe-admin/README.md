@@ -1,7 +1,7 @@
 # fe-admin
 
 Admin console for the SSO IdP: TanStack Start app acting as a BFF / confidential client (plan D2, §6).
-Scaffolded by hand in run 41 (A1–A3), no TanStack CLI. Login (A4) is not wired yet.
+Scaffolded by hand in run 41 (A1–A3), no TanStack CLI. OIDC login as a BFF since run 42 (A4).
 
 ## Commands
 
@@ -24,10 +24,11 @@ at build time (CI builds without any secret). Copy `.env.example` to `.env` and 
 
 | Variable | Rule |
 |---|---|
-| `OIDC_ISSUER` | URL (`https:` when `NODE_ENV=production`) |
+| `OIDC_ISSUER` | URL (`https:` in production = production build or `NODE_ENV=production`) |
 | `OIDC_CLIENT_ID` | non-empty |
 | `OIDC_CLIENT_SECRET` | >= 32 chars |
-| `SESSION_SECRET` | >= 32 chars (reserved for A4, store decided there: DEBT-265) |
+| `SESSION_SECRET` | >= 32 chars (HMAC of the session id + AES-256-GCM key for the token blob) |
+| `SESSION_REDIS_URL` | URL of the session Redis (`aegate-redis`: `/1` dev, `/2` E2E; keys `fea:*`) |
 | `ADMIN_API_BASE_URL` | URL (`https:` in production) |
 | `ADMIN_API_RESOURCE` | URL (resource indicator of the admin API) |
 | `APP_URL` | origin only, no path / trailing slash (`https:` in production) |
@@ -79,6 +80,23 @@ All 159 packages new to the lockfile (incl. transitive) were checked against the
 Transitive pins in `pnpm-workspace.yaml` `overrides` (resolved versions were < 14 days old):
 `seroval`/`seroval-plugins` 1.6.8 (range `^1.6.7`), `@tanstack/router-generator>prettier` 3.9.9
 (range `^3.9.6`). Deferred to first use: TanStack Query (A5), Form (A5/A6), Table (A6).
+
+## Login (A4, run 42)
+
+BFF / confidential client (`client_secret_basic`, PKCE S256, `resource=ADMIN_API_RESOURCE`). Tokens
+never leave the server: the browser holds an opaque `fea_sid` cookie (`__Host-fea_sid` + `Secure`
+when `APP_URL` is https), the client only receives `{sub, email, roles, tenantId}`.
+
+- Server routes: `GET /auth/login[?returnTo=/path][&stepup=1]`, `GET /auth/callback`,
+  `POST /auth/logout` (same-origin only, then IdP `end_session` with `id_token_hint`).
+- Session: Redis `fea:sess:<HMAC(id)>`, tokens AES-256-GCM, idle 30 min / absolute 8 h; login
+  transaction `fea:tx:<sha256(state)>` (single-use, 10 min). Code in `src/server/{auth,oidc,session}`.
+- Refresh: server-side when the access token has < 60 s left, single-flight per session, never
+  retried (`invalid_grant` => signed out; IdP/Redis down => error page, session kept).
+- Guard: root `beforeLoad` (`getViewer` server function); no admin role => 403 page. UX only, the
+  admin API enforces roles.
+- Errors (DEBT-275): server functions, loaders/`beforeLoad` and `/auth/*` handlers log the detail
+  with a request id and expose only a fixed message (`src/server/errors.ts`, `src/start.ts`).
 
 ## Not decided yet
 

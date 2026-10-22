@@ -2,9 +2,19 @@ import type { ReactNode } from "react";
 import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { ThemeToggle } from "@/features/theme/theme-toggle";
+import type { Viewer } from "@/features/auth/viewer-types";
+import { SignOutButton } from "@/features/auth/sign-out-button";
 import { AppSidebar } from "./app-sidebar";
 
-export function AppLayout({ sidebarOpen, children }: { sidebarOpen: boolean; children: ReactNode }) {
+export function AppLayout({
+  sidebarOpen,
+  viewer,
+  children,
+}: {
+  sidebarOpen: boolean;
+  viewer: Viewer;
+  children: ReactNode;
+}) {
   return (
     <SidebarProvider defaultOpen={sidebarOpen}>
       <a
@@ -18,8 +28,12 @@ export function AppLayout({ sidebarOpen, children }: { sidebarOpen: boolean; chi
         <header className="flex h-12 shrink-0 items-center gap-2 border-b px-3">
           <SidebarTrigger />
           <Separator orientation="vertical" className="h-4" />
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-2">
+            <span data-testid="viewer-email" className="max-w-48 truncate text-sm text-muted-foreground">
+              {viewer.email ?? viewer.sub}
+            </span>
             <ThemeToggle />
+            <SignOutButton />
           </div>
         </header>
         <main id="main" tabIndex={-1} className="flex-1 p-4 outline-none md:p-6">
