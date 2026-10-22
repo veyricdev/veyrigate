@@ -3,6 +3,7 @@
 // the server log, names only) instead of rendering pages without its secrets.
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
 import { serverEnv } from "./server/env";
+import { withUnavailableStatus } from "./server/unavailable";
 
 let envValid = true;
 try {
@@ -19,6 +20,6 @@ export default createServerEntry({
         headers: { "content-type": "text/plain; charset=utf-8" },
       });
     }
-    return handler.fetch(request, opts);
+    return withUnavailableStatus(() => handler.fetch(request, opts));
   },
 });

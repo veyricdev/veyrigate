@@ -18,6 +18,18 @@ const SECRET = "client-secret-0123456789abcdef0123456789";
 type Json = Record<string, unknown>;
 type Reply = { status: number; body: Json };
 type Handler = (req: { form: URLSearchParams; headers: Headers }) => Reply | Promise<Reply>;
+/** An admin API request as the fake BE sees it. */
+export interface AdminRequest {
+  method: string;
+  url: URL;
+  headers: Headers;
+  body: unknown;
+}
+/** Reply of the fake admin API: JSON, a raw body, a network failure, or a hang until the timeout. */
+export type AdminReply =
+  | { status: number; body?: unknown; raw?: string }
+  | "network-error"
+  | "hang";
 
 export interface FakeIdp {
   auth: Auth;
@@ -25,7 +37,19 @@ export interface FakeIdp {
   /** Created session keys (for cleanup). */
   sessionKeys: Set<string>;
   /** Every URL the BFF fetched (any origin), plus per-endpoint counters (matched by path only). */
-  calls: { urls: string[]; token: URLSearchParams[]; revoke: string[]; me: number; userinfo: number };
+  calls: {
+    urls: string[];
+    token: URLSearchParams[];
+    revoke: string[];
+    me: number;
+    userinfo: number;
+    /** Admin API requests other than /admin/me (run 43). */
+    admin: AdminRequest[];
+  };
+  /** The injected fetch (IdP + admin API), for clients built in tests. */
+  fetch: typeof fetch;
+  /** Fake admin API for every /admin/* path except /admin/me (default: 404 not_found). */
+  adminApi: (req: AdminRequest) => AdminReply | Promise<AdminReply>;
   /** Discovery document served at `/.well-known/openid-configuration` (patch it to test trust checks). */
   discoveryDoc: Json;
   /** Discovery used by the BFF (real `createDiscovery` over the fake fetch by default). */
@@ -113,6 +137,25 @@ export async function createFakeIdp(redis: Redis): Promise<FakeIdp> {
       const res = fake.me();
       return json(res.status, res.body);
     }
+    if (url.pathname.startsWith("/admin/")) {
+      const req: AdminRequest = {
+        method: init?.method ?? "GET",
+        url,
+        headers,
+        body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+      };
+      fake.calls.admin.push(req);
+      const reply = await fake.adminApi(req);
+      if (reply === "network-error") throw new TypeError("fetch failed");
+      if (reply === "hang") {
+        return new Promise<Response>((_, reject) => {
+          const signal = init?.signal;
+          signal?.addEventListener("abort", () => reject(signal.reason));
+        });
+      }
+      if (reply.raw !== undefined) return new Response(reply.raw, { status: reply.status });
+      return json(reply.status, reply.body ?? {});
+    }
     if (url.pathname === "/userinfo") {
       fake.calls.userinfo++;
       const res = fake.userinfo();
@@ -137,7 +180,9 @@ export async function createFakeIdp(redis: Redis): Promise<FakeIdp> {
   Object.assign(fake, {
     store,
     sessionKeys,
-    calls: { urls: [], token: [], revoke: [], me: 0, userinfo: 0 },
+    calls: { urls: [], token: [], revoke: [], me: 0, userinfo: 0, admin: [] },
+    fetch: fetchImpl,
+    adminApi: () => ({ status: 404, body: { error: "not_found" } }),
     discoveryDoc: {
       issuer: ISSUER,
       authorization_endpoint: `${ISSUER}/authorize`,

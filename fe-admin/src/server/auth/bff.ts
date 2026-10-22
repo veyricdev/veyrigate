@@ -55,6 +55,12 @@ export interface ViewerResult {
   setCookie: string | null;
 }
 
+export interface AccessTokenResult {
+  session: { token: string; key: string } | null;
+  /** As {@link ViewerResult.setCookie}. */
+  setCookie: string | null;
+}
+
 export function createAuth(deps: AuthDeps) {
   const { store, cookies, idp } = deps;
   const redirectUri = `${deps.appUrl}/auth/callback`;
@@ -245,22 +251,36 @@ export function createAuth(deps: AuthDeps) {
     return new Response(null, { status: 302, headers });
   }
 
-  /** One refresh per session at a time in this process; waiters share the result. */
-  function refresh(key: string): Promise<SessionData | null> {
+  /**
+   * One refresh per session at a time in this process; waiters share the result. With
+   * `staleAccessToken` (the admin API answered 401 to it) the refresh is forced unless another
+   * request already replaced that token: a forced caller that finds a refresh in flight waits for
+   * it, and only refreshes itself if the token is still the rejected one (RT single-use, run 43 F2).
+   */
+  async function refresh(key: string, opts: { staleAccessToken?: string } = {}): Promise<SessionData | null> {
+    const running = inflight.get(key);
+    if (running) {
+      const shared = await running;
+      if (!opts.staleAccessToken || shared?.tokens.accessToken !== opts.staleAccessToken) return shared;
+    }
     let p = inflight.get(key);
     if (!p) {
-      p = doRefresh(key).finally(() => inflight.delete(key));
+      p = doRefresh(key, opts.staleAccessToken).finally(() => inflight.delete(key));
       inflight.set(key, p);
     }
     return p;
   }
 
-  async function doRefresh(key: string): Promise<SessionData | null> {
+  async function doRefresh(key: string, staleAccessToken?: string): Promise<SessionData | null> {
     // Re-read: another request may have refreshed already (the RT in hand may be spent).
     const current = await store.get(key);
     if (current.status !== "ok") return null;
     const data = current.data;
-    if (data.atExp - deps.now() >= REFRESH_SKEW_MS) return data;
+    const fresh =
+      staleAccessToken === undefined
+        ? data.atExp - deps.now() >= REFRESH_SKEW_MS
+        : data.tokens.accessToken !== staleAccessToken;
+    if (fresh) return data;
 
     const { d, policy: idPolicy } = await policy();
     let t;
@@ -321,18 +341,60 @@ export function createAuth(deps: AuthDeps) {
    * cookie kept, no login redirect loop).
    */
   async function viewer(request: Request): Promise<ViewerResult> {
-    const sid = readCookie(request, cookies.sid);
-    if (!sid) return { viewer: null, setCookie: null };
-    const key = store.keyFor(sid);
-    const found = await store.get(key);
-    if (found.status !== "ok") return { viewer: null, setCookie: clearSid };
-    let data: SessionData | null = found.data;
-    if (data.atExp - deps.now() < REFRESH_SKEW_MS) data = await refresh(key);
-    if (!data) return { viewer: null, setCookie: clearSid };
+    const s = await liveSession(request);
+    if (!s.data) return { viewer: null, setCookie: s.setCookie };
+    const { data } = s;
     return {
       viewer: { sub: data.sub, email: data.email, roles: data.roles, tenantId: data.tenantId },
       setCookie: null,
     };
+  }
+
+  /** The request's session with a non-expiring access token (refreshed if needed), or why not. */
+  async function liveSession(
+    request: Request,
+  ): Promise<{ key: string; data: SessionData } | { key: null; data: null; setCookie: string | null }> {
+    const sid = readCookie(request, cookies.sid);
+    if (!sid) return { key: null, data: null, setCookie: null };
+    const key = store.keyFor(sid);
+    const found = await store.get(key);
+    if (found.status !== "ok") return { key: null, data: null, setCookie: clearSid };
+    let data: SessionData | null = found.data;
+    if (data.atExp - deps.now() < REFRESH_SKEW_MS) data = await refresh(key);
+    if (!data) return { key: null, data: null, setCookie: clearSid };
+    return { key, data };
+  }
+
+  /**
+   * Admin API access token for this request (run 43 F2). Server-only: the token never leaves
+   * `src/server/`. Same session rules as {@link viewer} (Redis/IdP down => ServiceUnavailableError).
+   */
+  async function accessToken(request: Request): Promise<AccessTokenResult> {
+    const s = await liveSession(request);
+    if (!s.data) return { session: null, setCookie: s.setCookie };
+    return { session: { token: s.data.tokens.accessToken, key: s.key }, setCookie: null };
+  }
+
+  /** The admin API refused `staleToken` (401): forced single-flight refresh; null => signed out. */
+  async function refreshRejected(key: string, staleToken: string): Promise<string | null> {
+    return (await refresh(key, { staleAccessToken: staleToken }))?.tokens.accessToken ?? null;
+  }
+
+  /**
+   * Ends a session the admin API keeps refusing: destroy it, revoke its RT (best-effort) and
+   * return the Set-Cookie clearing `fea_sid`.
+   */
+  async function dropSession(key: string): Promise<string> {
+    const old = await store.get(key);
+    await store.destroy(key);
+    if (old.status === "ok") {
+      try {
+        await revokeRefreshToken(idp, await deps.discovery(), old.data.tokens.refreshToken);
+      } catch (err) {
+        logServerError("drop session revoke", err);
+      }
+    }
+    return clearSid;
   }
 
   /** Same-origin POST only (logout CSRF): Sec-Fetch-Site, else Origin === APP_URL. */
@@ -381,7 +443,7 @@ export function createAuth(deps: AuthDeps) {
     return new Response(null, { status: 303, headers });
   }
 
-  return { login, callback, viewer, logout };
+  return { login, callback, viewer, logout, accessToken, refreshRejected, dropSession };
 }
 
 export type Auth = ReturnType<typeof createAuth>;

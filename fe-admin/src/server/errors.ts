@@ -1,6 +1,7 @@
 import "@tanstack/react-start/server-only";
 import { randomUUID } from "node:crypto";
 import { isNotFound, isRedirect } from "@tanstack/react-router";
+import { markUnavailable } from "./unavailable";
 
 /**
  * Error boundary for everything that crosses the server -> browser edge (DEBT-275). An unintended
@@ -50,6 +51,7 @@ export function toPublicError(where: string, err: unknown): { error: unknown; st
   if (err instanceof PublicError) return { error: err, status: err.status };
   const requestId = logServerError(where, err);
   if (err instanceof ServiceUnavailableError) {
+    markUnavailable(); // DEBT-282: an SSR page answers 503, not 500
     return { error: new PublicError(`Service unavailable (request id ${requestId})`, 503), status: 503 };
   }
   return { error: new PublicError(`Internal error (request id ${requestId})`, 500), status: 500 };

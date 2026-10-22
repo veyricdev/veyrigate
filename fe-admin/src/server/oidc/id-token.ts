@@ -14,7 +14,7 @@ export type IdTokenClaims = JWTPayload & { sub: string; nonce?: unknown; auth_ti
 
 /**
  * Validates an ID token at the RP (INV-6): RS256 only (no `none`/HS*), signature over the IdP JWKS,
- * `iss`, `aud` contains the client (and `azp` when multi-valued), `exp`/`iat`, string `sub`.
+ * `iss`, `aud` contains the client (and `azp`, required when `aud` is multi-valued, equals it), `exp`/`iat`, string `sub`.
  * Callback mode (`nonce` given): the claim must equal it. Refresh mode (`sub` given): the IdP omits
  * nonce/auth_time on refreshed tokens, so neither is required, but `sub` must not change.
  */
@@ -34,6 +34,8 @@ export async function verifyIdToken(
   if (Array.isArray(payload.aud) && payload.aud.length > 1 && payload.azp !== policy.clientId) {
     throw new Error("ID token azp invalid");
   }
+  // OIDC Core §3.1.3.7: an `azp` present (even with a single `aud`) must be this client (DEBT-288).
+  if (payload.azp !== undefined && payload.azp !== policy.clientId) throw new Error("ID token azp invalid");
   if ("nonce" in expect && payload.nonce !== expect.nonce) throw new Error("ID token nonce mismatch");
   if ("sub" in expect && payload.sub !== expect.sub) throw new Error("ID token sub changed");
   return payload as IdTokenClaims;

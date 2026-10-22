@@ -64,6 +64,11 @@ jobs:
       - name: fe-admin build + client bundle scan
         run: pnpm -C fe-admin build && pnpm -C fe-admin check:bundle
 
+      # fe-admin (A5, run 43 F1): request types are generated from the committed OpenAPI snapshot;
+      # regenerate and fail if schema.d.ts drifts from it (live BE vs snapshot: e2e admin-openapi.spec).
+      - name: fe-admin API types match the OpenAPI snapshot
+        run: pnpm -C fe-admin gen:api && git diff --exit-code -- fe-admin/src/server/admin-api/schema.d.ts
+
   # Integration suite bảo mật (B7.1): chạy `pnpm -C be test:int` y như local, trên service giống
   # vg-test-* (mongo@27117, redis@6479) + Mailpit (mailer.int-spec). KHÔNG đặt TEST_MONGO_URI /
   # TEST_REDIS_URL (override làm mọi spec dùng chung 1 DB, DEBT-203); không secret, không .env/keys

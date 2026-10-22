@@ -10,10 +10,13 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check:bundle": "node scripts/check-bundle.mjs"
+    "check:bundle": "node scripts/check-bundle.mjs",
+    "gen:api": "openapi-typescript openapi/admin.json -o src/server/admin-api/schema.d.ts",
+    "fetch:api": "node scripts/fetch-openapi.mjs"
   },
   "dependencies": {
     "@t3-oss/env-core": "0.13.11",
+    "@tanstack/react-query": "5.104.1",
     "@tanstack/react-router": "1.170.41",
     "@tanstack/react-start": "1.168.60",
     "class-variance-authority": "0.7.1",
@@ -42,6 +45,7 @@
     "eslint-plugin-react-hooks": "7.1.1",
     "globals": "17.13.0",
     "happy-dom": "21.0.1",
+    "openapi-typescript": "7.13.0",
     "tailwindcss": "4.3.3",
     "typescript": "5.7.3",
     "typescript-eslint": "8.71.2",
