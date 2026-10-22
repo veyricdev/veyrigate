@@ -93,3 +93,6 @@
 - Mở **DEBT-308** 🟡 [FE]: form sửa client không remount khi đổi `clientId` mà detail có cache ⇒ form và mốc diff của client trước. Tiềm ẩn: chưa có link detail→detail. Phải sửa trước run 45.
 - Không sửa code sản phẩm, không cài package, không commit. Không còn process nào tester khởi động.
 - Tiếp: orchestrator đóng run 44.
+
+## orchestrator — 2026-10-22 (đóng run)
+- Mọi cổng PASS (senior sau 2 retry). Commit `a581963`.
