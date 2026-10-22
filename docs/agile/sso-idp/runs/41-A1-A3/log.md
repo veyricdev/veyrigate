@@ -28,3 +28,6 @@
 - Mutation (sao lưu + sha256, khôi phục `cp`, sha OK): canary/tên biến cố tình vào route ⇒ check:bundle rc=1 (canary báo theo index); theme lỏng / bỏ refine origin APP_URL / secret min 31 / lộ lỗi qua `title` ⇒ test tester RED.
 - Smoke dev :3000: 200 HTML, cookie dark/light ⇒ class, `"><script>`/encoded/`DARK` ⇒ không class, không phản chiếu; `/nope/deeper` 404; env thiếu `OIDC_CLIENT_SECRET` + secret 31 ⇒ 500 trơn, log chỉ tên biến. Đã dừng mọi process tự mở (:3000 trống).
 - Debt mới: DEBT-277 (💭 check:bundle chỉ khớp literal). Cổng → **orchestrator** đóng run.
+
+## orchestrator — 2026-10-22 (đóng run)
+- Mọi cổng PASS. Commit `9851442`.
