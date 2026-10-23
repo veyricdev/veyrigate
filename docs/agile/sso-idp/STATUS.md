@@ -2,9 +2,9 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `45-A6.1b` — senior lượt 2 PASS ⇒ **tester lượt 2 PASS [FE]** (fe-admin 682/682, risk 32/32, root test be 405 / fe-sso-test 269, E2E 29/29; DEBT-313/314/315/316 đóng thật, DEBT-318 🟡 xác nhận, không debt mới) → cổng: **orchestrator** đóng run. Đang mở DEBT-309…312, 317…320.
+- **Run hiện tại**: `46-A6.2` — chưa bắt đầu (A6.2 Resources + DEBT-318/319). Đang mở DEBT-309…312, 317…320.
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `44-A6.1` ✅ 4/4 — fe-admin 586, E2E 28. Xem `runs/44-A6.1/summary.md`.
+- **Run vừa đóng**: `45-A6.1b` ✅ 4/4 — fe-admin 682, E2E 29. Xem `runs/45-A6.1b/summary.md`.
 - **Việc tiếp theo**: sau M6 → M7 hardening (B7.*, T7, X2/X3/X5); A4–A6 fe-admin chờ Q3 (plan §12). Debt đáng chú ý: DEBT-124/143 (super_admin xuyên tenant), DEBT-140 (audit OAuth chưa gắn tenant), DEBT-177, DEBT-095, DEBT-054/096.
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
@@ -45,6 +45,7 @@
 | [42](runs/42-A4/summary.md) | M5 | A4 đăng nhập BFF fe-admin (+ DEBT-117/265/274/275) | ✅ fe-admin 237 + E2E 25 | `9d2de22` |
 | [43](runs/43-A5/summary.md) | M5 | A5 API layer fe-admin (+ DEBT-282/289) | ✅ fe-admin 417 + E2E 27 | `3999ef3` |
 | [44](runs/44-A6.1/summary.md) | M5 | A6.1 Clients UI (+ DEBT-281/290/294/296/297/299) | ✅ fe-admin 586 + E2E 28 | `a581963` |
+| [45](runs/45-A6.1b/summary.md) | M5 | A6.1b Secrets dialog, rotate/revoke, disable/enable (+ DEBT-308/313–316) | ✅ fe-admin 682 + E2E 29 | `15cba2d` |
 
 ## Chặn / cần người quyết định
 
