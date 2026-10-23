@@ -2,9 +2,9 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `46-A6.2`: tech-lead **PASS**, Task 0–4 ✅, senior **PASS**. Tester **FAIL [FE]** case 9 ⇒ **frontend-dev retry 1 xong**: sau `uncertain` lần lưu kế luôn gửi PATCH + dòng "Currently saved" (đóng DEBT-327); cùng lỗi ở `/clients/$clientId` tái hiện bằng test rồi sửa (đóng DEBT-330). fe-admin 889/889, E2E 30/30. Senior vòng 2 **PASS** (889/889; 🟡 mới DEBT-332). Tester lượt 2 **PASS**: case 9/DEBT-330 đóng thật, +12 test rủi ro, fe-admin 901/901, E2E 30/30, root test xanh (flaky tải ⇒ DEBT-333). Bước tiếp: **orchestrator** đóng run. Đang mở DEBT-309…312, 317, 320…326, 328, 329, 331…333.
+- **Run hiện tại**: `47-A6.3` — chưa bắt đầu (A6.3 Users & sessions + DEBT-326/328). Đang mở DEBT-309…312, 317, 320…326, 328, 329, 331…333.
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `45-A6.1b` ✅ 4/4 — fe-admin 682, E2E 29. Xem `runs/45-A6.1b/summary.md`.
+- **Run vừa đóng**: `46-A6.2` ✅ 5/5 — fe-admin 901, E2E 30. Xem `runs/46-A6.2/summary.md`.
 - **Việc tiếp theo**: sau M6 → M7 hardening (B7.*, T7, X2/X3/X5); A4–A6 fe-admin chờ Q3 (plan §12). Debt đáng chú ý: DEBT-124/143 (super_admin xuyên tenant), DEBT-140 (audit OAuth chưa gắn tenant), DEBT-177, DEBT-095, DEBT-054/096.
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
@@ -46,6 +46,7 @@
 | [43](runs/43-A5/summary.md) | M5 | A5 API layer fe-admin (+ DEBT-282/289) | ✅ fe-admin 417 + E2E 27 | `3999ef3` |
 | [44](runs/44-A6.1/summary.md) | M5 | A6.1 Clients UI (+ DEBT-281/290/294/296/297/299) | ✅ fe-admin 586 + E2E 28 | `a581963` |
 | [45](runs/45-A6.1b/summary.md) | M5 | A6.1b Secrets dialog, rotate/revoke, disable/enable (+ DEBT-308/313–316) | ✅ fe-admin 682 + E2E 29 | `15cba2d` |
+| [46](runs/46-A6.2/summary.md) | M5 | A6.2 Resources UI (+ DEBT-318/319/327/330) | ✅ fe-admin 901 + E2E 30 | `969583f` |
 
 ## Chặn / cần người quyết định
 
