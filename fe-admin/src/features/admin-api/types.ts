@@ -21,6 +21,9 @@ export interface AdminApiFailure {
   uncertain?: true;
 }
 
+/** IdP readiness as the browser sees it: no dependency name, status code or body. */
+export type BackendHealth = "up" | "down" | "unknown";
+
 export type AdminResult<T> = { ok: true; data: T } | { ok: false; error: AdminApiFailure };
 
 /** Client-side error for a typed admin API failure (Query `error`). */

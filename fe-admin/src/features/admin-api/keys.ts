@@ -28,6 +28,8 @@ export const adminKeys = {
   audit: {
     list: (params: AuditListParams) => ["admin", "audit", "list", params] as const,
   },
+  /** IdP readiness (`up` | `down` | `unknown`). */
+  health: ["admin", "health"] as const,
   /** Signing keys (super_admin only; never paged). */
   signingKeys: {
     list: ["admin", "signing-keys"] as const,

@@ -4,6 +4,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RouterProvider, createMemoryHistory, createRouter } from "@tanstack/react-router";
 import { routeTree } from "@/routeTree.gen";
+import { IdleQueries } from "./support/idle-queries";
 import { getUiPrefs } from "@/features/theme/ui-prefs";
 import { getViewer } from "@/features/auth/viewer";
 
@@ -14,7 +15,7 @@ vi.mock("@/features/auth/viewer", () => ({ getViewer: vi.fn() }));
 const viewer = vi.mocked(getViewer);
 
 function renderAt(path: string) {
-  const router = createRouter({ routeTree, history: createMemoryHistory({ initialEntries: [path] }) });
+  const router = createRouter({ routeTree, history: createMemoryHistory({ initialEntries: [path] }), Wrap: IdleQueries });
   return render(<RouterProvider router={router} />);
 }
 

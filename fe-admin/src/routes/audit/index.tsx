@@ -17,6 +17,7 @@ import {
   type AuditListParams,
 } from "@/features/admin-api/inputs";
 import { AdminRequestError } from "@/features/admin-api/types";
+import { alertLabel } from "@/features/audit/alert-label";
 import type { AuditEvent } from "@/server/admin-api/schemas";
 
 /**
@@ -113,13 +114,6 @@ function AuditPage() {
       </nav>
     </section>
   );
-}
-
-/** Text that marks a security event (never colour only). */
-function alertLabel(e: AuditEvent): string | null {
-  if (e.action === "TOKEN_REUSE_DETECTED") return "Security alert: token reuse";
-  if (e.action === "SIGNING_KEY_ROTATED" && e.metadata?.mode === "emergency") return "Security alert: emergency key rotation";
-  return null;
 }
 
 const isUserId = (v: string | null | undefined): v is string => UserIdSchema.safeParse(v).success;

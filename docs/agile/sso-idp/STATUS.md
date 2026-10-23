@@ -2,7 +2,7 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `50-A6.6` — chưa bắt đầu (A6.6 Dashboard + DEBT-352). A6.3b roles chờ analyst chốt DEBT-149/142; DEBT-344 chờ quyết định retention. Đang mở DEBT-309…312, 317, 320…325, 329, 331…338, 342…345, 349…355.
+- **Run hiện tại**: `50-A6.6` — frontend-dev ✅ Task 1–3; senior-reviewer ✅ PASS; **tester ✅ PASS** (fe-admin 1284/1284, E2E 34/34; mutation 9/9 RED; DEBT-358 đóng bằng test retry thật) → **orchestrator đóng run**. DEBT-352 đóng; dashboard `/`: đếm `n`/`100+`, health BFF `/ready` 3 trạng thái, sự kiện 3 action fail-closed. Root `pnpm test` song song đỏ do flaky ngoài diff ⇒ DEBT-360 (tuần tự xanh). A6.3b roles chờ analyst chốt DEBT-149/142; DEBT-344 chờ quyết định retention. Đang mở DEBT-309…312, 317, 320…325, 329, 331…338, 342…345, 349…351, 353…357, 359, 360.
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
 - **Run vừa đóng**: `49-A6.5` ✅ 5/5 — fe-admin 1206, E2E 33. Xem `runs/49-A6.5/summary.md`.
 - **Việc tiếp theo**: sau M6 → M7 hardening (B7.*, T7, X2/X3/X5); A4–A6 fe-admin chờ Q3 (plan §12). Debt đáng chú ý: DEBT-124/143 (super_admin xuyên tenant), DEBT-140 (audit OAuth chưa gắn tenant), DEBT-177, DEBT-095, DEBT-054/096.

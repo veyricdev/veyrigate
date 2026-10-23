@@ -4,6 +4,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RouterProvider, createMemoryHistory, createRouter } from "@tanstack/react-router";
 import { routeTree } from "@/routeTree.gen";
+import { IdleQueries } from "./support/idle-queries";
 import { getUiPrefs } from "@/features/theme/ui-prefs";
 import { getViewer } from "@/features/auth/viewer";
 import { themeClass } from "@/features/theme/theme";
@@ -50,6 +51,7 @@ function renderAt(path: string, { portalSafe = false } = {}) {
   const router = createRouter({
     routeTree,
     history: createMemoryHistory({ initialEntries: [path] }),
+    Wrap: IdleQueries,
   });
   return render(<RouterProvider router={router} />);
 }

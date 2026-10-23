@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createClient, getClient, listClients, listResources, updateClient } from "./clients";
 import { listAudit } from "./audit";
+import { getBackendHealth } from "./health";
 import type {
   AuditListParams,
   CreateClientParams,
@@ -199,12 +200,23 @@ export function useAuditEvents(params: AuditListParams) {
   });
 }
 
-/** Signing keys; `enabled: false` for a non-super_admin (the BE would refuse: never called). */
-export function useSigningKeys(enabled: boolean) {
+/**
+ * Signing keys (super_admin only: the BE refuses anyone else). Gate by mounting the caller only for
+ * a super_admin (`/keys`, dashboard), so nobody else ever sends the request.
+ */
+export function useSigningKeys() {
   return useQuery({
     queryKey: adminKeys.signingKeys.list,
     queryFn: async () => unwrap(await listSigningKeys()),
-    enabled,
+  });
+}
+
+/** IdP readiness for the dashboard: read once, never retried (the BFF already waited up to 3 s). */
+export function useBackendHealth() {
+  return useQuery({
+    queryKey: adminKeys.health,
+    queryFn: async () => unwrap(await getBackendHealth()),
+    retry: false,
   });
 }
 

@@ -1,6 +1,6 @@
 import "@tanstack/react-start/server-only";
-import type { z } from "zod";
-import type { AdminApiErrorCode, AdminApiFailure } from "@/features/admin-api/types";
+import { z } from "zod";
+import type { AdminApiErrorCode, AdminApiFailure, BackendHealth } from "@/features/admin-api/types";
 import type {
   AuditListParams,
   CreateClientParams,
@@ -116,6 +116,10 @@ export interface AdminApiDeps {
 
 const DESCRIPTION_MAX = 200;
 
+/** BE `/ready` body: only `status` is read (the dependency names never leave this module). */
+const ReadySchema = z.object({ status: z.enum(["ok", "error"]) });
+const READY_TIMEOUT_MS = 3000;
+
 export function createAdminApi(deps: AdminApiDeps) {
   const base = deps.baseUrl.replace(/\/+$/, "");
   const timeoutMs = deps.timeoutMs ?? 10_000;
@@ -227,7 +231,35 @@ export function createAdminApi(deps: AdminApiDeps) {
     });
   }
 
+  /**
+   * BE readiness (`GET /ready`, public) for a signed-in admin only: no session => `unauthenticated`
+   * and no request (this BFF is not a probe for anonymous callers). No bearer (the endpoint is
+   * public), no retry, 3 s. Fail-closed: anything but a well-formed 200 `ok` / 503 `error` is
+   * `unknown` (never "up" when unsure); the log has the route only, never the body.
+   */
+  async function readiness(ctx: AdminCallContext): Promise<BackendHealth> {
+    const at = await deps.auth.accessToken(ctx.request);
+    if (at.setCookie) ctx.setCookie(at.setCookie);
+    if (!at.session) throw new AdminApiError("unauthenticated");
+    try {
+      const res = await fetchWithTimeout(
+        deps.fetch,
+        `${base}/ready`,
+        { method: "GET", headers: { accept: "application/json" } },
+        READY_TIMEOUT_MS,
+      );
+      const body = ReadySchema.safeParse(await res.json().catch(() => undefined));
+      if (res.status === 200 && body.success && body.data.status === "ok") return "up";
+      if (res.status === 503 && body.success && body.data.status === "error") return "down";
+      throw new Error(`HTTP ${res.status}: unexpected readiness answer`);
+    } catch (err) {
+      logServerError("admin api GET /ready", err);
+      return "unknown";
+    }
+  }
+
   return {
+    readiness,
     listClients(ctx: AdminCallContext, params: ListClientsParams): Promise<ClientPage> {
       return call(ctx, { method: "GET", route: "/admin/clients", path: `/admin/clients${query(params)}`, schema: ClientPageSchema });
     },

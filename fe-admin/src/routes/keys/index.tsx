@@ -63,7 +63,7 @@ function KeysPage() {
 }
 
 function Keys() {
-  const query = useSigningKeys(true);
+  const query = useSigningKeys();
   const rotate = useRotateSigningKey();
   const { notice, headingRef, announce } = useActionNotice();
   const activeKid = query.data?.items.find((k) => k.status === "active")?.kid;

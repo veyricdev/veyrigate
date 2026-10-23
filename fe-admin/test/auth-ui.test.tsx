@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { RouterProvider, createMemoryHistory, createRouter } from "@tanstack/react-router";
 import { routeTree } from "@/routeTree.gen";
+import { IdleQueries } from "./support/idle-queries";
 import { getUiPrefs } from "@/features/theme/ui-prefs";
 import { getViewer } from "@/features/auth/viewer";
 
@@ -13,7 +14,7 @@ const viewer = vi.mocked(getViewer);
 const admin = { sub: "u1", email: "admin@example.com", roles: ["tenant_admin"], tenantId: "t1" };
 
 function renderAt(path: string) {
-  const router = createRouter({ routeTree, history: createMemoryHistory({ initialEntries: [path] }) });
+  const router = createRouter({ routeTree, history: createMemoryHistory({ initialEntries: [path] }), Wrap: IdleQueries });
   render(<RouterProvider router={router} />);
   return router;
 }
