@@ -7,6 +7,7 @@ export const adminKeys = {
     all: ["admin", "clients"] as const,
     list: (params: ListClientsParams) => ["admin", "clients", "list", params] as const,
     detail: (clientId: string) => ["admin", "clients", "detail", clientId] as const,
+    secrets: (clientId: string) => ["admin", "clients", "secrets", clientId] as const,
   },
   resources: ["admin", "resources"] as const,
 };

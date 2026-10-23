@@ -2,7 +2,7 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: — (run 44 đã đóng, `a581963`). Kế tiếp: run 45 = A6.1b secrets dialog/rotate/revoke/disable + E2E secret (+ DEBT-308 bắt buộc).
+- **Run hiện tại**: `45-A6.1b` — senior lượt 2 PASS ⇒ **tester lượt 2 PASS [FE]** (fe-admin 682/682, risk 32/32, root test be 405 / fe-sso-test 269, E2E 29/29; DEBT-313/314/315/316 đóng thật, DEBT-318 🟡 xác nhận, không debt mới) → cổng: **orchestrator** đóng run. Đang mở DEBT-309…312, 317…320.
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
 - **Run vừa đóng**: `44-A6.1` ✅ 4/4 — fe-admin 586, E2E 28. Xem `runs/44-A6.1/summary.md`.
 - **Việc tiếp theo**: sau M6 → M7 hardening (B7.*, T7, X2/X3/X5); A4–A6 fe-admin chờ Q3 (plan §12). Debt đáng chú ý: DEBT-124/143 (super_admin xuyên tenant), DEBT-140 (audit OAuth chưa gắn tenant), DEBT-177, DEBT-095, DEBT-054/096.

@@ -9,9 +9,13 @@ import type { components } from "./schema";
 import {
   AdminClientSchema,
   ClientPageSchema,
+  CredentialListSchema,
+  IssuedSecretSchema,
   ResourcePageSchema,
   type AdminClient,
   type ClientPage,
+  type CredentialList,
+  type IssuedSecret,
   type ResourcePage,
 } from "./schemas";
 
@@ -66,14 +70,15 @@ export interface AdminCallContext {
 /** `UpdateClientDto` from the OpenAPI snapshot. */
 export type ClientPatch = components["schemas"]["UpdateClientDto"];
 
-type Method = "GET" | "POST" | "PATCH";
+type Method = "GET" | "POST" | "PATCH" | "DELETE";
 interface Operation<T> {
   method: Method;
   /** Route template for logs (never the concrete id). */
   route: string;
   path: string;
   body?: unknown;
-  schema: z.ZodType<T>;
+  /** `null`: the success answer is `204 No Content` (nothing to parse). */
+  schema: z.ZodType<T> | null;
 }
 
 export interface AdminApiDeps {
@@ -116,6 +121,10 @@ export function createAdminApi(deps: AdminApiDeps) {
       // A 2xx mutation was applied even when its body is unusable: report it as `uncertain` so the
       // UI re-reads instead of re-sending (DEBT-297). Never log the body (it may hold a secret).
       const mutation = op.method !== "GET";
+      if (op.schema === null) {
+        if (status === 204) return undefined as T;
+        throw unavailable(op, new Error(`HTTP ${status}: expected 204`), mutation);
+      }
       const body: unknown = await res.json().catch(() => undefined);
       if (body === undefined) throw unavailable(op, new Error(`HTTP ${status}: body is not JSON`), mutation);
       const parsed = op.schema.safeParse(body);
@@ -160,6 +169,8 @@ export function createAdminApi(deps: AdminApiDeps) {
 
   const clientPath = (clientId: string) => `/admin/clients/${encodeURIComponent(clientId)}`;
 
+  const secretsPath = (clientId: string) => `${clientPath(clientId)}/secrets`;
+
   return {
     listClients(ctx: AdminCallContext, params: ListClientsParams): Promise<ClientPage> {
       const q = new URLSearchParams();
@@ -196,6 +207,36 @@ export function createAdminApi(deps: AdminApiDeps) {
         path: clientPath(clientId),
         body: patch,
         schema: AdminClientSchema,
+      });
+    },
+    /** Secret versions of a client: metadata only (no hash, no secret). */
+    listSecrets(ctx: AdminCallContext, clientId: string): Promise<CredentialList> {
+      return call(ctx, {
+        method: "GET",
+        route: "/admin/clients/:clientId/secrets",
+        path: secretsPath(clientId),
+        schema: CredentialListSchema,
+      });
+    },
+    /**
+     * Issue (= rotate) a secret: the plaintext is in this answer only. Not idempotent: never re-sent;
+     * a timeout/5xx/off-contract 2xx is `uncertain` and nothing of the body is logged.
+     */
+    issueSecret(ctx: AdminCallContext, clientId: string): Promise<IssuedSecret> {
+      return call(ctx, {
+        method: "POST",
+        route: "/admin/clients/:clientId/secrets",
+        path: secretsPath(clientId),
+        schema: IssuedSecretSchema,
+      });
+    },
+    /** Revoke one version now (no grace): `204`; an unknown/already revoked version is `not_found`. */
+    revokeSecret(ctx: AdminCallContext, clientId: string, version: number): Promise<void> {
+      return call(ctx, {
+        method: "DELETE",
+        route: "/admin/clients/:clientId/secrets/:version",
+        path: `${secretsPath(clientId)}/${String(version)}`,
+        schema: null,
       });
     },
   };

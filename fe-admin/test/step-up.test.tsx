@@ -20,6 +20,12 @@ vi.mock("@/features/admin-api/clients", () => ({
   getClient: vi.fn(),
   updateClient: vi.fn(),
 }));
+// Detail pages of a confidential client also list its secrets (run 45): empty by default.
+vi.mock("@/features/admin-api/secrets", () => ({
+  listSecrets: vi.fn(async () => ({ ok: true, data: { items: [] } })),
+  issueSecret: vi.fn(),
+  revokeSecret: vi.fn(),
+}));
 
 const KEY = "fea:stepup";
 const ACTION = "client.update";

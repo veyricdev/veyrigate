@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { test, expect, type Page } from "@playwright/test";
-import { ADMIN_SEED_EMAIL, ADMIN_SEED_PASSWORD, BE_PORT, FE_ADMIN_PORT, FE_ADMIN_URL } from "../config/env";
+import { FE_ADMIN_URL } from "../config/env";
 import { adminApi, adminToken } from "./support/admin";
+import { isAdminApp, isIdp, signInAsAdmin } from "./support/fe-admin";
 
 /**
  * DEBT-281 (run 44 Task 3E): step-up round-trip on the real fe-admin. Sign in, create a client with
@@ -12,26 +13,6 @@ import { adminApi, adminToken } from "./support/admin";
  * (`prompt=login&max_age=0`) the draft is restored but NOT sent; saving then succeeds. The client
  * is created fresh every run (server-generated id) and disabled through the admin API at the end.
  */
-
-const isIdp = (url: URL) => url.port === String(BE_PORT);
-const isAdminApp = (url: URL) => url.port === String(FE_ADMIN_PORT);
-
-/** On the IdP login page: sign the E2E admin in (and approve consent) until back on fe-admin. */
-async function signInAsAdmin(page: Page): Promise<void> {
-  await page.waitForURL((url) => isIdp(url) && url.pathname === "/login", { waitUntil: "load" });
-  const form = page.locator('form[action="/login"]');
-  await form.getByLabel("Email").fill(ADMIN_SEED_EMAIL);
-  await form.getByLabel("Password").fill(ADMIN_SEED_PASSWORD);
-  await form.getByRole("button", { name: "Sign in" }).click();
-  const consent = page.locator('form[action="/authorize/consent"]');
-  const email = page.getByTestId("viewer-email");
-  for (let i = 0; i < 3; i++) {
-    await expect(consent.or(email).first()).toBeVisible({ timeout: 30_000 });
-    if (await email.isVisible()) return;
-    await consent.getByRole("button", { name: "Allow" }).click();
-    await consent.waitFor({ state: "detached" });
-  }
-}
 
 /** The client as the admin API sees it (separate browser context, read-only token). */
 async function readClient(page: Page, clientId: string): Promise<{ redirectUris: string[] }> {

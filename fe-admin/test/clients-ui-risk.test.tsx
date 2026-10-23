@@ -29,6 +29,12 @@ vi.mock("@/features/admin-api/clients", () => ({
   updateClient: vi.fn(),
   listResources: vi.fn(),
 }));
+// Detail pages of a confidential client also list its secrets (run 45): empty by default.
+vi.mock("@/features/admin-api/secrets", () => ({
+  listSecrets: vi.fn(async () => ({ ok: true, data: { items: [] } })),
+  issueSecret: vi.fn(),
+  revokeSecret: vi.fn(),
+}));
 
 const mocks = {
   list: vi.mocked(listClients),
@@ -284,7 +290,7 @@ describe("state: lost-update variants", () => {
   // reaches it): `$clientId` keeps `EditClient` mounted when the new id's detail is cached, and
   // `ClientForm` (frozen defaults, key "blank") keeps the PREVIOUS client's values and diff base.
   // A save there PATCHes this client with the other client's lists. Flip to `it` once fixed.
-  it.fails("switching to another client whose detail is cached shows THAT client's values (no stale form)", async () => {
+  it("switching to another client whose detail is cached shows THAT client's values (no stale form)", async () => {
     const OTHER = { ...CLIENT, clientId: "app-2", redirectUris: ["https://other.example/cb"], scopes: ["openid", "other"] };
     mocks.get.mockImplementation((async ({ data }: { data: string }) => ok(data === "app-2" ? OTHER : CLIENT)) as never);
     const router = renderAt("/clients/app-1");

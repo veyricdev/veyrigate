@@ -3,7 +3,14 @@
 // snapshot. Type-level: a drift (new/renamed field, other enum or nullability) fails `typecheck`.
 import { describe, expectTypeOf, it } from "vitest";
 import type { components } from "@/server/admin-api/schema";
-import type { AdminClient, AdminResource, ClientPage, ResourcePage } from "@/server/admin-api/schemas";
+import type {
+  AdminClient,
+  AdminResource,
+  ClientPage,
+  CredentialList,
+  IssuedSecret,
+  ResourcePage,
+} from "@/server/admin-api/schemas";
 import type { CreateClientParams, UpdateClientParams } from "@/features/admin-api/inputs";
 
 type S = components["schemas"];
@@ -14,6 +21,8 @@ describe("zod allowlists vs OpenAPI snapshot", () => {
     expectTypeOf<ClientPage>().toEqualTypeOf<S["ClientPageViewDto"]>();
     expectTypeOf<AdminResource>().toEqualTypeOf<S["AdminResourceViewDto"]>();
     expectTypeOf<ResourcePage>().toEqualTypeOf<S["ResourcePageViewDto"]>();
+    expectTypeOf<CredentialList>().toEqualTypeOf<S["CredentialListViewDto"]>();
+    expectTypeOf<IssuedSecret>().toEqualTypeOf<S["IssuedSecretViewDto"]>();
   });
 
   it("request bodies", () => {

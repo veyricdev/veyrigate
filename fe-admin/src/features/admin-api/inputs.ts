@@ -54,3 +54,10 @@ export const CreateClientInput = z
   })
   .strict();
 export type CreateClientParams = z.infer<typeof CreateClientInput>;
+
+/** `DELETE /admin/clients/{id}/secrets/{version}` (BE path rule `^[1-9][0-9]{0,8}$`). */
+export const RevokeSecretInput = z.object({
+  clientId: ClientIdSchema,
+  version: z.number().int().min(1).max(999_999_999),
+});
+export type RevokeSecretParams = z.infer<typeof RevokeSecretInput>;

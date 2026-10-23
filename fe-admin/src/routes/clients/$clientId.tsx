@@ -1,7 +1,10 @@
+import { Fragment } from "react";
 import { Link, createFileRoute, useLocation } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { PagePending } from "@/components/feedback/route-states";
 import { ClientForm, failureMessage } from "@/features/clients/client-form";
+import { SecretsPanel } from "@/features/clients/client-secrets";
+import { ClientStatus } from "@/features/clients/client-status";
 import { EditDraftSchema, changedValues, toPatch, valuesFrom } from "@/features/clients/client-form-schema";
 import { useClient, useResources, useUpdateClient } from "@/features/admin-api/hooks";
 import { startStepUp, useStepUpDraft } from "@/features/admin-api/step-up";
@@ -15,6 +18,7 @@ const ACTION = "client.update";
 function ClientPage() {
   const { clientId } = Route.useParams();
   const query = useClient(clientId);
+  const path = useLocation({ select: (l) => l.pathname });
   return (
     <section aria-labelledby="client-title" className="space-y-6">
       <div className="space-y-1">
@@ -25,9 +29,8 @@ function ClientPage() {
           {clientId}
         </h1>
       </div>
-      {query.isPending ? (
-        <PagePending />
-      ) : query.isError ? (
+      {query.isPending && <PagePending />}
+      {query.isError && (
         <div role="alert" className="space-y-3">
           <p>
             {query.error instanceof AdminRequestError && query.error.code === "not_found"
@@ -40,11 +43,17 @@ function ClientPage() {
             Try again
           </Button>
         </div>
-      ) : (
-        <>
+      )}
+      {/* DEBT-316: a failed re-read keeps the last data below the error (a shown one-time secret stays). */}
+      {query.data !== undefined && (
+        // DEBT-308: everything below is per client (form, secret dialog, confirmations): a new
+        // `clientId` remounts it even when its detail is already cached.
+        <Fragment key={clientId}>
           <ClientFacts client={query.data} />
           <EditClient client={query.data} />
-        </>
+          {query.data.clientType === "confidential" && <SecretsPanel clientId={clientId} path={path} />}
+          <ClientStatus clientId={clientId} disabled={query.data.disabled} path={path} />
+        </Fragment>
       )}
     </section>
   );

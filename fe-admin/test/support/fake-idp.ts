@@ -153,6 +153,7 @@ export async function createFakeIdp(redis: Redis): Promise<FakeIdp> {
           signal?.addEventListener("abort", () => reject(signal.reason));
         });
       }
+      if (reply.status === 204) return new Response(null, { status: 204 });
       if (reply.raw !== undefined) return new Response(reply.raw, { status: reply.status });
       return json(reply.status, reply.body ?? {});
     }

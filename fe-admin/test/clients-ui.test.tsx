@@ -25,6 +25,12 @@ vi.mock("@/features/admin-api/clients", () => ({
   updateClient: vi.fn(),
   listResources: vi.fn(),
 }));
+// Detail pages of a confidential client also list its secrets (run 45): empty by default.
+vi.mock("@/features/admin-api/secrets", () => ({
+  listSecrets: vi.fn(async () => ({ ok: true, data: { items: [] } })),
+  issueSecret: vi.fn(),
+  revokeSecret: vi.fn(),
+}));
 
 const mocks = {
   list: vi.mocked(listClients),

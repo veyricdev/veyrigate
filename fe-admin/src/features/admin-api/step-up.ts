@@ -102,5 +102,10 @@ export function startStepUp(schema: z.ZodType, intent: StepUpIntent): void {
   if (!saveIntent(schema, intent)) {
     toast.warning("Your changes could not be kept. Please enter them again after confirming your identity.");
   }
-  location.assign(`/auth/login?stepup=1&returnTo=${encodeURIComponent(intent.path)}`);
+  reauthenticate(intent.path);
+}
+
+/** Re-authenticate (`prompt=login&max_age=0`) and come back to `path`; stores nothing. */
+export function reauthenticate(path: string): void {
+  location.assign(`/auth/login?stepup=1&returnTo=${encodeURIComponent(path)}`);
 }

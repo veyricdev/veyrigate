@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createClient, getClient, listClients, listResources, updateClient } from "./clients";
-import type { CreateClientParams, ListClientsParams, UpdateClientParams } from "./inputs";
+import type { CreateClientParams, ListClientsParams, RevokeSecretParams, UpdateClientParams } from "./inputs";
 import { adminKeys } from "./keys";
+import { listSecrets, revokeSecret } from "./secrets";
 import { AdminRequestError, unwrap } from "./types";
 
 export function useClients(params: ListClientsParams) {
@@ -53,6 +54,23 @@ export function useCreateClient() {
   const invalidate = useInvalidateClients();
   return useMutation({
     mutationFn: async (input: CreateClientParams) => unwrap(await createClient({ data: input })),
+    onSettled: (_data, error) => invalidate(error),
+  });
+}
+
+/** Secret versions of a confidential client (metadata only: the cache never holds a secret). */
+export function useSecrets(clientId: string) {
+  return useQuery({
+    queryKey: adminKeys.clients.secrets(clientId),
+    queryFn: async () => unwrap(await listSecrets({ data: clientId })),
+  });
+}
+
+/** Revoke one secret version; the list is re-read on success or when the outcome is unknown. */
+export function useRevokeSecret() {
+  const invalidate = useInvalidateClients();
+  return useMutation({
+    mutationFn: async (input: RevokeSecretParams) => unwrap(await revokeSecret({ data: input })),
     onSettled: (_data, error) => invalidate(error),
   });
 }

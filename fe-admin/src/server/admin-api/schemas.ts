@@ -44,3 +44,24 @@ export const ResourcePageSchema = z.object({
   nextCursor: z.string().nullable(),
 });
 export type ResourcePage = z.infer<typeof ResourcePageSchema>;
+
+/** A secret version (`GET /admin/clients/{id}/secrets`): metadata only, never a hash or a secret. */
+export const CredentialSchema = z.object({
+  version: z.number().int().min(1),
+  createdAt: z.string(),
+  expiresAt: z.string().nullable(),
+  revokedAt: z.string().nullable(),
+  status: z.enum(["active", "grace", "expired", "revoked"]),
+});
+export type Credential = z.infer<typeof CredentialSchema>;
+
+export const CredentialListSchema = z.object({ items: z.array(CredentialSchema) });
+export type CredentialList = z.infer<typeof CredentialListSchema>;
+
+/** `POST /admin/clients/{id}/secrets`: the only answer that ever holds the plaintext. */
+export const IssuedSecretSchema = z.object({
+  clientId: z.string(),
+  version: z.number().int().min(1),
+  clientSecret: z.string().min(1).max(512),
+});
+export type IssuedSecret = z.infer<typeof IssuedSecretSchema>;

@@ -35,3 +35,10 @@ export async function adminCall<T>(fn: (api: AdminApi, ctx: AdminCallContext) =>
 export function adminResourceIdentifier(): string {
   return new URL("/admin/", serverEnv().OIDC_ISSUER).href;
 }
+
+/** The answer of this server function must never be stored (it holds a one-time secret). */
+export function setNoStore(): void {
+  const headers = getResponseHeaders();
+  headers.set("cache-control", "no-store");
+  headers.set("pragma", "no-cache");
+}
