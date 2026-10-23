@@ -2,9 +2,9 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `50-A6.6` — frontend-dev ✅ Task 1–3; senior-reviewer ✅ PASS; **tester ✅ PASS** (fe-admin 1284/1284, E2E 34/34; mutation 9/9 RED; DEBT-358 đóng bằng test retry thật) → **orchestrator đóng run**. DEBT-352 đóng; dashboard `/`: đếm `n`/`100+`, health BFF `/ready` 3 trạng thái, sự kiện 3 action fail-closed. Root `pnpm test` song song đỏ do flaky ngoài diff ⇒ DEBT-360 (tuần tự xanh). A6.3b roles chờ analyst chốt DEBT-149/142; DEBT-344 chờ quyết định retention. Đang mở DEBT-309…312, 317, 320…325, 329, 331…338, 342…345, 349…351, 353…357, 359, 360.
+- **Run hiện tại**: `51-A7` — chưa bắt đầu (DEBT-360 test song song + A7 hardening FE + DEBT-359). A6.3b roles chờ analyst chốt DEBT-149/142; DEBT-344 chờ quyết định retention. Đang mở DEBT-309…312, 317, 320…325, 329, 331…338, 342…345, 349…351, 353…357, 359, 360.
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `49-A6.5` ✅ 5/5 — fe-admin 1206, E2E 33. Xem `runs/49-A6.5/summary.md`.
+- **Run vừa đóng**: `50-A6.6` ✅ 3/3 — fe-admin 1284, E2E 34. Xem `runs/50-A6.6/summary.md`.
 - **Việc tiếp theo**: sau M6 → M7 hardening (B7.*, T7, X2/X3/X5); A4–A6 fe-admin chờ Q3 (plan §12). Debt đáng chú ý: DEBT-124/143 (super_admin xuyên tenant), DEBT-140 (audit OAuth chưa gắn tenant), DEBT-177, DEBT-095, DEBT-054/096.
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
@@ -50,6 +50,7 @@
 | [47](runs/47-A6.3/summary.md) | M5 | A6.3 Users & sessions (+ DEBT-326/328) | ✅ fe-admin 1019 + E2E 31 | `ceeb3d6` |
 | [48](runs/48-A6.4/summary.md) | M5 | A6.4 Audit log (+ reuse tenant, DEBT-339/340/341) | ✅ fe-admin 1120 + E2E 32 | `8ced241` |
 | [49](runs/49-A6.5/summary.md) | M5 | A6.5 Keys (+ JWKS cooldown, DEBT-346/347/348) | ✅ fe-admin 1206 + E2E 33 | `7ea8902` |
+| [50](runs/50-A6.6/summary.md) | M5 | A6.6 Dashboard (+ DEBT-352/358) | ✅ fe-admin 1284 + E2E 34 | `b9d8675` |
 
 ## Chặn / cần người quyết định
 
