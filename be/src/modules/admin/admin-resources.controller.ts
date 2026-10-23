@@ -10,7 +10,13 @@ import {
   UseFilters,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiCreatedResponse,
+  ApiOkResponse,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
 import type { HttpRequest } from '../../common/http/http.types';
 import { AdminAuthError, AdminAuthErrorFilter } from '../identity/tenant-context/admin-auth.errors';
 import {
@@ -34,7 +40,7 @@ import {
   UpdateResourceDto,
 } from './admin.dto';
 import { toAdminError, toAdminResource } from './admin.mappers';
-import { ResourcePageViewDto } from './admin.views';
+import { AdminResourceViewDto, ResourcePageViewDto } from './admin.views';
 
 /**
  * Admin API — resources (B6.3a). Resources are GLOBAL (spec §10, no `tenantId`): every admin may
@@ -63,6 +69,7 @@ export class AdminResourcesController {
 
   @Get(':resourceId')
   @AdminScope('admin.read')
+  @ApiOkResponse({ type: AdminResourceViewDto })
   async get(@Param('resourceId') resourceId: string) {
     const resource = await this.resources.findByResourceId(resourceId);
     if (!resource) throw AdminAuthError.notFound();
@@ -73,6 +80,7 @@ export class AdminResourcesController {
   @AdminScope('admin.write')
   @RequireRecentAuth(5)
   @ApiOperation({ description: 'super_admin only. resourceId and identifier are immutable.' })
+  @ApiCreatedResponse({ type: AdminResourceViewDto })
   async create(
     @Tenant() ctx: TenantContext,
     @CurrentAdmin() actor: AdminActor,
@@ -98,6 +106,7 @@ export class AdminResourcesController {
   @AdminScope('admin.write')
   @RequireRecentAuth(5)
   @ApiOperation({ description: 'super_admin only. Only `scopes` can change.' })
+  @ApiOkResponse({ type: AdminResourceViewDto })
   async update(
     @Tenant() ctx: TenantContext,
     @CurrentAdmin() actor: AdminActor,

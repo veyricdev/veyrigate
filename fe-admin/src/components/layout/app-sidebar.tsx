@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { KeyRoundIcon, LayoutDashboardIcon } from "lucide-react";
+import { BoxesIcon, KeyRoundIcon, LayoutDashboardIcon } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -15,6 +15,7 @@ import {
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboardIcon },
   { to: "/clients", label: "Clients", icon: KeyRoundIcon },
+  { to: "/resources", label: "Resources", icon: BoxesIcon },
 ] as const;
 
 export function AppSidebar() {

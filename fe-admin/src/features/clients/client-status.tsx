@@ -1,7 +1,6 @@
-import { useState } from "react";
 import { useUpdateClient } from "@/features/admin-api/hooks";
 import { AdminRequestError } from "@/features/admin-api/types";
-import { ConfirmAction, outcomeOf, type ActionOutcome } from "./confirm-action";
+import { ConfirmAction, outcomeOf, useActionNotice, type ActionOutcome } from "./confirm-action";
 
 export const SELF_DISABLE_CONFLICT =
   "This client issues the admin console's own sign-in token and cannot be disabled here.";
@@ -15,7 +14,7 @@ export const UNCERTAIN_STATUS =
  */
 export function ClientStatus({ clientId, disabled, path }: { clientId: string; disabled: boolean; path: string }) {
   const update = useUpdateClient();
-  const [notice, setNotice] = useState<string | null>(null);
+  const { notice, headingRef, announce } = useActionNotice();
 
   async function setDisabled(next: boolean): Promise<ActionOutcome> {
     try {
@@ -31,14 +30,12 @@ export function ClientStatus({ clientId, disabled, path }: { clientId: string; d
 
   return (
     <section aria-labelledby="status-title" className="space-y-3">
-      <h2 id="status-title" className="text-lg font-semibold">
+      <h2 id="status-title" ref={headingRef} tabIndex={-1} className="text-lg font-semibold outline-none">
         Status
       </h2>
-      {notice && (
-        <p role="status" className="text-sm">
-          {notice}
-        </p>
-      )}
+      <p role="status" className="text-sm">
+        {notice}
+      </p>
       {/* DEBT-313: one instance per action (`key`): a status change never turns an open Disable
           confirmation into an Enable one (or back). */}
       {disabled ? (
@@ -49,7 +46,7 @@ export function ClientStatus({ clientId, disabled, path }: { clientId: string; d
           confirmLabel="Enable client"
           path={path}
           run={() => setDisabled(false)}
-          onDone={setNotice}
+          onDone={announce}
         >
           <p>The client can authenticate and get tokens again. Refresh tokens revoked when it was disabled do not come back.</p>
         </ConfirmAction>
@@ -62,7 +59,7 @@ export function ClientStatus({ clientId, disabled, path }: { clientId: string; d
           destructive
           path={path}
           run={() => setDisabled(true)}
-          onDone={setNotice}
+          onDone={announce}
         >
           <p>
             Disabling revokes every refresh token of this client. Sign-ins and token requests with it stop immediately.

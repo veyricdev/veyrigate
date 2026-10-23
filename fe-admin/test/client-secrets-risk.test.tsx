@@ -463,7 +463,7 @@ describe("keyboard a11y of the dialogs", () => {
   });
 });
 
-// ---- Tester round 2 (after frontend-dev retry 1): DEBT-313/314/315/316 closed, DEBT-318 characterised.
+// ---- Tester round 2 (after frontend-dev retry 1): DEBT-313/314/315/316 closed; DEBT-318 closed in run 46.
 const UNCERTAIN_REVOKE = "The result is unknown. The version list was reloaded: check it before trying again.";
 
 describe("round 2: no one-click way back after an unknown Disable / Enable", () => {
@@ -477,7 +477,7 @@ describe("round 2: no one-click way back after an unknown Disable / Enable", () 
     click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Disable client" }));
     const trigger = await screen.findByRole("button", { name: "Enable client" });
     expect(screen.queryByRole("alertdialog")).toBeNull();
-    expect(screen.getByRole("status").textContent).toBe(UNCERTAIN_STATUS);
+    expect(within(document.getElementById("status-title")!.closest("section")!).getByRole("status").textContent).toBe(UNCERTAIN_STATUS);
     click(trigger);
     const dialog = await screen.findByRole("alertdialog");
     expect(document.getElementById(dialog.getAttribute("aria-labelledby")!)?.textContent).toBe("Enable this client?");
@@ -497,21 +497,20 @@ describe("round 2: no one-click way back after an unknown Disable / Enable", () 
     click(await screen.findByRole("button", { name: label }));
     click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: label }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
-    expect(screen.getByRole("status").textContent).toBe(UNCERTAIN_STATUS);
+    expect(within(document.getElementById("status-title")!.closest("section")!).getByRole("status").textContent).toBe(UNCERTAIN_STATUS);
     await tick();
     expect(mocks.update).toHaveBeenCalledTimes(1);
     expect(stores()).not.toContain(SECRET);
   });
 
-  it("DEBT-318 characterisation: a thrown Disable does NOT re-read the detail although the notice says 'reloaded'", async () => {
+  it("DEBT-318: a thrown Disable re-reads the detail (the notice says 'reloaded' and it was re-read)", async () => {
     mocks.update.mockRejectedValue(new TypeError("Failed to fetch"));
     renderAt("/clients/app-1");
     click(await screen.findByRole("button", { name: "Disable client" }));
     const before = mocks.get.mock.calls.length;
     click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Disable client" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
-    await tick(80);
-    expect(mocks.get.mock.calls.length).toBe(before); // current: no refetch (DEBT-318)
+    await waitFor(() => expect(mocks.get.mock.calls.length).toBeGreaterThan(before)); // was re-read (DEBT-318)
     expect(screen.getByText(UNCERTAIN_STATUS)).toBeTruthy();
     // Stale trigger is the SAME action (disable again => idempotent), never the opposite one.
     expect(screen.getByRole("button", { name: "Disable client" })).toBeTruthy();
@@ -520,7 +519,7 @@ describe("round 2: no one-click way back after an unknown Disable / Enable", () 
 });
 
 describe("round 2: revoke unknown outcome", () => {
-  it("revoke throws (canary in message) => uncertain text in the dialog, revoked once, no canary; DEBT-318: list not re-read", async () => {
+  it("revoke throws (canary in message) => uncertain text in the dialog, revoked once, no canary; DEBT-318: list was re-read", async () => {
     mocks.revoke.mockRejectedValue(new TypeError(`Failed to fetch ${SECRET}`));
     rows = [V2, V1_GRACE]; // not the last usable: no warning alert in the way
     renderAt("/clients/app-1");
@@ -529,8 +528,7 @@ describe("round 2: revoke unknown outcome", () => {
     const before = mocks.list.mock.calls.length;
     click(within(dialog).getByRole("button", { name: "Revoke" }));
     expect((await within(dialog).findByRole("alert")).textContent).toBe(UNCERTAIN_REVOKE);
-    await tick(80);
-    expect(mocks.list.mock.calls.length).toBe(before); // DEBT-318 characterisation
+    await waitFor(() => expect(mocks.list.mock.calls.length).toBeGreaterThan(before)); // was re-read (DEBT-318)
     expect(mocks.revoke).toHaveBeenCalledTimes(1);
     expect(stores()).not.toContain(SECRET);
   });
@@ -571,5 +569,52 @@ describe("round 2: refetch that THROWS while the one-time secret is shown", () =
     click(await rotateButton());
     expect(within(await screen.findByRole("dialog")).queryByTestId("issued-secret")).toBeNull();
     expect(stores(false)).not.toContain(SECRET);
+  });
+});
+
+// ---- Run 46 Task 1 (DEBT-319): the status region is always there; focus never falls to <body>.
+describe("DEBT-319: status region and focus after a confirmed action", () => {
+  // By id: while a modal is open the rest of the page is aria-hidden (no accessible heading).
+  const heading = (name: "Status" | "Secrets") => document.getElementById(`${name.toLowerCase()}-title`)!;
+  const statusIn = (name: "Status" | "Secrets") => heading(name).closest("section")!.querySelector('[role="status"]');
+
+  it.each([
+    ["success", () => mocks.update.mockResolvedValue(ok({ ...CLIENT, disabled: true }) as never), "Client disabled."],
+    ["uncertain", () => mocks.update.mockResolvedValue(fail("unavailable", { uncertain: true }) as never), UNCERTAIN_STATUS],
+  ] as const)("Disable %s => status region existed before the click, holds the notice, focus on the 'Status' heading", async (_, arrange, text) => {
+    arrange();
+    renderAt("/clients/app-1");
+    click(await screen.findByRole("button", { name: "Disable client" }));
+    const region = statusIn("Status");
+    expect(region).not.toBeNull();
+    expect(region!.textContent).toBe("");
+    click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Disable client" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(heading("Status")));
+    expect(statusIn("Status")).toBe(region); // same node: announced, not re-mounted with its content
+    expect(region!.textContent).toBe(text);
+    await tick(80);
+    expect(document.activeElement).toBe(heading("Status"));
+  });
+
+  it("Revoke success => status region existed before, holds the notice, focus on the 'Secrets' heading", async () => {
+    rows = [V2, V1_GRACE];
+    mocks.revoke.mockImplementation((async () => {
+      rows = [{ ...V2, status: "revoked", revokedAt: "2026-10-23T00:00:00.000Z" }, V1_GRACE];
+      return ok(undefined);
+    }) as never);
+    renderAt("/clients/app-1");
+    click(await screen.findByRole("button", { name: "Revoke version 2" }));
+    const region = statusIn("Secrets");
+    expect(region).not.toBeNull();
+    expect(region!.textContent).toBe("");
+    click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Revoke" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(heading("Secrets")));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Revoke version 2" })).toBeNull());
+    expect(statusIn("Secrets")).toBe(region);
+    expect(region!.textContent).toBe("Version 2 revoked.");
+    await tick(80);
+    expect(document.activeElement).toBe(heading("Secrets"));
   });
 });

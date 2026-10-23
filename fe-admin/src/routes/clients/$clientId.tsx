@@ -1,4 +1,4 @@
-import { Fragment } from "react";
+import { Fragment, useRef } from "react";
 import { Link, createFileRoute, useLocation } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { PagePending } from "@/components/feedback/route-states";
@@ -86,6 +86,9 @@ function EditClient({ client }: { client: AdminClient }) {
   const draft = useStepUpDraft(EditDraftSchema, ACTION, path, viewer.sub);
   const update = useUpdateClient();
   const resources = useResources();
+  // DEBT-330: fields of an `uncertain` PATCH have an unknown server value (the frozen base may be
+  // stale): they are sent again on the next save, until a save confirms the values.
+  const unknown = useRef(new Set<string>());
   return (
     <div className="space-y-3">
       <h2 className="text-lg font-semibold">Settings</h2>
@@ -99,20 +102,24 @@ function EditClient({ client }: { client: AdminClient }) {
         submitLabel="Save changes"
         onSubmit={async (fields, values, base) => {
           // Only what this admin changed vs the values the form shows as loaded (it never follows a refetch).
-          const changed = changedValues(values, base);
+          const changed = changedValues(values, base, unknown.current);
           const patch = toPatch(fields, changed);
           if (Object.keys(patch).length === 0) return { info: "No changes to save." };
           try {
             const saved = await update.mutateAsync({ clientId: client.clientId, patch });
+            unknown.current.clear();
             return { saved: valuesFrom(saved) };
           } catch (err) {
             if (err instanceof AdminRequestError && err.code === "step_up_required") {
               startStepUp(EditDraftSchema, { action: ACTION, path, sub: viewer.sub, payload: changed });
               return { info: "Confirm your identity to continue…" };
             }
+            if (!(err instanceof AdminRequestError) || err.uncertain) {
+              for (const key of Object.keys(patch)) unknown.current.add(key);
+            }
             const message = failureMessage(
               err,
-              "The result is unknown. The latest data was reloaded: check it before saving again.",
+              "The result is unknown. Saving again sends the fields you just tried to change.",
             );
             return message ? { error: message } : null;
           }

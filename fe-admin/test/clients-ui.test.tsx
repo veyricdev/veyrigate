@@ -337,7 +337,7 @@ describe("create form", () => {
     mocks.create.mockResolvedValue(ok({ ...CLIENT, clientId: "new-2" }) as never);
     renderAt("/clients/new");
     await waitFor(() => expect(field("Redirect URIs").value).toBe("https://app.example/cb2"));
-    expect(screen.getByRole("status").textContent).toMatch(/submit again/);
+    expect(within(document.querySelector("form[novalidate]")!).getByRole("status").textContent).toMatch(/submit again/);
     expect((screen.getByRole("radio", { name: /Public/ }) as HTMLInputElement).checked).toBe(true);
     expect(sessionStorage.getItem(KEY)).toBeNull();
     await act(() => new Promise((r) => setTimeout(r, 30)));
@@ -359,7 +359,7 @@ describe("edit form", () => {
     expect(screen.queryByRole("radio")).toBeNull();
     expect(screen.queryByLabelText(/client type|auth method|tenant/i)).toBeNull();
     submit("Save changes");
-    expect((await screen.findByRole("status")).textContent).toBe("No changes to save.");
+    expect((await within(document.querySelector("form[novalidate]")!).findByRole("status")).textContent).toBe("No changes to save.");
     expect(mocks.update).not.toHaveBeenCalled();
     type("Redirect URIs", "https://app.example/cb\nhttps://app.example/cb2");
     submit("Save changes");
@@ -367,7 +367,7 @@ describe("edit form", () => {
     expect(mocks.update.mock.calls[0]![0]).toEqual({
       data: { clientId: "app-1", patch: { redirectUris: ["https://app.example/cb", "https://app.example/cb2"] } },
     });
-    expect((await screen.findByRole("status")).textContent).toBe("Saved.");
+    expect((await within(document.querySelector("form[novalidate]")!).findByRole("status")).textContent).toBe("Saved.");
   });
 
   it("uncertain update => message, detail re-read (not re-sent)", async () => {
@@ -399,7 +399,7 @@ describe("edit form", () => {
     mocks.update.mockResolvedValue(ok({ ...CLIENT, redirectUris: ["https://app.example/cb3"] }) as never);
     renderAt("/clients/app-1");
     await waitFor(() => expect(field("Redirect URIs").value).toBe("https://app.example/cb3"));
-    expect(screen.getByRole("status").textContent).toMatch(/submit again/);
+    expect(within(document.querySelector("form[novalidate]")!).getByRole("status").textContent).toMatch(/submit again/);
     expect(field("Scopes").value).toBe("openid email");
     await act(() => new Promise((r) => setTimeout(r, 30)));
     expect(mocks.update).toHaveBeenCalledTimes(1);
@@ -511,7 +511,7 @@ describe("edit form", () => {
     mocks.get.mockResolvedValue(ok({ ...saved, redirectUris: [CB, LEAKED] }) as never);
     const reads = mocks.get.mock.calls.length;
     submit("Save changes");
-    expect((await screen.findByRole("status")).textContent).toBe("Saved.");
+    expect((await within(document.querySelector("form[novalidate]")!).findByRole("status")).textContent).toBe("Saved.");
     await waitFor(() => expect(mocks.get.mock.calls.length).toBeGreaterThan(reads));
     await act(() => new Promise((r) => setTimeout(r, 30)));
     type("Allowed CORS origins", "https://app.example");

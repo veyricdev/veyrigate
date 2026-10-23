@@ -7,7 +7,7 @@
 // - a11y: keyboard-only create (Tab order, Space on radios/checkboxes, Enter submits).
 import { StrictMode, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createMemoryHistory, createRouter } from "@tanstack/react-router";
@@ -192,7 +192,7 @@ describe("input: a tampered step-up draft never reaches the request beyond the a
     mocks.create.mockResolvedValue(ok({ ...CLIENT, clientId: "new-1" }) as never);
     renderAt("/clients/new");
     await waitFor(() => expect(field("Redirect URIs").value).toBe("https://app.example/cb"));
-    expect(screen.getByRole("status").textContent).toMatch(/submit again/);
+    expect(within(document.querySelector("form[novalidate]")!).getByRole("status").textContent).toMatch(/submit again/);
     expect(mocks.create).not.toHaveBeenCalled();
     submit("Create client");
     await waitFor(() => expect(mocks.create).toHaveBeenCalledTimes(1));
@@ -282,7 +282,7 @@ describe("state: lost-update variants", () => {
     fireEvent.click(demo);
     fireEvent.click(demo);
     submit("Save changes");
-    expect((await screen.findByRole("status")).textContent).toBe("No changes to save.");
+    expect((await within(document.querySelector("form[novalidate]")!).findByRole("status")).textContent).toBe("No changes to save.");
     expect(mocks.update).not.toHaveBeenCalled();
   });
 
@@ -303,6 +303,64 @@ describe("state: lost-update variants", () => {
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("app-1");
     expect(field("Redirect URIs").value).toBe("https://app.example/cb");
     expect(field("Scopes").value).toBe("openid");
+  });
+});
+
+// DEBT-330: after an `uncertain` PATCH the diff base is unknown. A field in that PATCH must be sent
+// again even when its value equals the mount data (the write may have landed); other fields stay
+// out of the PATCH (DEBT-307: nothing the admin did not change is sent).
+describe("state: uncertain update then revert (DEBT-330)", () => {
+  const uncertain = { ok: false as const, error: { code: "unavailable" as const, message: "x", uncertain: true as const } };
+  const formAlert = () => within(document.querySelector("form[novalidate]")!).getByRole("alert");
+
+  async function uncertainThenLanded(edit: () => void, landed: AdminClient) {
+    renderAt("/clients/app-1");
+    await waitFor(() => expect(field("Redirect URIs").value).toBe("https://app.example/cb"));
+    await screen.findByRole("checkbox", { name: /^demo/ });
+    mocks.update.mockResolvedValueOnce(uncertain as never);
+    mocks.get.mockResolvedValue(ok(landed) as never); // the write did land
+    edit();
+    submit("Save changes");
+    await waitFor(() => expect(formAlert().textContent).toMatch(/result is unknown/));
+    await waitFor(() => expect(mocks.get.mock.calls.length).toBeGreaterThan(1));
+    await act(() => new Promise((r) => setTimeout(r, 30)));
+    mocks.update.mockResolvedValue(ok(CLIENT) as never);
+  }
+  const lastPatch = () => (mocks.update.mock.calls.at(-1)![0] as { data: { patch: unknown } }).data.patch;
+
+  it("redirectUris: reverting to the mount value is sent (not 'No changes')", async () => {
+    await uncertainThenLanded(() => type("Redirect URIs", "https://evil.example/cb"), {
+      ...CLIENT,
+      redirectUris: ["https://evil.example/cb"],
+    });
+    type("Redirect URIs", "https://app.example/cb");
+    submit("Save changes");
+    await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(2));
+    expect(lastPatch()).toEqual({ redirectUris: ["https://app.example/cb"] });
+  });
+
+  it("allowedResources: unticking back to the mount value is sent (not 'No changes')", async () => {
+    await uncertainThenLanded(() => fireEvent.click(screen.getByRole("checkbox", { name: /^demo/ })), {
+      ...CLIENT,
+      allowedResources: ["demo"],
+    });
+    fireEvent.click(screen.getByRole("checkbox", { name: /^demo/ }));
+    submit("Save changes");
+    await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(2));
+    expect(lastPatch()).toEqual({ allowedResources: [] });
+  });
+
+  it("saving the same values again re-sends exactly that field; after a confirmed save the base is known again", async () => {
+    await uncertainThenLanded(() => type("Scopes", "openid profile"), CLIENT); // did NOT land
+    submit("Save changes");
+    await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(2));
+    expect(lastPatch()).toEqual({ scopes: ["openid", "profile"] });
+    await act(() => new Promise((r) => setTimeout(r, 30)));
+    submit("Save changes"); // saved => the form now shows the saved values: nothing to send
+    expect((await within(document.querySelector("form[novalidate]")!).findByRole("status")).textContent).toBe(
+      "No changes to save.",
+    );
+    expect(mocks.update).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -365,5 +423,111 @@ describe("a11y: keyboard only", () => {
     expect(document.getElementById(errorId)!.textContent).toMatch(/Line 1: .*https/);
     expect(field("Allowed CORS origins").getAttribute("aria-invalid")).toBe("true");
     expect(mocks.create).not.toHaveBeenCalled();
+  });
+});
+
+// Tester run 46 round 2: the `unknown` field set (DEBT-330 fix) across failure sequences. Invariant:
+// the PATCH holds exactly the fields still unknown + the fields changed vs the mount base (`toEqual`,
+// so no immutable / untouched field ever appears), until a save is confirmed; a 4xx in between does
+// not make a field known; a refetch never overwrites the admin's draft.
+describe("state: uncertain update, failure sequences (DEBT-330, round 2)", () => {
+  const uncertain = { ok: false as const, error: { code: "unavailable" as const, message: "x", uncertain: true as const } };
+  const theForm = () => document.querySelector("form[novalidate]") as HTMLElement;
+  const formAlert = () => within(theForm()).getByRole("alert");
+  const settle = () => act(() => new Promise((r) => setTimeout(r, 30)));
+  const lastPatch = () => (mocks.update.mock.calls.at(-1)![0] as { data: { clientId: string; patch: unknown } }).data;
+  const EVIL = "https://evil.example/cb";
+
+  async function open() {
+    renderAt("/clients/app-1");
+    await waitFor(() => expect(field("Redirect URIs").value).toBe("https://app.example/cb"));
+    await screen.findByRole("checkbox", { name: /^demo/ });
+  }
+  async function saveExpecting(alert: RegExp) {
+    submit("Save changes");
+    await waitFor(() => expect(formAlert().textContent).toMatch(alert));
+    await settle();
+  }
+
+  it("unknown field + newly changed field are sent together, nothing else; the refetch never overwrites the draft", async () => {
+    await open();
+    mocks.update.mockResolvedValueOnce(uncertain as never);
+    // re-read: the redirect write landed, and someone else changed CORS meanwhile
+    mocks.get.mockResolvedValue(
+      ok({ ...CLIENT, redirectUris: [EVIL], allowedCorsOrigins: ["https://other.example"] }) as never,
+    );
+    type("Redirect URIs", EVIL);
+    await saveExpecting(/result is unknown/);
+    expect(field("Redirect URIs").value).toBe(EVIL);
+    expect(field("Allowed CORS origins").value).toBe(""); // draft kept, refetch not applied
+    mocks.update.mockResolvedValue(ok(CLIENT) as never);
+    type("Redirect URIs", "https://app.example/cb"); // revert
+    type("Scopes", "openid email");
+    submit("Save changes");
+    await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(2));
+    expect(lastPatch()).toEqual({
+      clientId: "app-1",
+      patch: { redirectUris: ["https://app.example/cb"], scopes: ["openid", "email"] },
+    });
+  });
+
+  it("uncertain twice accumulates the unknown fields; a confirmed save clears them ('No changes' again)", async () => {
+    await open();
+    mocks.update.mockResolvedValueOnce(uncertain as never).mockResolvedValueOnce(uncertain as never);
+    type("Redirect URIs", EVIL);
+    await saveExpecting(/result is unknown/);
+    type("Scopes", "openid admin");
+    await saveExpecting(/result is unknown/);
+    expect(lastPatch().patch).toEqual({ redirectUris: [EVIL], scopes: ["openid", "admin"] });
+    mocks.update.mockResolvedValue(ok(CLIENT) as never);
+    type("Redirect URIs", "https://app.example/cb");
+    type("Scopes", "openid");
+    submit("Save changes");
+    await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(3));
+    expect(lastPatch().patch).toEqual({ redirectUris: ["https://app.example/cb"], scopes: ["openid"] });
+    await settle();
+    submit("Save changes");
+    expect((await within(theForm()).findByRole("status")).textContent).toBe("No changes to save.");
+    expect(mocks.update).toHaveBeenCalledTimes(3);
+  });
+
+  it("uncertain, then a 4xx (not uncertain), then save: the unknown field is still sent", async () => {
+    await open();
+    mocks.update
+      .mockResolvedValueOnce(uncertain as never)
+      .mockResolvedValueOnce(fail("invalid_request", "redirect rejected") as never);
+    type("Redirect URIs", EVIL);
+    await saveExpecting(/result is unknown/);
+    type("Redirect URIs", "https://app.example/cb");
+    await saveExpecting(/redirect rejected/);
+    expect(lastPatch().patch).toEqual({ redirectUris: ["https://app.example/cb"] });
+    mocks.update.mockResolvedValue(ok(CLIENT) as never);
+    submit("Save changes"); // equals the mount base: still unknown => sent
+    await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(3));
+    expect(lastPatch().patch).toEqual({ redirectUris: ["https://app.example/cb"] });
+  });
+
+  it("a thrown error (network / BFF), then revert: sent", async () => {
+    await open();
+    mocks.update.mockRejectedValueOnce(new Error("socket hang up"));
+    fireEvent.click(screen.getByRole("checkbox", { name: /^admin/ }));
+    await saveExpecting(/Something went wrong/);
+    mocks.update.mockResolvedValue(ok(CLIENT) as never);
+    fireEvent.click(screen.getByRole("checkbox", { name: /^admin/ }));
+    submit("Save changes");
+    await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(2));
+    expect(lastPatch().patch).toEqual({ allowedResources: [] });
+  });
+
+  it("uncertain that did NOT land: unchanged resubmit re-sends exactly the same values", async () => {
+    await open();
+    mocks.update.mockResolvedValueOnce(uncertain as never);
+    type("Redirect URIs", `${EVIL}\nhttps://app.example/cb`);
+    await saveExpecting(/result is unknown/);
+    mocks.update.mockResolvedValue(ok(CLIENT) as never);
+    submit("Save changes");
+    await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(2));
+    expect(mocks.update.mock.calls[1]![0]).toEqual(mocks.update.mock.calls[0]![0]);
+    expect(lastPatch().patch).toEqual({ redirectUris: [EVIL, "https://app.example/cb"] });
   });
 });

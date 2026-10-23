@@ -135,10 +135,19 @@ export type ClientFormValues = z.infer<typeof ClientDraftSchema>;
  */
 export const EditDraftSchema = ClientDraftSchema.partial();
 
-/** The fields of `values` that differ from `base` (arrays compared whole). */
-export function changedValues(values: ClientFormValues, base: ClientFormValues): Partial<ClientFormValues> {
+/**
+ * The fields of `values` that differ from `base` (arrays compared whole), plus the `unknown` ones:
+ * their server value is unknown (an `uncertain` PATCH, DEBT-330), so they are sent even when equal.
+ */
+export function changedValues(
+  values: ClientFormValues,
+  base: ClientFormValues,
+  unknown: ReadonlySet<string> = new Set(),
+): Partial<ClientFormValues> {
   return Object.fromEntries(
-    Object.entries(values).filter(([key, v]) => JSON.stringify(v) !== JSON.stringify(base[key as keyof ClientFormValues])),
+    Object.entries(values).filter(
+      ([key, v]) => unknown.has(key) || JSON.stringify(v) !== JSON.stringify(base[key as keyof ClientFormValues]),
+    ),
   );
 }
 

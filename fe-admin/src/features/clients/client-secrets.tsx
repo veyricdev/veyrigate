@@ -8,7 +8,7 @@ import { signInAgain } from "@/features/admin-api/query-client";
 import { issueSecret } from "@/features/admin-api/secrets";
 import { AdminRequestError, unwrap } from "@/features/admin-api/types";
 import type { Credential } from "@/server/admin-api/schemas";
-import { ConfirmAction, StepUpAlert, outcomeOf, type ActionOutcome } from "./confirm-action";
+import { ConfirmAction, StepUpAlert, outcomeOf, useActionNotice, type ActionOutcome } from "./confirm-action";
 
 const usable = (c: Credential) => c.status === "active" || c.status === "grace";
 
@@ -22,7 +22,7 @@ export const UNCERTAIN_ISSUE =
 export function SecretsPanel({ clientId, path }: { clientId: string; path: string }) {
   const secrets = useSecrets(clientId);
   const revoke = useRevokeSecret();
-  const [notice, setNotice] = useState<string | null>(null);
+  const { notice, headingRef, announce } = useActionNotice();
   const items = secrets.data?.items ?? [];
   const usableCount = items.filter(usable).length;
 
@@ -41,7 +41,7 @@ export function SecretsPanel({ clientId, path }: { clientId: string; path: strin
   return (
     <section aria-labelledby="secrets-title" className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 id="secrets-title" className="text-lg font-semibold">
+        <h2 id="secrets-title" ref={headingRef} tabIndex={-1} className="text-lg font-semibold outline-none">
           Secrets
         </h2>
         {/* DEBT-314: data, not isSuccess: a failed re-read must not unmount a shown one-time secret. */}
@@ -49,11 +49,9 @@ export function SecretsPanel({ clientId, path }: { clientId: string; path: strin
           <IssueSecretDialog clientId={clientId} path={path} rotate={usableCount > 0} />
         )}
       </div>
-      {notice && (
-        <p role="status" className="text-sm">
-          {notice}
-        </p>
-      )}
+      <p role="status" className="text-sm">
+        {notice}
+      </p>
       {secrets.isPending ? (
         <p className="text-sm text-muted-foreground">Loading secrets…</p>
       ) : secrets.isError ? (
@@ -106,7 +104,7 @@ export function SecretsPanel({ clientId, path }: { clientId: string; path: strin
                           )
                         }
                         run={() => revokeVersion(c.version)}
-                        onDone={setNotice}
+                        onDone={announce}
                       >
                         <p>
                           Version {c.version} stops working immediately, with no grace period. Tokens already issued with

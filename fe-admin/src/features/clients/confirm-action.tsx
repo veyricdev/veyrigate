@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -24,6 +24,21 @@ export function outcomeOf(err: unknown, uncertainText: string, byCode: Partial<R
   if (err.code === "step_up_required") return { stepUp: true };
   if (err.uncertain) return { error: uncertainText };
   return { error: byCode[err.code] ?? err.message };
+}
+
+/**
+ * Result notice of a section's confirmed actions (DEBT-319): its `role="status"` region is always
+ * rendered (filled later, so it is announced), and `announce` moves focus to the section heading
+ * (`tabIndex={-1}`) because the dialog trigger may be gone (status swap, revoked row).
+ */
+export function useActionNotice() {
+  const [notice, setNotice] = useState("");
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const announce = useCallback((message: string) => {
+    setNotice(message);
+    requestAnimationFrame(() => headingRef.current?.focus());
+  }, []);
+  return { notice, headingRef, announce };
 }
 
 /** `step_up_required` without a stored intent: nothing runs by itself after the round-trip. */
@@ -59,6 +74,7 @@ export function ConfirmAction({ trigger, triggerLabel, title, children, warning,
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<ActionOutcome | null>(null);
   const busy = useRef(false); // a second click in the same tick must not send twice
+  const done = useRef(false); // closed by a finished action: the caller places focus (DEBT-319)
 
   async function confirm() {
     if (busy.current) return;
@@ -68,6 +84,7 @@ export function ConfirmAction({ trigger, triggerLabel, title, children, warning,
     try {
       const outcome = await run();
       if ("done" in outcome) {
+        done.current = true;
         setOpen(false);
         onDone(outcome.done);
       } else {
@@ -93,7 +110,13 @@ export function ConfirmAction({ trigger, triggerLabel, title, children, warning,
           {trigger}
         </Button>
       </AlertDialogTrigger>
-      <AlertDialogContent>
+      <AlertDialogContent
+        onCloseAutoFocus={(e) => {
+          if (!done.current) return; // Cancel / Escape: back to the trigger
+          done.current = false;
+          e.preventDefault();
+        }}
+      >
         <AlertDialogTitle>{title}</AlertDialogTitle>
         <AlertDialogDescription asChild>
           <div className="space-y-2">{children}</div>

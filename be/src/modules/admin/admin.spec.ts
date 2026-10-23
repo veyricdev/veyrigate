@@ -243,5 +243,8 @@ describe('admin OpenAPI response schemas (DEBT-290/294)', () => {
       ),
     ).toEqual(['204']);
     expect(ref('/admin/resources', 'get', '200')).toBe(r('ResourcePageViewDto'));
+    expect(ref('/admin/resources', 'post', '201')).toBe(r('AdminResourceViewDto'));
+    expect(ref('/admin/resources/{resourceId}', 'get', '200')).toBe(r('AdminResourceViewDto'));
+    expect(ref('/admin/resources/{resourceId}', 'patch', '200')).toBe(r('AdminResourceViewDto'));
   });
 });

@@ -1,18 +1,26 @@
 import "@tanstack/react-start/server-only";
 import type { z } from "zod";
 import type { AdminApiErrorCode, AdminApiFailure } from "@/features/admin-api/types";
-import type { CreateClientParams, ListClientsParams } from "@/features/admin-api/inputs";
+import type {
+  CreateClientParams,
+  CreateResourceParams,
+  ListClientsParams,
+  PageParams,
+  UpdateResourceParams,
+} from "@/features/admin-api/inputs";
 import type { Auth } from "../auth/bff";
 import { PublicError, logServerError } from "../errors";
 import { fetchWithTimeout, type FetchFn } from "../oidc/discovery";
 import type { components } from "./schema";
 import {
   AdminClientSchema,
+  AdminResourceSchema,
   ClientPageSchema,
   CredentialListSchema,
   IssuedSecretSchema,
   ResourcePageSchema,
   type AdminClient,
+  type AdminResource,
   type ClientPage,
   type CredentialList,
   type IssuedSecret,
@@ -171,13 +179,29 @@ export function createAdminApi(deps: AdminApiDeps) {
 
   const secretsPath = (clientId: string) => `${clientPath(clientId)}/secrets`;
 
+  const resourcePath = (resourceId: string) => `/admin/resources/${encodeURIComponent(resourceId)}`;
+
+  /** `?limit=&after=` (encoded), or "" when neither is set. */
+  const pageQuery = (params: PageParams) => {
+    const q = new URLSearchParams();
+    if (params.limit !== undefined) q.set("limit", String(params.limit));
+    if (params.after !== undefined) q.set("after", params.after);
+    return q.size ? `?${q}` : "";
+  };
+
+  /** One page of the (global) resources, `identifier` ascending (`admin.read`). */
+  function listResourcePage(ctx: AdminCallContext, params: PageParams): Promise<ResourcePage> {
+    return call(ctx, {
+      method: "GET",
+      route: "/admin/resources",
+      path: `/admin/resources${pageQuery(params)}`,
+      schema: ResourcePageSchema,
+    });
+  }
+
   return {
     listClients(ctx: AdminCallContext, params: ListClientsParams): Promise<ClientPage> {
-      const q = new URLSearchParams();
-      if (params.limit !== undefined) q.set("limit", String(params.limit));
-      if (params.after !== undefined) q.set("after", params.after);
-      const qs = q.size ? `?${q}` : "";
-      return call(ctx, { method: "GET", route: "/admin/clients", path: `/admin/clients${qs}`, schema: ClientPageSchema });
+      return call(ctx, { method: "GET", route: "/admin/clients", path: `/admin/clients${pageQuery(params)}`, schema: ClientPageSchema });
     },
     getClient(ctx: AdminCallContext, clientId: string): Promise<AdminClient> {
       return call(ctx, {
@@ -191,13 +215,31 @@ export function createAdminApi(deps: AdminApiDeps) {
     createClient(ctx: AdminCallContext, body: CreateClientParams): Promise<AdminClient> {
       return call(ctx, { method: "POST", route: "/admin/clients", path: "/admin/clients", body, schema: AdminClientSchema });
     },
-    /** First page (≤ 100) of the tenant's resources (`admin.read`). */
+    /** First page (≤ 100) of the resources: the options of the client form. */
     listResources(ctx: AdminCallContext): Promise<ResourcePage> {
+      return listResourcePage(ctx, { limit: 100 });
+    },
+    listResourcePage,
+    getResource(ctx: AdminCallContext, resourceId: string): Promise<AdminResource> {
       return call(ctx, {
         method: "GET",
-        route: "/admin/resources",
-        path: "/admin/resources?limit=100",
-        schema: ResourcePageSchema,
+        route: "/admin/resources/:resourceId",
+        path: resourcePath(resourceId),
+        schema: AdminResourceSchema,
+      });
+    },
+    /** `POST /admin/resources` (super_admin + recent sign-in; not idempotent: never re-sent). */
+    createResource(ctx: AdminCallContext, body: CreateResourceParams): Promise<AdminResource> {
+      return call(ctx, { method: "POST", route: "/admin/resources", path: "/admin/resources", body, schema: AdminResourceSchema });
+    },
+    /** `PATCH /admin/resources/{id}`: replaces `scopes` (the only mutable field). */
+    updateResource(ctx: AdminCallContext, resourceId: string, patch: UpdateResourceParams["patch"]): Promise<AdminResource> {
+      return call(ctx, {
+        method: "PATCH",
+        route: "/admin/resources/:resourceId",
+        path: resourcePath(resourceId),
+        body: patch,
+        schema: AdminResourceSchema,
       });
     },
     updateClient(ctx: AdminCallContext, clientId: string, patch: ClientPatch): Promise<AdminClient> {

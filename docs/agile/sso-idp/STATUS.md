@@ -2,7 +2,7 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `46-A6.2` — chưa bắt đầu (A6.2 Resources + DEBT-318/319). Đang mở DEBT-309…312, 317…320.
+- **Run hiện tại**: `46-A6.2`: tech-lead **PASS**, Task 0–4 ✅, senior **PASS**. Tester **FAIL [FE]** case 9 ⇒ **frontend-dev retry 1 xong**: sau `uncertain` lần lưu kế luôn gửi PATCH + dòng "Currently saved" (đóng DEBT-327); cùng lỗi ở `/clients/$clientId` tái hiện bằng test rồi sửa (đóng DEBT-330). fe-admin 889/889, E2E 30/30. Senior vòng 2 **PASS** (889/889; 🟡 mới DEBT-332). Tester lượt 2 **PASS**: case 9/DEBT-330 đóng thật, +12 test rủi ro, fe-admin 901/901, E2E 30/30, root test xanh (flaky tải ⇒ DEBT-333). Bước tiếp: **orchestrator** đóng run. Đang mở DEBT-309…312, 317, 320…326, 328, 329, 331…333.
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
 - **Run vừa đóng**: `45-A6.1b` ✅ 4/4 — fe-admin 682, E2E 29. Xem `runs/45-A6.1b/summary.md`.
 - **Việc tiếp theo**: sau M6 → M7 hardening (B7.*, T7, X2/X3/X5); A4–A6 fe-admin chờ Q3 (plan §12). Debt đáng chú ý: DEBT-124/143 (super_admin xuyên tenant), DEBT-140 (audit OAuth chưa gắn tenant), DEBT-177, DEBT-095, DEBT-054/096.

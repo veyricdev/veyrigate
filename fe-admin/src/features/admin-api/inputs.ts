@@ -10,11 +10,14 @@ export const ClientIdSchema = z
   .max(128)
   .refine((v) => !/[/\\]/.test(v) && v !== "." && v !== "..", "Invalid client id");
 
-export const ListClientsInput = z.object({
+/** Cursor page input of a list endpoint (`limit` 1..100, `after` = the BE cursor). */
+export const PageInput = z.object({
   limit: z.number().int().min(1).max(100).optional(),
   after: z.string().min(1).max(2048).optional(),
 });
-export type ListClientsParams = z.infer<typeof ListClientsInput>;
+export type PageParams = z.infer<typeof PageInput>;
+export const ListClientsInput = PageInput;
+export type ListClientsParams = PageParams;
 
 export const CLIENT_TYPES = ["public", "confidential"] as const;
 export const AUTH_METHODS = ["none", "client_secret_basic", "client_secret_post"] as const;
@@ -61,3 +64,39 @@ export const RevokeSecretInput = z.object({
   version: z.number().int().min(1).max(999_999_999),
 });
 export type RevokeSecretParams = z.infer<typeof RevokeSecretInput>;
+
+/**
+ * A resource id in a path: the same loose rule as {@link ClientIdSchema} (NOT the create regex),
+ * so a seeded or older resource outside {@link RESOURCE_ID} can still be opened.
+ */
+export const ResourcePathIdSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .refine((v) => !/[/\\]/.test(v) && v !== "." && v !== "..", "Invalid resource id");
+
+/** New resource id (BE `RESOURCE_ID`, `be/src/modules/admin/admin.dto.ts`). */
+export const RESOURCE_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+/** Resource scopes (BE `MAX_RESOURCE_SCOPES` / per-scope length; NOT the client limits). */
+export const RESOURCE_SCOPES_MAX = 50;
+export const RESOURCE_SCOPE_MAX_LEN = 256;
+export const RESOURCE_IDENTIFIER_MAX_LEN = 2048;
+
+const resourceScopes = z.array(z.string().min(1).max(RESOURCE_SCOPE_MAX_LEN).regex(/^\S+$/)).max(RESOURCE_SCOPES_MAX);
+
+/** `POST /admin/resources` body (BE `CreateResourceDto`). */
+export const CreateResourceInput = z
+  .object({
+    resourceId: z.string().regex(RESOURCE_ID),
+    identifier: z.string().min(1).max(RESOURCE_IDENTIFIER_MAX_LEN),
+    scopes: resourceScopes,
+  })
+  .strict();
+export type CreateResourceParams = z.infer<typeof CreateResourceInput>;
+
+/** `PATCH /admin/resources/{id}`: `scopes` only (replaces the whole list; `[]` is valid). */
+export const UpdateResourceInput = z.object({
+  resourceId: ResourcePathIdSchema,
+  patch: z.object({ scopes: resourceScopes }).strict(),
+});
+export type UpdateResourceParams = z.infer<typeof UpdateResourceInput>;
