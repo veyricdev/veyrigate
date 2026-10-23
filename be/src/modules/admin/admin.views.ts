@@ -1,8 +1,11 @@
 import { ApiProperty } from '@nestjs/swagger';
 import type {
   AdminClientView,
+  AdminConsentView,
   AdminCredentialView,
+  AdminFamilyView,
   AdminResourceView,
+  AdminUserView,
   CredentialStatus,
 } from './admin.mappers';
 
@@ -118,6 +121,111 @@ export class AdminResourceViewDto implements AdminResourceView {
 export class ResourcePageViewDto {
   @ApiProperty({ type: [AdminResourceViewDto] })
   items!: AdminResourceViewDto[];
+
+  @ApiProperty({ type: String, nullable: true })
+  nextCursor!: string | null;
+}
+
+export class AdminUserViewDto implements AdminUserView {
+  @ApiProperty({ type: String })
+  id!: string;
+
+  @ApiProperty({ type: String })
+  email!: string;
+
+  @ApiProperty({ type: Boolean })
+  emailVerified!: boolean;
+
+  @ApiProperty({ type: Boolean })
+  locked!: boolean;
+
+  @ApiProperty(NULLABLE_DATE)
+  lockedUntil!: Date | null;
+
+  @ApiProperty({ enum: ['active', 'suspended'] })
+  membershipStatus!: string;
+
+  @ApiProperty({ type: [String] })
+  roles!: string[];
+
+  @ApiProperty(NULLABLE_DATE)
+  createdAt!: Date | null;
+}
+
+export class UserPageViewDto {
+  @ApiProperty({ type: [AdminUserViewDto] })
+  items!: AdminUserViewDto[];
+
+  @ApiProperty({ type: String, nullable: true })
+  nextCursor!: string | null;
+}
+
+export class AdminFamilyViewDto implements AdminFamilyView {
+  @ApiProperty({ type: String })
+  familyId!: string;
+
+  @ApiProperty({ type: String })
+  clientId!: string;
+
+  @ApiProperty({ type: String })
+  resource!: string;
+
+  @ApiProperty({ type: [String] })
+  scope!: string[];
+
+  @ApiProperty(DATE)
+  createdAt!: Date;
+
+  @ApiProperty(DATE)
+  lastRotatedAt!: Date;
+
+  @ApiProperty(DATE)
+  expiresAt!: Date;
+
+  @ApiProperty({ type: Boolean })
+  active!: boolean;
+
+  @ApiProperty(NULLABLE_DATE)
+  revokedAt!: Date | null;
+}
+
+export class FamilyPageViewDto {
+  @ApiProperty({ type: [AdminFamilyViewDto] })
+  items!: AdminFamilyViewDto[];
+
+  @ApiProperty({ type: String, nullable: true })
+  nextCursor!: string | null;
+}
+
+export class AdminConsentViewDto implements AdminConsentView {
+  @ApiProperty({ type: String })
+  id!: string;
+
+  @ApiProperty({ type: String })
+  clientId!: string;
+
+  @ApiProperty({ type: String })
+  resource!: string;
+
+  @ApiProperty({ type: [String] })
+  grantedScopes!: string[];
+
+  @ApiProperty({ type: String, nullable: true })
+  policyVersion!: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  termsVersion!: string | null;
+
+  @ApiProperty(DATE)
+  grantedAt!: Date;
+
+  @ApiProperty(DATE)
+  updatedAt!: Date;
+}
+
+export class ConsentPageViewDto {
+  @ApiProperty({ type: [AdminConsentViewDto] })
+  items!: AdminConsentViewDto[];
 
   @ApiProperty({ type: String, nullable: true })
   nextCursor!: string | null;

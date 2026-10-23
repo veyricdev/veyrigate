@@ -4,11 +4,14 @@ import { z } from "zod";
  * Server function inputs (run 43 F2), validated on both sides by `.inputValidator`. A path id can
  * never carry a path segment (`/`, `\`, `.`, `..`); it is still `encodeURIComponent`-ed server-side.
  */
-export const ClientIdSchema = z
-  .string()
-  .min(1)
-  .max(128)
-  .refine((v) => !/[/\\]/.test(v) && v !== "." && v !== "..", "Invalid client id");
+export const pathIdSchema = (message: string) =>
+  z
+    .string()
+    .min(1)
+    .max(128)
+    .refine((v) => !/[/\\]/.test(v) && v !== "." && v !== "..", message);
+
+export const ClientIdSchema = pathIdSchema("Invalid client id");
 
 /** Cursor page input of a list endpoint (`limit` 1..100, `after` = the BE cursor). */
 export const PageInput = z.object({
@@ -69,11 +72,7 @@ export type RevokeSecretParams = z.infer<typeof RevokeSecretInput>;
  * A resource id in a path: the same loose rule as {@link ClientIdSchema} (NOT the create regex),
  * so a seeded or older resource outside {@link RESOURCE_ID} can still be opened.
  */
-export const ResourcePathIdSchema = z
-  .string()
-  .min(1)
-  .max(128)
-  .refine((v) => !/[/\\]/.test(v) && v !== "." && v !== "..", "Invalid resource id");
+export const ResourcePathIdSchema = pathIdSchema("Invalid resource id");
 
 /** New resource id (BE `RESOURCE_ID`, `be/src/modules/admin/admin.dto.ts`). */
 export const RESOURCE_ID = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -100,3 +99,28 @@ export const UpdateResourceInput = z.object({
   patch: z.object({ scopes: resourceScopes }).strict(),
 });
 export type UpdateResourceParams = z.infer<typeof UpdateResourceInput>;
+
+/** A user id in a path: the BE `sub` (24 hex); anything else is never sent. */
+export const UserIdSchema = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid user id");
+/** BE `FAMILY_ID` (`admin-users.controller.ts`). */
+export const FamilyIdSchema = z.string().regex(/^[A-Za-z0-9-]{1,128}$/, "Invalid family id");
+export const ConsentIdSchema = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid consent id");
+
+export const USER_STATUSES = ["active", "suspended"] as const;
+
+/** `GET /admin/users` filters (BE `UserListQueryDto`): exact email (never in a URL: POST fn), membership status. */
+export const UserListInput = PageInput.extend({
+  email: z.string().trim().min(1).max(320).optional(),
+  status: z.enum(USER_STATUSES).optional(),
+}).strict();
+export type UserListParams = z.infer<typeof UserListInput>;
+
+/** One page of a user's families or consents. */
+export const UserPageInput = PageInput.extend({ userId: UserIdSchema });
+export type UserPageParams = z.infer<typeof UserPageInput>;
+
+export const RevokeFamilyInput = z.object({ userId: UserIdSchema, familyId: FamilyIdSchema });
+export type RevokeFamilyParams = z.infer<typeof RevokeFamilyInput>;
+
+export const RevokeConsentInput = z.object({ userId: UserIdSchema, consentId: ConsentIdSchema });
+export type RevokeConsentParams = z.infer<typeof RevokeConsentInput>;

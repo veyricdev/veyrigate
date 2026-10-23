@@ -5,17 +5,24 @@ import { describe, expectTypeOf, it } from "vitest";
 import type { components, operations } from "@/server/admin-api/schema";
 import type {
   AdminClient,
+  AdminConsent,
+  AdminFamily,
   AdminResource,
+  AdminUser,
   ClientPage,
+  ConsentPage,
   CredentialList,
+  FamilyPage,
   IssuedSecret,
   ResourcePage,
+  UserPage,
 } from "@/server/admin-api/schemas";
 import type {
   CreateClientParams,
   CreateResourceParams,
   UpdateClientParams,
   UpdateResourceParams,
+  UserListParams,
 } from "@/features/admin-api/inputs";
 
 type S = components["schemas"];
@@ -28,6 +35,17 @@ describe("zod allowlists vs OpenAPI snapshot", () => {
     expectTypeOf<ResourcePage>().toEqualTypeOf<S["ResourcePageViewDto"]>();
     expectTypeOf<CredentialList>().toEqualTypeOf<S["CredentialListViewDto"]>();
     expectTypeOf<IssuedSecret>().toEqualTypeOf<S["IssuedSecretViewDto"]>();
+  });
+
+  it("users, families, consents (run 47 Task 0)", () => {
+    expectTypeOf<AdminUser>().toEqualTypeOf<S["AdminUserViewDto"]>();
+    expectTypeOf<UserPage>().toEqualTypeOf<S["UserPageViewDto"]>();
+    expectTypeOf<AdminFamily>().toEqualTypeOf<S["AdminFamilyViewDto"]>();
+    expectTypeOf<FamilyPage>().toEqualTypeOf<S["FamilyPageViewDto"]>();
+    expectTypeOf<AdminConsent>().toEqualTypeOf<S["AdminConsentViewDto"]>();
+    expectTypeOf<ConsentPage>().toEqualTypeOf<S["ConsentPageViewDto"]>();
+    // The list filters are exactly the BE query parameters.
+    expectTypeOf<UserListParams>().toEqualTypeOf<NonNullable<operations["AdminUsersController_list"]["parameters"]["query"]>>();
   });
 
   it("request bodies", () => {

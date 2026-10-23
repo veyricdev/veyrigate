@@ -19,6 +19,8 @@ import { Route as ClientsNewRouteImport } from './routes/clients/new'
 import { Route as ResourcesIndexRouteImport } from './routes/resources/index'
 import { Route as ResourcesResourceIdRouteImport } from './routes/resources/$resourceId'
 import { Route as ResourcesNewRouteImport } from './routes/resources/new'
+import { Route as UsersIndexRouteImport } from './routes/users/index'
+import { Route as UsersUserIdRouteImport } from './routes/users/$userId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -70,6 +72,16 @@ const ResourcesNewRoute = ResourcesNewRouteImport.update({
   path: '/resources/new',
   getParentRoute: () => rootRouteImport,
 } as any)
+const UsersIndexRoute = UsersIndexRouteImport.update({
+  id: '/users/',
+  path: '/users/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const UsersUserIdRoute = UsersUserIdRouteImport.update({
+  id: '/users/$userId',
+  path: '/users/$userId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -80,8 +92,10 @@ export interface FileRoutesByFullPath {
   '/clients/new': typeof ClientsNewRoute
   '/resources/$resourceId': typeof ResourcesResourceIdRoute
   '/resources/new': typeof ResourcesNewRoute
+  '/users/$userId': typeof UsersUserIdRoute
   '/clients/': typeof ClientsIndexRoute
   '/resources/': typeof ResourcesIndexRoute
+  '/users/': typeof UsersIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -92,8 +106,10 @@ export interface FileRoutesByTo {
   '/clients/new': typeof ClientsNewRoute
   '/resources/$resourceId': typeof ResourcesResourceIdRoute
   '/resources/new': typeof ResourcesNewRoute
+  '/users/$userId': typeof UsersUserIdRoute
   '/clients': typeof ClientsIndexRoute
   '/resources': typeof ResourcesIndexRoute
+  '/users': typeof UsersIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -105,8 +121,10 @@ export interface FileRoutesById {
   '/clients/new': typeof ClientsNewRoute
   '/resources/$resourceId': typeof ResourcesResourceIdRoute
   '/resources/new': typeof ResourcesNewRoute
+  '/users/$userId': typeof UsersUserIdRoute
   '/clients/': typeof ClientsIndexRoute
   '/resources/': typeof ResourcesIndexRoute
+  '/users/': typeof UsersIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -119,8 +137,10 @@ export interface FileRouteTypes {
     | '/clients/new'
     | '/resources/$resourceId'
     | '/resources/new'
+    | '/users/$userId'
     | '/clients/'
     | '/resources/'
+    | '/users/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -131,8 +151,10 @@ export interface FileRouteTypes {
     | '/clients/new'
     | '/resources/$resourceId'
     | '/resources/new'
+    | '/users/$userId'
     | '/clients'
     | '/resources'
+    | '/users'
   id:
     | '__root__'
     | '/'
@@ -143,8 +165,10 @@ export interface FileRouteTypes {
     | '/clients/new'
     | '/resources/$resourceId'
     | '/resources/new'
+    | '/users/$userId'
     | '/clients/'
     | '/resources/'
+    | '/users/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -156,8 +180,10 @@ export interface RootRouteChildren {
   ClientsNewRoute: typeof ClientsNewRoute
   ResourcesResourceIdRoute: typeof ResourcesResourceIdRoute
   ResourcesNewRoute: typeof ResourcesNewRoute
+  UsersUserIdRoute: typeof UsersUserIdRoute
   ClientsIndexRoute: typeof ClientsIndexRoute
   ResourcesIndexRoute: typeof ResourcesIndexRoute
+  UsersIndexRoute: typeof UsersIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -232,6 +258,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ResourcesNewRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/users/': {
+      id: '/users/'
+      path: '/users'
+      fullPath: '/users/'
+      preLoaderRoute: typeof UsersIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/users/$userId': {
+      id: '/users/$userId'
+      path: '/users/$userId'
+      fullPath: '/users/$userId'
+      preLoaderRoute: typeof UsersUserIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -244,8 +284,10 @@ const rootRouteChildren: RootRouteChildren = {
   ClientsNewRoute: ClientsNewRoute,
   ResourcesResourceIdRoute: ResourcesResourceIdRoute,
   ResourcesNewRoute: ResourcesNewRoute,
+  UsersUserIdRoute: UsersUserIdRoute,
   ClientsIndexRoute: ClientsIndexRoute,
   ResourcesIndexRoute: ResourcesIndexRoute,
+  UsersIndexRoute: UsersIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

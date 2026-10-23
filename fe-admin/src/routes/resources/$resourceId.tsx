@@ -2,7 +2,7 @@ import { Fragment, useState } from "react";
 import { Link, createFileRoute, useLocation } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { PagePending } from "@/components/feedback/route-states";
-import { failureMessage } from "@/features/clients/client-form";
+import { failureMessage } from "@/components/feedback/form-feedback";
 import { ResourceForm } from "@/features/resources/resource-form";
 import {
   EditResourceDraftSchema,

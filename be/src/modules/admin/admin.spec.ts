@@ -8,10 +8,19 @@ import { DuplicateError } from '../identity/identity.errors';
 import { AdminAuthError } from '../identity/tenant-context/admin-auth.errors';
 import { AdminTokenGuard } from '../identity/tenant-context/tenant-context';
 import { toPage } from './admin.dto';
-import { toAdminClient, toAdminCredential, toAdminError, toAdminResource } from './admin.mappers';
+import {
+  toAdminClient,
+  toAdminConsent,
+  toAdminCredential,
+  toAdminError,
+  toAdminFamily,
+  toAdminResource,
+  toAdminUser,
+} from './admin.mappers';
 import { adminOnly, isAdminOpenApiEnabled, registerAdminOpenApi } from './admin.openapi';
 import { AdminClientsController } from './admin-clients.controller';
 import { AdminResourcesController } from './admin-resources.controller';
+import { AdminUsersController } from './admin-users.controller';
 
 /** A stored doc polluted with internal/secret fields the mappers must never pass through. */
 const internals = { _id: 'oid', __v: 0, secretHash: '$argon2id$x', tokenHash: 'h', extra: 1 };
@@ -160,7 +169,7 @@ describe('admin OpenAPI response schemas (DEBT-290/294)', () => {
   let doc: OpenAPIObject;
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
-      controllers: [AdminClientsController, AdminResourcesController],
+      controllers: [AdminClientsController, AdminResourcesController, AdminUsersController],
     })
       .overrideGuard(AdminTokenGuard)
       .useValue({})
@@ -202,6 +211,62 @@ describe('admin OpenAPI response schemas (DEBT-290/294)', () => {
     expect(keys('ClientPageViewDto')).toEqual(['items', 'nextCursor']);
     expect(keys('ResourcePageViewDto')).toEqual(['items', 'nextCursor']);
     expect(keys('CredentialListViewDto')).toEqual(['items']);
+  });
+
+  it('users/families/consents: mapper output keys == schema properties (run 47 Task 0)', () => {
+    const now = new Date();
+    expect(keys('AdminUserViewDto')).toEqual(
+      Object.keys(
+        toAdminUser(
+          { sub: 'u', email: 'a@b.c', failedLoginCount: 0 } as never,
+          { status: 'active', roles: [] },
+          now,
+        ),
+      ).sort(),
+    );
+    expect(keys('AdminFamilyViewDto')).toEqual(
+      Object.keys(
+        toAdminFamily({
+          familyId: 'f',
+          clientId: 'c',
+          resource: 'r',
+          scope: [],
+          createdAt: now,
+          lastRotatedAt: now,
+          expiresAt: now,
+          active: true,
+        } as never),
+      ).sort(),
+    );
+    expect(keys('AdminConsentViewDto')).toEqual(
+      Object.keys(
+        toAdminConsent({
+          _id: { toHexString: () => 'x' },
+          clientId: 'c',
+          resource: 'r',
+          grantedScopes: [],
+          grantedAt: now,
+          updatedAt: now,
+        } as never),
+      ).sort(),
+    );
+    for (const page of ['UserPageViewDto', 'FamilyPageViewDto', 'ConsentPageViewDto']) {
+      expect(keys(page)).toEqual(['items', 'nextCursor']);
+      expect(schema(page).properties!.nextCursor).toMatchObject({ type: 'string', nullable: true });
+    }
+    const u = schema('AdminUserViewDto').properties as Record<string, Schema & { enum?: string[] }>;
+    expect(u.membershipStatus.enum).toEqual(['active', 'suspended']);
+    for (const f of ['lockedUntil', 'createdAt']) {
+      expect(u[f]).toMatchObject({ type: 'string', format: 'date-time', nullable: true });
+    }
+    const f = schema('AdminFamilyViewDto').properties!;
+    expect(f.revokedAt).toMatchObject({ type: 'string', format: 'date-time', nullable: true });
+    expect(f.expiresAt.nullable).toBeUndefined();
+    const c = schema('AdminConsentViewDto').properties!;
+    for (const k of ['policyVersion', 'termsVersion']) {
+      expect(c[k]).toMatchObject({ type: 'string', nullable: true });
+    }
+    expect(c.grantedAt.nullable).toBeUndefined();
   });
 
   it('dates are date-time strings, nullable fields carry a type', () => {
@@ -246,5 +311,29 @@ describe('admin OpenAPI response schemas (DEBT-290/294)', () => {
     expect(ref('/admin/resources', 'post', '201')).toBe(r('AdminResourceViewDto'));
     expect(ref('/admin/resources/{resourceId}', 'get', '200')).toBe(r('AdminResourceViewDto'));
     expect(ref('/admin/resources/{resourceId}', 'patch', '200')).toBe(r('AdminResourceViewDto'));
+  });
+
+  it('users operations reference the view schemas; 204 operations have no body (run 47 Task 0)', () => {
+    const r = (n: string) => `#/components/schemas/${n}`;
+    expect(ref('/admin/users', 'get', '200')).toBe(r('UserPageViewDto'));
+    expect(ref('/admin/users/{id}', 'get', '200')).toBe(r('AdminUserViewDto'));
+    expect(ref('/admin/users/{id}/lock', 'post', '200')).toBe(r('AdminUserViewDto'));
+    expect(ref('/admin/users/{id}/unlock', 'post', '200')).toBe(r('AdminUserViewDto'));
+    expect(ref('/admin/users/{id}/roles', 'patch', '200')).toBe(r('AdminUserViewDto'));
+    expect(ref('/admin/users/{id}/families', 'get', '200')).toBe(r('FamilyPageViewDto'));
+    expect(ref('/admin/users/{id}/consents', 'get', '200')).toBe(r('ConsentPageViewDto'));
+    const responses = (path: string, method: string) =>
+      (doc.paths[path] as Record<string, { responses: Record<string, { content?: unknown }> }>)[
+        method
+      ].responses;
+    for (const [path, method] of [
+      ['/admin/users/{id}/sessions/revoke', 'post'],
+      ['/admin/users/{id}/families/{familyId}/revoke', 'post'],
+      ['/admin/users/{id}/consents/{consentId}', 'delete'],
+    ]) {
+      const res = responses(path, method);
+      expect(Object.keys(res)).toEqual(['204']);
+      expect(res['204'].content).toBeUndefined();
+    }
   });
 });

@@ -3,7 +3,8 @@ import { revalidateLogic, useForm } from "@tanstack/react-form";
 import type { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useActionNotice } from "@/features/clients/confirm-action";
+import { useActionNotice } from "@/components/feedback/confirm-action";
+import { fieldMessages, textareaClass } from "@/components/feedback/form-feedback";
 
 type FieldName = "resourceId" | "identifier" | "scopes";
 type Values = Partial<Record<FieldName, string>>;
@@ -26,11 +27,6 @@ const FIELDS: Record<FieldName, { label: string; hint: string }> = {
 };
 const ORDER: FieldName[] = ["resourceId", "identifier", "scopes"];
 const fieldId = (name: string) => `resource-${name}`;
-
-const messages = (errors: readonly unknown[]) =>
-  errors
-    .map((e) => (typeof e === "string" ? e : (e as { message?: unknown } | undefined)?.message))
-    .filter((m): m is string => typeof m === "string");
 
 interface ResourceFormProps<V extends Values> {
   /** Section heading: gets the focus when a result is announced (DEBT-319 pattern). */
@@ -104,7 +100,7 @@ export function ResourceForm<V extends Values>({ title, initial, base, schema, r
           <form.Field key={name} name={name}>
             {(field) => {
               const id = fieldId(name);
-              const errors = messages(field.state.meta.errors);
+              const errors = fieldMessages(field.state.meta.errors);
               const props = {
                 id,
                 value: field.state.value ?? "",
@@ -162,6 +158,3 @@ export function ResourceForm<V extends Values>({ title, initial, base, schema, r
     </div>
   );
 }
-
-const textareaClass =
-  "w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1.5 font-mono text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:bg-input/30";

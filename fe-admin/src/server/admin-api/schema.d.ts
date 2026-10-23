@@ -458,8 +458,60 @@ export interface components {
         UpdateResourceDto: {
             scopes: string[];
         };
+        AdminUserViewDto: {
+            id: string;
+            email: string;
+            emailVerified: boolean;
+            locked: boolean;
+            /** Format: date-time */
+            lockedUntil: string | null;
+            /** @enum {string} */
+            membershipStatus: "active" | "suspended";
+            roles: string[];
+            /** Format: date-time */
+            createdAt: string | null;
+        };
+        UserPageViewDto: {
+            items: components["schemas"]["AdminUserViewDto"][];
+            nextCursor: string | null;
+        };
         UpdateUserRolesDto: {
             roles: ("tenant_admin" | "super_admin")[];
+        };
+        AdminFamilyViewDto: {
+            familyId: string;
+            clientId: string;
+            resource: string;
+            scope: string[];
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            lastRotatedAt: string;
+            /** Format: date-time */
+            expiresAt: string;
+            active: boolean;
+            /** Format: date-time */
+            revokedAt: string | null;
+        };
+        FamilyPageViewDto: {
+            items: components["schemas"]["AdminFamilyViewDto"][];
+            nextCursor: string | null;
+        };
+        AdminConsentViewDto: {
+            id: string;
+            clientId: string;
+            resource: string;
+            grantedScopes: string[];
+            policyVersion: string | null;
+            termsVersion: string | null;
+            /** Format: date-time */
+            grantedAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        ConsentPageViewDto: {
+            items: components["schemas"]["AdminConsentViewDto"][];
+            nextCursor: string | null;
         };
         RotateKeyDto: {
             /** @enum {string} */
@@ -758,7 +810,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["UserPageViewDto"];
+                };
             };
         };
     };
@@ -777,7 +831,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["AdminUserViewDto"];
+                };
             };
         };
     };
@@ -796,7 +852,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["AdminUserViewDto"];
+                };
             };
         };
     };
@@ -815,7 +873,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["AdminUserViewDto"];
+                };
             };
         };
     };
@@ -857,7 +917,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["AdminUserViewDto"];
+                };
             };
         };
     };
@@ -880,7 +942,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["FamilyPageViewDto"];
+                };
             };
         };
     };
@@ -923,7 +987,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ConsentPageViewDto"];
+                };
             };
         };
     };

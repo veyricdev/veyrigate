@@ -22,10 +22,18 @@ export interface AdminTokens {
   loginFormShown: boolean;
 }
 
-/** Sign the seeded super_admin in at the IdP as `fe-admin`; `forceLogin` ⇒ `prompt=login&max_age=0`. */
+/**
+ * Sign a user in at the IdP as `fe-admin` (default: the seeded super_admin); `forceLogin` ⇒
+ * `prompt=login&max_age=0`. The admin resource is gated per client, not per user (run 47 Q-47.3):
+ * a user without an admin role gets tokens too (used as the lock/revoke target).
+ */
 export async function adminToken(
   context: BrowserContext,
-  { forceLogin = false }: { forceLogin?: boolean } = {},
+  {
+    forceLogin = false,
+    email = ADMIN_SEED_EMAIL,
+    password = ADMIN_SEED_PASSWORD,
+  }: { forceLogin?: boolean; email?: string; password?: string } = {},
 ): Promise<AdminTokens> {
   const verifier = b64url(randomBytes(32));
   const state = b64url(randomBytes(16));
@@ -78,8 +86,8 @@ export async function adminToken(
       if (onIdp && url.pathname === "/login") {
         loginFormShown = true;
         const form = page.locator('form[action="/login"]');
-        await form.getByLabel("Email").fill(ADMIN_SEED_EMAIL);
-        await form.getByLabel("Password").fill(ADMIN_SEED_PASSWORD);
+        await form.getByLabel("Email").fill(email);
+        await form.getByLabel("Password").fill(password);
         await step(
           Promise.all([
             page.waitForURL(leftIdpPage, { waitUntil: "load" }),

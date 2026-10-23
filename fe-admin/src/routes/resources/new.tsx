@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { failureMessage } from "@/features/clients/client-form";
+import { failureMessage } from "@/components/feedback/form-feedback";
 import { ResourceForm } from "@/features/resources/resource-form";
 import { NewResourceDraftSchema, NewResourceSchema, type NewResourceValues } from "@/features/resources/resource-form-schema";
 import { useCreateResource } from "@/features/admin-api/hooks";

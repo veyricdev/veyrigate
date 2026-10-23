@@ -7,6 +7,8 @@ import type {
   ListClientsParams,
   PageParams,
   UpdateResourceParams,
+  UserListParams,
+  UserPageParams,
 } from "@/features/admin-api/inputs";
 import type { Auth } from "../auth/bff";
 import { PublicError, logServerError } from "../errors";
@@ -19,12 +21,20 @@ import {
   CredentialListSchema,
   IssuedSecretSchema,
   ResourcePageSchema,
+  AdminUserSchema,
+  ConsentPageSchema,
+  FamilyPageSchema,
+  UserPageSchema,
   type AdminClient,
   type AdminResource,
   type ClientPage,
   type CredentialList,
   type IssuedSecret,
   type ResourcePage,
+  type AdminUser,
+  type ConsentPage,
+  type FamilyPage,
+  type UserPage,
 } from "./schemas";
 
 /**
@@ -189,6 +199,17 @@ export function createAdminApi(deps: AdminApiDeps) {
     return q.size ? `?${q}` : "";
   };
 
+  const userPath = (userId: string) => `/admin/users/${encodeURIComponent(userId)}`;
+
+  /** A user write without a body: `POST /admin/users/{id}/{action}` answering the user view. */
+  const userAction = (ctx: AdminCallContext, userId: string, action: "lock" | "unlock"): Promise<AdminUser> =>
+    call(ctx, {
+      method: "POST",
+      route: `/admin/users/:id/${action}`,
+      path: `${userPath(userId)}/${action}`,
+      schema: AdminUserSchema,
+    });
+
   /** One page of the (global) resources, `identifier` ascending (`admin.read`). */
   function listResourcePage(ctx: AdminCallContext, params: PageParams): Promise<ResourcePage> {
     return call(ctx, {
@@ -278,6 +299,68 @@ export function createAdminApi(deps: AdminApiDeps) {
         method: "DELETE",
         route: "/admin/clients/:clientId/secrets/:version",
         path: `${secretsPath(clientId)}/${String(version)}`,
+        schema: null,
+      });
+    },
+    /**
+     * Users of the token's tenant (`admin.read`). `email` (exact) is in this BE query only: the
+     * logged route is the template, never the query (the BE log strips it too).
+     */
+    listUsers(ctx: AdminCallContext, params: UserListParams): Promise<UserPage> {
+      const q = new URLSearchParams();
+      if (params.limit !== undefined) q.set("limit", String(params.limit));
+      if (params.after !== undefined) q.set("after", params.after);
+      if (params.email !== undefined) q.set("email", params.email);
+      if (params.status !== undefined) q.set("status", params.status);
+      return call(ctx, { method: "GET", route: "/admin/users", path: `/admin/users${q.size ? `?${q}` : ""}`, schema: UserPageSchema });
+    },
+    getUser(ctx: AdminCallContext, userId: string): Promise<AdminUser> {
+      return call(ctx, { method: "GET", route: "/admin/users/:id", path: userPath(userId), schema: AdminUserSchema });
+    },
+    /** Locks until unlocked (global), then ends every session/family: a 5xx may follow an applied lock. */
+    lockUser: (ctx: AdminCallContext, userId: string) => userAction(ctx, userId, "lock"),
+    /** Clears the lock and the failed-login counter; restores nothing. */
+    unlockUser: (ctx: AdminCallContext, userId: string) => userAction(ctx, userId, "unlock"),
+    /** Ends every IdP session and refresh family of the user, in every tenant (`204`, idempotent). */
+    revokeUserSessions(ctx: AdminCallContext, userId: string): Promise<void> {
+      return call(ctx, {
+        method: "POST",
+        route: "/admin/users/:id/sessions/revoke",
+        path: `${userPath(userId)}/sessions/revoke`,
+        schema: null,
+      });
+    },
+    listUserFamilies(ctx: AdminCallContext, params: UserPageParams): Promise<FamilyPage> {
+      return call(ctx, {
+        method: "GET",
+        route: "/admin/users/:id/families",
+        path: `${userPath(params.userId)}/families${pageQuery(params)}`,
+        schema: FamilyPageSchema,
+      });
+    },
+    /** `204`, idempotent (an already revoked family is still `204`). */
+    revokeUserFamily(ctx: AdminCallContext, userId: string, familyId: string): Promise<void> {
+      return call(ctx, {
+        method: "POST",
+        route: "/admin/users/:id/families/:familyId/revoke",
+        path: `${userPath(userId)}/families/${encodeURIComponent(familyId)}/revoke`,
+        schema: null,
+      });
+    },
+    listUserConsents(ctx: AdminCallContext, params: UserPageParams): Promise<ConsentPage> {
+      return call(ctx, {
+        method: "GET",
+        route: "/admin/users/:id/consents",
+        path: `${userPath(params.userId)}/consents${pageQuery(params)}`,
+        schema: ConsentPageSchema,
+      });
+    },
+    /** `204`; an already revoked consent is `not_found` (not idempotent: never re-sent). */
+    revokeUserConsent(ctx: AdminCallContext, userId: string, consentId: string): Promise<void> {
+      return call(ctx, {
+        method: "DELETE",
+        route: "/admin/users/:id/consents/:consentId",
+        path: `${userPath(userId)}/consents/${encodeURIComponent(consentId)}`,
         schema: null,
       });
     },

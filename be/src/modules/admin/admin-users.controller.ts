@@ -12,7 +12,13 @@ import {
   UseFilters,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiNoContentResponse,
+  ApiOkResponse,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
 import type { HttpRequest } from '../../common/http/http.types';
 import { AuthenticationService } from '../authentication/authentication.service';
 import { ClientService } from '../clients/client.service';
@@ -42,6 +48,12 @@ import {
   UserListQueryDto,
 } from './admin.dto';
 import { type AdminUserView, toAdminConsent, toAdminFamily, toAdminUser } from './admin.mappers';
+import {
+  AdminUserViewDto,
+  ConsentPageViewDto,
+  FamilyPageViewDto,
+  UserPageViewDto,
+} from './admin.views';
 
 const OBJECT_ID_HEX = /^[0-9a-fA-F]{24}$/;
 const FAMILY_ID = /^[A-Za-z0-9-]{1,128}$/;
@@ -83,6 +95,7 @@ export class AdminUsersController {
 
   @Get()
   @AdminScope('admin.read')
+  @ApiOkResponse({ type: UserPageViewDto })
   async list(@Tenant() ctx: TenantContext, @Query() q: UserListQueryDto) {
     if (q.after !== undefined && !OBJECT_ID_HEX.test(q.after)) {
       throw AdminAuthError.invalidRequest('invalid cursor');
@@ -119,6 +132,7 @@ export class AdminUsersController {
 
   @Get(':id')
   @AdminScope('admin.read')
+  @ApiOkResponse({ type: AdminUserViewDto })
   async get(@Tenant() ctx: TenantContext, @Param('id') rawId: string) {
     const t = await this.mustFind(ctx, rawId);
     return toAdminUser(t.user, t.member, new Date());
@@ -128,6 +142,7 @@ export class AdminUsersController {
   @AdminScope('admin.write')
   @RequireRecentAuth(5)
   @HttpCode(200)
+  @ApiOkResponse({ type: AdminUserViewDto })
   @ApiOperation({
     description: 'Locks until unlocked, then revokes every session + refresh family.',
   })
@@ -172,6 +187,7 @@ export class AdminUsersController {
   @AdminScope('admin.write')
   @RequireRecentAuth(5)
   @HttpCode(200)
+  @ApiOkResponse({ type: AdminUserViewDto })
   @ApiOperation({ description: 'Clears the lock and the failed-login counter; revokes nothing.' })
   async unlock(
     @Tenant() ctx: TenantContext,
@@ -199,6 +215,7 @@ export class AdminUsersController {
   @AdminScope('admin.write')
   @RequireRecentAuth(5)
   @HttpCode(204)
+  @ApiNoContentResponse()
   @ApiOperation({ description: 'Ends every session and revokes every refresh family of the user.' })
   async revokeSessions(
     @Tenant() ctx: TenantContext,
@@ -235,6 +252,7 @@ export class AdminUsersController {
   @Patch(':id/roles')
   @AdminScope('admin.write')
   @RequireRecentAuth(5)
+  @ApiOkResponse({ type: AdminUserViewDto })
   @ApiOperation({
     description:
       'Replaces the admin roles of the membership. Never on yourself; granting/revoking super_admin, ' +
@@ -280,6 +298,7 @@ export class AdminUsersController {
 
   @Get(':id/families')
   @AdminScope('admin.read')
+  @ApiOkResponse({ type: FamilyPageViewDto })
   @ApiOperation({ description: 'Refresh-token families of the user for clients of this tenant.' })
   async listFamilies(
     @Tenant() ctx: TenantContext,
@@ -306,6 +325,7 @@ export class AdminUsersController {
   @AdminScope('admin.write')
   @RequireRecentAuth(5)
   @HttpCode(204)
+  @ApiNoContentResponse()
   @ApiOperation({ description: 'Revokes the whole family (stamp-first, race-safe). Idempotent.' })
   async revokeFamily(
     @Tenant() ctx: TenantContext,
@@ -335,6 +355,7 @@ export class AdminUsersController {
 
   @Get(':id/consents')
   @AdminScope('admin.read')
+  @ApiOkResponse({ type: ConsentPageViewDto })
   @ApiOperation({ description: 'Active consents of the user for clients of this tenant.' })
   async listConsents(
     @Tenant() ctx: TenantContext,
@@ -358,6 +379,7 @@ export class AdminUsersController {
   @AdminScope('admin.write')
   @RequireRecentAuth(5)
   @HttpCode(204)
+  @ApiNoContentResponse()
   @ApiOperation({
     description:
       'Revokes the consent (the next /authorize asks again) and every refresh family of that ' +

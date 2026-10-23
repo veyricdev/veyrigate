@@ -2,7 +2,7 @@ import { useRef, useState, type ReactNode } from "react";
 import { revalidateLogic, useForm } from "@tanstack/react-form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { AdminRequestError } from "@/features/admin-api/types";
+import { fieldMessages, textareaClass } from "@/components/feedback/form-feedback";
 import { GRANT_TYPES } from "@/features/admin-api/inputs";
 import {
   ClientFieldsSchema,
@@ -38,19 +38,6 @@ const GRANT_LABELS: Record<(typeof GRANT_TYPES)[number], string> = {
 
 export const ADMIN_RESOURCE_WARNING =
   "Grants admin API access: super_admin only, the client must be confidential, and saving revokes every existing secret.";
-
-/** Message for a failed write; `null` for `unauthenticated` (the query client signs in again). */
-export function failureMessage(err: unknown, uncertainText: string): string | null {
-  if (!(err instanceof AdminRequestError)) return "Something went wrong. Please try again.";
-  if (err.uncertain) return uncertainText;
-  if (err.code === "unauthenticated") return null;
-  return err.message; // fixed text per code, or the BE 400/409 description (rendered as text)
-}
-
-const messages = (errors: readonly unknown[]) =>
-  errors
-    .map((e) => (typeof e === "string" ? e : (e as { message?: unknown } | undefined)?.message))
-    .filter((m): m is string => typeof m === "string");
 
 interface ClientFormProps {
   initial: ClientFormValues;
@@ -126,7 +113,7 @@ export function ClientForm({ initial, base, resources, restored, submitLabel, ch
 
       <form.Field name="grantTypes">
         {(field) => (
-          <Group label="Grant types" name={field.name} errors={messages(field.state.meta.errors)}>
+          <Group label="Grant types" name={field.name} errors={fieldMessages(field.state.meta.errors)}>
             {GRANT_TYPES.map((grant, i) => (
               <Check
                 key={grant}
@@ -156,7 +143,7 @@ export function ClientForm({ initial, base, resources, restored, submitLabel, ch
               label={label}
               hint={hint}
               warning={hasHttpLocalhost(field.state.value) ? LOCALHOST_WARNING : undefined}
-              errors={messages(field.state.meta.errors)}
+              errors={fieldMessages(field.state.meta.errors)}
             >
               {(props) => (
                 <textarea
@@ -180,7 +167,7 @@ export function ClientForm({ initial, base, resources, restored, submitLabel, ch
             label="Front-channel logout URI"
             hint="Optional. Leave empty for none."
             warning={hasHttpLocalhost(field.state.value) ? LOCALHOST_WARNING : undefined}
-            errors={messages(field.state.meta.errors)}
+            errors={fieldMessages(field.state.meta.errors)}
           >
             {(props) => (
               <Input
@@ -202,7 +189,7 @@ export function ClientForm({ initial, base, resources, restored, submitLabel, ch
             label="Allowed CORS origins"
             hint="One exact origin per line, e.g. https://app.example.com (no path, no trailing slash)."
             warning={hasHttpLocalhost(field.state.value) ? LOCALHOST_WARNING : undefined}
-            errors={messages(field.state.meta.errors)}
+            errors={fieldMessages(field.state.meta.errors)}
           >
             {(props) => (
               <textarea
@@ -225,7 +212,7 @@ export function ClientForm({ initial, base, resources, restored, submitLabel, ch
           const extra = field.state.value.filter((id) => !known.some((r) => r.resourceId === id));
           const options = [...known, ...extra.map((id) => ({ resourceId: id, identifier: "", adminCapable: false }))];
           return (
-            <Group label="Allowed resources" name={field.name} errors={messages(field.state.meta.errors)}>
+            <Group label="Allowed resources" name={field.name} errors={fieldMessages(field.state.meta.errors)}>
               {resources.failed && <p className="text-sm text-destructive">The resource list could not be loaded.</p>}
               {!resources.failed && !resources.options && <p className="text-sm text-muted-foreground">Loading resources…</p>}
               {resources.options && options.length === 0 && (
@@ -258,7 +245,7 @@ export function ClientForm({ initial, base, resources, restored, submitLabel, ch
             name={field.name}
             label="Scopes"
             hint="Separated by spaces, e.g. openid profile email."
-            errors={messages(field.state.meta.errors)}
+            errors={fieldMessages(field.state.meta.errors)}
           >
             {(props) => (
               <Input
@@ -294,9 +281,6 @@ export function ClientForm({ initial, base, resources, restored, submitLabel, ch
 }
 
 const LOCALHOST_WARNING = "http://localhost is only accepted outside production (the server decides).";
-
-const textareaClass =
-  "w-full min-w-0 rounded-lg border border-input bg-transparent px-2.5 py-1.5 font-mono text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:bg-input/30";
 
 /** No `name`: a submit before hydration must not put the values in the URL (native GET). */
 interface ControlProps {

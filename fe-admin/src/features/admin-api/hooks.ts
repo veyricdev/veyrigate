@@ -8,11 +8,26 @@ import type {
   RevokeSecretParams,
   UpdateClientParams,
   UpdateResourceParams,
+  RevokeConsentParams,
+  RevokeFamilyParams,
+  UserListParams,
 } from "./inputs";
 import { adminKeys } from "./keys";
 import { createResource, getResource, listResourcePage, updateResource } from "./resources";
 import { listSecrets, revokeSecret } from "./secrets";
-import { AdminRequestError, unwrap } from "./types";
+import type { AdminUser } from "@/server/admin-api/schemas";
+import { AdminRequestError, unwrap, type AdminResult } from "./types";
+import {
+  getUser,
+  listUserConsents,
+  listUserFamilies,
+  listUsers,
+  lockUser,
+  revokeUserConsent,
+  revokeUserFamily,
+  revokeUserSessions,
+  unlockUser,
+} from "./users";
 
 export function useClients(params: ListClientsParams) {
   return useQuery({
@@ -124,3 +139,52 @@ export function useUpdateResource() {
     onSettled: (_data, error) => invalidate(error),
   });
 }
+
+/** One page of the tenant's users (`email` filter: in the POST body and the in-memory key only). */
+export function useUsers(params: UserListParams) {
+  return useQuery({
+    queryKey: adminKeys.users.list(params),
+    queryFn: async () => unwrap(await listUsers({ data: params })),
+  });
+}
+
+export function useUser(userId: string) {
+  return useQuery({
+    queryKey: adminKeys.users.detail(userId),
+    queryFn: async () => unwrap(await getUser({ data: userId })),
+  });
+}
+
+export function useUserFamilies(userId: string, params: PageParams) {
+  return useQuery({
+    queryKey: adminKeys.users.families(userId, params),
+    queryFn: async () => unwrap(await listUserFamilies({ data: { userId, ...params } })),
+  });
+}
+
+export function useUserConsents(userId: string, params: PageParams) {
+  return useQuery({
+    queryKey: adminKeys.users.consents(userId, params),
+    queryFn: async () => unwrap(await listUserConsents({ data: { userId, ...params } })),
+  });
+}
+
+/**
+ * Any user write refreshes every user query (detail, families, consents, lists): a lock also
+ * revokes the families, a consent revoke its families. Never retried (`retry: 0` default).
+ */
+const useInvalidateUsers = () => useInvalidateOn(adminKeys.users.all);
+
+function useUserWrite<I, T>(fn: (o: { data: I }) => Promise<AdminResult<T>>) {
+  const invalidate = useInvalidateUsers();
+  return useMutation({
+    mutationFn: async (input: I) => unwrap(await fn({ data: input })),
+    onSettled: (_data, error) => invalidate(error),
+  });
+}
+
+export const useLockUser = () => useUserWrite<string, AdminUser>(lockUser);
+export const useUnlockUser = () => useUserWrite<string, AdminUser>(unlockUser);
+export const useRevokeUserSessions = () => useUserWrite<string, void>(revokeUserSessions);
+export const useRevokeUserFamily = () => useUserWrite<RevokeFamilyParams, void>(revokeUserFamily);
+export const useRevokeUserConsent = () => useUserWrite<RevokeConsentParams, void>(revokeUserConsent);

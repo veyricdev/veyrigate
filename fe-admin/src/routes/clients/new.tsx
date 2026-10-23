@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { ClientForm, failureMessage } from "@/features/clients/client-form";
+import { failureMessage } from "@/components/feedback/form-feedback";
+import { ClientForm } from "@/features/clients/client-form";
 import {
   EMPTY_VALUES,
   METHODS_FOR,

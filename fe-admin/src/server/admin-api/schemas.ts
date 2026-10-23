@@ -65,3 +65,61 @@ export const IssuedSecretSchema = z.object({
   clientSecret: z.string().min(1).max(512),
 });
 export type IssuedSecret = z.infer<typeof IssuedSecretSchema>;
+
+/** A user of the token's tenant (`admin.views.ts` `AdminUserViewDto`): no hash, token or session ref. */
+export const AdminUserSchema = z.object({
+  id: z.string(),
+  email: z.string(),
+  emailVerified: z.boolean(),
+  locked: z.boolean(),
+  lockedUntil: z.string().nullable(),
+  membershipStatus: z.enum(["active", "suspended"]),
+  roles: z.array(z.string()),
+  createdAt: z.string().nullable(),
+});
+export type AdminUser = z.infer<typeof AdminUserSchema>;
+
+export const UserPageSchema = z.object({
+  items: z.array(AdminUserSchema),
+  nextCursor: z.string().nullable(),
+});
+export type UserPage = z.infer<typeof UserPageSchema>;
+
+/** A refresh token family of a user (metadata only: never a token or its hash). */
+export const AdminFamilySchema = z.object({
+  familyId: z.string(),
+  clientId: z.string(),
+  resource: z.string(),
+  scope: z.array(z.string()),
+  createdAt: z.string(),
+  lastRotatedAt: z.string(),
+  expiresAt: z.string(),
+  active: z.boolean(),
+  revokedAt: z.string().nullable(),
+});
+export type AdminFamily = z.infer<typeof AdminFamilySchema>;
+
+export const FamilyPageSchema = z.object({
+  items: z.array(AdminFamilySchema),
+  nextCursor: z.string().nullable(),
+});
+export type FamilyPage = z.infer<typeof FamilyPageSchema>;
+
+/** An active consent of a user. */
+export const AdminConsentSchema = z.object({
+  id: z.string(),
+  clientId: z.string(),
+  resource: z.string(),
+  grantedScopes: z.array(z.string()),
+  policyVersion: z.string().nullable(),
+  termsVersion: z.string().nullable(),
+  grantedAt: z.string(),
+  updatedAt: z.string(),
+});
+export type AdminConsent = z.infer<typeof AdminConsentSchema>;
+
+export const ConsentPageSchema = z.object({
+  items: z.array(AdminConsentSchema),
+  nextCursor: z.string().nullable(),
+});
+export type ConsentPage = z.infer<typeof ConsentPageSchema>;

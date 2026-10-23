@@ -1,4 +1,4 @@
-import type { ListClientsParams, PageParams } from "./inputs";
+import type { ListClientsParams, PageParams, UserListParams } from "./inputs";
 
 /** Query key factory (run 43 F3): invalidate `clients.all` to refresh every client query. */
 export const adminKeys = {
@@ -15,5 +15,13 @@ export const adminKeys = {
     options: ["admin", "resources", "options"] as const,
     list: (params: PageParams) => ["admin", "resources", "list", params] as const,
     detail: (resourceId: string) => ["admin", "resources", "detail", resourceId] as const,
+  },
+  /** Invalidate `users.all` after any user write (a lock also revokes the families). */
+  users: {
+    all: ["admin", "users"] as const,
+    list: (params: UserListParams) => ["admin", "users", "list", params] as const,
+    detail: (userId: string) => ["admin", "users", "detail", userId] as const,
+    families: (userId: string, params: PageParams) => ["admin", "users", "families", userId, params] as const,
+    consents: (userId: string, params: PageParams) => ["admin", "users", "consents", userId, params] as const,
   },
 };

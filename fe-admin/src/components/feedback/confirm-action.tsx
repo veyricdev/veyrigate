@@ -41,11 +41,14 @@ export function useActionNotice() {
   return { notice, headingRef, announce };
 }
 
-/** `step_up_required` without a stored intent: nothing runs by itself after the round-trip. */
-export function StepUpAlert({ path }: { path: string }) {
+/**
+ * `step_up_required` without a stored intent: nothing runs by itself after the round-trip.
+ * `note`: page-specific consequence of leaving (e.g. unsaved changes elsewhere on the page).
+ */
+export function StepUpAlert({ path, note }: { path: string; note?: string }) {
   return (
     <div role="alert" className="space-y-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3">
-      <p>Confirm your identity to continue. Unsaved changes in Settings will be lost.</p>
+      <p>Confirm your identity to continue.{note && ` ${note}`}</p>
       <Button type="button" variant="outline" onClick={() => reauthenticate(path)}>
         Confirm identity
       </Button>
@@ -64,12 +67,14 @@ interface ConfirmActionProps {
   confirmLabel: string;
   destructive?: boolean;
   path: string;
+  /** Passed to {@link StepUpAlert} as its `note`. */
+  stepUpNote?: string;
   run: () => Promise<ActionOutcome>;
   onDone: (message: string) => void;
 }
 
 /** A write behind a confirmation (Escape / Cancel close it; an outside click does not). */
-export function ConfirmAction({ trigger, triggerLabel, title, children, warning, confirmLabel, destructive, path, run, onDone }: ConfirmActionProps) {
+export function ConfirmAction({ trigger, triggerLabel, title, children, warning, confirmLabel, destructive, path, stepUpNote, run, onDone }: ConfirmActionProps) {
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<ActionOutcome | null>(null);
@@ -122,7 +127,7 @@ export function ConfirmAction({ trigger, triggerLabel, title, children, warning,
           <div className="space-y-2">{children}</div>
         </AlertDialogDescription>
         {warning}
-        {result && "stepUp" in result && <StepUpAlert path={path} />}
+        {result && "stepUp" in result && <StepUpAlert path={path} note={stepUpNote} />}
         {result && "error" in result && (
           <p role="alert" className="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-destructive">
             {result.error}

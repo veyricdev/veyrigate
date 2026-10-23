@@ -8,7 +8,8 @@ import { signInAgain } from "@/features/admin-api/query-client";
 import { issueSecret } from "@/features/admin-api/secrets";
 import { AdminRequestError, unwrap } from "@/features/admin-api/types";
 import type { Credential } from "@/server/admin-api/schemas";
-import { ConfirmAction, StepUpAlert, outcomeOf, useActionNotice, type ActionOutcome } from "./confirm-action";
+import { ConfirmAction, StepUpAlert, outcomeOf, useActionNotice, type ActionOutcome } from "@/components/feedback/confirm-action";
+import { SETTINGS_STEP_UP_NOTE } from "./client-status";
 
 const usable = (c: Credential) => c.status === "active" || c.status === "grace";
 
@@ -95,6 +96,7 @@ export function SecretsPanel({ clientId, path }: { clientId: string; path: strin
                         confirmLabel="Revoke"
                         destructive
                         path={path}
+                        stepUpNote={SETTINGS_STEP_UP_NOTE}
                         warning={
                           usableCount === 1 && (
                             <p role="alert" className="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-destructive">
@@ -260,7 +262,7 @@ function IssueSecretBody({ clientId, path, label, rotate, pending, setPending, c
           : "A new secret is created for this client."}{" "}
         The secret is shown only once.
       </DialogDescription>
-      {failure && "stepUp" in failure && <StepUpAlert path={path} />}
+      {failure && "stepUp" in failure && <StepUpAlert path={path} note={SETTINGS_STEP_UP_NOTE} />}
       {failure && "error" in failure && (
         <p role="alert" className="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-destructive">
           {failure.error}

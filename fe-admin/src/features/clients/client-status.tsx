@@ -1,6 +1,9 @@
 import { useUpdateClient } from "@/features/admin-api/hooks";
 import { AdminRequestError } from "@/features/admin-api/types";
-import { ConfirmAction, outcomeOf, useActionNotice, type ActionOutcome } from "./confirm-action";
+import { ConfirmAction, outcomeOf, useActionNotice, type ActionOutcome } from "@/components/feedback/confirm-action";
+
+/** Step-up note of the client page's action panels: leaving drops the Settings form draft. */
+export const SETTINGS_STEP_UP_NOTE = "Unsaved changes in Settings will be lost.";
 
 export const SELF_DISABLE_CONFLICT =
   "This client issues the admin console's own sign-in token and cannot be disabled here.";
@@ -45,6 +48,7 @@ export function ClientStatus({ clientId, disabled, path }: { clientId: string; d
           title="Enable this client?"
           confirmLabel="Enable client"
           path={path}
+          stepUpNote={SETTINGS_STEP_UP_NOTE}
           run={() => setDisabled(false)}
           onDone={announce}
         >
@@ -58,6 +62,7 @@ export function ClientStatus({ clientId, disabled, path }: { clientId: string; d
           confirmLabel="Disable client"
           destructive
           path={path}
+          stepUpNote={SETTINGS_STEP_UP_NOTE}
           run={() => setDisabled(true)}
           onDone={announce}
         >

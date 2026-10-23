@@ -58,6 +58,14 @@ export const ADMIN_SEED_PASSWORD = "e2e-admin-password";
 export const E2E_FE_ADMIN_SECRET = "e2e-fe-admin-secret-0123456789abcdef0123456789abcdef";
 
 /**
+ * Target user of the lock/revoke specs (run 47, Q-47.3). Non-secret placeholders valid only on
+ * `sso-idp-e2e`: `seed:e2e-admin` resets it every run (password, no lock, active membership of the
+ * default tenant, NO admin role). Must differ from `ADMIN_SEED_EMAIL` and `DEV_SEED_EMAIL`.
+ */
+export const E2E_USER_EMAIL = "e2e-user@example.com";
+export const E2E_USER_PASSWORD = "e2e-user-password";
+
+/**
  * Full BE env for the E2E run. Includes every var `envSchema` requires (no defaults) plus
  * `SESSION_COOKIE_SECURE=false` (http) and `NODE_ENV=test` (not production, so the cookie-secure
  * guard and the seed`s production block both allow the run). Federation/admin/CSRF values are
@@ -96,6 +104,8 @@ export function beEnv(): Record<string, string> {
     ADMIN_SEED_EMAIL,
     ADMIN_SEED_PASSWORD,
     E2E_FE_ADMIN_SECRET,
+    E2E_USER_EMAIL,
+    E2E_USER_PASSWORD,
     CSRF_SECRET: "e2e-csrf-secret-0123456789abcdef0123456789abcdef",
     RATE_LIMIT_WINDOW: "60",
     RATE_LIMIT_MAX: "1000",

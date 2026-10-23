@@ -4,9 +4,11 @@ import { verifyPassword } from '../src/common/crypto/crypto.util';
 import { MODELS } from '../src/database/mongo/models';
 import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
 import type { AdminSeedConfig } from '../src/database/seed';
+import { DEFAULT_TENANT_ID } from '../src/modules/identity/tenant.service';
+import { ADMIN_LOCKED_UNTIL } from '../src/modules/identity/user.service';
 import { ClientCredentialService } from '../src/modules/clients/client-credential.service';
 import type { ConfigService } from '@nestjs/config';
-import { seedE2eAdmin } from './e2e/seed-e2e-admin';
+import { seedE2eAdmin, type E2eUserConfig } from './e2e/seed-e2e-admin';
 
 // Throwaway int DB on vg-test-mongo (the DB-name guard is covered by the unit spec; this exercises
 // the writes). Test-only values, never a real credential.
@@ -16,6 +18,7 @@ const MONGO_URI =
 const ISSUER = 'http://localhost:4000';
 const ADMIN: AdminSeedConfig = { email: 'E2E-Admin@Example.com', password: 'e2e-int-admin-pass-1' };
 const SECRET = 'e2e-int-fe-admin-secret-0123456789abcdef';
+const E2E_USER: E2eUserConfig = { email: 'E2E-User@Example.com', password: 'e2e-int-user-pass-1' };
 
 describe('seed-e2e-admin (run 39 Task 0) on real Mongo', () => {
   let connection: Connection;
@@ -103,6 +106,113 @@ describe('seed-e2e-admin (run 39 Task 0) on real Mongo', () => {
     expect(await verifyPassword(String(user?.passwordHash), ADMIN.password)).toBe(true);
   });
 
+  describe('E2E target user (run 47 Task 0)', () => {
+    let members: Model<Record<string, unknown>>;
+    beforeAll(() => {
+      members = connection.model<Record<string, unknown>>('UserTenant');
+    });
+    const runWithUser = (u: E2eUserConfig | undefined) =>
+      seedE2eAdmin(connection, ADMIN, ISSUER, 'test', SECRET, u);
+    const target = E2E_USER.email.toLowerCase();
+    const readUser = () => users.findOne({ email: target }).select('+passwordHash').lean().exec();
+    const readMember = async () => {
+      const u = await users.findOne({ email: target }).lean().exec();
+      return members.findOne({ userId: u?._id, tenantId: DEFAULT_TENANT_ID }).lean().exec();
+    };
+
+    it('config unset => step skipped, no user written', async () => {
+      await runWithUser(undefined);
+      expect(await users.countDocuments({ email: target }).exec()).toBe(0);
+    });
+
+    it('creates the user: verified, password set, active membership in the default tenant, no role', async () => {
+      await runWithUser(E2E_USER);
+      const user = await readUser();
+      expect(user?.emailVerifiedAt).toBeInstanceOf(Date);
+      expect(user?.failedLoginCount).toBe(0);
+      expect(user?.lockedUntil).toBeUndefined();
+      expect(await verifyPassword(String(user?.passwordHash), E2E_USER.password)).toBe(true);
+      const member = await readMember();
+      expect(member).toMatchObject({ status: 'active', roles: [] });
+      expect(await members.countDocuments({ userId: user?._id }).exec()).toBe(1);
+    });
+
+    it('second run (admin "unchanged") still runs the user step and writes nothing', async () => {
+      const before = { user: await readUser(), member: await readMember() };
+      output.length = 0;
+      await runWithUser(E2E_USER);
+      expect(output.join('\n')).toMatch(/admin user unchanged/);
+      expect(output.join('\n')).toMatch(/E2E user unchanged/);
+      expect(await readUser()).toEqual(before.user);
+      expect(await readMember()).toEqual(before.member);
+    });
+
+    it('admin-locked, suspended, tenant_admin, password changed => all reset', async () => {
+      const user = await readUser();
+      await users
+        .updateOne(
+          { _id: user?._id },
+          {
+            $set: {
+              passwordHash: 'not-a-valid-hash',
+              failedLoginCount: 5,
+              lockedUntil: ADMIN_LOCKED_UNTIL,
+            },
+            $unset: { emailVerifiedAt: 1 },
+          },
+        )
+        .exec();
+      await members
+        .updateOne(
+          { userId: user?._id, tenantId: DEFAULT_TENANT_ID },
+          { $set: { status: 'suspended', roles: ['tenant_admin'] } },
+        )
+        .exec();
+      output.length = 0;
+      await runWithUser(E2E_USER);
+      expect(output.join('\n')).toMatch(/E2E user reset/);
+      const after = await readUser();
+      expect(after?.failedLoginCount).toBe(0);
+      expect(after?.lockedUntil).toBeUndefined();
+      expect(after?.emailVerifiedAt).toBeInstanceOf(Date);
+      expect(await verifyPassword(String(after?.passwordHash), E2E_USER.password)).toBe(true);
+      expect(await readMember()).toMatchObject({ status: 'active', roles: [] });
+    });
+
+    it('active membership holding an admin role (roles only drift) => roles cleared', async () => {
+      const user = await readUser();
+      await members
+        .updateOne(
+          { userId: user?._id, tenantId: DEFAULT_TENANT_ID },
+          { $set: { status: 'active', roles: ['super_admin'] } },
+        )
+        .exec();
+      await runWithUser(E2E_USER);
+      expect(await readMember()).toMatchObject({ status: 'active', roles: [] });
+    });
+
+    it('membership missing => re-created; user untouched', async () => {
+      const before = await readUser();
+      await members.deleteOne({ userId: before?._id }).exec();
+      await runWithUser(E2E_USER);
+      expect(await readMember()).toMatchObject({ status: 'active', roles: [] });
+      expect((await readUser())?.passwordHash).toBe(before?.passwordHash);
+    });
+
+    it('email equal to the admin seed (normalized) => throws before any write', async () => {
+      const snapshot = async () => ({
+        users: await users.find().select('+passwordHash').lean().exec(),
+        members: await members.find().lean().exec(),
+        creds: await creds.find().lean().exec(),
+      });
+      const before = await snapshot();
+      await expect(
+        runWithUser({ email: ` ${ADMIN.email.toUpperCase()} `, password: 'other-pass-123' }),
+      ).rejects.toThrow(/E2E_USER_EMAIL must differ from ADMIN_SEED_EMAIL/);
+      expect(await snapshot()).toEqual(before);
+    });
+  });
+
   it('refuses NODE_ENV other than test before any write', async () => {
     const n = await credCount();
     await expect(seedE2eAdmin(connection, ADMIN, ISSUER, 'development', SECRET)).rejects.toThrow(
@@ -116,6 +226,7 @@ describe('seed-e2e-admin (run 39 Task 0) on real Mongo', () => {
     expect(all).toMatch(/seed-e2e-admin:/);
     expect(all).not.toContain(SECRET);
     expect(all).not.toContain(ADMIN.password);
+    expect(all).not.toContain(E2E_USER.password);
     expect(all).not.toMatch(/client_secret/i);
   });
 });

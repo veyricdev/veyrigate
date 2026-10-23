@@ -1,4 +1,4 @@
-import { assertE2eSeedTarget } from './seed-e2e-admin';
+import { assertE2eSeedTarget, readE2eUserConfig } from './seed-e2e-admin';
 
 // Test-only values (never a real credential).
 const SECRET = 'e2e-unit-fe-admin-secret-0123456789abcdef';
@@ -55,5 +55,42 @@ describe('seed-e2e-admin guard (run 39 Task 0)', () => {
     expect(() => assertE2eSeedTarget({ ...ok, E2E_FE_ADMIN_SECRET: secret })).toThrow(
       /E2E_FE_ADMIN_SECRET must be at least 32 characters/,
     );
+  });
+});
+
+describe('readE2eUserConfig (run 47 Task 0)', () => {
+  const PASSWORD = 'e2e-unit-user-password';
+  const env = {
+    E2E_USER_EMAIL: 'e2e-user@example.com',
+    E2E_USER_PASSWORD: PASSWORD,
+    ADMIN_SEED_EMAIL: 'admin@example.com',
+    DEV_SEED_EMAIL: 'dev@example.com',
+  };
+
+  it('returns the configured user', () => {
+    expect(readE2eUserConfig(env)).toEqual({ email: 'e2e-user@example.com', password: PASSWORD });
+  });
+
+  it.each([
+    ['email unset', { ...env, E2E_USER_EMAIL: undefined }],
+    ['email empty', { ...env, E2E_USER_EMAIL: '' }],
+    ['password unset', { ...env, E2E_USER_PASSWORD: undefined }],
+    ['password empty', { ...env, E2E_USER_PASSWORD: '' }],
+  ])('%s => undefined (step skipped, no error)', (_label, e) => {
+    expect(readE2eUserConfig(e)).toBeUndefined();
+  });
+
+  it.each([
+    ['ADMIN_SEED_EMAIL', ' Admin@Example.com '],
+    ['DEV_SEED_EMAIL', 'DEV@example.com'],
+  ])('refuses an email equal to %s (normalized) without echoing the password', (_label, email) => {
+    let message = '';
+    try {
+      readE2eUserConfig({ ...env, E2E_USER_EMAIL: email });
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toMatch(/E2E_USER_EMAIL must differ from ADMIN_SEED_EMAIL and DEV_SEED_EMAIL/);
+    expect(message).not.toContain(PASSWORD);
   });
 });
