@@ -1,5 +1,8 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { AuditAction } from '../security/audit/audit-action.enum';
+import type { AuditActorType, AuditMetadata } from '../security/audit/audit.types';
 import type {
+  AdminAuditView,
   AdminClientView,
   AdminConsentView,
   AdminCredentialView,
@@ -226,6 +229,66 @@ export class AdminConsentViewDto implements AdminConsentView {
 export class ConsentPageViewDto {
   @ApiProperty({ type: [AdminConsentViewDto] })
   items!: AdminConsentViewDto[];
+
+  @ApiProperty({ type: String, nullable: true })
+  nextCursor!: string | null;
+}
+
+/** Optional fields are omitted from the JSON when absent (never `null`). */
+export class AdminAuditEventViewDto implements AdminAuditView {
+  @ApiProperty({ type: String })
+  eventId!: string;
+
+  @ApiProperty(DATE)
+  timestamp!: Date;
+
+  @ApiProperty({ enum: ['user', 'client', 'admin', 'system'] })
+  actorType!: AuditActorType;
+
+  @ApiPropertyOptional({ type: String })
+  actorId?: string;
+
+  @ApiProperty({ enum: AuditAction })
+  action!: AuditAction;
+
+  @ApiPropertyOptional({ type: String })
+  targetType?: string;
+
+  @ApiPropertyOptional({ type: String })
+  targetId?: string;
+
+  @ApiPropertyOptional({ type: String })
+  clientId?: string;
+
+  @ApiPropertyOptional({ type: String })
+  ip?: string;
+
+  @ApiPropertyOptional({ type: String })
+  userAgent?: string;
+
+  @ApiPropertyOptional({ type: String })
+  requestId?: string;
+
+  @ApiProperty({ enum: ['success', 'failure'] })
+  result!: 'success' | 'failure';
+
+  @ApiPropertyOptional({ type: String })
+  reason?: string;
+
+  @ApiPropertyOptional({
+    type: 'object',
+    description: 'Flat, primitive-only; sanitized at write (INV-20).',
+    additionalProperties: {
+      oneOf: [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }],
+      nullable: true,
+    },
+  })
+  metadata?: AuditMetadata;
+}
+
+export class AuditPageViewDto {
+  @ApiProperty({ type: [AdminAuditEventViewDto] })
+  items!: AdminAuditEventViewDto[];
 
   @ApiProperty({ type: String, nullable: true })
   nextCursor!: string | null;

@@ -395,6 +395,7 @@ export class TokenController {
           allowedResources: client.allowedResources,
           clientType: client.clientType,
           tokenEndpointAuthMethod: client.tokenEndpointAuthMethod,
+          tenantId: client.tenantId,
         },
         { scope: body.get('scope'), resource: body.get('resource') },
         // DEBT-207: after rotate, the client (re-read), user and membership must still be valid.

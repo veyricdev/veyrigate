@@ -124,3 +124,71 @@ export type RevokeFamilyParams = z.infer<typeof RevokeFamilyInput>;
 
 export const RevokeConsentInput = z.object({ userId: UserIdSchema, consentId: ConsentIdSchema });
 export type RevokeConsentParams = z.infer<typeof RevokeConsentInput>;
+
+/** BE `AuditAction` (`audit-action.enum.ts`); `test/admin-schema-types.test.ts` fails `typecheck` on drift. */
+export const AUDIT_ACTIONS = [
+  "AUTH_LOGIN_SUCCESS",
+  "AUTH_LOGIN_FAILED",
+  "AUTH_ACCOUNT_LOCKED",
+  "AUTH_EMAIL_VERIFIED",
+  "AUTH_PASSWORD_RESET",
+  "SESSION_CREATED",
+  "SESSION_REVOKED",
+  "OAUTH_AUTHORIZE",
+  "OAUTH_CONSENT_GRANTED",
+  "OAUTH_CONSENT_DENIED",
+  "TOKEN_ISSUED",
+  "TOKEN_REFRESHED",
+  "TOKEN_REUSE_DETECTED",
+  "TOKEN_REVOKED",
+  "CLIENT_SECRET_CREATED",
+  "CLIENT_SECRET_ROTATED",
+  "CLIENT_SECRET_REVOKED",
+  "REDIRECT_URI_CHANGED",
+  "SIGNING_KEY_CREATED",
+  "SIGNING_KEY_ROTATED",
+  "ACCOUNT_LINKED",
+  "ACCOUNT_UNLINKED",
+  "ADMIN_CLIENT_CREATED",
+  "ADMIN_CLIENT_UPDATED",
+  "ADMIN_RESOURCE_CREATED",
+  "ADMIN_RESOURCE_UPDATED",
+  "ADMIN_USER_LOCKED",
+  "ADMIN_USER_UNLOCKED",
+  "ADMIN_USER_ROLES_CHANGED",
+  "OAUTH_CONSENT_REVOKED",
+] as const;
+/** `targetType` values the BE writes today (free string in the BE query: this is the UI choice). */
+export const AUDIT_TARGET_TYPES = ["user", "client", "resource", "session", "signing_key"] as const;
+export const AUDIT_RESULTS = ["success", "failure"] as const;
+
+/**
+ * An audit filter id (actor, target, client): opaque ids only. No `@`, no space: an email pasted
+ * here is refused before it can reach a URL, `returnTo` or the BE (run 48 Q-48.1).
+ */
+export const AuditIdSchema = z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/, "Invalid id");
+/** The BE cursor (base64url JSON). */
+export const AuditCursorSchema = z.string().regex(/^[A-Za-z0-9_-]{1,512}$/);
+export const AuditTimeSchema = z.iso.datetime({ offset: true });
+
+/** `GET /admin/audit` filters (BE `AuditQueryDto`). Never a `tenantId`: the BE takes it from the token. */
+export const AuditListInput = z
+  .object({
+    limit: z.number().int().min(1).max(100),
+    after: AuditCursorSchema,
+    action: z.enum(AUDIT_ACTIONS),
+    actorId: AuditIdSchema,
+    targetType: z.enum(AUDIT_TARGET_TYPES),
+    targetId: AuditIdSchema,
+    clientId: AuditIdSchema,
+    result: z.enum(AUDIT_RESULTS),
+    from: AuditTimeSchema,
+    to: AuditTimeSchema,
+  })
+  .partial()
+  .strict()
+  .refine((p) => !p.from || !p.to || Date.parse(p.from) < Date.parse(p.to), {
+    message: "'from' must be before 'to'",
+    path: ["to"],
+  });
+export type AuditListParams = z.infer<typeof AuditListInput>;

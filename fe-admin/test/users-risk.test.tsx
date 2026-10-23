@@ -1,7 +1,7 @@
 // Run 47 (A6.3) tester risk matrix (users UI): no one-click reversal after an uncertain write
 // (Lock <-> Unlock), self revoke-all whose uncertain outcome was applied (401 => signInAgain), the
 // email filter never reaching returnTo / storage / a reload, tenant_admin on own admin account,
-// not_found on first load, lock sentinel vs near date, paging, DEBT-339 characterisation.
+// not_found on first load, lock sentinel vs near date, paging, DEBT-339 (family uncertain).
 import type { QueryClient } from "@tanstack/react-query";
 import { StrictMode, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,6 +25,7 @@ import {
 import { createQueryClient } from "@/features/admin-api/query-client";
 import type { AdminApiErrorCode } from "@/features/admin-api/types";
 import { LOCK_UNCERTAIN, UNLOCK_UNCERTAIN, lockStatus } from "@/features/users/user-account";
+import { FAMILY_UNCERTAIN } from "@/features/users/user-grants";
 import type { AdminConsent, AdminFamily, AdminUser } from "@/server/admin-api/schemas";
 
 vi.mock("@/features/theme/ui-prefs", () => ({ getUiPrefs: vi.fn() }));
@@ -388,8 +389,8 @@ describe("tester: paging", () => {
   });
 });
 
-describe("tester: DEBT-339 characterisation", () => {
-  it("family uncertain but applied: the row (and its dialog) is gone after the re-read; no re-send", async () => {
+describe("DEBT-339: family revoke with an unknown outcome closes the dialog (lock pattern)", () => {
+  it("uncertain but applied: status message, focus on the heading, no re-send", async () => {
     await openDetail();
     mocks.revokeFamily.mockImplementation((async () => {
       mocks.families.mockResolvedValue(ok({ items: [{ ...FAMILY, active: false, revokedAt: "2026-10-23T00:00:00.000Z" }], nextCursor: null }) as never);
@@ -398,9 +399,39 @@ describe("tester: DEBT-339 characterisation", () => {
     await confirmIn(await screen.findByRole("button", { name: "Revoke family of app-1" }), "Revoke family");
     await screen.findByText("Revoked 2026-10-23T00:00:00.000Z");
     await noDialog();
-    // DEBT-339: the uncertain message lived in the unmounted dialog; the status region stays empty
-    expect(statusOf("Refresh token families").textContent).toBe("");
+    await waitFor(() => expect(statusOf("Refresh token families").textContent).toBe(FAMILY_UNCERTAIN));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Refresh token families" })));
     expect(mocks.revokeFamily).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: "Revoke family of app-1" })).toBeNull();
+  });
+
+  it("uncertain and still active: status message, dialog closed, Revoke still offered", async () => {
+    await openDetail();
+    mocks.revokeFamily.mockResolvedValue(fail("unavailable", true) as never);
+    await confirmIn(await screen.findByRole("button", { name: "Revoke family of app-1" }), "Revoke family");
+    await noDialog();
+    await waitFor(() => expect(statusOf("Refresh token families").textContent).toBe(FAMILY_UNCERTAIN));
+    expect(await screen.findByRole("button", { name: "Revoke family of app-1" })).toBeTruthy();
+    expect(mocks.revokeFamily).toHaveBeenCalledTimes(1);
+  });
+
+  it("tester run 48: a thrown call (BFF/network) is unknown too: closed, status, one send despite 3 clicks", async () => {
+    await openDetail();
+    mocks.revokeFamily.mockRejectedValue(new Error("network down") as never);
+    await confirmIn(await screen.findByRole("button", { name: "Revoke family of app-1" }), "Revoke family", 3);
+    await noDialog();
+    await waitFor(() => expect(statusOf("Refresh token families").textContent).toBe(FAMILY_UNCERTAIN));
+    expect(mocks.revokeFamily).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).not.toContain("network down");
+  });
+
+  it("tester run 48: a definite error keeps the dialog open with its message (not the uncertain notice)", async () => {
+    await openDetail();
+    mocks.revokeFamily.mockResolvedValue(fail("forbidden") as never);
+    const d = await confirmIn(await screen.findByRole("button", { name: "Revoke family of app-1" }), "Revoke family");
+    expect(await within(d).findByText("msg forbidden")).toBeTruthy();
+    expect(screen.getByRole("alertdialog")).toBe(d);
+    expect(document.body.textContent).not.toContain(FAMILY_UNCERTAIN);
+    expect(mocks.revokeFamily).toHaveBeenCalledTimes(1);
   });
 });

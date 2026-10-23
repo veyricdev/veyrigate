@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AuditIndexRouteImport } from './routes/audit/index'
 import { Route as AuthCallbackRouteImport } from './routes/auth/callback'
 import { Route as AuthLoginRouteImport } from './routes/auth/login'
 import { Route as AuthLogoutRouteImport } from './routes/auth/logout'
@@ -25,6 +26,11 @@ import { Route as UsersUserIdRouteImport } from './routes/users/$userId'
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuditIndexRoute = AuditIndexRouteImport.update({
+  id: '/audit/',
+  path: '/audit/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthCallbackRoute = AuthCallbackRouteImport.update({
@@ -93,6 +99,7 @@ export interface FileRoutesByFullPath {
   '/resources/$resourceId': typeof ResourcesResourceIdRoute
   '/resources/new': typeof ResourcesNewRoute
   '/users/$userId': typeof UsersUserIdRoute
+  '/audit/': typeof AuditIndexRoute
   '/clients/': typeof ClientsIndexRoute
   '/resources/': typeof ResourcesIndexRoute
   '/users/': typeof UsersIndexRoute
@@ -107,6 +114,7 @@ export interface FileRoutesByTo {
   '/resources/$resourceId': typeof ResourcesResourceIdRoute
   '/resources/new': typeof ResourcesNewRoute
   '/users/$userId': typeof UsersUserIdRoute
+  '/audit': typeof AuditIndexRoute
   '/clients': typeof ClientsIndexRoute
   '/resources': typeof ResourcesIndexRoute
   '/users': typeof UsersIndexRoute
@@ -122,6 +130,7 @@ export interface FileRoutesById {
   '/resources/$resourceId': typeof ResourcesResourceIdRoute
   '/resources/new': typeof ResourcesNewRoute
   '/users/$userId': typeof UsersUserIdRoute
+  '/audit/': typeof AuditIndexRoute
   '/clients/': typeof ClientsIndexRoute
   '/resources/': typeof ResourcesIndexRoute
   '/users/': typeof UsersIndexRoute
@@ -138,6 +147,7 @@ export interface FileRouteTypes {
     | '/resources/$resourceId'
     | '/resources/new'
     | '/users/$userId'
+    | '/audit/'
     | '/clients/'
     | '/resources/'
     | '/users/'
@@ -152,6 +162,7 @@ export interface FileRouteTypes {
     | '/resources/$resourceId'
     | '/resources/new'
     | '/users/$userId'
+    | '/audit'
     | '/clients'
     | '/resources'
     | '/users'
@@ -166,6 +177,7 @@ export interface FileRouteTypes {
     | '/resources/$resourceId'
     | '/resources/new'
     | '/users/$userId'
+    | '/audit/'
     | '/clients/'
     | '/resources/'
     | '/users/'
@@ -181,6 +193,7 @@ export interface RootRouteChildren {
   ResourcesResourceIdRoute: typeof ResourcesResourceIdRoute
   ResourcesNewRoute: typeof ResourcesNewRoute
   UsersUserIdRoute: typeof UsersUserIdRoute
+  AuditIndexRoute: typeof AuditIndexRoute
   ClientsIndexRoute: typeof ClientsIndexRoute
   ResourcesIndexRoute: typeof ResourcesIndexRoute
   UsersIndexRoute: typeof UsersIndexRoute
@@ -193,6 +206,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/audit/': {
+      id: '/audit/'
+      path: '/audit'
+      fullPath: '/audit/'
+      preLoaderRoute: typeof AuditIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/auth/callback': {
@@ -285,6 +305,7 @@ const rootRouteChildren: RootRouteChildren = {
   ResourcesResourceIdRoute: ResourcesResourceIdRoute,
   ResourcesNewRoute: ResourcesNewRoute,
   UsersUserIdRoute: UsersUserIdRoute,
+  AuditIndexRoute: AuditIndexRoute,
   ClientsIndexRoute: ClientsIndexRoute,
   ResourcesIndexRoute: ResourcesIndexRoute,
   UsersIndexRoute: UsersIndexRoute,

@@ -2,6 +2,7 @@ import "@tanstack/react-start/server-only";
 import type { z } from "zod";
 import type { AdminApiErrorCode, AdminApiFailure } from "@/features/admin-api/types";
 import type {
+  AuditListParams,
   CreateClientParams,
   CreateResourceParams,
   ListClientsParams,
@@ -22,6 +23,7 @@ import {
   IssuedSecretSchema,
   ResourcePageSchema,
   AdminUserSchema,
+  AuditPageSchema,
   ConsentPageSchema,
   FamilyPageSchema,
   UserPageSchema,
@@ -32,6 +34,7 @@ import {
   type IssuedSecret,
   type ResourcePage,
   type AdminUser,
+  type AuditPage,
   type ConsentPage,
   type FamilyPage,
   type UserPage,
@@ -191,11 +194,10 @@ export function createAdminApi(deps: AdminApiDeps) {
 
   const resourcePath = (resourceId: string) => `/admin/resources/${encodeURIComponent(resourceId)}`;
 
-  /** `?limit=&after=` (encoded), or "" when neither is set. */
-  const pageQuery = (params: PageParams) => {
+  /** `?k=v&…` (encoded) of every defined value of a flat params object, or "" when none is. */
+  const query = (params: Record<string, string | number | undefined>) => {
     const q = new URLSearchParams();
-    if (params.limit !== undefined) q.set("limit", String(params.limit));
-    if (params.after !== undefined) q.set("after", params.after);
+    for (const [k, v] of Object.entries(params)) if (v !== undefined) q.set(k, String(v));
     return q.size ? `?${q}` : "";
   };
 
@@ -215,14 +217,14 @@ export function createAdminApi(deps: AdminApiDeps) {
     return call(ctx, {
       method: "GET",
       route: "/admin/resources",
-      path: `/admin/resources${pageQuery(params)}`,
+      path: `/admin/resources${query(params)}`,
       schema: ResourcePageSchema,
     });
   }
 
   return {
     listClients(ctx: AdminCallContext, params: ListClientsParams): Promise<ClientPage> {
-      return call(ctx, { method: "GET", route: "/admin/clients", path: `/admin/clients${pageQuery(params)}`, schema: ClientPageSchema });
+      return call(ctx, { method: "GET", route: "/admin/clients", path: `/admin/clients${query(params)}`, schema: ClientPageSchema });
     },
     getClient(ctx: AdminCallContext, clientId: string): Promise<AdminClient> {
       return call(ctx, {
@@ -307,12 +309,7 @@ export function createAdminApi(deps: AdminApiDeps) {
      * logged route is the template, never the query (the BE log strips it too).
      */
     listUsers(ctx: AdminCallContext, params: UserListParams): Promise<UserPage> {
-      const q = new URLSearchParams();
-      if (params.limit !== undefined) q.set("limit", String(params.limit));
-      if (params.after !== undefined) q.set("after", params.after);
-      if (params.email !== undefined) q.set("email", params.email);
-      if (params.status !== undefined) q.set("status", params.status);
-      return call(ctx, { method: "GET", route: "/admin/users", path: `/admin/users${q.size ? `?${q}` : ""}`, schema: UserPageSchema });
+      return call(ctx, { method: "GET", route: "/admin/users", path: `/admin/users${query(params)}`, schema: UserPageSchema });
     },
     getUser(ctx: AdminCallContext, userId: string): Promise<AdminUser> {
       return call(ctx, { method: "GET", route: "/admin/users/:id", path: userPath(userId), schema: AdminUserSchema });
@@ -334,7 +331,7 @@ export function createAdminApi(deps: AdminApiDeps) {
       return call(ctx, {
         method: "GET",
         route: "/admin/users/:id/families",
-        path: `${userPath(params.userId)}/families${pageQuery(params)}`,
+        path: `${userPath(params.userId)}/families${query({ limit: params.limit, after: params.after })}`,
         schema: FamilyPageSchema,
       });
     },
@@ -351,7 +348,7 @@ export function createAdminApi(deps: AdminApiDeps) {
       return call(ctx, {
         method: "GET",
         route: "/admin/users/:id/consents",
-        path: `${userPath(params.userId)}/consents${pageQuery(params)}`,
+        path: `${userPath(params.userId)}/consents${query({ limit: params.limit, after: params.after })}`,
         schema: ConsentPageSchema,
       });
     },
@@ -363,6 +360,13 @@ export function createAdminApi(deps: AdminApiDeps) {
         path: `${userPath(userId)}/consents/${encodeURIComponent(consentId)}`,
         schema: null,
       });
+    },
+    /**
+     * Audit events of the token's tenant (`admin.read`), newest first. Filters are enums, opaque ids
+     * and ISO times only (never an email); the logged route is the template, never the query.
+     */
+    listAudit(ctx: AdminCallContext, params: AuditListParams): Promise<AuditPage> {
+      return call(ctx, { method: "GET", route: "/admin/audit", path: `/admin/audit${query(params)}`, schema: AuditPageSchema });
     },
   };
 }

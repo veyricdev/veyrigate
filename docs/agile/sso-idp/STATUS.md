@@ -2,7 +2,7 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `48-A6.4` — chưa bắt đầu (A6.4 Audit log + DEBT-339/340/341). A6.3b roles chờ analyst chốt DEBT-149/142. Đang mở DEBT-309…312, 317, 320…325, 329, 331…341.
+- **Run hiện tại**: `48-A6.4` — tech-lead **PASS (fold)**. Task 0 [BE] ✅ (snapshot audit + reuse gắn tenant; BE unit 415, int 1211). Task 1 ✅ (DEBT-339/340/341). Task 2–4 ✅ (`/audit` + server fn GET + lọc metadata server-side; fe-admin 1070, E2E 32 ×2). senior-reviewer **PASS** (0 🔴; 🟡 ⇒ DEBT-346/347). tester **PASS** (fe-admin 1120, BE int 1215, E2E 32; mutation 6/6; DEBT-348). Tiếp: **orchestrator đóng run**. A6.3b roles chờ analyst chốt DEBT-149/142. Đang mở DEBT-309…312, 317, 320…325, 329, 331…338, 342…348.
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
 - **Run vừa đóng**: `47-A6.3` ✅ 6/6 — fe-admin 1019, E2E 31. Xem `runs/47-A6.3/summary.md`.
 - **Việc tiếp theo**: sau M6 → M7 hardening (B7.*, T7, X2/X3/X5); A4–A6 fe-admin chờ Q3 (plan §12). Debt đáng chú ý: DEBT-124/143 (super_admin xuyên tenant), DEBT-140 (audit OAuth chưa gắn tenant), DEBT-177, DEBT-095, DEBT-054/096.

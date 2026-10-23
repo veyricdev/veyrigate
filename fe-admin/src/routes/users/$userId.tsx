@@ -24,6 +24,15 @@ function UserPage() {
         <h1 id="user-title" className="text-2xl font-semibold">
           User
         </h1>
+        {valid && (
+          <Link
+            to="/audit"
+            search={{ targetType: "user", targetId: userId }}
+            className="text-sm underline-offset-4 hover:underline"
+          >
+            Audit events for this account
+          </Link>
+        )}
       </div>
       {/* An id that is not 24 hex is never sent to the BE. */}
       {valid ? (

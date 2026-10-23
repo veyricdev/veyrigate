@@ -471,12 +471,13 @@ describe("families", () => {
     await waitFor(() => expect(mocks.families.mock.calls.length).toBeGreaterThan(reads));
   });
 
-  it("uncertain: stays, safe-again message, re-read, one send per click", async () => {
+  it("uncertain: closes, safe-again message in the status region, re-read, one send", async () => {
     mocks.revokeFamily.mockResolvedValue(fail("unavailable", true) as never);
     await openDetail();
     const reads = mocks.families.mock.calls.length;
-    const d = await confirmIn(await revokeTrigger(), "Revoke family");
-    expect((await within(d).findByRole("alert")).textContent).toBe(FAMILY_UNCERTAIN);
+    await confirmIn(await revokeTrigger(), "Revoke family");
+    await noDialog();
+    await waitFor(() => expect(statusOf("Refresh token families").textContent).toBe(FAMILY_UNCERTAIN));
     await waitFor(() => expect(mocks.families.mock.calls.length).toBeGreaterThan(reads));
     expect(mocks.revokeFamily).toHaveBeenCalledTimes(1);
   });

@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createClient, getClient, listClients, listResources, updateClient } from "./clients";
+import { listAudit } from "./audit";
 import type {
+  AuditListParams,
   CreateClientParams,
   CreateResourceParams,
   ListClientsParams,
@@ -173,10 +175,8 @@ export function useUserConsents(userId: string, params: PageParams) {
  * Any user write refreshes every user query (detail, families, consents, lists): a lock also
  * revokes the families, a consent revoke its families. Never retried (`retry: 0` default).
  */
-const useInvalidateUsers = () => useInvalidateOn(adminKeys.users.all);
-
 function useUserWrite<I, T>(fn: (o: { data: I }) => Promise<AdminResult<T>>) {
-  const invalidate = useInvalidateUsers();
+  const invalidate = useInvalidateOn(adminKeys.users.all);
   return useMutation({
     mutationFn: async (input: I) => unwrap(await fn({ data: input })),
     onSettled: (_data, error) => invalidate(error),
@@ -188,3 +188,11 @@ export const useUnlockUser = () => useUserWrite<string, AdminUser>(unlockUser);
 export const useRevokeUserSessions = () => useUserWrite<string, void>(revokeUserSessions);
 export const useRevokeUserFamily = () => useUserWrite<RevokeFamilyParams, void>(revokeUserFamily);
 export const useRevokeUserConsent = () => useUserWrite<RevokeConsentParams, void>(revokeUserConsent);
+
+/** One page of the tenant's audit events (filters from the URL search params). */
+export function useAuditEvents(params: AuditListParams) {
+  return useQuery({
+    queryKey: adminKeys.audit.list(params),
+    queryFn: async () => unwrap(await listAudit({ data: params })),
+  });
+}

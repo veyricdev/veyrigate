@@ -513,6 +513,33 @@ export interface components {
             items: components["schemas"]["AdminConsentViewDto"][];
             nextCursor: string | null;
         };
+        AdminAuditEventViewDto: {
+            eventId: string;
+            /** Format: date-time */
+            timestamp: string;
+            /** @enum {string} */
+            actorType: "user" | "client" | "admin" | "system";
+            actorId?: string;
+            /** @enum {string} */
+            action: "AUTH_LOGIN_SUCCESS" | "AUTH_LOGIN_FAILED" | "AUTH_ACCOUNT_LOCKED" | "AUTH_EMAIL_VERIFIED" | "AUTH_PASSWORD_RESET" | "SESSION_CREATED" | "SESSION_REVOKED" | "OAUTH_AUTHORIZE" | "OAUTH_CONSENT_GRANTED" | "OAUTH_CONSENT_DENIED" | "TOKEN_ISSUED" | "TOKEN_REFRESHED" | "TOKEN_REUSE_DETECTED" | "TOKEN_REVOKED" | "CLIENT_SECRET_CREATED" | "CLIENT_SECRET_ROTATED" | "CLIENT_SECRET_REVOKED" | "REDIRECT_URI_CHANGED" | "SIGNING_KEY_CREATED" | "SIGNING_KEY_ROTATED" | "ACCOUNT_LINKED" | "ACCOUNT_UNLINKED" | "ADMIN_CLIENT_CREATED" | "ADMIN_CLIENT_UPDATED" | "ADMIN_RESOURCE_CREATED" | "ADMIN_RESOURCE_UPDATED" | "ADMIN_USER_LOCKED" | "ADMIN_USER_UNLOCKED" | "ADMIN_USER_ROLES_CHANGED" | "OAUTH_CONSENT_REVOKED";
+            targetType?: string;
+            targetId?: string;
+            clientId?: string;
+            ip?: string;
+            userAgent?: string;
+            requestId?: string;
+            /** @enum {string} */
+            result: "success" | "failure";
+            reason?: string;
+            /** @description Flat, primitive-only; sanitized at write (INV-20). */
+            metadata?: {
+                [key: string]: (string | number | boolean) | null;
+            };
+        };
+        AuditPageViewDto: {
+            items: components["schemas"]["AdminAuditEventViewDto"][];
+            nextCursor: string | null;
+        };
         RotateKeyDto: {
             /** @enum {string} */
             mode: "normal" | "emergency";
@@ -1040,7 +1067,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["AuditPageViewDto"];
+                };
             };
         };
     };

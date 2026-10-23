@@ -28,7 +28,8 @@ import { seedConsent, seedOAuthUser } from './oauth-fixtures';
  * throwaway DB `vg-int-runbook-drill-<ts>`, temp `KEY_LOCAL_DIR`). Each `it` walks the runbook steps
  * in order and asserts what the runbook claims, so the runbook cannot go stale silently — in
  * particular the two "surprising" facts it relies on:
- * - `GET /admin/audit?action=TOKEN_REUSE_DETECTED` is EMPTY (the event has no tenantId, DEBT-140);
+ * - `GET /admin/audit?action=TOKEN_REUSE_DETECTED` shows the event to admins of the client's tenant
+ *   (tenantId = client.tenantId since run 48; other OAuth events still have none, DEBT-140);
  * - `db:seed` restores `super_admin` but never resets the password nor clears a lock.
  * The mongosh steps of the runbook are replayed here with the same filter/update documents.
  */
@@ -242,7 +243,7 @@ describe('Runbook drill (run 40 B7.5): runbook-ops §1 key, §2 reuse, §3 admin
     expect(ev.metadata).toMatchObject({ mode: 'emergency', oldKid });
   }, 60_000);
 
-  it('§2 TOKEN_REUSE_DETECTED: family auto-revoked, admin audit EMPTY, mongosh path finds the user, revoke tools work', async () => {
+  it('§2 TOKEN_REUSE_DETECTED: family auto-revoked, admin audit shows it (run 48), mongosh path finds the user, revoke tools work', async () => {
     const victim = await seedOAuthUser(full.conn, { tenantId: DEFAULT_TENANT_ID });
     const metricBefore = await reuseMetric();
 
@@ -258,11 +259,14 @@ describe('Runbook drill (run 40 B7.5): runbook-ops §1 key, §2 reuse, §3 admin
     // Signal (a): the metric behind the SsoTokenReuseDetected alert.
     expect((await reuseMetric()) - metricBefore).toBe(1);
 
-    // Admin API audit query is EMPTY for this action (no tenantId on the event, DEBT-140).
+    // Admin API audit query shows it to an admin of the client's tenant (run 48, part of DEBT-140).
     const adm = await adminLogin();
     const viaApi = await admin('GET', '/admin/audit?action=TOKEN_REUSE_DETECTED', adm.access_token);
     expect(viaApi.statusCode).toBe(200);
-    expect(viaApi.json<{ items: unknown[] }>().items).toEqual([]);
+    const audited = viaApi.json<{ items: Record<string, unknown>[] }>().items;
+    expect(audited).toHaveLength(1);
+    expect(audited[0]).toMatchObject({ clientId: rp.clientId, result: 'failure' });
+    expect(audited[0]).not.toHaveProperty('tenantId');
 
     // Signal (b): read-only mongosh queries of the runbook (same filters / projections).
     const events = await auditModel
@@ -272,7 +276,7 @@ describe('Runbook drill (run 40 B7.5): runbook-ops §1 key, §2 reuse, §3 admin
         { clientId?: string; tenantId?: string; metadata?: { familyId?: string; count?: number } }[]
       >();
     expect(events).toHaveLength(1);
-    expect(events[0].tenantId).toBeUndefined();
+    expect(events[0].tenantId).toBe(DEFAULT_TENANT_ID);
     expect(events[0].clientId).toBe(rp.clientId);
     expect(events[0].metadata?.count).toBeGreaterThanOrEqual(1);
     const familyId = String(events[0].metadata?.familyId);

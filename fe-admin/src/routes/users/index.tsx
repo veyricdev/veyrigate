@@ -34,7 +34,6 @@ function UsersPage() {
   const { status, after } = Route.useSearch();
   const [email, setEmail] = useState<string | undefined>(undefined);
   const query = useUsers({ limit: PAGE_SIZE, ...(after ? { after } : {}), ...(status ? { status } : {}), ...(email ? { email } : {}) });
-  const filtered = email !== undefined || status !== undefined;
   return (
     <section aria-labelledby="users-title" className="space-y-6">
       <h1 id="users-title" className="text-2xl font-semibold">
@@ -51,7 +50,7 @@ function UsersPage() {
           </Button>
         </div>
       ) : query.data.items.length === 0 ? (
-        <p>{email ? "No user with this email in this tenant." : after ? "No more users on this page." : filtered ? "No matching users." : "No users yet."}</p>
+        <p>{email ? "No user with this email in this tenant." : "No users."}</p>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">

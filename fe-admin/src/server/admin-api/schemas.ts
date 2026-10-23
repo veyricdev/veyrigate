@@ -1,6 +1,6 @@
 import "@tanstack/react-start/server-only";
 import { z } from "zod";
-import { AUTH_METHODS, CLIENT_TYPES, GRANT_TYPES } from "@/features/admin-api/inputs";
+import { AUDIT_RESULTS, AUTH_METHODS, CLIENT_TYPES, GRANT_TYPES } from "@/features/admin-api/inputs";
 
 /**
  * Response schemas of the admin API (run 43 F1), mirroring the BE views (`admin.views.ts`, now in
@@ -123,3 +123,54 @@ export const ConsentPageSchema = z.object({
   nextCursor: z.string().nullable(),
 });
 export type ConsentPage = z.infer<typeof ConsentPageSchema>;
+
+/** Mirror of the BE `isSecretKey` (`audit.service.ts`) plus `hash`: lowercase, letters only. */
+const SECRET_KEY_PATTERN = /password|secret|token|privatekey|cookie|authorization|verifier|hash/;
+const SECRET_KEY_EXACT = new Set(["code", "authorizationcode"]);
+const isSecretKey = (key: string) => {
+  const k = key.toLowerCase().replace(/[^a-z]/g, "");
+  return SECRET_KEY_EXACT.has(k) || SECRET_KEY_PATTERN.test(k);
+};
+export type AuditMetadata = Record<string, string | number | boolean | null>;
+
+/**
+ * Second filter of the audit metadata (run 48 F2), server-side, before the browser: only primitive
+ * values under a non-secret-looking key. Old Mongo rows are `Mixed`; an odd shape never fails the page.
+ */
+function safeMetadata(raw: unknown): AuditMetadata | null {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const clean: AuditMetadata = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (isSecretKey(key)) continue;
+    if (value === null || ["string", "number", "boolean"].includes(typeof value)) clean[key] = value as AuditMetadata[string];
+  }
+  return Object.keys(clean).length ? clean : null;
+}
+
+/**
+ * An audit event of the token's tenant (`AdminAuditEventViewDto`; no `tenantId`, no `_id`).
+ * `action`/`actorType` are plain strings: an action the BE adds later must not break the page.
+ */
+export const AuditEventSchema = z.object({
+  eventId: z.string(),
+  timestamp: z.string(),
+  actorType: z.string(),
+  actorId: z.string().nullish(),
+  action: z.string(),
+  targetType: z.string().nullish(),
+  targetId: z.string().nullish(),
+  clientId: z.string().nullish(),
+  ip: z.string().nullish(),
+  userAgent: z.string().nullish(),
+  requestId: z.string().nullish(),
+  result: z.enum(AUDIT_RESULTS),
+  reason: z.string().nullish(),
+  metadata: z.unknown().optional().transform(safeMetadata),
+});
+export type AuditEvent = z.infer<typeof AuditEventSchema>;
+
+export const AuditPageSchema = z.object({
+  items: z.array(AuditEventSchema),
+  nextCursor: z.string().nullable(),
+});
+export type AuditPage = z.infer<typeof AuditPageSchema>;

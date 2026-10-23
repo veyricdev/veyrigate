@@ -1,5 +1,5 @@
 import { Controller, Get, Query, UseFilters, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AdminAuthError, AdminAuthErrorFilter } from '../identity/tenant-context/admin-auth.errors';
 import {
   AdminScope,
@@ -10,6 +10,7 @@ import {
 import { type AuditCursor, AuditService } from '../security/audit/audit.service';
 import { AuditQueryDto, DEFAULT_PAGE_LIMIT, toPage } from './admin.dto';
 import { toAdminAuditEvent } from './admin.mappers';
+import { AuditPageViewDto } from './admin.views';
 
 /** Opaque cursor = base64url(JSON `{t: ms epoch, e: eventId}`) of the last event of the page. */
 export function encodeAuditCursor(c: AuditCursor): string {
@@ -49,6 +50,7 @@ export class AdminAuditController {
 
   @Get()
   @AdminScope('admin.read')
+  @ApiOkResponse({ type: AuditPageViewDto })
   @ApiOperation({
     description: 'Exact-match filters; `[from, to)`; `after` = previous nextCursor.',
   })

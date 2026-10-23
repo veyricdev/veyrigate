@@ -583,6 +583,18 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
 
     const alerts = await auditModel.find({ action: AuditAction.TOKEN_REUSE_DETECTED }).lean();
     expect(alerts.length).toBeGreaterThanOrEqual(1);
+    // run 48: the reuse alert carries the tenant of the authenticated client (admin audit
+    // visibility); other refresh events stay tenant-less (rest of DEBT-140).
+    const mine = await auditModel
+      .find({ action: AuditAction.TOKEN_REUSE_DETECTED, 'metadata.familyId': familyId })
+      .lean();
+    expect(mine).toHaveLength(1);
+    expect(mine[0]).toMatchObject({ tenantId: 'tenant-A', clientId: CLIENT });
+    const refreshed = await auditModel
+      .find({ action: AuditAction.TOKEN_REFRESHED, 'metadata.familyId': familyId })
+      .lean();
+    expect(refreshed.length).toBeGreaterThanOrEqual(1);
+    expect(refreshed.every((e) => e.tenantId === undefined)).toBe(true);
     // the once-valid descendant is now dead too (strict rotation => re-login).
     const dead = await refreshReq(first.json().refresh_token);
     expect(dead.statusCode).toBe(400);
@@ -1915,6 +1927,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
           allowedResources: [RESOURCE_ID],
           clientType: 'public',
           tokenEndpointAuthMethod: 'none',
+          tenantId: 'tenant-A',
         },
         {},
         async () => null,

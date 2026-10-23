@@ -1029,7 +1029,14 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditPageViewDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1784,6 +1791,137 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/AdminConsentViewDto"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "AdminAuditEventViewDto": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actorType": {
+            "type": "string",
+            "enum": [
+              "user",
+              "client",
+              "admin",
+              "system"
+            ]
+          },
+          "actorId": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "AUTH_LOGIN_SUCCESS",
+              "AUTH_LOGIN_FAILED",
+              "AUTH_ACCOUNT_LOCKED",
+              "AUTH_EMAIL_VERIFIED",
+              "AUTH_PASSWORD_RESET",
+              "SESSION_CREATED",
+              "SESSION_REVOKED",
+              "OAUTH_AUTHORIZE",
+              "OAUTH_CONSENT_GRANTED",
+              "OAUTH_CONSENT_DENIED",
+              "TOKEN_ISSUED",
+              "TOKEN_REFRESHED",
+              "TOKEN_REUSE_DETECTED",
+              "TOKEN_REVOKED",
+              "CLIENT_SECRET_CREATED",
+              "CLIENT_SECRET_ROTATED",
+              "CLIENT_SECRET_REVOKED",
+              "REDIRECT_URI_CHANGED",
+              "SIGNING_KEY_CREATED",
+              "SIGNING_KEY_ROTATED",
+              "ACCOUNT_LINKED",
+              "ACCOUNT_UNLINKED",
+              "ADMIN_CLIENT_CREATED",
+              "ADMIN_CLIENT_UPDATED",
+              "ADMIN_RESOURCE_CREATED",
+              "ADMIN_RESOURCE_UPDATED",
+              "ADMIN_USER_LOCKED",
+              "ADMIN_USER_UNLOCKED",
+              "ADMIN_USER_ROLES_CHANGED",
+              "OAUTH_CONSENT_REVOKED"
+            ]
+          },
+          "targetType": {
+            "type": "string"
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "clientId": {
+            "type": "string"
+          },
+          "ip": {
+            "type": "string"
+          },
+          "userAgent": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string",
+            "enum": [
+              "success",
+              "failure"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Flat, primitive-only; sanitized at write (INV-20).",
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "nullable": true
+            }
+          }
+        },
+        "required": [
+          "eventId",
+          "timestamp",
+          "actorType",
+          "action",
+          "result"
+        ]
+      },
+      "AuditPageViewDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminAuditEventViewDto"
             }
           },
           "nextCursor": {

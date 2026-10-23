@@ -7,8 +7,10 @@ import { InvalidClientConfigError, validateCorsOrigin } from '../clients/client.
 import { DuplicateError } from '../identity/identity.errors';
 import { AdminAuthError } from '../identity/tenant-context/admin-auth.errors';
 import { AdminTokenGuard } from '../identity/tenant-context/tenant-context';
+import { AuditAction } from '../security/audit/audit-action.enum';
 import { toPage } from './admin.dto';
 import {
+  toAdminAuditEvent,
   toAdminClient,
   toAdminConsent,
   toAdminCredential,
@@ -18,6 +20,7 @@ import {
   toAdminUser,
 } from './admin.mappers';
 import { adminOnly, isAdminOpenApiEnabled, registerAdminOpenApi } from './admin.openapi';
+import { AdminAuditController } from './admin-audit.controller';
 import { AdminClientsController } from './admin-clients.controller';
 import { AdminResourcesController } from './admin-resources.controller';
 import { AdminUsersController } from './admin-users.controller';
@@ -169,7 +172,12 @@ describe('admin OpenAPI response schemas (DEBT-290/294)', () => {
   let doc: OpenAPIObject;
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
-      controllers: [AdminClientsController, AdminResourcesController, AdminUsersController],
+      controllers: [
+        AdminClientsController,
+        AdminResourcesController,
+        AdminUsersController,
+        AdminAuditController,
+      ],
     })
       .overrideGuard(AdminTokenGuard)
       .useValue({})
@@ -335,5 +343,51 @@ describe('admin OpenAPI response schemas (DEBT-290/294)', () => {
       expect(Object.keys(res)).toEqual(['204']);
       expect(res['204'].content).toBeUndefined();
     }
+  });
+
+  it('audit: mapper keys == schema properties, enums, optional fields, $ref (run 48 Task 0)', () => {
+    const view = toAdminAuditEvent({
+      eventId: 'e',
+      timestamp: new Date(),
+      actorType: 'admin',
+      actorId: 'a',
+      tenantId: 't',
+      action: AuditAction.TOKEN_REUSE_DETECTED,
+      targetType: 'user',
+      targetId: 'u',
+      clientId: 'c',
+      ip: '127.0.0.1',
+      userAgent: 'ua',
+      requestId: 'r',
+      result: 'failure',
+      reason: 'x',
+      metadata: { familyId: 'f', count: 1 },
+    });
+    expect(keys('AdminAuditEventViewDto')).toEqual(Object.keys(view).sort());
+    expect(keys('AuditPageViewDto')).toEqual(['items', 'nextCursor']);
+    expect(schema('AuditPageViewDto').properties!.nextCursor).toMatchObject({
+      type: 'string',
+      nullable: true,
+    });
+    const s = schema('AdminAuditEventViewDto') as Schema & { required?: string[] };
+    expect([...(s.required ?? [])].sort()).toEqual(
+      ['action', 'actorType', 'eventId', 'result', 'timestamp'].sort(),
+    );
+    const p = s.properties as Record<
+      string,
+      Schema & { enum?: string[]; additionalProperties?: unknown }
+    >;
+    expect(p.actorType.enum).toEqual(['user', 'client', 'admin', 'system']);
+    expect(p.result.enum).toEqual(['success', 'failure']);
+    expect([...p.action.enum!].sort()).toEqual([...Object.values(AuditAction)].sort());
+    expect(p.timestamp).toMatchObject({ type: 'string', format: 'date-time' });
+    expect(p.metadata).toMatchObject({
+      type: 'object',
+      additionalProperties: {
+        oneOf: [{ type: 'string' }, { type: 'number' }, { type: 'boolean' }],
+        nullable: true,
+      },
+    });
+    expect(ref('/admin/audit', 'get', '200')).toBe('#/components/schemas/AuditPageViewDto');
   });
 });

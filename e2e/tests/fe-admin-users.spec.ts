@@ -24,7 +24,7 @@ test("fe-admin users: filter by email, lock blocks refresh + sign-in, unlock, re
   const refused = async (refreshToken: string, what: string) =>
     expect((await adminRefresh(refreshToken)).status, `${what}: refresh token refused`).toBe(400);
 
-  // Admin API token (own context) to find the target and clean up; read + cleanup only.
+  // Admin API token (own context) to find the target and start clean; read + revoke only.
   const apiContext = await browser.newContext();
   const { accessToken } = await adminToken(apiContext).finally(() => apiContext.close());
   const found = await adminApi(accessToken, "GET", `/users?email=${encodeURIComponent(E2E_USER_EMAIL)}`);
@@ -104,8 +104,12 @@ test("fe-admin users: filter by email, lock blocks refresh + sign-in, unlock, re
     await refused(rt2, "after revoke all");
   } finally {
     await context.close();
-    // The seed resets it next run anyway; never leave it locked for the specs that follow.
-    await adminApi(accessToken, "POST", `/users/${userId}/unlock`).catch(() => undefined);
+    // Best effort (the seed resets the user every run): a fresh token, the first may have expired.
+    const cleanup = await browser.newContext();
+    await adminToken(cleanup)
+      .then(({ accessToken: fresh }) => adminApi(fresh, "POST", `/users/${userId}/unlock`))
+      .catch(() => undefined)
+      .finally(() => cleanup.close());
   }
 });
 

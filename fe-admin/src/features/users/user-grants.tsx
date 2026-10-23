@@ -93,7 +93,9 @@ export function UserFamilies({ userId, path, self, writable }: Props) {
         void queryClient.invalidateQueries({ queryKey: adminKeys.users.all });
         return { done: "This family is not visible in this tenant." };
       }
-      return outcomeOf(err, FAMILY_UNCERTAIN); // idempotent: the dialog stays, again is safe
+      // An unknown outcome closes the dialog (lock pattern, DEBT-339): the re-read may unmount the row.
+      if (!(err instanceof AdminRequestError) || err.uncertain) return { done: FAMILY_UNCERTAIN };
+      return outcomeOf(err, FAMILY_UNCERTAIN);
     }
   }
 

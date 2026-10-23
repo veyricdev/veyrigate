@@ -9,6 +9,8 @@ import type {
   AdminFamily,
   AdminResource,
   AdminUser,
+  AuditEvent,
+  AuditPage,
   ClientPage,
   ConsentPage,
   CredentialList,
@@ -17,7 +19,9 @@ import type {
   ResourcePage,
   UserPage,
 } from "@/server/admin-api/schemas";
+import { AUDIT_ACTIONS, AUDIT_RESULTS } from "@/features/admin-api/inputs";
 import type {
+  AuditListParams,
   CreateClientParams,
   CreateResourceParams,
   UpdateClientParams,
@@ -46,6 +50,21 @@ describe("zod allowlists vs OpenAPI snapshot", () => {
     expectTypeOf<ConsentPage>().toEqualTypeOf<S["ConsentPageViewDto"]>();
     // The list filters are exactly the BE query parameters.
     expectTypeOf<UserListParams>().toEqualTypeOf<NonNullable<operations["AdminUsersController_list"]["parameters"]["query"]>>();
+  });
+
+  it("audit (run 48 F2)", () => {
+    type Q = NonNullable<operations["AdminAuditController_list"]["parameters"]["query"]>;
+    type View = S["AdminAuditEventViewDto"];
+    // Both ways: an action added to or removed from the BE enum fails `typecheck`.
+    expectTypeOf<(typeof AUDIT_ACTIONS)[number]>().toEqualTypeOf<NonNullable<Q["action"]>>();
+    expectTypeOf<(typeof AUDIT_ACTIONS)[number]>().toEqualTypeOf<View["action"]>();
+    expectTypeOf<(typeof AUDIT_RESULTS)[number]>().toEqualTypeOf<View["result"]>();
+    // Same filter names as the BE query, each a valid value of it (`targetType` narrowed to the known ones).
+    expectTypeOf<keyof AuditListParams>().toEqualTypeOf<keyof Q>();
+    expectTypeOf<AuditListParams>().toExtend<Q>();
+    // The response allowlist has exactly the view's keys (action/actorType kept as plain strings on purpose).
+    expectTypeOf<keyof AuditEvent>().toEqualTypeOf<keyof View>();
+    expectTypeOf<keyof AuditPage>().toEqualTypeOf<keyof S["AuditPageViewDto"]>();
   });
 
   it("request bodies", () => {

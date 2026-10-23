@@ -1287,6 +1287,34 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
       }
       expect((await call('GET', '/admin/audit?limit=100', token)).statusCode).toBe(200);
     });
+
+    it('run 48 (DEBT-140 part): a real refresh reuse is visible to the client tenant admin only', async () => {
+      const user = await mkUser({ [TENANT_A]: [] }, 'reuse');
+      const flow = await realFlow(user);
+      const familyId = (await refreshModel.findOne({ userId: new Types.ObjectId(user) }).lean())!
+        .familyId as string;
+      expect((await refresh(flow.refresh_token!)).statusCode).toBe(200);
+      const replay = await refresh(flow.refresh_token!);
+      expect(replay.json().error).toBe('invalid_grant');
+
+      const q = `/admin/audit?action=TOKEN_REUSE_DETECTED&clientId=${CLIENT_A}&limit=100`;
+      const mine = (await call('GET', q, await tok(tadminA))).json().items as Array<
+        Record<string, unknown> & { metadata?: Record<string, unknown> }
+      >;
+      const hit = mine.filter((e) => e.metadata?.familyId === familyId);
+      expect(hit).toHaveLength(1);
+      expect(hit[0]).toMatchObject({
+        action: 'TOKEN_REUSE_DETECTED',
+        actorType: 'client',
+        actorId: CLIENT_A,
+        result: 'failure',
+      });
+      expect(hit[0]).not.toHaveProperty('tenantId');
+
+      const other = await call('GET', q, await tok(tadminB, { client: CLIENT_B }));
+      expect(other.statusCode).toBe(200);
+      expect(other.json().items).toEqual([]);
+    });
   });
 
   // ------------------------------------------------------------------ QA (tester, run 28): risk matrix
@@ -1489,6 +1517,126 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
         expect(res.body).not.toContain('injected fault');
         spy.mockRestore();
       }
+    });
+  });
+
+  // ------------------------------------------------------------------ QA (tester, run 48): reuse tenant
+  describe('QA run 48 — TOKEN_REUSE_DETECTED tenant attribution', () => {
+    const REUSE = '/admin/audit?action=TOKEN_REUSE_DETECTED&limit=100';
+    /** Refresh at /token with request-controlled tenant hints (body + headers) the BE must ignore. */
+    const injected = (value: string, clientId = CLIENT_A) =>
+      app.inject({
+        method: 'POST',
+        url: `/token?tenantId=${TENANT_B}&tenant=${TENANT_B}`,
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          authorization: basic(clientId),
+          'x-tenant-id': TENANT_B,
+          'x-tenant': TENANT_B,
+          tenant: TENANT_B,
+        },
+        payload: form({
+          grant_type: 'refresh_token',
+          refresh_token: value,
+          tenantId: TENANT_B,
+          tenant_id: TENANT_B,
+        }),
+      });
+    const familyOf = async (user: string): Promise<string> =>
+      (await refreshModel.findOne({ userId: new Types.ObjectId(user) }).lean())!.familyId as string;
+    const seen = async (token: string, familyId: string) =>
+      (
+        (await call('GET', REUSE, token)).json().items as { metadata?: { familyId?: string } }[]
+      ).filter((e) => e.metadata?.familyId === familyId);
+    const stored = (familyId: string) =>
+      auditModel
+        .find({ action: 'TOKEN_REUSE_DETECTED', 'metadata.familyId': familyId })
+        .lean<{ tenantId?: string; clientId?: string }[]>();
+
+    it('tenant hints in query/body/headers are ignored: event tenant = client tenant (A), B sees 0', async () => {
+      const user = await mkUser({ [TENANT_A]: [] }, 'qa48inj');
+      const flow = await realFlow(user);
+      const familyId = await familyOf(user);
+      expect((await injected(flow.refresh_token!)).statusCode).toBe(200);
+      const replay = await injected(flow.refresh_token!);
+      expect(replay.statusCode).toBe(400);
+      expect(replay.json().error).toBe('invalid_grant');
+
+      const docs = await stored(familyId);
+      expect(docs).toHaveLength(1);
+      expect(docs[0]).toMatchObject({ tenantId: TENANT_A, clientId: CLIENT_A });
+      expect(await seen(await tok(tadminA), familyId)).toHaveLength(1);
+      expect(await seen(await tok(tadminB, { client: CLIENT_B }), familyId)).toHaveLength(0);
+      // Family revoke unchanged: every member revoked.
+      const fam = await refreshModel.find({ familyId }).lean<Record<string, unknown>[]>();
+      expect(fam.length).toBeGreaterThanOrEqual(2);
+      expect(fam.every((d) => d.revokedAt)).toBe(true);
+    });
+
+    it("a client of tenant B replaying A's rotated value: invalid_grant, no reuse event, A's family intact", async () => {
+      const user = await mkUser({ [TENANT_A]: [] }, 'qa48xc');
+      const flow = await realFlow(user);
+      const familyId = await familyOf(user);
+      const rotated = await refresh(flow.refresh_token!);
+      expect(rotated.statusCode).toBe(200);
+      const foreign = await refresh(flow.refresh_token!, CLIENT_B);
+      expect(foreign.statusCode).toBe(400);
+      expect(foreign.json().error).toBe('invalid_grant');
+      expect(await stored(familyId)).toHaveLength(0);
+      expect(await seen(await tok(tadminB, { client: CLIENT_B }), familyId)).toHaveLength(0);
+      // A's successor is still usable (no cross-client family teardown).
+      expect((await refresh(rotated.json().refresh_token as string)).statusCode).toBe(200);
+    });
+
+    it('concurrent replays (N=4): all invalid_grant, every reuse event tenant A, B sees none', async () => {
+      const user = await mkUser({ [TENANT_A]: [] }, 'qa48cc');
+      const flow = await realFlow(user);
+      const familyId = await familyOf(user);
+      expect((await refresh(flow.refresh_token!)).statusCode).toBe(200);
+      const results = await Promise.all(
+        Array.from({ length: 4 }, () => refresh(flow.refresh_token!)),
+      );
+      for (const r of results) {
+        expect(r.statusCode).toBe(400);
+        expect(r.json().error).toBe('invalid_grant');
+      }
+      const docs = await stored(familyId);
+      expect(docs.length).toBeGreaterThanOrEqual(1);
+      expect(docs.every((d) => d.tenantId === TENANT_A)).toBe(true);
+      expect((await seen(await tok(tadminA), familyId)).length).toBe(docs.length);
+      expect(await seen(await tok(tadminB, { client: CLIENT_B }), familyId)).toHaveLength(0);
+      const fam = await refreshModel.find({ familyId }).lean<Record<string, unknown>[]>();
+      expect(fam.every((d) => d.revokedAt)).toBe(true);
+    });
+
+    it('fail-closed: reuse audit write fails => 5xx no-store, no token, family still revoked', async () => {
+      const user = await mkUser({ [TENANT_A]: [] }, 'qa48fc');
+      const flow = await realFlow(user);
+      const familyId = await familyOf(user);
+      const rotated = await refresh(flow.refresh_token!);
+      expect(rotated.statusCode).toBe(200);
+      const svc = moduleRef.get(AuditService);
+      const original = svc.record.bind(svc);
+      const spy = jest
+        .spyOn(svc, 'record')
+        .mockImplementation(((ev: { action: string }) =>
+          ev.action === 'TOKEN_REUSE_DETECTED'
+            ? Promise.reject(new Error('qa: audit down'))
+            : original(ev as never)) as never);
+      try {
+        const res = await refresh(flow.refresh_token!);
+        expect(res.statusCode).toBeGreaterThanOrEqual(500);
+        expect(res.headers['cache-control']).toBe('no-store');
+        expect(res.body).not.toContain('access_token');
+        expect(res.body).not.toContain('refresh_token');
+        expect(res.body).not.toContain('audit down');
+      } finally {
+        spy.mockRestore();
+      }
+      const fam = await refreshModel.find({ familyId }).lean<Record<string, unknown>[]>();
+      expect(fam.every((d) => d.revokedAt)).toBe(true);
+      expect((await refresh(rotated.json().refresh_token as string)).statusCode).toBe(400);
+      expect(await stored(familyId)).toHaveLength(0);
     });
   });
 });

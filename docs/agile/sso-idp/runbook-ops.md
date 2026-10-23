@@ -79,8 +79,9 @@ lạ ký hợp lệ. Sau khi xoay: alert `SsoEmergencyKeyRotation`
 **Dấu hiệu**: alert `SsoTokenReuseDetected` — `sum(increase(sso_audit_events_total{action="TOKEN_REUSE_DETECTED",result="failure"}[5m])) > 0`.
 Metric KHÔNG có nhãn client/user (chủ đích) ⇒ phân loại bằng Mongo bên dưới.
 
-> ⚠ `GET /admin/audit?action=TOKEN_REUSE_DETECTED` **luôn trả `items: []`**: event này ghi không có
-> `tenantId` (DEBT-140) mà admin audit lọc chặt theo tenant. Đừng kết luận "không có sự cố" từ API này.
+> ⚠ Từ run 48, `GET /admin/audit?action=TOKEN_REUSE_DETECTED` hiện event cho admin của **tenant sở hữu
+> client** (`tenantId = client.tenantId`); admin tenant khác thấy rỗng. Các event OAuth/auth khác vẫn chưa
+> gắn tenant (DEBT-140) ⇒ không kết luận "không có sự cố" chỉ từ API này; mongosh bên dưới là nguồn đầy đủ.
 
 **Điều tra (mongosh, CHỈ ĐỌC)**
 ```js

@@ -36,8 +36,12 @@ export interface RotationResult {
   rotatedFromId: Types.ObjectId;
 }
 
-/** Request-level context carried into audit records (never contains hash/token). */
-type AuditCtx = { ip?: string; userAgent?: string; requestId?: string };
+/**
+ * Request-level context carried into audit records (never contains hash/token). `tenantId` is the
+ * tenant of the authenticated client (never request input); only `TOKEN_REUSE_DETECTED` records it
+ * today (run 48, rest of DEBT-140 open).
+ */
+type AuditCtx = { ip?: string; userAgent?: string; requestId?: string; tenantId?: string };
 
 /** A read-only view of the refresh document this service inspects. */
 interface RefreshDoc {
@@ -130,7 +134,7 @@ export class RefreshTokenService {
     value: string,
     client: Pick<
       Client,
-      'clientId' | 'allowedResources' | 'clientType' | 'tokenEndpointAuthMethod'
+      'clientId' | 'allowedResources' | 'clientType' | 'tokenEndpointAuthMethod' | 'tenantId'
     >,
     request: { scope?: string; resource?: string },
     recheck: (userId: string) => Promise<string | null>,
@@ -189,7 +193,12 @@ export class RefreshTokenService {
     // Atomic single-use rotation is the source of truth (re-validates active/unexpired/owner/
     // resource). Any invalid/reuse result throws here before any token is signed.
     // DEBT-105: hand the identifiers resolved for the pre-check to rotate (one lookup per refresh).
-    const result = await this.rotate(value, client, audit, allowedIdentifiers);
+    const result = await this.rotate(
+      value,
+      client,
+      { ...audit, tenantId: client.tenantId },
+      allowedIdentifiers,
+    );
     await this.recheckAfterRotate(result, recheck, audit);
 
     // Access token uses the narrowed scope when the client asked to narrow; otherwise the full
@@ -508,6 +517,7 @@ export class RefreshTokenService {
       await this.audit.record({
         actorType: 'client',
         actorId: clientId,
+        tenantId: opts.audit?.tenantId,
         clientId,
         action: AuditAction.TOKEN_REUSE_DETECTED,
         result: 'failure',
