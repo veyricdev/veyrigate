@@ -1057,7 +1057,14 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyListViewDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1088,7 +1095,14 @@
         },
         "responses": {
           "200": {
-            "description": ""
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotateKeyResultViewDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1934,6 +1948,62 @@
           "nextCursor"
         ]
       },
+      "AdminKeyViewDto": {
+        "type": "object",
+        "properties": {
+          "kid": {
+            "type": "string"
+          },
+          "alg": {
+            "type": "string",
+            "enum": [
+              "RS256"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "retiring"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "retireAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "kid",
+          "alg",
+          "status",
+          "createdAt",
+          "retireAt"
+        ]
+      },
+      "KeyListViewDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminKeyViewDto"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
       "RotateKeyDto": {
         "type": "object",
         "properties": {
@@ -1946,6 +2016,30 @@
           }
         },
         "required": [
+          "mode"
+        ]
+      },
+      "RotateKeyResultViewDto": {
+        "type": "object",
+        "properties": {
+          "newKid": {
+            "type": "string"
+          },
+          "oldKid": {
+            "type": "string",
+            "nullable": true
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "normal",
+              "emergency"
+            ]
+          }
+        },
+        "required": [
+          "newKid",
+          "oldKid",
           "mode"
         ]
       }

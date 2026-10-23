@@ -174,3 +174,31 @@ export const AuditPageSchema = z.object({
   nextCursor: z.string().nullable(),
 });
 export type AuditPage = z.infer<typeof AuditPageSchema>;
+
+/**
+ * A signing key of the IdP (`GET /admin/keys`, run 49 F2): metadata only. `z.object` strips, so a
+ * key member (`n`, `e`, `d`, `p`, …), a PEM or a path the BE might add never reaches the browser.
+ */
+export const SigningKeySchema = z.object({
+  kid: z.string().min(1).max(128),
+  alg: z.string(),
+  status: z.enum(["active", "retiring"]),
+  createdAt: z.string(),
+  retireAt: z.string().nullable(),
+});
+export type SigningKey = z.infer<typeof SigningKeySchema>;
+
+/** Every key in the JWKS (one active + the retiring ones); never paged (`nextCursor` always null). */
+export const SigningKeyListSchema = z.object({
+  items: z.array(SigningKeySchema),
+  nextCursor: z.null(),
+});
+export type SigningKeyList = z.infer<typeof SigningKeyListSchema>;
+
+/** `POST /admin/keys/rotate`. */
+export const RotateKeyResultSchema = z.object({
+  newKid: z.string().min(1).max(128),
+  oldKid: z.string().nullable(),
+  mode: z.enum(["normal", "emergency"]),
+});
+export type RotateKeyResult = z.infer<typeof RotateKeyResultSchema>;

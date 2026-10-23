@@ -1,5 +1,6 @@
-import { useCallback, useRef, useState, type ReactNode } from "react";
+import { useCallback, useId, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -71,18 +72,26 @@ interface ConfirmActionProps {
   stepUpNote?: string;
   run: () => Promise<ActionOutcome>;
   onDone: (message: string) => void;
+  /**
+   * Second confirmation step: the confirm button stays disabled until exactly this text (case
+   * sensitive, not trimmed) is typed. The typed text is cleared whenever the dialog closes.
+   */
+  confirmText?: string;
 }
 
 /** A write behind a confirmation (Escape / Cancel close it; an outside click does not). */
-export function ConfirmAction({ trigger, triggerLabel, title, children, warning, confirmLabel, destructive, path, stepUpNote, run, onDone }: ConfirmActionProps) {
+export function ConfirmAction({ trigger, triggerLabel, title, children, warning, confirmLabel, destructive, path, stepUpNote, run, onDone, confirmText }: ConfirmActionProps) {
   const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState("");
+  const textId = useId();
+  const blocked = confirmText !== undefined && typed !== confirmText;
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<ActionOutcome | null>(null);
   const busy = useRef(false); // a second click in the same tick must not send twice
   const done = useRef(false); // closed by a finished action: the caller places focus (DEBT-319)
 
   async function confirm() {
-    if (busy.current) return;
+    if (busy.current || blocked) return;
     busy.current = true;
     setPending(true);
     setResult(null);
@@ -91,6 +100,7 @@ export function ConfirmAction({ trigger, triggerLabel, title, children, warning,
       if ("done" in outcome) {
         done.current = true;
         setOpen(false);
+        setTyped("");
         onDone(outcome.done);
       } else {
         setResult(outcome);
@@ -107,7 +117,10 @@ export function ConfirmAction({ trigger, triggerLabel, title, children, warning,
       onOpenChange={(next) => {
         if (pending) return;
         setOpen(next);
-        if (!next) setResult(null);
+        if (!next) {
+          setResult(null);
+          setTyped("");
+        }
       }}
     >
       <AlertDialogTrigger asChild>
@@ -127,6 +140,22 @@ export function ConfirmAction({ trigger, triggerLabel, title, children, warning,
           <div className="space-y-2">{children}</div>
         </AlertDialogDescription>
         {warning}
+        {confirmText !== undefined && (
+          <div className="space-y-1">
+            <label htmlFor={textId} className="text-sm font-medium">
+              Type {confirmText} to confirm
+            </label>
+            <Input
+              id={textId}
+              autoComplete="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              value={typed}
+              disabled={pending}
+              onChange={(e) => setTyped(e.target.value)}
+            />
+          </div>
+        )}
         {result && "stepUp" in result && <StepUpAlert path={path} note={stepUpNote} />}
         {result && "error" in result && (
           <p role="alert" className="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-destructive">
@@ -139,7 +168,7 @@ export function ConfirmAction({ trigger, triggerLabel, title, children, warning,
               Cancel
             </Button>
           </AlertDialogCancel>
-          <Button type="button" variant={destructive ? "destructive" : "default"} disabled={pending} onClick={() => void confirm()}>
+          <Button type="button" variant={destructive ? "destructive" : "default"} disabled={pending || blocked} onClick={() => void confirm()}>
             {pending ? "Working…" : confirmLabel}
           </Button>
         </div>

@@ -7,6 +7,7 @@ import { InvalidClientConfigError, validateCorsOrigin } from '../clients/client.
 import { DuplicateError } from '../identity/identity.errors';
 import { AdminAuthError } from '../identity/tenant-context/admin-auth.errors';
 import { AdminTokenGuard } from '../identity/tenant-context/tenant-context';
+import type { KeyMetadata, RotationMode } from '../keys/key-provider';
 import { AuditAction } from '../security/audit/audit-action.enum';
 import { toPage } from './admin.dto';
 import {
@@ -22,6 +23,7 @@ import {
 import { adminOnly, isAdminOpenApiEnabled, registerAdminOpenApi } from './admin.openapi';
 import { AdminAuditController } from './admin-audit.controller';
 import { AdminClientsController } from './admin-clients.controller';
+import { AdminKeysController } from './admin-keys.controller';
 import { AdminResourcesController } from './admin-resources.controller';
 import { AdminUsersController } from './admin-users.controller';
 
@@ -177,6 +179,7 @@ describe('admin OpenAPI response schemas (DEBT-290/294)', () => {
         AdminResourcesController,
         AdminUsersController,
         AdminAuditController,
+        AdminKeysController,
       ],
     })
       .overrideGuard(AdminTokenGuard)
@@ -389,5 +392,62 @@ describe('admin OpenAPI response schemas (DEBT-290/294)', () => {
       },
     });
     expect(ref('/admin/audit', 'get', '200')).toBe('#/components/schemas/AuditPageViewDto');
+  });
+
+  it('keys: controller output keys == schema properties, enums, nullable, $ref (run 49 Task 0)', async () => {
+    const meta = {
+      kid: 'k1',
+      alg: 'RS256',
+      status: 'retiring',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      retireAt: '2026-01-01T00:02:00.000Z',
+    } as const;
+    const rotation = {
+      // Key material on the provider side must never reach the view (controller allowlist).
+      list: async () => [{ ...meta, n: 'n', e: 'AQAB', d: 'd', pem: 'PEM', path: '/k' }],
+      rotate: async () => ({ newKid: 'k2', oldKid: 'k1', mode: 'normal' as const }),
+    };
+    const ctl = new AdminKeysController(rotation as never);
+    const actor = { roles: ['super_admin'] } as never;
+    const page = await ctl.list(actor);
+    expect(Object.keys(page).sort()).toEqual(keys('KeyListViewDto'));
+    expect(keys('KeyListViewDto')).toEqual(['items', 'nextCursor']);
+    expect(Object.keys(page.items[0]).sort()).toEqual(keys('AdminKeyViewDto'));
+    expect(keys('AdminKeyViewDto')).toEqual(Object.keys(meta).sort());
+    const rotated = await ctl.rotate({} as never, actor, { mode: 'normal' }, { headers: {} });
+    expect(Object.keys(rotated).sort()).toEqual(keys('RotateKeyResultViewDto'));
+    expect(keys('RotateKeyResultViewDto')).toEqual(['mode', 'newKid', 'oldKid']);
+
+    const k = schema('AdminKeyViewDto') as Schema & { required?: string[] };
+    const kp = k.properties as Record<string, Schema & { enum?: string[] }>;
+    expect([...(k.required ?? [])].sort()).toEqual(Object.keys(meta).sort());
+    expect(kp.kid).toMatchObject({ type: 'string' });
+    expect(kp.alg.enum).toEqual(['RS256' satisfies KeyMetadata['alg']]);
+    const statuses: KeyMetadata['status'][] = ['active', 'retiring'];
+    expect(kp.status.enum).toEqual(statuses);
+    expect(kp.createdAt).toMatchObject({ type: 'string', format: 'date-time' });
+    expect(kp.createdAt.nullable).toBeUndefined();
+    expect(kp.retireAt).toMatchObject({ type: 'string', format: 'date-time', nullable: true });
+    expect(schema('KeyListViewDto').properties!.items).toMatchObject({
+      type: 'array',
+      items: { $ref: '#/components/schemas/AdminKeyViewDto' },
+    });
+    expect(schema('KeyListViewDto').properties!.nextCursor).toMatchObject({
+      type: 'string',
+      nullable: true,
+    });
+
+    const r = schema('RotateKeyResultViewDto') as Schema & { required?: string[] };
+    const rp = r.properties as Record<string, Schema & { enum?: string[] }>;
+    expect([...(r.required ?? [])].sort()).toEqual(['mode', 'newKid', 'oldKid']);
+    expect(rp.newKid).toMatchObject({ type: 'string' });
+    expect(rp.newKid.nullable).toBeUndefined();
+    expect(rp.oldKid).toMatchObject({ type: 'string', nullable: true });
+    const modes: RotationMode[] = ['normal', 'emergency'];
+    expect(rp.mode.enum).toEqual(modes);
+    expect(ref('/admin/keys', 'get', '200')).toBe('#/components/schemas/KeyListViewDto');
+    expect(ref('/admin/keys/rotate', 'post', '200')).toBe(
+      '#/components/schemas/RotateKeyResultViewDto',
+    );
   });
 });

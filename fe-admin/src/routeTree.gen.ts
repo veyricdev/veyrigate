@@ -17,6 +17,7 @@ import { Route as AuthLogoutRouteImport } from './routes/auth/logout'
 import { Route as ClientsIndexRouteImport } from './routes/clients/index'
 import { Route as ClientsClientIdRouteImport } from './routes/clients/$clientId'
 import { Route as ClientsNewRouteImport } from './routes/clients/new'
+import { Route as KeysIndexRouteImport } from './routes/keys/index'
 import { Route as ResourcesIndexRouteImport } from './routes/resources/index'
 import { Route as ResourcesResourceIdRouteImport } from './routes/resources/$resourceId'
 import { Route as ResourcesNewRouteImport } from './routes/resources/new'
@@ -63,6 +64,11 @@ const ClientsNewRoute = ClientsNewRouteImport.update({
   path: '/clients/new',
   getParentRoute: () => rootRouteImport,
 } as any)
+const KeysIndexRoute = KeysIndexRouteImport.update({
+  id: '/keys/',
+  path: '/keys/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ResourcesIndexRoute = ResourcesIndexRouteImport.update({
   id: '/resources/',
   path: '/resources/',
@@ -101,6 +107,7 @@ export interface FileRoutesByFullPath {
   '/users/$userId': typeof UsersUserIdRoute
   '/audit/': typeof AuditIndexRoute
   '/clients/': typeof ClientsIndexRoute
+  '/keys/': typeof KeysIndexRoute
   '/resources/': typeof ResourcesIndexRoute
   '/users/': typeof UsersIndexRoute
 }
@@ -116,6 +123,7 @@ export interface FileRoutesByTo {
   '/users/$userId': typeof UsersUserIdRoute
   '/audit': typeof AuditIndexRoute
   '/clients': typeof ClientsIndexRoute
+  '/keys': typeof KeysIndexRoute
   '/resources': typeof ResourcesIndexRoute
   '/users': typeof UsersIndexRoute
 }
@@ -132,6 +140,7 @@ export interface FileRoutesById {
   '/users/$userId': typeof UsersUserIdRoute
   '/audit/': typeof AuditIndexRoute
   '/clients/': typeof ClientsIndexRoute
+  '/keys/': typeof KeysIndexRoute
   '/resources/': typeof ResourcesIndexRoute
   '/users/': typeof UsersIndexRoute
 }
@@ -149,6 +158,7 @@ export interface FileRouteTypes {
     | '/users/$userId'
     | '/audit/'
     | '/clients/'
+    | '/keys/'
     | '/resources/'
     | '/users/'
   fileRoutesByTo: FileRoutesByTo
@@ -164,6 +174,7 @@ export interface FileRouteTypes {
     | '/users/$userId'
     | '/audit'
     | '/clients'
+    | '/keys'
     | '/resources'
     | '/users'
   id:
@@ -179,6 +190,7 @@ export interface FileRouteTypes {
     | '/users/$userId'
     | '/audit/'
     | '/clients/'
+    | '/keys/'
     | '/resources/'
     | '/users/'
   fileRoutesById: FileRoutesById
@@ -195,6 +207,7 @@ export interface RootRouteChildren {
   UsersUserIdRoute: typeof UsersUserIdRoute
   AuditIndexRoute: typeof AuditIndexRoute
   ClientsIndexRoute: typeof ClientsIndexRoute
+  KeysIndexRoute: typeof KeysIndexRoute
   ResourcesIndexRoute: typeof ResourcesIndexRoute
   UsersIndexRoute: typeof UsersIndexRoute
 }
@@ -257,6 +270,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ClientsNewRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/keys/': {
+      id: '/keys/'
+      path: '/keys'
+      fullPath: '/keys/'
+      preLoaderRoute: typeof KeysIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/resources/': {
       id: '/resources/'
       path: '/resources'
@@ -307,6 +327,7 @@ const rootRouteChildren: RootRouteChildren = {
   UsersUserIdRoute: UsersUserIdRoute,
   AuditIndexRoute: AuditIndexRoute,
   ClientsIndexRoute: ClientsIndexRoute,
+  KeysIndexRoute: KeysIndexRoute,
   ResourcesIndexRoute: ResourcesIndexRoute,
   UsersIndexRoute: UsersIndexRoute,
 }

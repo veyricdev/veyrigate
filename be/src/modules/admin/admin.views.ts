@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import type { KeyMetadata, RotationMode } from '../keys/key-provider';
 import { AuditAction } from '../security/audit/audit-action.enum';
 import type { AuditActorType, AuditMetadata } from '../security/audit/audit.types';
 import type {
@@ -292,4 +293,42 @@ export class AuditPageViewDto {
 
   @ApiProperty({ type: String, nullable: true })
   nextCursor!: string | null;
+}
+
+/** Signing key metadata (B6.3c) — the controller's allowlist; never key material. */
+export class AdminKeyViewDto implements KeyMetadata {
+  @ApiProperty({ type: String })
+  kid!: string;
+
+  @ApiProperty({ enum: ['RS256'] })
+  alg!: KeyMetadata['alg'];
+
+  @ApiProperty({ enum: ['active', 'retiring'] })
+  status!: KeyMetadata['status'];
+
+  @ApiProperty(DATE)
+  createdAt!: string;
+
+  @ApiProperty(NULLABLE_DATE)
+  retireAt!: string | null;
+}
+
+/** `nextCursor` is always `null` (every key in JWKS fits one page); kept for the page shape. */
+export class KeyListViewDto {
+  @ApiProperty({ type: [AdminKeyViewDto] })
+  items!: AdminKeyViewDto[];
+
+  @ApiProperty({ type: String, nullable: true })
+  nextCursor!: string | null;
+}
+
+export class RotateKeyResultViewDto {
+  @ApiProperty({ type: String })
+  newKid!: string;
+
+  @ApiProperty({ type: String, nullable: true })
+  oldKid!: string | null;
+
+  @ApiProperty({ enum: ['normal', 'emergency'] })
+  mode!: RotationMode;
 }

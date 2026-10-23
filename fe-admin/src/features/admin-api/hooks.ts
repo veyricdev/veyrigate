@@ -12,11 +12,13 @@ import type {
   UpdateResourceParams,
   RevokeConsentParams,
   RevokeFamilyParams,
+  RotateKeyParams,
   UserListParams,
 } from "./inputs";
 import { adminKeys } from "./keys";
 import { createResource, getResource, listResourcePage, updateResource } from "./resources";
 import { listSecrets, revokeSecret } from "./secrets";
+import { listSigningKeys, rotateSigningKey } from "./signing-keys";
 import type { AdminUser } from "@/server/admin-api/schemas";
 import { AdminRequestError, unwrap, type AdminResult } from "./types";
 import {
@@ -194,5 +196,23 @@ export function useAuditEvents(params: AuditListParams) {
   return useQuery({
     queryKey: adminKeys.audit.list(params),
     queryFn: async () => unwrap(await listAudit({ data: params })),
+  });
+}
+
+/** Signing keys; `enabled: false` for a non-super_admin (the BE would refuse: never called). */
+export function useSigningKeys(enabled: boolean) {
+  return useQuery({
+    queryKey: adminKeys.signingKeys.list,
+    queryFn: async () => unwrap(await listSigningKeys()),
+    enabled,
+  });
+}
+
+/** Key rotation; never retried (not idempotent). The list is re-read on success or an unknown outcome. */
+export function useRotateSigningKey() {
+  const invalidate = useInvalidateOn(adminKeys.signingKeys.list);
+  return useMutation({
+    mutationFn: async (input: RotateKeyParams) => unwrap(await rotateSigningKey({ data: input })),
+    onSettled: (_data, error) => invalidate(error),
   });
 }

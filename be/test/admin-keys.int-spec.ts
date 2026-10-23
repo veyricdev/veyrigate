@@ -777,4 +777,81 @@ describe('Admin API B6.3c (keys + tenants) on real Mongo + Redis', () => {
       for (const e of events) expect(JSON.stringify(e)).not.toMatch(KEY_MATERIAL);
     });
   });
+
+  describe('run 49 QA (tester) — A6.5 mode contract and emergency over retiring keys', () => {
+    type Listed = { items: { kid: string; status: string; retireAt: string | null }[] };
+
+    it.each([
+      ['upper case', { mode: 'EMERGENCY' }],
+      ['leading space', { mode: ' emergency' }],
+      ['array', { mode: ['emergency'] }],
+      ['boolean flag', { emergency: true }],
+      ['null', { mode: null }],
+    ])('mode %s => 400, JWKS unchanged (the BE never guesses the mode)', async (_n, body) => {
+      const before = await jwksKids();
+      const res = await call('POST', '/admin/keys/rotate', await tok(superA), body);
+      expect(res.statusCode).toBe(400);
+      expect(await jwksKids()).toEqual(before);
+    });
+
+    it('normal x2 then emergency: retiring keys stay after normal, ALL previous keys (active + retiring) gone after emergency; audit mode/oldKid per call', async () => {
+      const k0 = decodeProtectedHeader(await tok(superA)).kid as string;
+      const normals: { newKid: string; oldKid: string }[] = [];
+      for (let i = 0; i < 2; i++) {
+        const r = await call('POST', '/admin/keys/rotate', await tok(superA), { mode: 'normal' });
+        expect(r.statusCode).toBe(200);
+        expect(r.json()).toMatchObject({ mode: 'normal' });
+        normals.push(r.json() as { newKid: string; oldKid: string });
+      }
+      expect(normals[0].oldKid).toBe(k0);
+      expect(normals[1].oldKid).toBe(normals[0].newKid);
+      const k2 = normals[1].newKid;
+      const afterNormal = (await call('GET', '/admin/keys', await tok(superA))).json() as Listed;
+      const retiring = afterNormal.items.filter((k) => k.status === 'retiring').map((k) => k.kid);
+      expect(retiring).toEqual(expect.arrayContaining([k0, normals[0].newKid]));
+      for (const k of afterNormal.items.filter((x) => x.status === 'retiring')) {
+        expect(typeof k.retireAt).toBe('string');
+      }
+      expect(afterNormal.items.filter((k) => k.status === 'active').map((k) => k.kid)).toEqual([
+        k2,
+      ]);
+
+      const em = await call('POST', '/admin/keys/rotate', await tok(superA), { mode: 'emergency' });
+      expect(em.statusCode).toBe(200);
+      const { newKid, oldKid, mode } = em.json() as {
+        newKid: string;
+        oldKid: string;
+        mode: string;
+      };
+      expect(mode).toBe('emergency');
+      expect(oldKid).toBe(k2); // the ACTIVE key before the call, not a retiring one
+      expect(await jwksKids()).toEqual([newKid]);
+      expect((await readdir(keyDir)).filter((f) => f.endsWith('.pem'))).toEqual([`${newKid}.pem`]);
+      const listed = (await call('GET', '/admin/keys', await tok(superA))).json() as Listed;
+      expect(listed.items).toEqual([
+        expect.objectContaining({ kid: newKid, status: 'active', retireAt: null }),
+      ]);
+
+      const events = await auditModel
+        .find({
+          action: AuditAction.SIGNING_KEY_ROTATED,
+          targetId: { $in: [...normals.map((n) => n.newKid), newKid] },
+        })
+        .lean();
+      const byTarget = new Map(events.map((e) => [e.targetId, e]));
+      for (const n of normals) {
+        expect(byTarget.get(n.newKid)).toMatchObject({
+          result: 'success',
+          targetType: 'signing_key',
+          metadata: { mode: 'normal', oldKid: n.oldKid },
+        });
+      }
+      expect(byTarget.get(newKid)).toMatchObject({
+        result: 'success',
+        targetType: 'signing_key',
+        metadata: { mode: 'emergency', oldKid: k2 },
+      });
+      for (const e of events) expect(JSON.stringify(e)).not.toMatch(KEY_MATERIAL);
+    });
+  });
 });

@@ -540,7 +540,28 @@ export interface components {
             items: components["schemas"]["AdminAuditEventViewDto"][];
             nextCursor: string | null;
         };
+        AdminKeyViewDto: {
+            kid: string;
+            /** @enum {string} */
+            alg: "RS256";
+            /** @enum {string} */
+            status: "active" | "retiring";
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            retireAt: string | null;
+        };
+        KeyListViewDto: {
+            items: components["schemas"]["AdminKeyViewDto"][];
+            nextCursor: string | null;
+        };
         RotateKeyDto: {
+            /** @enum {string} */
+            mode: "normal" | "emergency";
+        };
+        RotateKeyResultViewDto: {
+            newKid: string;
+            oldKid: string | null;
             /** @enum {string} */
             mode: "normal" | "emergency";
         };
@@ -1086,7 +1107,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["KeyListViewDto"];
+                };
             };
         };
     };
@@ -1107,7 +1130,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RotateKeyResultViewDto"];
+                };
             };
         };
     };

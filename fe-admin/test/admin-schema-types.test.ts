@@ -17,13 +17,17 @@ import type {
   FamilyPage,
   IssuedSecret,
   ResourcePage,
+  RotateKeyResult,
+  SigningKey,
+  SigningKeyList,
   UserPage,
 } from "@/server/admin-api/schemas";
-import { AUDIT_ACTIONS, AUDIT_RESULTS } from "@/features/admin-api/inputs";
+import { AUDIT_ACTIONS, AUDIT_RESULTS, ROTATION_MODES } from "@/features/admin-api/inputs";
 import type {
   AuditListParams,
   CreateClientParams,
   CreateResourceParams,
+  RotateKeyParams,
   UpdateClientParams,
   UpdateResourceParams,
   UserListParams,
@@ -65,6 +69,21 @@ describe("zod allowlists vs OpenAPI snapshot", () => {
     // The response allowlist has exactly the view's keys (action/actorType kept as plain strings on purpose).
     expectTypeOf<keyof AuditEvent>().toEqualTypeOf<keyof View>();
     expectTypeOf<keyof AuditPage>().toEqualTypeOf<keyof S["AuditPageViewDto"]>();
+  });
+
+  it("signing keys (run 49 F2)", () => {
+    type Key = S["AdminKeyViewDto"];
+    type Rotated = S["RotateKeyResultViewDto"];
+    // Both ways: a status or mode added to or removed from the BE enum fails `typecheck`.
+    expectTypeOf<SigningKey["status"]>().toEqualTypeOf<Key["status"]>();
+    expectTypeOf<(typeof ROTATION_MODES)[number]>().toEqualTypeOf<S["RotateKeyDto"]["mode"]>();
+    expectTypeOf<RotateKeyResult["mode"]>().toEqualTypeOf<Rotated["mode"]>();
+    expectTypeOf<RotateKeyParams>().toEqualTypeOf<S["RotateKeyDto"]>();
+    // Exactly the view's keys (`alg` kept a plain string, `nextCursor` narrowed to the BE's constant null).
+    expectTypeOf<keyof SigningKey>().toEqualTypeOf<keyof Key>();
+    expectTypeOf<SigningKey>().toExtend<Omit<Key, "alg"> & { alg: string }>();
+    expectTypeOf<keyof SigningKeyList>().toEqualTypeOf<keyof S["KeyListViewDto"]>();
+    expectTypeOf<RotateKeyResult>().toEqualTypeOf<Rotated>();
   });
 
   it("request bodies", () => {

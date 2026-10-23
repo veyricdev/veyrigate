@@ -26,7 +26,10 @@ export const adminKeys = {
   },
   /** Read-only. */
   audit: {
-    all: ["admin", "audit"] as const,
     list: (params: AuditListParams) => ["admin", "audit", "list", params] as const,
+  },
+  /** Signing keys (super_admin only; never paged). */
+  signingKeys: {
+    list: ["admin", "signing-keys"] as const,
   },
 };

@@ -2,7 +2,7 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `49-A6.5` — chưa bắt đầu (A6.5 Keys + DEBT-346/347). A6.3b roles chờ analyst chốt DEBT-149/142; DEBT-344 chờ quyết định retention. Đang mở DEBT-309…312, 317, 320…325, 329, 331…338, 342…348.
+- **Run hiện tại**: `49-A6.5` — tech-lead **PASS** (fold trong tasks.md: Task 0 [BE] OpenAPI keys; Task 1 gộp DEBT-348; `cooldownDuration: 0` JWKS fe-admin; E2E chỉ rotate thường, skip khi `E2E_REUSE=1`) → **frontend-dev Task 1 ✅** (DEBT-346/347/348; fe-admin 1121) → **backend-dev Task 0 ✅** (OpenAPI keys + snapshot/`gen:api`; BE unit 416, int 1215) → **frontend-dev Task 2→4 ✅** (`/keys`, `confirmText`, `cooldownDuration: 0`; fe-admin 1156, E2E 33 ×2; DEBT-351) → **senior-reviewer PASS** (0 🔴; DEBT-352 ponytail) → **tester PASS** (fe-admin 1206, BE int 1221, E2E 33; risk +56 test; DEBT-353…355) → tiếp: **orchestrator đóng run**. A6.3b roles chờ analyst chốt DEBT-149/142; DEBT-344 chờ quyết định retention. Đang mở DEBT-309…312, 317, 320…325, 329, 331…338, 342…345, 349…355.
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
 - **Run vừa đóng**: `48-A6.4` ✅ 5/5 — fe-admin 1120, E2E 32. Xem `runs/48-A6.4/summary.md`.
 - **Việc tiếp theo**: sau M6 → M7 hardening (B7.*, T7, X2/X3/X5); A4–A6 fe-admin chờ Q3 (plan §12). Debt đáng chú ý: DEBT-124/143 (super_admin xuyên tenant), DEBT-140 (audit OAuth chưa gắn tenant), DEBT-177, DEBT-095, DEBT-054/096.

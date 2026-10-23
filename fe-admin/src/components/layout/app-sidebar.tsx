@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { BoxesIcon, KeyRoundIcon, LayoutDashboardIcon, ScrollTextIcon, UsersIcon } from "lucide-react";
+import { BoxesIcon, FileKeyIcon, KeyRoundIcon, LayoutDashboardIcon, ScrollTextIcon, UsersIcon } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -18,6 +18,7 @@ const NAV = [
   { to: "/resources", label: "Resources", icon: BoxesIcon },
   { to: "/users", label: "Users", icon: UsersIcon },
   { to: "/audit", label: "Audit log", icon: ScrollTextIcon },
+  { to: "/keys", label: "Signing keys", icon: FileKeyIcon },
 ] as const;
 
 export function AppSidebar() {

@@ -184,7 +184,7 @@ describe("table", () => {
     const [row] = await rows();
     expect(within(row!).getByText(EVENT.timestamp)).toBeTruthy();
     expect(screen.queryByText(EVENT.ip!)).toBeNull();
-    const details = within(row!).getByRole("button", { name: "Details" });
+    const details = within(row!).getByRole("button", { name: /^Details for / });
     expect(details.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(details);
     expect(details.getAttribute("aria-expanded")).toBe("true");
@@ -225,7 +225,7 @@ describe("table", () => {
     const [row] = await rows();
     const imgs = document.querySelectorAll("img").length;
     const scripts = document.querySelectorAll("script").length;
-    fireEvent.click(within(row!).getByRole("button", { name: "Details" }));
+    fireEvent.click(within(row!).getByRole("button", { name: /^Details for / }));
     expect(screen.getAllByText(xss)).toHaveLength(2);
     expect(screen.getByText("<script>window.__pwned=1</script>")).toBeTruthy();
     expect(document.querySelectorAll("img").length).toBe(imgs);

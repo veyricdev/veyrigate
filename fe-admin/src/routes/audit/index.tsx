@@ -93,7 +93,7 @@ function AuditPage() {
       ) : query.data.items.length === 0 ? (
         <p>No audit events.</p>
       ) : (
-        <AuditTable items={query.data.items} nextPage={Boolean(after)} />
+        <AuditTable items={query.data.items} />
       )}
       <nav aria-label="Pagination" className="flex gap-2">
         {after && (
@@ -125,12 +125,12 @@ function alertLabel(e: AuditEvent): string | null {
 const isUserId = (v: string | null | undefined): v is string => UserIdSchema.safeParse(v).success;
 const linkClass = "underline-offset-4 hover:underline";
 
-function AuditTable({ items, nextPage }: { items: AuditEvent[]; nextPage: boolean }) {
+function AuditTable({ items }: { items: AuditEvent[] }) {
   const [open, setOpen] = useState<string | null>(null);
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-left text-sm">
-        <caption className="sr-only">Audit events{nextPage ? " (next page)" : ""}</caption>
+        <caption className="sr-only">Audit events</caption>
         <thead className="border-b">
           <tr>
             <th scope="col" className="py-2 pr-4 font-medium">Time</th>
@@ -198,12 +198,16 @@ function AuditTable({ items, nextPage }: { items: AuditEvent[]; nextPage: boolea
                       onClick={() => setOpen(expanded ? null : e.eventId)}
                     >
                       Details
+                      <span className="sr-only">
+                        {" "}
+                        for {e.action} at {e.timestamp}
+                      </span>
                     </Button>
                   </td>
                 </tr>
                 <tr id={id} hidden={!expanded} className="border-b">
                   <td colSpan={7} className="py-2">
-                    {expanded && <Details event={e} />}
+                    {expanded && <Details event={e} id={id} />}
                   </td>
                 </tr>
               </Fragment>
@@ -226,24 +230,44 @@ function Party({ type, id, children }: { type: string | null | undefined; id: st
   );
 }
 
-function Details({ event: e }: { event: AuditEvent }) {
-  const rows: [string, string][] = [
+const dlClass = "grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1";
+
+/** Fixed fields, then metadata in its own "Metadata" group: a metadata key ("IP") never reads as a fixed field. */
+function Details({ event: e, id }: { event: AuditEvent; id: string }) {
+  const fixed: [string, string][] = [
     ["Event id", e.eventId],
     ["Request id", e.requestId ?? "—"],
     ["IP", e.ip ?? "—"],
     ["User agent", e.userAgent ?? "—"],
     ["Reason", e.reason ?? "—"],
-    ...Object.entries(e.metadata ?? {}).map(([k, v]): [string, string] => [k, String(v)]),
   ];
+  const metadata = Object.entries(e.metadata ?? {});
   return (
-    <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1">
-      {rows.map(([k, v]) => (
-        <Fragment key={k}>
-          <dt className="font-medium">{k}</dt>
-          <dd className="font-mono break-all">{v}</dd>
-        </Fragment>
-      ))}
-    </dl>
+    <div className="space-y-2">
+      <dl className={dlClass}>
+        {fixed.map(([k, v]) => (
+          <Fragment key={k}>
+            <dt className="font-medium">{k}</dt>
+            <dd className="font-mono break-all">{v}</dd>
+          </Fragment>
+        ))}
+      </dl>
+      {metadata.length > 0 && (
+        <section aria-labelledby={`${id}-metadata`}>
+          <h2 id={`${id}-metadata`} className="font-medium">
+            Metadata
+          </h2>
+          <dl className={dlClass}>
+            {metadata.map(([k, v]) => (
+              <Fragment key={`m:${k}`}>
+                <dt className="font-medium">{k}</dt>
+                <dd className="font-mono break-all">{String(v)}</dd>
+              </Fragment>
+            ))}
+          </dl>
+        </section>
+      )}
+    </div>
   );
 }
 

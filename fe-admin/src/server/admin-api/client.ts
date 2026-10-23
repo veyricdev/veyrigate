@@ -7,6 +7,7 @@ import type {
   CreateResourceParams,
   ListClientsParams,
   PageParams,
+  RotateKeyParams,
   UpdateResourceParams,
   UserListParams,
   UserPageParams,
@@ -27,6 +28,8 @@ import {
   ConsentPageSchema,
   FamilyPageSchema,
   UserPageSchema,
+  RotateKeyResultSchema,
+  SigningKeyListSchema,
   type AdminClient,
   type AdminResource,
   type ClientPage,
@@ -38,6 +41,8 @@ import {
   type ConsentPage,
   type FamilyPage,
   type UserPage,
+  type RotateKeyResult,
+  type SigningKeyList,
 } from "./schemas";
 
 /**
@@ -367,6 +372,23 @@ export function createAdminApi(deps: AdminApiDeps) {
      */
     listAudit(ctx: AdminCallContext, params: AuditListParams): Promise<AuditPage> {
       return call(ctx, { method: "GET", route: "/admin/audit", path: `/admin/audit${query(params)}`, schema: AuditPageSchema });
+    },
+    /** Signing keys in the JWKS (super_admin): metadata only, never key material. */
+    listSigningKeys(ctx: AdminCallContext): Promise<SigningKeyList> {
+      return call(ctx, { method: "GET", route: "/admin/keys", path: "/admin/keys", schema: SigningKeyListSchema });
+    },
+    /**
+     * `POST /admin/keys/rotate` (super_admin + recent sign-in). Not idempotent: never re-sent;
+     * timeout/5xx/off-contract 2xx => uncertain (it may have rotated).
+     */
+    rotateSigningKey(ctx: AdminCallContext, mode: RotateKeyParams["mode"]): Promise<RotateKeyResult> {
+      return call(ctx, {
+        method: "POST",
+        route: "/admin/keys/rotate",
+        path: "/admin/keys/rotate",
+        body: { mode },
+        schema: RotateKeyResultSchema,
+      });
     },
   };
 }

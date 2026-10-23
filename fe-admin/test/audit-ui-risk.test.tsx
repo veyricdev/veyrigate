@@ -1,7 +1,8 @@
 // Run 48 (A6.4) tester risk matrix, audit UI (same harness as audit-ui.test.tsx): prototype and
 // tenant keys in the URL never reach the server fn, encoded/homoglyph emails refused in the form,
 // a BE action the FE does not know renders as text, system actors never linked, IP/UA never in the
-// URL, and a metadata key equal to a fixed label cannot hide or replace the real value.
+// URL, a metadata key equal to a fixed label is kept apart in a "Metadata" group (DEBT-348), and each
+// Details button names its event (DEBT-346).
 import { StrictMode, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -152,7 +153,7 @@ describe("tester: rendering", () => {
     expect(screen.queryByText(/Security alert/)).toBeNull();
     // Not a user/admin actor: no user link even for a 24-hex id.
     expect(within(row!).queryByRole("link", { name: USER_ID })).toBeNull();
-    fireEvent.click(within(row!).getByRole("button", { name: "Details" }));
+    fireEvent.click(within(row!).getByRole("button", { name: /^Details for / }));
     expect(screen.getByText("count")).toBeTruthy();
   });
 
@@ -177,7 +178,7 @@ describe("tester: rendering", () => {
     const [row] = await rows();
     const calls = list.mock.calls.length;
     const before = href(router);
-    fireEvent.click(within(row!).getByRole("button", { name: "Details" }));
+    fireEvent.click(within(row!).getByRole("button", { name: /^Details for / }));
     await settle();
     expect(href(router)).toBe(before);
     for (const v of [EVENT.ip!, "canary-ua", "req-1"]) expect(href(router)).not.toContain(v);
@@ -188,10 +189,29 @@ describe("tester: rendering", () => {
     list.mockResolvedValue(page([{ ...EVENT, metadata: { IP: "198.51.100.66", count: 1 } }]));
     renderAt("/audit");
     const [row] = await rows();
-    fireEvent.click(within(row!).getByRole("button", { name: "Details" }));
-    const panel = document.getElementById(within(row!).getByRole("button", { name: "Details" }).getAttribute("aria-controls")!)!;
-    expect(within(panel).getByText(EVENT.ip!)).toBeTruthy();
-    expect(within(panel).getByText("198.51.100.66")).toBeTruthy();
-    expect(within(panel).getAllByText("IP")).toHaveLength(2);
+    fireEvent.click(within(row!).getByRole("button", { name: /^Details for / }));
+    const panel = document.getElementById(within(row!).getByRole("button", { name: /^Details for / }).getAttribute("aria-controls")!)!;
+    // DEBT-348: metadata sits in its own "Metadata" group, never among the fixed labels.
+    const meta = within(panel).getByRole("region", { name: "Metadata" });
+    expect(within(meta).getByText("IP").nextElementSibling?.textContent).toBe("198.51.100.66");
+    expect(within(meta).queryByText(EVENT.ip!)).toBeNull();
+    const fixed = within(panel).getAllByText("IP").filter((el) => !meta.contains(el));
+    expect(fixed).toHaveLength(1);
+    expect(fixed[0]!.nextElementSibling?.textContent).toBe(EVENT.ip);
+  });
+
+  it("each Details button names its event (action and time) for screen readers", async () => {
+    list.mockResolvedValue(
+      page([
+        { ...EVENT, eventId: "a" },
+        { ...EVENT, eventId: "r", action: "TOKEN_REUSE_DETECTED", timestamp: "2026-10-23T05:06:07.000Z" },
+      ]),
+    );
+    renderAt("/audit");
+    await rows();
+    const reuse = screen.getAllByRole("button", { name: /Details for TOKEN_REUSE_DETECTED at / });
+    expect(reuse).toHaveLength(1);
+    expect(reuse[0]!.textContent).toBe("Details for TOKEN_REUSE_DETECTED at 2026-10-23T05:06:07.000Z");
+    expect(screen.getAllByRole("button", { name: `Details for ADMIN_USER_LOCKED at ${EVENT.timestamp}` })).toHaveLength(1);
   });
 });

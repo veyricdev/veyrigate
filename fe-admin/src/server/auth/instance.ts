@@ -29,7 +29,11 @@ export function getAuth(): Auth {
     jwks: (uri) => {
       let jwks = jwksCache.get(uri);
       if (!jwks) {
-        jwks = createRemoteJWKSet(new URL(uri), { timeoutDuration: 5000 });
+        // `cooldownDuration: 0`: an ID token with a `kid` not yet in the cached JWKS refetches it at
+        // once. The default 30s cooldown broke the callback / refresh for 30s after the IdP rotated
+        // its key (run 49 Q-49.3). Safe: this set only verifies ID tokens received on the
+        // back-channel `/token` call (client authenticated), so no outsider chooses the `kid`.
+        jwks = createRemoteJWKSet(new URL(uri), { timeoutDuration: 5000, cooldownDuration: 0 });
         jwksCache.set(uri, jwks);
       }
       return jwks;

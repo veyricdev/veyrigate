@@ -1,5 +1,5 @@
 import { Body, Controller, Get, HttpCode, Post, Req, UseFilters, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { HttpRequest } from '../../common/http/http.types';
 import { AdminAuthErrorFilter } from '../identity/tenant-context/admin-auth.errors';
 import {
@@ -16,6 +16,7 @@ import { KeyRotationService } from '../keys/key-rotation.service';
 import { adminAuditBase } from './admin-audit';
 import { assertSuperAdmin } from './admin-resources.controller';
 import { RotateKeyDto } from './admin.dto';
+import { KeyListViewDto, RotateKeyResultViewDto } from './admin.views';
 
 /**
  * Admin API — signing keys (B6.3c). Platform-level, so super_admin only for read AND rotate
@@ -33,6 +34,7 @@ export class AdminKeysController {
   @Get()
   @AdminScope('admin.read')
   @ApiOperation({ description: 'super_admin only. Keys currently in JWKS (active + retiring).' })
+  @ApiOkResponse({ type: KeyListViewDto })
   async list(
     @CurrentAdmin() actor: AdminActor,
   ): Promise<{ items: KeyMetadata[]; nextCursor: null }> {
@@ -56,6 +58,7 @@ export class AdminKeysController {
       'super_admin only. normal: old key stays verify-only for ACCESS_TOKEN_TTL. emergency: old ' +
       'key leaves JWKS at once (sessions/refresh tokens are not revoked). Not idempotent.',
   })
+  @ApiOkResponse({ type: RotateKeyResultViewDto })
   async rotate(
     @Tenant() ctx: TenantContext,
     @CurrentAdmin() actor: AdminActor,

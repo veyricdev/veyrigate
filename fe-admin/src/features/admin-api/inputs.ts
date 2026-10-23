@@ -192,3 +192,8 @@ export const AuditListInput = z
     path: ["to"],
   });
 export type AuditListParams = z.infer<typeof AuditListInput>;
+
+export const ROTATION_MODES = ["normal", "emergency"] as const;
+/** `POST /admin/keys/rotate` body (BE `RotateKeyDto`): `mode` is required, nothing else. */
+export const RotateKeyInput = z.object({ mode: z.enum(ROTATION_MODES) }).strict();
+export type RotateKeyParams = z.infer<typeof RotateKeyInput>;
