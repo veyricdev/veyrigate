@@ -22,6 +22,13 @@ const optionalCredential = z
 const optionalNonEmpty = <T extends z.ZodType>(schema: T) =>
   z.preprocess((v) => (v === '' ? undefined : v), schema.optional());
 
+/** `host:port` / `[v6]:port` ⇒ {host, port}; null when malformed (empty host, port not 1..65535). */
+function parseHostPort(value: string): { host: string; port: number } | null {
+  const m = /^(?:\[([0-9A-Fa-f:.]+)\]|([^\s:[\]]+)):(\d{1,5})$/.exec(value);
+  const port = m ? Number(m[3]) : 0;
+  return m && port >= 1 && port <= 65535 ? { host: m[1] ?? m[2], port } : null;
+}
+
 export const envSchema = z
   .object({
     // Required, no default (DEBT-098, Q-26.3): an unset NODE_ENV must not silently mean `development`
@@ -31,7 +38,30 @@ export const envSchema = z
     ISSUER: z.string().url(),
 
     MONGO_URI: z.string().min(1),
-    REDIS_URL: z.string().min(1),
+    // Redis: exactly one of REDIS_URL (standalone) or REDIS_SENTINELS (run 53c, plan §6.2; checked
+    // below). Sentinel mode: `host:port` list + master name; credentials/db only in this mode
+    // (standalone puts them in REDIS_URL). Redis Cluster is not supported (DEBT-013/073).
+    REDIS_URL: optionalNonEmpty(z.string()),
+    REDIS_SENTINELS: optionalNonEmpty(
+      z.string().transform((v, ctx) => {
+        const list = v.split(',').map((s) => parseHostPort(s.trim()));
+        if (list.some((x) => x === null)) {
+          ctx.addIssue({
+            code: 'custom',
+            message: 'REDIS_SENTINELS must be host:port[,host:port...]',
+          });
+          return z.NEVER;
+        }
+        return list as Array<{ host: string; port: number }>;
+      }),
+    ),
+    REDIS_SENTINEL_MASTER: optionalNonEmpty(
+      z.string().regex(/^[A-Za-z0-9._-]+$/, 'REDIS_SENTINEL_MASTER has an invalid format'),
+    ),
+    REDIS_SENTINEL_PASSWORD: optionalNonEmpty(z.string()),
+    REDIS_USERNAME: optionalNonEmpty(z.string()),
+    REDIS_PASSWORD: optionalNonEmpty(z.string()),
+    REDIS_DB: optionalNonEmpty(z.coerce.number().int().nonnegative()),
     // Per-command timeout (ms) for the shared Redis client (DEBT-005). Bounds request-path Redis
     // commands (rate-limit, session liveness, tombstones) so they fail fast instead of queuing
     // forever when Redis is down/reconnecting. Kept below PING_TIMEOUT_MS (1500) so `/ready` is
@@ -120,6 +150,39 @@ export const envSchema = z
       .pipe(z.string().min(32).optional()),
   })
   .superRefine((env, ctx) => {
+    if (!env.REDIS_URL === !env.REDIS_SENTINELS) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['REDIS_URL'],
+        message: env.REDIS_URL
+          ? 'REDIS_URL must not be set together with REDIS_SENTINELS'
+          : 'set REDIS_URL (standalone) or REDIS_SENTINELS (Sentinel)',
+      });
+    }
+    if (env.REDIS_SENTINELS && !env.REDIS_SENTINEL_MASTER) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['REDIS_SENTINEL_MASTER'],
+        message: 'REDIS_SENTINEL_MASTER is required with REDIS_SENTINELS',
+      });
+    }
+    if (!env.REDIS_SENTINELS) {
+      for (const name of [
+        'REDIS_SENTINEL_MASTER',
+        'REDIS_SENTINEL_PASSWORD',
+        'REDIS_USERNAME',
+        'REDIS_PASSWORD',
+        'REDIS_DB',
+      ] as const) {
+        if (env[name] !== undefined) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [name],
+            message: `${name} is only used with REDIS_SENTINELS (standalone: put it in REDIS_URL)`,
+          });
+        }
+      }
+    }
     if (env.NODE_ENV === 'production' && !env.SESSION_COOKIE_SECURE) {
       ctx.addIssue({
         code: 'custom',

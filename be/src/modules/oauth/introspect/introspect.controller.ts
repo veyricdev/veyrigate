@@ -20,6 +20,11 @@ import { ResourceService } from '../../resources/resource.service';
 import { SessionService } from '../../sessions/session.service';
 import { isAccessTokenLive } from '../access-token-liveness';
 import { errorForLog } from '../../../common/logger/error-log';
+import {
+  DEPENDENCY_RETRY_AFTER_SEC,
+  isDependencyUnavailable,
+  KeyProviderUnavailableError,
+} from '../../../common/errors/dependency-unavailable';
 
 /** Reply members the `/introspect` controller needs (Fastify, structural). */
 interface IntrospectReply {
@@ -147,7 +152,8 @@ export class IntrospectController {
     let claims;
     try {
       claims = await this.verifier.verifyAccessToken(token);
-    } catch {
+    } catch (err) {
+      if (err instanceof KeyProviderUnavailableError) throw err; // DEBT-394 ⇒ 503, never inactive
       return INACTIVE; // bad signature / wrong iss / expired / ID token / malformed => inactive.
     }
 
@@ -254,6 +260,15 @@ export class IntrospectController {
       return reply
         .status(HttpStatus.TOO_MANY_REQUESTS)
         .header('Retry-After', String(err.retryAfterSec))
+        .send({ error: 'temporarily_unavailable' });
+    }
+    // Dependency outage (Redis / key provider, run 53c, DEBT-394): 503 + Retry-After and NEVER an
+    // `active` member — neither active:true nor active:false (ma trận #28: infra error ⇒ 5xx).
+    if (isDependencyUnavailable(err)) {
+      this.logger.error(errorForLog(err));
+      return reply
+        .status(HttpStatus.SERVICE_UNAVAILABLE)
+        .header('Retry-After', String(DEPENDENCY_RETRY_AFTER_SEC))
         .send({ error: 'temporarily_unavailable' });
     }
     const error =

@@ -298,3 +298,30 @@ không ảnh hưởng DB cũ.
 
 **Production vs dev**: lệnh như nhau; chính sách/lưu trữ/mã hoá production chờ DEBT-253.
 Diễn tập: `runs/40-B7.5/drill-report.md` (tester, `vg-test-mongo`, DB `vg-drill-*`).
+
+## 5. Redis chết / failover Sentinel (run 53c)
+
+**Dấu hiệu**: `/ready` 503 `redis:"down"`; người dùng thấy trang "temporarily unavailable"; RP/RS nhận
+`503 temporarily_unavailable` + `Retry-After: 5` ở `/token`, `/userinfo`, `/introspect`; alert HTTP 5xx;
+log app `Redis error: …` (không có mật khẩu/URI đầy đủ).
+
+**Không làm**: restart app (không giúp, `/health` vẫn 200), bật fallback memory, FLUSH Redis, đổi
+`maxmemory-policy` (phải `noeviction`, runbook-deploy §3).
+
+1. `read -rs REDISCLI_AUTH && export REDISCLI_AUTH` (nhập mật khẩu sentinel, không vào history/`ps`; **không**
+   dùng `redis-cli -a`), rồi `redis-cli -h <sentinel> -p 26379 SENTINEL get-master-addr-by-name <master>` ⇒
+   master hiện tại; `SENTINEL replicas <master>` / `SENTINEL ckquorum <master>`. Xong: `unset REDISCLI_AUTH`.
+2. Master chết + còn replica ⇒ Sentinel tự failover (vài giây); app tự kết nối master mới, 503 hết.
+3. `min-replicas-to-write 1`: mẫu có 2 replica ⇒ 1 replica chết vẫn ghi được (khôi phục replica sớm). **Không còn
+   replica đồng bộ** ⇒ Redis trả `NOREPLICAS` ⇒ app trả **500 `server_error`, không `Retry-After`** (không phải
+   503: `NOREPLICAS` chưa có trong `isRedisUnavailable`, DEBT-402) ở login/`/token`/logout — fail-closed, không
+   "thành công giả". Nhận diện: log app `NOREPLICAS`, alert HTTP 5xx; `/ready` có thể vẫn 200 (đọc được) ⇒
+   khôi phục replica, `INFO replication` trên master (`connected_slaves`, `lag`).
+4. Mất toàn bộ dữ liệu Redis (không backup): mọi người dùng phải đăng nhập lại, code/flow dở bị hỏng; tombstone
+   `sess_end:*` mất ⇒ AT đã logout có thể "sống" lại tới hết `ACCESS_TOKEN_TTL` (≤ 15') — ghi biên bản; RT
+   (Mongo) không ảnh hưởng.
+5. Sau khi hồi phục: `/ready` 200, metric `temporarily_unavailable` về 0. Khi Redis chết hẳn, request lỗi
+   **thường** không tiêu code/RT/phiên. Nhưng `Command timed out` không bảo đảm lệnh chưa chạy (Redis chậm,
+   failover giữa request): code có thể đã bị tiêu rồi mới timeout ⇒ client thử lại `/token` nhận
+   `invalid_grant` ⇒ **bắt đầu lại luồng** (`/authorize`; với RT: đăng nhập lại). Đây là hành vi an toàn,
+   không phải lỗi mới.

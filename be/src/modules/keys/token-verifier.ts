@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { createLocalJWKSet, decodeProtectedHeader, jwtVerify, type JWTPayload } from 'jose';
 import type { AppConfig } from '../../config/configuration';
 import { KEY_PROVIDER, type KeyProvider } from './key-provider';
+import { KeyProviderUnavailableError } from '../../common/errors/dependency-unavailable';
 
 /** A verified access token (RFC 9068): `aud` is always a single string (the bound resource). */
 export interface AccessTokenClaims extends JWTPayload {
@@ -37,12 +38,18 @@ export class TokenVerifier {
   /**
    * Key set for `token`, passing its header `kid` as a refresh hint (another instance may have rotated).
    * A token whose header does not decode throws here, exactly as `jwtVerify` would (401/inactive).
+   * DEBT-394: a key set that cannot be obtained (Vault down + cache expired) is NOT a token failure:
+   * it throws `KeyProviderUnavailableError` (⇒ 503), which every caller rethrows. Still fail-closed.
    */
   private async jwksFor(token: string): Promise<ReturnType<typeof createLocalJWKSet>> {
     const { kid } = decodeProtectedHeader(token);
-    return createLocalJWKSet({
-      keys: await this.keys.getPublicKeys(typeof kid === 'string' ? kid : undefined),
-    });
+    let keys;
+    try {
+      keys = await this.keys.getPublicKeys(typeof kid === 'string' ? kid : undefined);
+    } catch (err) {
+      throw new KeyProviderUnavailableError(err);
+    }
+    return createLocalJWKSet({ keys });
   }
 
   /**

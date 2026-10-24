@@ -7,6 +7,10 @@ import {
   Logger,
 } from '@nestjs/common';
 import { errorForLog } from '../logger/error-log';
+import {
+  DEPENDENCY_RETRY_AFTER_SEC,
+  isDependencyUnavailable,
+} from '../errors/dependency-unavailable';
 
 /**
  * Minimal Fastify reply shape used by this filter. Declared structurally to
@@ -38,6 +42,8 @@ export function clientErrorStatus(exception: unknown): number | undefined {
  * - `HttpException`s map their status to a matching OAuth `error` code and use
  *   their message as `error_description`.
  * - A non-HttpException with a 4xx `statusCode` keeps that status (see `clientErrorStatus`).
+ * - A dependency outage (Redis/key provider, run 53c) is 503 `temporarily_unavailable` +
+ *   `Retry-After` (still logged like a 500).
  * - Anything else is a `server_error` with a generic description (details are
  *   logged, not leaked to the client).
  */
@@ -66,6 +72,12 @@ export class OAuthExceptionFilter implements ExceptionFilter {
     } else {
       // Name + code + frames only: the message may carry input/DB values (B7.4).
       this.logger.error(errorForLog(exception));
+      if (isDependencyUnavailable(exception)) {
+        status = HttpStatus.SERVICE_UNAVAILABLE;
+        error = 'temporarily_unavailable';
+        description = 'The service is temporarily unavailable. Try again later.';
+        reply.header('Retry-After', String(DEPENDENCY_RETRY_AFTER_SEC));
+      }
     }
 
     // Error bodies are per-request and may follow a credential exchange: never cached (B7.4).

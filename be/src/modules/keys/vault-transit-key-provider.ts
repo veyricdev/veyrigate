@@ -130,11 +130,12 @@ export class VaultTransitKeyProvider implements KeyProvider {
     } catch (err) {
       // Vault refuses `key_version < min_encryption_version` (another instance did an emergency
       // rotation; Vault 2.1.2 answers 500, docs suggest 400). Refresh once and re-sign only when the
-      // latest version really changed — otherwise the original error stands.
+      // latest version really changed — otherwise the original error stands. Shared (single-flight)
+      // refresh (DEBT-395): N concurrent refused signs cost one metadata read, not N, on a weak Vault.
       if (!(err instanceof VaultStatusError) || !(err.status === 400 || err.status >= 500)) {
         throw err;
       }
-      const fresh = await this.refresh(true);
+      const fresh = await this.refresh(false);
       if (fresh.latest === set.latest) throw err;
       return this.signWith(fresh, header, payload);
     }

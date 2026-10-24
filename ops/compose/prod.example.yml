@@ -1,0 +1,219 @@
+# Production compose — EXAMPLE ONLY (run 53c, B7.3, plan §6.2). Never run as-is: replace every
+# <placeholder>, provide the secret files, and review with your platform team. Not used by CI/tests.
+#
+# Topology: IdP backend (be) + Vault Agent sidecar (token sink, run 53 §8) + Redis master + 2 replicas +
+# 3 Sentinels (quorum 2). MongoDB (replica set) and the TLS reverse proxy live elsewhere.
+# Redis Cluster is NOT supported (DEBT-013/073): the app uses multi-key Lua/MULTI in one slot space.
+#
+# Security notes
+# - No secret in this file or on a command line (`ps` leak). Redis/Sentinel/Vault Agent read their
+#   passwords from secret files. The app's `env_file:` only keeps secrets out of this file and out of
+#   git: every variable it loads (REDIS_PASSWORD, CSRF_SECRET, MONGO_URI with its password, …) is still
+#   in the container's `Config.Env`, i.e. visible to anyone who can run `docker inspect` (docker access =
+#   root on the host). Restrict docker access accordingly; the Vault token is the only app secret read
+#   from a file (VAULT_TOKEN_FILE, via Vault Agent). Secret files for the remaining variables (`*_FILE`)
+#   are not supported yet (DEBT-406 follow-up, X6).
+# - Nothing is published on the host except through the reverse proxy; `/metrics` must NOT be routed
+#   by the public proxy (DEBT-220) — Prometheus scrapes `be:4000` on the internal network only.
+# - Redis `maxmemory-policy noeviction` (DEBT-049: an evicted `sess_end:*` tombstone would revive a
+#   logged-out access token) and `min-replicas-to-write 1` with TWO replicas: one replica down ⇒ writes
+#   continue; no replica in sync ⇒ Redis refuses writes with `NOREPLICAS`. The app does NOT map
+#   `NOREPLICAS` to 503 (it is not in `isRedisUnavailable`, DEBT-402): login/token/logout answer
+#   **500 `server_error` without `Retry-After`** (fail-closed, never a false success). Trade-off chosen
+#   here: an extra replica so that a single replica failure does not stop all writes. The alternative
+#   `min-replicas-to-write 0` keeps writing with no replica but an acknowledged write (session, code,
+#   `sess_end:*` tombstone) can be lost at failover (async replication) — not used in this example.
+# - Hardening (`read_only`, `cap_drop: [ALL]`, no-new-privileges) requires every service to start as a
+#   non-root `user:` (the official entrypoints only chown / setcap / gosu / su-exec when started as
+#   root). UIDs below are those of the official images (redis: 999:999; hashicorp/vault alpine:
+#   vault = 100, group vault = 1000) — confirm with `docker image inspect` / the image Dockerfile before
+#   use. Host secret files and bind mounts must be readable by that uid/gid (compose `secrets:` without
+#   Swarm are bind mounts that keep the host owner/mode). THIS EXAMPLE HAS NOT BEEN STARTED: only
+#   `docker compose config` was run (DEBT-405 asks for one trial run on a scratch network).
+
+x-redis-image: &redis-image redis:7.4.10-bookworm@sha256:e9b2e45ecd47fbb69b877cf8d045d5cccaaaed52524b6e098b4abe8212994f73
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  restart: unless-stopped
+
+services:
+  be:
+    <<: *hardening
+    image: <registry>/veyrigate-be@sha256:<digest>
+    user: '1000:1000'
+    env_file: [./secrets/be.env] # NOT committed: ISSUER, MONGO_URI, CSRF_SECRET, REDIS_PASSWORD, …
+    environment:
+      NODE_ENV: production
+      REDIS_SENTINELS: redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379
+      REDIS_SENTINEL_MASTER: idp
+      KEY_PROVIDER: vault
+      VAULT_ADDR: https://<vault-host>:8200
+      VAULT_TRANSIT_KEY: idp-signer
+      VAULT_TOKEN_FILE: /run/vault/token
+      # REDIS_URL must NOT be set together with REDIS_SENTINELS (the app refuses to boot).
+    tmpfs: [/tmp]
+    volumes:
+      - vault-token:/run/vault:ro
+    expose: ['4000'] # reverse proxy only; no `ports:`
+    stop_grace_period: 20s # SIGTERM ⇒ graceful exit even with Redis down (DEBT-397)
+    depends_on:
+      vault-agent: { condition: service_healthy }
+      redis-sentinel-1: { condition: service_started }
+      redis-sentinel-2: { condition: service_started }
+      redis-sentinel-3: { condition: service_started }
+    networks: [backend]
+
+  vault-agent:
+    <<: *hardening
+    image: hashicorp/vault:2.1.2@sha256:c2f666266f383d2cf424d86b8bb8ce7d065562173ffec2b476d762943608bb55
+    user: '100:1000' # vault:vault in the official image; group 1000 = the app's group (token sink 0440)
+    command: [vault, agent, -config=/vault/config/agent.hcl]
+    environment:
+      SKIP_SETCAP: 'true' # no setcap on the read-only rootfs (agent does not need mlock ⇒ no IPC_LOCK)
+      SKIP_CHOWN: 'true'
+    volumes:
+      - ./vault-agent.hcl:/vault/config/agent.hcl:ro
+      - ./secrets/approle:/vault/approle:ro # role_id / secret_id files (NOT committed)
+      - vault-token:/run/vault
+    healthcheck:
+      test: [CMD, sh, -c, 'test -s /run/vault/token']
+      interval: 5s
+      retries: 12
+    networks: [backend]
+
+  redis-master:
+    <<: *hardening
+    image: *redis-image
+    user: '999:999' # redis:redis in the official image; /data volume is owned by 999 in the image
+    hostname: redis-master
+    # /run/secrets/redis_auth.conf: `requirepass <pw>` + `masterauth <pw>` (same password as the app's
+    # REDIS_PASSWORD). The other settings are not secret and stay visible here.
+    command:
+      - redis-server
+      - /run/secrets/redis_auth.conf
+      - --maxmemory-policy
+      - noeviction
+      - --maxmemory
+      - <bytes>
+      - --min-replicas-to-write
+      - '1'
+      - --min-replicas-max-lag
+      - '10'
+      - --replica-announce-ip
+      - redis-master
+      - --appendonly
+      - 'yes'
+    secrets: [redis_auth.conf]
+    volumes: [redis-master-data:/data]
+    networks: [backend]
+
+  redis-replica-1:
+    <<: *hardening
+    image: *redis-image
+    user: '999:999'
+    hostname: redis-replica-1
+    command:
+      - redis-server
+      - /run/secrets/redis_auth.conf
+      - --replicaof
+      - redis-master
+      - '6379'
+      - --maxmemory-policy
+      - noeviction
+      - --maxmemory
+      - <bytes>
+      - --min-replicas-to-write
+      - '1'
+      - --min-replicas-max-lag
+      - '10'
+      - --replica-announce-ip
+      - redis-replica-1
+      - --appendonly
+      - 'yes'
+    secrets: [redis_auth.conf]
+    volumes: [redis-replica-1-data:/data]
+    depends_on: [redis-master]
+    networks: [backend]
+
+  redis-replica-2:
+    <<: *hardening
+    image: *redis-image
+    user: '999:999'
+    hostname: redis-replica-2
+    command:
+      - redis-server
+      - /run/secrets/redis_auth.conf
+      - --replicaof
+      - redis-master
+      - '6379'
+      - --maxmemory-policy
+      - noeviction
+      - --maxmemory
+      - <bytes>
+      - --min-replicas-to-write
+      - '1'
+      - --min-replicas-max-lag
+      - '10'
+      - --replica-announce-ip
+      - redis-replica-2
+      - --appendonly
+      - 'yes'
+    secrets: [redis_auth.conf]
+    volumes: [redis-replica-2-data:/data]
+    depends_on: [redis-master]
+    networks: [backend]
+
+  # Three Sentinels, quorum 2. Sentinel rewrites its config at runtime, so it is generated into the
+  # tmpfs at start from the secret files (password never on the command line).
+  redis-sentinel-1: &sentinel
+    <<: *hardening
+    image: *redis-image
+    user: '999:999'
+    hostname: redis-sentinel-1
+    tmpfs: ['/etc/sentinel:uid=999,gid=999,mode=0700']
+    secrets: [redis_password, sentinel_password]
+    entrypoint:
+      - sh
+      - -c
+      - |
+        umask 077
+        {
+          echo "port 26379"
+          echo "sentinel resolve-hostnames yes"
+          echo "sentinel announce-hostnames yes"
+          echo "sentinel announce-ip $$(hostname)"
+          echo "requirepass $$(cat /run/secrets/sentinel_password)"
+          echo "sentinel monitor idp redis-master 6379 2"
+          echo "sentinel auth-pass idp $$(cat /run/secrets/redis_password)"
+          echo "sentinel down-after-milliseconds idp 5000"
+          echo "sentinel failover-timeout idp 60000"
+          echo "sentinel parallel-syncs idp 1"
+        } > /etc/sentinel/sentinel.conf
+        exec redis-sentinel /etc/sentinel/sentinel.conf
+    depends_on: [redis-master, redis-replica-1, redis-replica-2]
+    networks: [backend]
+  redis-sentinel-2:
+    <<: *sentinel
+    hostname: redis-sentinel-2
+  redis-sentinel-3:
+    <<: *sentinel
+    hostname: redis-sentinel-3
+
+secrets:
+  redis_auth.conf: { file: ./secrets/redis_auth.conf }
+  redis_password: { file: ./secrets/redis_password }
+  sentinel_password: { file: ./secrets/sentinel_password }
+
+volumes:
+  vault-token:
+    driver: local
+    driver_opts: { type: tmpfs, device: tmpfs, o: 'mode=0750,uid=100,gid=1000' }
+  redis-master-data:
+  redis-replica-1-data:
+  redis-replica-2-data:
+
+networks:
+  backend:
+    internal: true # no route to the internet; the reverse proxy joins this network to reach be:4000

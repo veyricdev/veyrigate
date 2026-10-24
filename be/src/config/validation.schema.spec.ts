@@ -375,3 +375,109 @@ describe('KEY_PROVIDER / Vault Transit env (run 53, V13)', () => {
     expect(cfg).toMatchObject({ mount: 'idp/transit_1', timeoutMs: 10000 });
   });
 });
+
+describe('Redis Sentinel env (run 53c, B7.3)', () => {
+  const NO_URL = Object.fromEntries(Object.entries(BASE).filter(([k]) => k !== 'REDIS_URL'));
+  const SENTINEL = {
+    ...NO_URL,
+    REDIS_SENTINELS: 'sentinel-1:26379, sentinel-2:26379,[fd00::3]:26380',
+    REDIS_SENTINEL_MASTER: 'idp',
+  };
+  const errorOf = (env: Record<string, string>): string => {
+    try {
+      validateEnv(env);
+      return '';
+    } catch (e) {
+      return (e as Error).message;
+    }
+  };
+
+  it('REDIS_SENTINELS ⇒ sentinel mode: parsed list, master, db 0, no redisUrl', () => {
+    const db = buildConfig(validateEnv(SENTINEL)).database;
+    expect(db.redisUrl).toBeUndefined();
+    expect(db.redisSentinel).toEqual({
+      sentinels: [
+        { host: 'sentinel-1', port: 26379 },
+        { host: 'sentinel-2', port: 26379 },
+        { host: 'fd00::3', port: 26380 },
+      ],
+      masterName: 'idp',
+      db: 0,
+    });
+  });
+
+  it('credentials and db are passed through (sentinel mode only)', () => {
+    const db = buildConfig(
+      validateEnv({
+        ...SENTINEL,
+        REDIS_SENTINEL_PASSWORD: 'sp',
+        REDIS_USERNAME: 'idp',
+        REDIS_PASSWORD: 'rp',
+        REDIS_DB: '2',
+      }),
+    ).database;
+    expect(db.redisSentinel).toMatchObject({
+      sentinelPassword: 'sp',
+      username: 'idp',
+      password: 'rp',
+      db: 2,
+    });
+  });
+
+  it('REDIS_URL only ⇒ standalone, unchanged', () => {
+    const db = buildConfig(validateEnv(BASE)).database;
+    expect(db.redisUrl).toBe('redis://x');
+    expect(db.redisSentinel).toBeUndefined();
+  });
+
+  it('neither REDIS_URL nor REDIS_SENTINELS ⇒ refused', () => {
+    expect(errorOf(NO_URL)).toMatch(/REDIS_URL: .*REDIS_SENTINELS/);
+  });
+
+  it('both REDIS_URL and REDIS_SENTINELS ⇒ refused (no silent precedence)', () => {
+    expect(errorOf({ ...SENTINEL, REDIS_URL: 'redis://x' })).toMatch(/REDIS_URL/);
+  });
+
+  it('sentinel mode without REDIS_SENTINEL_MASTER ⇒ refused', () => {
+    const env = { ...SENTINEL, REDIS_SENTINEL_MASTER: '' }; // empty = unset
+    expect(errorOf(env)).toMatch(/REDIS_SENTINEL_MASTER/);
+  });
+
+  it.each([
+    '',
+    ' ',
+    'host',
+    'host:',
+    ':26379',
+    'host:0',
+    'host:70000',
+    'host:12x',
+    'a b:1',
+    'h:1,,',
+  ])('malformed REDIS_SENTINELS %j ⇒ refused', (value) => {
+    const msg = errorOf({ ...SENTINEL, REDIS_SENTINELS: value });
+    // '' counts as unset: then the "one of" rule names both variables.
+    expect(msg).toMatch(/REDIS_SENTINELS/);
+  });
+
+  it.each([
+    'REDIS_SENTINEL_MASTER',
+    'REDIS_SENTINEL_PASSWORD',
+    'REDIS_USERNAME',
+    'REDIS_PASSWORD',
+    'REDIS_DB',
+  ])('standalone (REDIS_URL) + %s ⇒ refused (credentials belong in REDIS_URL)', (name) => {
+    expect(errorOf({ ...BASE, [name]: '1' })).toMatch(new RegExp(name));
+  });
+
+  it('REDIS_DB must be a non-negative integer', () => {
+    expect(errorOf({ ...SENTINEL, REDIS_DB: '-1' })).toMatch(/REDIS_DB/);
+    expect(errorOf({ ...SENTINEL, REDIS_DB: 'x' })).toMatch(/REDIS_DB/);
+  });
+
+  it('a validation error never echoes a password value', () => {
+    const msg = errorOf({ ...BASE, REDIS_PASSWORD: 'canary-redis-pw-123' });
+    expect(msg).toMatch(/REDIS_PASSWORD/);
+    expect(msg).not.toContain('canary-redis-pw-123');
+  });
+});

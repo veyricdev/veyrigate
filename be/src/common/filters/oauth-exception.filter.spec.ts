@@ -60,3 +60,23 @@ describe('OAuthExceptionFilter: non-HttpException carrying a statusCode (B7.4 re
     expect(out.errorLogged).toBe(true);
   });
 });
+
+describe('OAuthExceptionFilter: dependency outage (run 53c)', () => {
+  it('Redis "Command timed out" ⇒ 503 temporarily_unavailable + Retry-After 5 + no-store, logged', () => {
+    const out = run(new Error('Command timed out'));
+    expect(out.status).toBe(503);
+    expect(out.body).toEqual({
+      error: 'temporarily_unavailable',
+      error_description: 'The service is temporarily unavailable. Try again later.',
+    });
+    expect(out.headers['Retry-After']).toBe('5');
+    expect(out.headers['Cache-Control']).toBe('no-store');
+    expect(out.errorLogged).toBe(true);
+  });
+
+  it('an unrelated Error stays 500 server_error without Retry-After', () => {
+    const out = run(new Error('redis down'));
+    expect(out.status).toBe(500);
+    expect(out.headers['Retry-After']).toBeUndefined();
+  });
+});

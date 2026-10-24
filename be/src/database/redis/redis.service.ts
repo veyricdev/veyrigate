@@ -2,6 +2,8 @@ import { Inject, Injectable, Logger, type OnApplicationShutdown } from '@nestjs/
 import type Redis from 'ioredis';
 import { REDIS_CLIENT } from './redis.constants';
 
+const QUIT_TIMEOUT_MS = 1000;
+
 /**
  * Thin wrapper around the shared ioredis client (B1.4).
  *
@@ -25,8 +27,21 @@ export class RedisService implements OnApplicationShutdown {
     return reply === 'PONG';
   }
 
+  /**
+   * DEBT-397: bounded shutdown. Graceful `QUIT` only when connected, capped at 1 s; then always
+   * `disconnect()`. With Redis down, `quit()` is queued behind leftover commands (e.g. the `/ready`
+   * PING), fails, and the client kept reconnecting: the process never exited (`docker stop` ⇒ 137).
+   */
   async onApplicationShutdown(): Promise<void> {
     this.logger.log('Closing Redis connection');
-    await this.redis.quit();
+    if (this.redis.status === 'ready') {
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([
+        this.redis.quit().catch(() => undefined),
+        new Promise((resolve) => (timer = setTimeout(resolve, QUIT_TIMEOUT_MS))),
+      ]);
+      clearTimeout(timer);
+    }
+    this.redis.disconnect();
   }
 }

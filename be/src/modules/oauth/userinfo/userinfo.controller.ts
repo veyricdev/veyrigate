@@ -10,6 +10,7 @@ import { TokenVerifier } from '../../keys/token-verifier';
 import { ResourceService } from '../../resources/resource.service';
 import { SessionService } from '../../sessions/session.service';
 import { isAccessTokenLive } from '../access-token-liveness';
+import { KeyProviderUnavailableError } from '../../../common/errors/dependency-unavailable';
 
 /** Reply members the `/userinfo` controller needs (Fastify, structural like TokenReply). */
 interface UserinfoReply {
@@ -81,7 +82,9 @@ export class UserinfoController {
     let claims;
     try {
       claims = await this.verifier.verifyAccessToken(token);
-    } catch {
+    } catch (err) {
+      // DEBT-394: key provider down ⇒ 503 (global filter), never "token looks bad".
+      if (err instanceof KeyProviderUnavailableError) throw err;
       // Any JOSE failure (bad signature, wrong `iss`, missing claim, ID token with `typ: JWT`,
       // `alg` != RS256, expired) collapses to a single opaque 401 (no reason leak).
       return this.unauthorized(req, reply, 'invalid_token');

@@ -27,6 +27,7 @@ import { SessionCookie } from '../../sessions/session.cookie';
 import { SessionService } from '../../sessions/session.service';
 import { UserTenantService } from '../user-tenant.service';
 import { AdminAuthError } from './admin-auth.errors';
+import { KeyProviderUnavailableError } from '../../../common/errors/dependency-unavailable';
 
 /** Brand key — NOT exported, so no code outside this file can mint a TenantContext. */
 declare const brand: unique symbol;
@@ -161,7 +162,8 @@ export class AdminTokenGuard implements CanActivate {
     let claims: AccessTokenClaims;
     try {
       claims = await this.verifier.verifyAccessToken(token);
-    } catch {
+    } catch (err) {
+      if (err instanceof KeyProviderUnavailableError) throw err; // DEBT-394 ⇒ 503
       throw AdminAuthError.invalidToken();
     }
     if (claims.aud !== this.adminAud || claims.sid === undefined) {

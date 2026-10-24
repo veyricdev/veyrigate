@@ -394,6 +394,20 @@ describe('VaultTransitKeyProvider (run 53, unit V7–V12)', () => {
       expect(vault.calls).toEqual(['read']);
     });
 
+    it('DEBT-395: 10 concurrent signJwt all refused (500) ⇒ all reject, one shared metadata read', async () => {
+      const p = make();
+      await p.init();
+      vault.calls = [];
+      vault.fail.sign = Array.from({ length: 20 }, () => () => json(500, {})); // incl. 1 retry each
+      const results = await Promise.allSettled(
+        Array.from({ length: 10 }, () => p.signJwt({ typ: 'JWT' }, {})),
+      );
+      expect(results.every((r) => r.status === 'rejected')).toBe(true);
+      expect(String((results[0] as PromiseRejectedResult).reason)).toContain('status=500');
+      expect(vault.calls.filter((c) => c === 'sign')).toHaveLength(20);
+      expect(vault.calls.filter((c) => c === 'read')).toHaveLength(1);
+    });
+
     it('expired cache + failing refresh ⇒ throw (never the stale key set)', async () => {
       const p = make();
       await p.init();

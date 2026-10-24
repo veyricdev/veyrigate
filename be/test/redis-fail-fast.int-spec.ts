@@ -1,3 +1,4 @@
+import { jest } from '@jest/globals';
 import net from 'node:net';
 import type { AddressInfo } from 'node:net';
 import type { ConfigService } from '@nestjs/config';
@@ -5,6 +6,7 @@ import IORedis from 'ioredis';
 import { buildRedisOptions } from '../src/database/redis/redis.module';
 import { RedisService } from '../src/database/redis/redis.service';
 import type { DatabaseConfig } from '../src/config/configuration';
+import { startRedisProxy } from './redis-proxy';
 import { RateLimitService } from '../src/modules/security/rate-limit/rate-limit.service';
 
 /**
@@ -143,4 +145,78 @@ describe('Redis request-path fail-fast on an unreachable server (DEBT-005)', () 
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   }, 10_000);
+});
+
+/**
+ * DEBT-397: `docker stop` while Redis was down ended in SIGKILL (137). Run-53c Docker repro: the
+ * `/ready` PING stays in ioredis' offline queue, `quit()` is queued behind it and rejects with
+ * "Command timed out", and the client never ends (it keeps reconnecting), so the process never exits.
+ * Shutdown must be bounded, never throw, and end the client; with Redis up it still sends QUIT.
+ */
+describe('RedisService.onApplicationShutdown (DEBT-397)', () => {
+  it('Redis down with a queued command: resolves within ~1 s, never throws, stops reconnecting', async () => {
+    const proxy = await startRedisProxy();
+    // Slow reconnect cycle = the Docker repro (each attempt waited on DNS for a stopped container).
+    const client = new IORedis(proxy.url, {
+      ...buildRedisOptions(dbConfig),
+      retryStrategy: () => 3000,
+    });
+    client.on('error', () => undefined);
+    try {
+      await client.ping();
+      const reconnecting = new Promise((resolve) => client.once('reconnecting', resolve));
+      await proxy.refuse();
+      await reconnecting;
+      // What `/ready` leaves behind: rejected by commandTimeout, still in the offline queue.
+      await expect(client.ping()).rejects.toThrow(/Command timed out/);
+      const start = Date.now();
+      await expect(new RedisService(client).onApplicationShutdown()).resolves.toBeUndefined();
+      expect(Date.now() - start).toBeLessThanOrEqual(1500);
+      let attempts = 0;
+      client.on('connecting', () => attempts++);
+      await new Promise((r) => setTimeout(r, 3500));
+      expect(attempts).toBe(0); // no reconnect loop keeping the process alive
+    } finally {
+      client.disconnect();
+      await proxy.close();
+    }
+  }, 15_000);
+
+  it('Redis stalled while ready (long commandTimeout): QUIT is capped at ~1 s, the client ends', async () => {
+    const proxy = await startRedisProxy();
+    const client = new IORedis(proxy.url, {
+      ...buildRedisOptions({ ...dbConfig, redisCommandTimeoutMs: 8000 }),
+    });
+    client.on('error', () => undefined);
+    try {
+      await client.ping();
+      proxy.stall();
+      expect(client.status).toBe('ready');
+      const ended = new Promise<'end'>((resolve) => client.once('end', () => resolve('end')));
+      const start = Date.now();
+      await expect(new RedisService(client).onApplicationShutdown()).resolves.toBeUndefined();
+      expect(Date.now() - start).toBeLessThanOrEqual(1500);
+      // ioredis destroys a socket that does not close within its disconnectTimeout (2 s).
+      expect(await settledWithin(ended, 3000)).toBe('resolved');
+    } finally {
+      client.disconnect();
+      await proxy.close();
+    }
+  }, 15_000);
+
+  it('Redis up: sends QUIT (graceful) and the client ends', async () => {
+    const client = new IORedis(process.env.TEST_REDIS_URL ?? 'redis://localhost:6479', {
+      ...buildRedisOptions(dbConfig),
+    });
+    try {
+      await client.ping();
+      const quit = jest.spyOn(client, 'quit');
+      const ended = new Promise((resolve) => client.once('end', resolve));
+      await new RedisService(client).onApplicationShutdown();
+      expect(quit).toHaveBeenCalledTimes(1);
+      await ended;
+    } finally {
+      client.disconnect();
+    }
+  });
 });

@@ -20,9 +20,21 @@ export interface AppConfig {
   trustProxy: false | string[];
 }
 
+/** Redis Sentinel connection (run 53c): set iff REDIS_SENTINELS is set. */
+export interface RedisSentinelConfig {
+  sentinels: Array<{ host: string; port: number }>;
+  masterName: string;
+  sentinelPassword?: string;
+  username?: string;
+  password?: string;
+  db: number;
+}
+
 export interface DatabaseConfig {
   mongoUri: string;
-  redisUrl: string;
+  /** Standalone Redis; exactly one of `redisUrl` / `redisSentinel` is set (validated). */
+  redisUrl?: string;
+  redisSentinel?: RedisSentinelConfig;
   /** Per-command timeout (ms) for the shared Redis client — fail-fast bound, see DEBT-005. */
   redisCommandTimeoutMs: number;
 }
@@ -127,6 +139,18 @@ export function buildConfig(env: Env): Config {
     database: {
       mongoUri: env.MONGO_URI,
       redisUrl: env.REDIS_URL,
+      redisSentinel: env.REDIS_SENTINELS
+        ? {
+            sentinels: env.REDIS_SENTINELS,
+            masterName: env.REDIS_SENTINEL_MASTER!,
+            ...(env.REDIS_SENTINEL_PASSWORD
+              ? { sentinelPassword: env.REDIS_SENTINEL_PASSWORD }
+              : {}),
+            ...(env.REDIS_USERNAME ? { username: env.REDIS_USERNAME } : {}),
+            ...(env.REDIS_PASSWORD ? { password: env.REDIS_PASSWORD } : {}),
+            db: env.REDIS_DB ?? 0,
+          }
+        : undefined,
       redisCommandTimeoutMs: env.REDIS_COMMAND_TIMEOUT_MS,
     },
     token: {

@@ -11,6 +11,7 @@ import { AuditAction } from '../security/audit/audit-action.enum';
 import type { AuditService } from '../security/audit/audit.service';
 import { encodeCompactJws } from './jws';
 import { KEY_PROVIDER } from './key-provider';
+import { KeyProviderUnavailableError } from '../../common/errors/dependency-unavailable';
 import { KeyRotationService } from './key-rotation.service';
 import { KeysController } from './keys.controller';
 import { ClientCorsService } from '../clients/client-cors.service';
@@ -334,6 +335,32 @@ describe('Keys (B1.9, INV-19)', () => {
         ).rejects.toThrow();
       },
     );
+  });
+
+  describe('DEBT-394: key provider down ⇒ KeyProviderUnavailableError, never a plain verify failure', () => {
+    it('verify / verifyAccessToken / verifyIdTokenHint all reject with KeyProviderUnavailableError', async () => {
+      const jwt = await provider.signJwt(
+        { typ: 'at+jwt' },
+        { sub: 'usr_1', iss: ISSUER, exp: 9e9 },
+      );
+      jest
+        .spyOn(provider, 'getPublicKeys')
+        .mockRejectedValue(new Error('vault read failed: status=503'));
+      await expect(verifier.verifyAccessToken(jwt)).rejects.toBeInstanceOf(
+        KeyProviderUnavailableError,
+      );
+      await expect(verifier.verify(jwt, AUD)).rejects.toBeInstanceOf(KeyProviderUnavailableError);
+      await expect(verifier.verifyIdTokenHint(jwt)).rejects.toBeInstanceOf(
+        KeyProviderUnavailableError,
+      );
+    });
+
+    it('an undecodable token is still a token failure (not an outage), even with the provider down', async () => {
+      jest.spyOn(provider, 'getPublicKeys').mockRejectedValue(new Error('down'));
+      const err = await verifier.verifyAccessToken('not-a-jwt').catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect(err).not.toBeInstanceOf(KeyProviderUnavailableError);
+    });
   });
 
   describe('verifyIdTokenHint (B4.7 RP-initiated logout)', () => {

@@ -12,6 +12,7 @@ import { TokenVerifier } from '../keys/token-verifier';
 import { ResourceService } from '../resources/resource.service';
 import { SessionService } from '../sessions/session.service';
 import { isAccessTokenLive } from '../oauth/access-token-liveness';
+import { KeyProviderUnavailableError } from '../../common/errors/dependency-unavailable';
 
 /** Reply members the demo controller needs (Fastify, structural like UserinfoReply). */
 interface DemoReply {
@@ -76,7 +77,8 @@ export class DemoController {
     let claims;
     try {
       claims = await this.verifier.verifyAccessToken(token);
-    } catch {
+    } catch (err) {
+      if (err instanceof KeyProviderUnavailableError) throw err; // DEBT-394 ⇒ 503
       // Any JOSE failure (bad signature, wrong iss, missing claim, ID token typ=JWT, alg!=RS256,
       // expired) collapses to one opaque 401 — no reason leak.
       return this.unauthorized(req, reply);

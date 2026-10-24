@@ -272,8 +272,10 @@ key không tồn tại (404) hoặc không có quyền (403), key không phải 
 - Token mang `kid` lạ (instance khác vừa rotate) ⇒ refresh metadata tối đa 1 lần / 5 s.
 - Rotate normal: version cũ còn trong JWKS tới `creation_time(mới) + ACCESS_TOKEN_TTL + 30 s`.
 - **Vault down**: không cấp được token (`/token` 5xx, không phát token chưa ký). Verify (`/userinfo`,
-  `/introspect`, admin API) chạy bằng cache tới khi hết hạn (≤ 30 s); sau đó verify thất bại và hiện là
-  `401 invalid_token` / `{active:false}` (fail-closed, chưa phân biệt với token sai — DEBT-394). `/ready`
+  `/introspect`, admin API) chạy bằng cache tới khi hết hạn (≤ 30 s); sau đó trả **503
+  `temporarily_unavailable` + `Retry-After: 5`** (run 53c, DEBT-394): vẫn fail-closed nhưng RS/RP phân biệt
+  được sự cố với token sai (`/introspect` không có `active`; token hỏng định dạng vẫn 401/`active:false`).
+  Logout bỏ qua `id_token_hint` (về trang mặc định) — chỉ là chọn redirect, không cấp quyền. `/ready`
   không kiểm Vault (DEBT-390).
 - Backup/HA/unseal của Vault là trách nhiệm hạ tầng (DEBT-391): mất storage Vault = mất key ký.
 
@@ -302,7 +304,7 @@ bash be/scripts/docker-smoke.sh <registry>/veyrigate-be:<version> <registry>/vey
 Smoke (như CI `be-image`, 11 check) dựng mạng `vg-b73b-net` + Mongo/Redis/Vault dev (TLS) tạm, rồi
 kiểm: non-root, `HEALTHCHECK` healthy, `/health` + `/ready` 200, `/jwks.json` đúng key Vault Transit,
 không `.env`/key trong image (cả build stage), Redis chết ⇒ `/health` 200 + `/ready` 503, `docker stop`
-⇒ 0/143, thiếu biến ⇒ thoát ≠ 0 (chỉ nêu tên), `KEY_PROVIDER=local` ⇒ thoát ≠ 0, log không có secret.
+**khi Redis vẫn chết** ⇒ thoát 0 trong < 10 s (DEBT-397), thiếu biến ⇒ thoát ≠ 0 (chỉ nêu tên), `KEY_PROVIDER=local` ⇒ thoát ≠ 0, log không có secret.
 Không push, không đăng nhập registry.
 
 **Env** (chỉ từ môi trường process; image đặt sẵn `NODE_ENV=production`, `PORT=4000`). `main.ts` nạp
@@ -311,7 +313,7 @@ Không push, không đăng nhập registry.
 | Nhóm | Biến | Ghi chú |
 |---|---|---|
 | Bắt buộc | `ISSUER` | URL công khai `https://…` (khớp proxy) |
-| Bắt buộc | `MONGO_URI`, `REDIS_URL` | Từ secret store (chứa mật khẩu); Redis `noeviction` (§3) |
+| Bắt buộc | `MONGO_URI` + **một trong** `REDIS_SENTINELS` (+ `REDIS_SENTINEL_MASTER`, production, §10) / `REDIS_URL` (standalone) | Từ secret store (chứa mật khẩu); Redis `noeviction` (§3) |
 | Bắt buộc | `ACCESS_TOKEN_TTL`, `REFRESH_TOKEN_TTL`, `SESSION_IDLE_TTL`, `SESSION_ABSOLUTE_TTL` | Giây (Q6) |
 | Bắt buộc | `SMTP_URL`, `ADMIN_SEED_EMAIL`, `CSRF_SECRET`, `RATE_LIMIT_WINDOW`, `RATE_LIMIT_MAX` | `CSRF_SECRET` ngẫu nhiên dài, từ secret store |
 | Key ký | `KEY_PROVIDER=vault`, `VAULT_ADDR` (`https:`), `VAULT_TOKEN_FILE`, `VAULT_TRANSIT_KEY` (+ `VAULT_TRANSIT_MOUNT`, `VAULT_TIMEOUT_MS`) | Xem §8. `local` bị từ chối ở production |
@@ -338,9 +340,61 @@ qua biến môi trường hay `docker run -e`. App phải khởi động **sau**
   chết thì mọi container cùng fail, restart không giúp gì. `/ready` không kiểm Vault (DEBT-390).
 
 **Dừng**: `docker stop` gửi SIGTERM ⇒ Nest đóng HTTP, Mongo, Redis rồi thoát mã 0. Để `stop -t` ≥ 15 s.
-Khi Redis **đang chết**, `redis.quit()` chờ client đang reconnect ⇒ hết `stop -t` thì bị SIGKILL (137),
-không mất dữ liệu (DEBT-397).
+Redis: `QUIT` chỉ khi đang kết nối, tối đa 1 s, rồi luôn `disconnect()` ⇒ Redis **đang chết** vẫn thoát 0
+trong vài giây (run 53c, DEBT-397; smoke check 8).
 
 **Cập nhật base image**: như §7 (cùng `NODE_IMAGE` digest với `fe-admin/Dockerfile`, đổi cả hai + `.nvmrc`
 + `engines` cùng lúc, bản ≥ 14 ngày, DEBT-379). Image phụ trợ của smoke (Mongo/Redis/Vault) ghim digest
 trong `be/scripts/docker-smoke.sh`.
+
+## 10. Redis Sentinel (production, run 53c)
+
+Plan §6.2: production chạy **Redis Sentinel** (self-host, Q5). **Không hỗ trợ Redis Cluster** (Lua/MULTI
+nhiều key khác slot — DEBT-013/073 đóng dạng N/A). Mẫu topology: `ops/compose/prod.example.yml` (1 master
++ 2 replica + 3 sentinel quorum 2, `noeviction`, `min-replicas-to-write 1`, Vault Agent sidecar, không
+publish `/metrics`, mọi service `user:` không root) — **chỉ là file mẫu, không chạy nguyên trạng**; mới qua
+`docker compose config`, **chưa khởi động thử** (DEBT-405).
+
+**Đánh đổi `min-replicas-to-write`**: `1` ⇒ không replica nào đồng bộ thì Redis trả `NOREPLICAS` và app trả
+**500 `server_error` không `Retry-After`** ở thao tác ghi (login, `/token`, logout) — fail-closed nhưng dừng
+ghi. Vì vậy mẫu dùng **2 replica** (1 replica chết vẫn ghi). `0` ⇒ vẫn ghi khi mất replica nhưng ghi đã xác
+nhận (phiên, code, tombstone `sess_end:*`) có thể mất khi failover (replication bất đồng bộ) — mẫu không chọn.
+
+**Secret**: `env_file:` chỉ giữ secret ngoài file compose/git; biến vẫn nằm trong `Config.Env` ⇒ ai có quyền
+docker (= root host) đọc được qua `docker inspect`. Bí mật nên lấy qua secret file / Vault Agent; hiện app chỉ
+đọc từ file với `VAULT_TOKEN_FILE` (`*_FILE` cho secret khác: chưa hỗ trợ, X6).
+
+**Env** (đặt **một** chế độ; có cả `REDIS_URL` và `REDIS_SENTINELS` ⇒ app không boot, log nêu tên biến):
+
+| Biến | Ghi chú |
+|---|---|
+| `REDIS_SENTINELS` | `host:port[,host:port…]` (IPv6: `[addr]:port`), ≥ 1; nên ≥ 3 |
+| `REDIS_SENTINEL_MASTER` | Tên master group (`sentinel monitor <tên> …`), bắt buộc với `REDIS_SENTINELS` |
+| `REDIS_SENTINEL_PASSWORD` | Tuỳ chọn — `requirepass` của sentinel |
+| `REDIS_USERNAME` / `REDIS_PASSWORD` / `REDIS_DB` | Tuỳ chọn (db mặc định 0); **chỉ** dùng với Sentinel — standalone đặt trong `REDIS_URL` (đặt kèm `REDIS_URL` ⇒ không boot) |
+| `REDIS_URL` | Standalone (dev/test). Production + `REDIS_URL` vẫn boot nhưng log WARN "no failover" |
+
+Client giữ nguyên giới hạn fail-fast cho cả hai chế độ (`REDIS_COMMAND_TIMEOUT_MS`, `maxRetriesPerRequest 1`,
+retry ≤ 2 s) và hỏi sentinel master hiện tại mỗi lần (re)connect. Hostname sentinel/master phải resolve được
+từ container app (`sentinel announce-hostnames yes` + tên DNS ổn định). Không TLS tới Redis/Sentinel ⇒ chỉ
+mạng nội bộ (`internal: true`).
+
+**Redis không trả lời (chết, failover, mạng)** — kill test `be/test/redis-down.int-spec.ts`:
+- Mọi endpoint cần state (`/authorize`, `POST /login`, `/authorize/consent`, `/token` code + refresh,
+  `/userinfo`, `/introspect`, `POST /logout`) ⇒ **503 `temporarily_unavailable`** +
+  `Retry-After: 5` + `Cache-Control: no-store` (HTML với trang UI, JSON với OAuth). Không `Set-Cookie`
+  phiên, không token, `/introspect` không có `active`. Không có fallback memory/fail-open.
+- Chỉ lỗi ioredis đã quan sát (`MaxRetriesPerRequestError`, `Command timed out`) thành 503; lỗi lạ vẫn 500
+  (fail-closed). Metric `sso_token_endpoint_errors_total{error="temporarily_unavailable"}` tăng; HTTP 5xx
+  alert vẫn bắt.
+- Redis chết hẳn (kill test): request thất bại không tiêu code/RT/phiên ⇒ Redis về, cùng phiên/code/RT dùng
+  tiếp (không reuse detection). Nhưng `Command timed out` không bảo đảm lệnh chưa chạy (Redis chậm/failover giữa
+  request có thể đã consume code rồi mới timeout) ⇒ thử lại `/token` có thể nhận `invalid_grant` ⇒ RP bắt đầu
+  lại luồng.
+- `/health` 200, `/ready` 503 `redis:"down"` ⇒ LB rút instance; **không** restart container.
+- Failover thật (test `test:sentinel`): dừng master ⇒ lệnh bị từ chối nhanh (≤ ~1 s, 503) trong lúc chuyển,
+  ghi được trên master mới sau ~5 s (down-after 1 s ở test; production đặt theo mạng, vd 5 s).
+
+**Test**: `bash be/scripts/sentinel-test-env.sh up && pnpm -C be test:sentinel; bash be/scripts/sentinel-test-env.sh down`
+(container `vg-b73c-redis-a`@16390, `vg-b73c-redis-b`@16391, `vg-b73c-sentinel`@26390, mạng `vg-b73c-net`;
+thiếu ⇒ fail kèm lệnh, không skip; chạy `up` lại trước mỗi lần test vì test failover đổi master).

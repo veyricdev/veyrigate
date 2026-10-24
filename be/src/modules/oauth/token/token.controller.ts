@@ -30,6 +30,10 @@ import { TokenError } from './token.errors';
 import { TokenService, adminTargetForbidden } from './token.service';
 import { RefreshRotationError, RefreshTokenService } from './refresh-token.service';
 import { errorForLog } from '../../../common/logger/error-log';
+import {
+  DEPENDENCY_RETRY_AFTER_SEC,
+  isDependencyUnavailable,
+} from '../../../common/errors/dependency-unavailable';
 
 /** Reply members the `/token` controller needs (Fastify). Declared structurally like HttpReply. */
 interface TokenReply {
@@ -457,11 +461,12 @@ export class TokenController {
     reply: TokenReply,
     err: unknown,
   ): unknown {
-    // B7.2: one count per error response (429 included); never throws into the response path.
+    const unavailable = isDependencyUnavailable(err);
+    // B7.2: one count per error response (429/503 included); never throws into the response path.
     try {
       observeTokenError(
         endpoint,
-        err instanceof ClientAuthRateLimitedError
+        err instanceof ClientAuthRateLimitedError || unavailable
           ? 'temporarily_unavailable'
           : err instanceof TokenError
             ? err.code
@@ -476,6 +481,17 @@ export class TokenController {
       return reply
         .status(HttpStatus.TOO_MANY_REQUESTS)
         .header('Retry-After', String(err.retryAfterSec))
+        .send({
+          error: 'temporarily_unavailable',
+          error_description: descriptionFor('temporarily_unavailable'),
+        });
+    }
+    // Dependency outage (Redis / key provider, run 53c): 503 + Retry-After, no token (fail-closed).
+    if (unavailable) {
+      this.logger.error(errorForLog(err));
+      return reply
+        .status(HttpStatus.SERVICE_UNAVAILABLE)
+        .header('Retry-After', String(DEPENDENCY_RETRY_AFTER_SEC))
         .send({
           error: 'temporarily_unavailable',
           error_description: descriptionFor('temporarily_unavailable'),

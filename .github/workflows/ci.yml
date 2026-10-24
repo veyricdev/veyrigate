@@ -150,6 +150,16 @@ jobs:
       - name: Vault Transit tests
         run: pnpm -C be test:vault
 
+      # Redis Sentinel failover (run 53c): throwaway master/replica/sentinel (vg-b73c-*, digest-pinned,
+      # loopback ports only). `test:sentinel` FAILS (never skips) without them.
+      - name: Redis Sentinel tests
+        run: |
+          bash be/scripts/sentinel-test-env.sh up
+          pnpm -C be test:sentinel
+      - name: Remove Redis Sentinel
+        if: always()
+        run: bash be/scripts/sentinel-test-env.sh down
+
   # E2E thật (DEBT-004 / X1): Playwright 1 kịch bản login → /authorize → /token → claims.
   # Mongo single-node (chưa dùng transaction — DEBT-083) + Redis service. Env BE/FE đều là giá trị
   # GIẢ không-secret: BE/FE do playwright.config.ts (e2e/config/env.ts) cấp qua webServer.env; chỉ

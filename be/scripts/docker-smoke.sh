@@ -188,19 +188,15 @@ code="$(curl -sS -o "$TMP/b" -w '%{http_code}' "$BASE/ready")"
 [ "$(docker inspect -f '{{.State.Running}}' vg-be-smoke-ok)" = "true" ] || fail 7 "app exited with Redis down"
 pass 7 "Redis down => /health 200, /ready 503 redis down"
 
-# Redis back before the stop check: with Redis down the shutdown hook `redis.quit()` waits on the
-# reconnecting client and `docker stop` ends in SIGKILL (137) - DEBT-397, fixed with run 53c.
-docker start vg-b73b-redis >/dev/null
-for _ in $(seq 1 30); do
-  [ "$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/ready")" = "200" ] && break
-  sleep 1
-done
-
-# 8. docker stop => clean exit on SIGTERM (not killed)
+# 8. docker stop while Redis is STILL down => clean exit 0 on SIGTERM, well before the SIGKILL deadline
+# (DEBT-397: the Redis shutdown hook used to wait on the reconnecting client => 137 after `stop -t`).
+start_s=$(date +%s)
 docker stop -t 15 vg-be-smoke-ok >/dev/null
+took=$(( $(date +%s) - start_s ))
 exit_code="$(docker inspect -f '{{.State.ExitCode}}' vg-be-smoke-ok)"
-[ "$exit_code" = "0" ] || [ "$exit_code" = "143" ] || fail 8 "exit code $exit_code after docker stop"
-pass 8 "docker stop => exit $exit_code"
+[ "$exit_code" = "0" ] || fail 8 "exit code $exit_code after docker stop with Redis down (${took} s)"
+[ "$took" -lt 10 ] || fail 8 "docker stop with Redis down took ${took} s"
+pass 8 "docker stop with Redis down => exit 0 in ${took} s"
 
 # 9. a missing variable => exit != 0 within 20 s, log names it, never prints a value (canary)
 CANARY="$(secret 20)"

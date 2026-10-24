@@ -380,7 +380,7 @@ describe('run 53 tester: Vault Transit KeyProvider risk tests', () => {
     }
   });
 
-  it('T5: Vault down ⇒ fail-closed: /token 5xx without tokens; verify works from cache ≤ 30 s, then 401/inactive (DEBT-394 characterisation); recovers', async () => {
+  it('T5: Vault down ⇒ fail-closed: /token 5xx without tokens; verify works from cache ≤ 30 s, then 503 (DEBT-394, run 53c); recovers', async () => {
     const k = await newKey();
     const proxy = new CuttableProxy();
     await proxy.up();
@@ -399,8 +399,12 @@ describe('run 53 tester: Vault Transit KeyProvider risk tests', () => {
 
       offset += 31_000; // cache expired, Vault still down
       const ui = await userinfo(full, at);
-      expect(ui.statusCode).toBe(401); // DEBT-394: fail-closed but not yet 503
-      expect((await introspect(full, ok.client, at)).active).toBe(false);
+      // DEBT-394 (run 53c): an outage, not a bad token ⇒ 503 + Retry-After, never 401/active:false.
+      expect(ui.statusCode).toBe(503);
+      expect(ui.headers['retry-after']).toBe('5');
+      expect(ui.json()).toMatchObject({ error: 'temporarily_unavailable' });
+      const intro = await introspect(full, ok.client, at);
+      expect(intro).toEqual({ error: 'temporarily_unavailable' });
       const jwks = await full.app.inject({ method: 'GET', url: '/jwks.json' });
       expect(jwks.statusCode).toBeGreaterThanOrEqual(500); // no stale key set served
       expect(jwks.body).not.toContain('"kty"');
@@ -507,7 +511,7 @@ describe('run 53 tester: Vault Transit KeyProvider risk tests', () => {
     }
   });
 
-  it('T8: DEBT-395 characterisation — 10 concurrent signJwt while Vault sign answers 500 ⇒ all fail closed; count metadata reads', async () => {
+  it('T8: DEBT-395 — 10 concurrent signJwt while Vault sign answers 500 ⇒ all fail closed; one shared metadata read', async () => {
     const k = await newKey();
     const reads: number[] = [];
     const fetchFn: typeof fetch = (url, init) => {
@@ -531,7 +535,7 @@ describe('run 53 tester: Vault Transit KeyProvider risk tests', () => {
       expect(String((r as PromiseRejectedResult).reason.message)).toBe(
         'vault sign failed: status=500',
       );
-    // Observed amplification (DEBT-395 🟡): one forced metadata read per failed request, not 1 shared.
-    expect(reads.length).toBe(10);
+    // DEBT-395 (run 53c): the post-failure refresh is single-flight — 1 shared read (+1 transport retry).
+    expect(reads.length).toBeLessThanOrEqual(2);
   });
 });
