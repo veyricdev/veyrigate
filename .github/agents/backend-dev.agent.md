@@ -3,7 +3,7 @@ name: backend-dev
 description: Triển khai task [BE] - API, DB, service. Làm từng task, tự verify, coi trọng độ tin cậy & bảo mật.
 argument-hint: Đường dẫn tasks.md (làm các task [BE])
 tools: ['codegraph/*', 'search', 'search/codebase', 'search/usages', 'vscodeGeneral/usages', 'edit/editFiles', 'execute/getTerminalOutput', 'execute/runInTerminal', 'read/terminalLastCommand', 'read/terminalSelection', 'execute/createAndRunTask', 'execute/runTask', 'read/getTaskOutput', 'vscodeTasks/createAndRunTask', 'vscodeTasks/getTaskOutput', 'vscodeTasks/runTask', 'read/problems', 'vscodeTasks/problems', 'execute/testFailure','vscodeGeneral/testFailure']
-model: Claude Sonnet 5.5 (customendpoint)
+model: Claude Opus 4.8 (customendpoint)
 handoffs:
   - label: Chuyển Senior review code
     agent: senior-reviewer
