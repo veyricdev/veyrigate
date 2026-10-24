@@ -1,7 +1,7 @@
 name: CI
 
 # Chặn merge khi CI đỏ: cần bật branch protection trên GitHub
-# (Settings → Branches → require status checks "quality", "int", "e2e", "secrets", "promtool", "fe-admin-image" + CodeQL).
+# (Settings → Branches → require status checks "quality", "int", "e2e", "secrets", "promtool", "fe-admin-image", "be-image" + CodeQL).
 # Không cấu hình được trong repo (DEBT-227).
 on:
   push:
@@ -279,3 +279,27 @@ jobs:
 
       - name: Smoke test image
         run: bash fe-admin/scripts/docker-smoke.sh veyrigate-fe-admin:ci
+
+  # IdP backend image (run 53b, B7.3): build the production image (and its build stage, scanned for
+  # env/key files) and run the smoke test against throwaway Mongo/Redis/Vault (dev, TLS) containers on
+  # a private network: non-root, healthcheck on /health, /ready, JWKS from Vault Transit, image hygiene,
+  # Redis down => /ready 503, clean stop, exit on bad env, production refuses KEY_PROVIDER=local.
+  # Nothing is pushed and no registry is logged into; every secret is generated per run inside the
+  # script and masked (::add-mask::) before use.
+  be-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Build image
+        run: |
+          docker build -f be/Dockerfile --target build -t veyrigate-be:ci-build .
+          docker build -f be/Dockerfile -t veyrigate-be:ci .
+
+      - name: Smoke test image
+        run: bash be/scripts/docker-smoke.sh veyrigate-be:ci veyrigate-be:ci-build

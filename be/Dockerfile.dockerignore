@@ -1,0 +1,20 @@
+# Build context allowlist for be/Dockerfile (BuildKit reads <Dockerfile>.dockerignore).
+# Last matching line wins: the exclusions below must stay after the `!` lines.
+*
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!be/
+be/node_modules
+be/dist
+be/test
+be/coverage
+be/keys/
+**/.keys/
+**/.env*
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/.npmrc
+**/*.log

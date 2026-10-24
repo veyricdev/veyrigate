@@ -7,8 +7,12 @@
 !fe-admin/
 fe-admin/node_modules
 fe-admin/dist
-fe-admin/.env*
+**/.env*
 **/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/.npmrc
 **/*.log
 fe-admin/test
 fe-admin/coverage

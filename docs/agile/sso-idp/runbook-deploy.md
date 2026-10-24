@@ -194,6 +194,8 @@ bash fe-admin/scripts/docker-smoke.sh <registry>/veyrigate-fe-admin:<version>   
 
 - **Env lỗi ⇒ container thoát mã 1** (tự kiểm `/healthz` lúc boot). Log chỉ có **tên biến** + lý do
   cố định, không bao giờ giá trị.
+- **Không listen được** (cổng bận, `HOST` không có trên interface…) ⇒ thoát mã 1, log
+  `fe-admin: listen failed: <mã lỗi>` (DEBT-384). Đặt `restart: on-failure`/`unless-stopped`.
 - **Không bật trust proxy**: URL tuyệt đối dựng từ `APP_URL`, không từ `Host`/`X-Forwarded-*`.
 - **Chỉ 1 replica** cho tới khi xong DEBT-278.
 - **Rate limit `/auth/login` ở proxy** (DEBT-284).
@@ -280,3 +282,65 @@ key không tồn tại (404) hoặc không có quyền (403), key không phải 
 
 **Test**: `pnpm -C be test:vault` (cần `VAULT_TEST_ADDR` + `VAULT_TEST_ROOT_TOKEN` của một Vault dev tạm;
 thiếu ⇒ fail kèm lệnh `docker run`, không skip). CI chạy trong job `int`.
+
+## 9. IdP backend (BE) — image & deploy (run 53b)
+
+Image Node một process (`node dist/main.js`, NestJS + Fastify), đặt **sau reverse proxy TLS**. Base
+`node:22.x-bookworm-slim` ghim digest (glibc, vì `@node-rs/argon2` dùng bản gnu — **không** đổi sang
+alpine). Không chứa `.env`, PEM/key, `be/keys`, `src/`, test, source map, `*.d.ts` hay devDependencies;
+chạy user `1000:1000`, file app thuộc root, rootfs read-only được (`--read-only --tmpfs /tmp`).
+
+**Build** (context = gốc repo; ignore = `be/Dockerfile.dockerignore`, allowlist, loại `**/.env*`,
+`**/*.pem|key|p12|pfx`, `**/.npmrc`, `be/keys/`):
+
+```bash
+docker build -f be/Dockerfile --target build -t <registry>/veyrigate-be:<version>-build .   # chỉ để quét
+docker build -f be/Dockerfile -t <registry>/veyrigate-be:<version> .
+bash be/scripts/docker-smoke.sh <registry>/veyrigate-be:<version> <registry>/veyrigate-be:<version>-build
+```
+
+Smoke (như CI `be-image`, 11 check) dựng mạng `vg-b73b-net` + Mongo/Redis/Vault dev (TLS) tạm, rồi
+kiểm: non-root, `HEALTHCHECK` healthy, `/health` + `/ready` 200, `/jwks.json` đúng key Vault Transit,
+không `.env`/key trong image (cả build stage), Redis chết ⇒ `/health` 200 + `/ready` 503, `docker stop`
+⇒ 0/143, thiếu biến ⇒ thoát ≠ 0 (chỉ nêu tên), `KEY_PROVIDER=local` ⇒ thoát ≠ 0, log không có secret.
+Không push, không đăng nhập registry.
+
+**Env** (chỉ từ môi trường process; image đặt sẵn `NODE_ENV=production`, `PORT=4000`). `main.ts` nạp
+`.env` ở cwd **nếu có** ⇒ không bao giờ mount/ghi file `/app/.env` (image không có, rootfs read-only).
+
+| Nhóm | Biến | Ghi chú |
+|---|---|---|
+| Bắt buộc | `ISSUER` | URL công khai `https://…` (khớp proxy) |
+| Bắt buộc | `MONGO_URI`, `REDIS_URL` | Từ secret store (chứa mật khẩu); Redis `noeviction` (§3) |
+| Bắt buộc | `ACCESS_TOKEN_TTL`, `REFRESH_TOKEN_TTL`, `SESSION_IDLE_TTL`, `SESSION_ABSOLUTE_TTL` | Giây (Q6) |
+| Bắt buộc | `SMTP_URL`, `ADMIN_SEED_EMAIL`, `CSRF_SECRET`, `RATE_LIMIT_WINDOW`, `RATE_LIMIT_MAX` | `CSRF_SECRET` ngẫu nhiên dài, từ secret store |
+| Key ký | `KEY_PROVIDER=vault`, `VAULT_ADDR` (`https:`), `VAULT_TOKEN_FILE`, `VAULT_TRANSIT_KEY` (+ `VAULT_TRANSIT_MOUNT`, `VAULT_TIMEOUT_MS`) | Xem §8. `local` bị từ chối ở production |
+| TLS Vault | `NODE_EXTRA_CA_CERTS=/path/ca.pem` | Chỉ khi Vault dùng CA riêng; file CA mount read-only |
+| Tuỳ chọn | `TRUST_PROXY` (§5), `METRICS_TOKEN` (≥ 32, không publish `/metrics` ra ngoài), `GOOGLE_*`/`GITHUB_*` (theo cặp), `CONSENT_*`, `CLIENT_*` | |
+
+- **Env lỗi ⇒ thoát mã 1** trước khi listen; log chỉ có **tên biến** + lý do, không giá trị.
+- `NODE_ENV=production` tắt `autoIndex` ⇒ chạy `db:sync-indexes` (§1) **trước** khi chuyển traffic
+  (image có `dist/database/mongo/sync-indexes.js`:
+  `docker run --rm <env…> <image> node dist/database/mongo/sync-indexes.js`).
+
+**Token Vault (Vault Agent sidecar)**: Agent auto-auth (AppRole/Kubernetes) ghi `sink "file"` vào một
+volume dùng chung (tmpfs/`emptyDir` medium Memory), app mount **read-only** cùng volume và đặt
+`VAULT_TOKEN_FILE` = đường dẫn sink. File `0400`/`0440`, đọc được bởi uid 1000. App đọc file lúc boot
+(thiếu/rỗng ⇒ không boot) và đọc lại một lần khi Vault trả 403 (Agent đã renew). **Không** truyền token
+qua biến môi trường hay `docker run -e`. App phải khởi động **sau** khi Agent ghi sink lần đầu
+(`depends_on` healthy / init container), nếu không app thoát 1 và được restart.
+
+**Healthcheck**
+- Image có `HEALTHCHECK` (30 s, timeout 3 s, start 20 s, 3 lần) gọi `GET /health` = **liveness**: chỉ cần
+  process trả lời, không chạm Mongo/Redis/Vault.
+- `GET /ready` = **readiness**: 200 khi Mongo + Redis ping được, 503 `{status:'error',mongo,redis}` khi
+  không. Dùng cho LB/`readinessProbe` (rút instance khỏi pool), **không** dùng cho restart: Redis/Mongo
+  chết thì mọi container cùng fail, restart không giúp gì. `/ready` không kiểm Vault (DEBT-390).
+
+**Dừng**: `docker stop` gửi SIGTERM ⇒ Nest đóng HTTP, Mongo, Redis rồi thoát mã 0. Để `stop -t` ≥ 15 s.
+Khi Redis **đang chết**, `redis.quit()` chờ client đang reconnect ⇒ hết `stop -t` thì bị SIGKILL (137),
+không mất dữ liệu (DEBT-397).
+
+**Cập nhật base image**: như §7 (cùng `NODE_IMAGE` digest với `fe-admin/Dockerfile`, đổi cả hai + `.nvmrc`
++ `engines` cùng lúc, bản ≥ 14 ngày, DEBT-379). Image phụ trợ của smoke (Mongo/Redis/Vault) ghim digest
+trong `be/scripts/docker-smoke.sh`.

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Smoke test of a built fe-admin image (run 52, A9): `bash fe-admin/scripts/docker-smoke.sh <image-tag>`.
 # Used locally and by the CI job `fe-admin-image`. Creates only the containers vg-fea-smoke-ok,
-# vg-fea-smoke-noenv and vg-fea-smoke-http (removed on exit), publishes 127.0.0.1:3300, never touches
-# the image itself or any other container. Fake https URLs (.invalid) and a Redis URL pointing into the
-# container itself: nothing outside is reached. Secrets are generated per run, passed with `-e NAME`
+# vg-fea-smoke-noenv, vg-fea-smoke-http and vg-fea-smoke-listen (removed on exit), publishes
+# 127.0.0.1:3300, never touches the image itself or any other container. Fake https URLs (.invalid) and
+# a Redis URL pointing into the container itself: nothing outside is reached. Secrets are generated per run, passed with `-e NAME`
 # (value from this shell's env, never on a command line) and never printed.
 set -euo pipefail
 # Git Bash on Windows: keep /app, /tmp, ... as container paths (only for docker, curl needs host paths).
@@ -11,7 +11,7 @@ docker() { MSYS_NO_PATHCONV=1 command docker "$@"; }
 
 IMAGE="${1:?usage: docker-smoke.sh <image-tag>}"
 BASE="http://127.0.0.1:3300"
-NAMES=(vg-fea-smoke-ok vg-fea-smoke-noenv vg-fea-smoke-http)
+NAMES=(vg-fea-smoke-ok vg-fea-smoke-noenv vg-fea-smoke-http vg-fea-smoke-listen)
 TMP="$(mktemp -d)"
 cleanup() {
   docker rm -f "${NAMES[@]}" >/dev/null 2>&1 || true
@@ -160,4 +160,12 @@ envs="$(docker image inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$IM
 [ "$envs" = "HOST NODE_ENV NODE_VERSION PATH PORT YARN_VERSION " ] || fail 13 "unexpected image env: $envs"
 pass 13 "no .env/.pem, no src/test/dev deps, clean history and env"
 
-echo "docker-smoke: 13/13 passed for $IMAGE"
+# 14. a listen error (here: HOST not on any interface) => exit != 0 with the error code (DEBT-384)
+HOST=192.0.2.1 docker run -d --name vg-fea-smoke-listen "${HARDEN[@]}" "${ENV_ARGS[@]}" -e APP_URL -e SESSION_SECRET -e HOST \
+  "$IMAGE" >/dev/null
+exit_code="$(timeout 20 docker wait vg-fea-smoke-listen || echo timeout)"
+[ "$exit_code" != "timeout" ] && [ "$exit_code" != "0" ] || fail 14 "listen error: exit '$exit_code'"
+docker logs vg-fea-smoke-listen 2>&1 | grep -q "fe-admin: listen failed: EADDRNOTAVAIL" || fail 14 "log does not name the listen error"
+pass 14 "listen error => exit $exit_code, EADDRNOTAVAIL logged"
+
+echo "docker-smoke: 14/14 passed for $IMAGE"

@@ -34,6 +34,12 @@ async function assets(request, next) {
 }
 
 const server = serve({ fetch: app.fetch, gracefulShutdown: true, middleware: [assets] });
+// srvx swallows a listen error (EADDRINUSE, EACCES on a port < 1024 as uid 1000) and the process would
+// then end with code 0 and no log: fail loudly instead, so the orchestrator restarts it (DEBT-384).
+await server.ready().catch((error) => {
+  console.error(`fe-admin: listen failed: ${error.code ?? error.name}`);
+  process.exit(1);
+});
 // srvx closes the HTTP server on SIGTERM/SIGINT (graceful, 5 s). Then exit: the session Redis client
 // (reconnect timers) would otherwise keep the process alive until the container is killed.
 server.node.server.once("close", () => process.exit(0));

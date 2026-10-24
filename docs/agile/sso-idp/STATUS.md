@@ -2,7 +2,7 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `53b-B7.3` — chưa bắt đầu (`be/Dockerfile` + smoke + CI `be-image`, kế hoạch trong `runs/53-B7.3/tasks.md`). Sau đó 53c (Redis Sentinel, DEBT-394/395) và DEBT-388. A6.3b roles chờ analyst chốt DEBT-149/142; DEBT-344 chờ quyết định retention; DEBT-369/371 hẹn 2026-11-04.
+- **Run hiện tại**: `53b-B7.3` — backend-dev xong Task 1–3 (`be/Dockerfile` + smoke + CI `be-image`; DEBT-384/385 đóng; runbook-deploy §9; mở DEBT-397); senior PASS (DEBT-398 🟡); **tester PASS** (smoke BE 11/11, fe-admin 14/14, be unit 475 ×3, fe-admin 1416, fe-sso-test 269; DEBT-397 tái hiện 137 giữ 🟡; mở DEBT-399 🟢 kích thước image) → cổng: **orchestrator đóng run**. Smoke: `docker build -f be/Dockerfile [--target build] …` rồi `bash be/scripts/docker-smoke.sh <tag> <build-tag>`.
   - Tech-lead run 53: mở DEBT-388…393 (388 = tiêu code/xoay RT trước khi ký ⇒ Vault chập chờn làm revoke family, 🟡). Backend-dev: đóng DEBT-071/159, mở DEBT-394 (Vault down + cache hết ⇒ verify ra 401/`active:false`, chưa 503). Số liệu dev: be unit 475, int 1221, vault 14, E2E 35, mutation 10/10. Tester: DEBT-394/395 có characterisation (T5/T8), giữ 🟡.
   - Test Vault: `VAULT_TEST_ADDR=… VAULT_TEST_ROOT_TOKEN=… pnpm -C be test:vault` (thiếu ⇒ fail kèm lệnh `docker run`, xem runbook-deploy §8).
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).

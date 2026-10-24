@@ -195,6 +195,18 @@ describe("serve.mjs boot", () => {
     expect(broken.log.text).not.toContain(canary);
   }, 20_000);
 
+  // DEBT-384 (run 53b): srvx swallows the listen error; without the ready() check the process ended
+  // with code 0 and no log, so `restart: on-failure` never restarted it.
+  it("port already in use => exit 1 with the error code, not a silent exit 0", async () => {
+    const second = start(port);
+    const timeout = setTimeout(() => second.child.kill(), 15_000);
+    const code = await second.exited;
+    clearTimeout(timeout);
+    expect(code).toBe(1);
+    expect(second.log.text).toContain("fe-admin: listen failed: EADDRINUSE");
+    expect((await raw(port, "GET", "/healthz")).status).toBe(200); // the first server is untouched
+  }, 20_000);
+
   it("/healthz needs no dependency: 200 `ok` on GET and HEAD", async () => {
     const get = await raw(port, "GET", "/healthz");
     expect(get.status).toBe(200);
