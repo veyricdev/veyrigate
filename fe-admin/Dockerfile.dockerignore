@@ -1,0 +1,14 @@
+# Build context allowlist for fe-admin/Dockerfile (BuildKit reads <Dockerfile>.dockerignore).
+# Last matching line wins: the exclusions below must stay after the `!` lines.
+*
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!fe-admin/
+fe-admin/node_modules
+fe-admin/dist
+fe-admin/.env*
+**/*.pem
+**/*.log
+fe-admin/test
+fe-admin/coverage

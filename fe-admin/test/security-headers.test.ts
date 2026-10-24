@@ -1,7 +1,7 @@
 // @vitest-environment node
 // A7 (DEBT-269/298): the server-entry wrapper sets a strict CSP with a fresh per-response nonce and
 // the security headers on every response, without reading the body or dropping a Set-Cookie.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { currentCspNonce, withSecurityHeaders } from "@/server/security-headers";
 import { markUnavailable, withUnavailableStatus } from "@/server/unavailable";
 
@@ -141,5 +141,36 @@ describe("withSecurityHeaders: other headers", () => {
     expect(csp(envError).get("form-action")).toEqual(["'self'"]);
     expect(envError.headers.get("x-frame-options")).toBe("DENY");
     expect(envError.headers.get("cache-control")).toBe("no-store");
+  });
+});
+
+describe("withSecurityHeaders: DEBT-368 a throwing handler", () => {
+  it("answers a fixed 500 that still carries CSP, nosniff and no-store; logs a request id, no detail out", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const res = await withSecurityHeaders(() => {
+        throw new Error("CANARY-detail");
+      });
+      expect(res.status).toBe(500);
+      expect(await res.text()).toBe("Internal Server Error");
+      expect(csp(res).get("frame-ancestors")).toEqual(["'none'"]);
+      expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(res.headers.get("cache-control")).toBe("no-store");
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(String(log.mock.calls[0][0])).toMatch(/request id [0-9a-f-]{36}/);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("an async rejection is caught the same way", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const res = await withSecurityHeaders(async () => Promise.reject(new Error("boom")));
+      expect(res.status).toBe(500);
+      expect(res.headers.get("x-frame-options")).toBe("DENY");
+    } finally {
+      log.mockRestore();
+    }
   });
 });

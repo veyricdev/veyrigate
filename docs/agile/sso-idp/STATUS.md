@@ -2,10 +2,9 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `52` — chưa bắt đầu (A9 Dockerfile fe-admin + DEBT-370/374). A6.3b roles chờ analyst chốt DEBT-149/142; DEBT-344 chờ quyết định retention; DEBT-369/371 hẹn 2026-11-04.
-  - Race đăng xuất đã đóng: `beginSignOut()` (cờ + `cancelQueries()`), `signInAgain`/`reauthenticate`/`startStepUp` bỏ qua khi đang đăng xuất. Test dev `sign-out-race.test.tsx` (3) + tester `sign-out-race-guard.test.tsx` (3: 8 query pending, characterisation DEBT-374 guard gốc fail-closed).
-  - Verify lượt 3: fe-admin 61 file/1349, be 416, fe-sso-test 269; lint/`-r typecheck`/build/`check:bundle` (0 hit)/`gen:api` xanh; audit exit 0; harness prod + Chromium 0 vi phạm. E2E `fe-admin.spec.ts` riêng 5/5, full 35/35.
-  - Debt run 51: DEBT-367…374 (DEBT-374 cờ đăng xuất có thể kẹt, fail-closed, 🟡).
+- **Run hiện tại**: `52-A9` — tech-lead PASS (có fold) → frontend-dev XONG T1/2/3 → senior PASS (0 🔴, DEBT-384…386) → **tester PASS** (2026-10-24) → chờ **orchestrator** đóng run (summary + commit). A6.3b roles chờ analyst chốt DEBT-149/142; DEBT-344 chờ quyết định retention; DEBT-369/371 hẹn 2026-11-04.
+  - Tester: smoke image 13/13 (đã dọn đúng tên); fe-admin 64 file/1415 (+2 file/46 test rủi ro: `serve-mjs-risk`, `body-limit-risk`), be 416, fe-sso-test 269; lint/`-r typecheck`/build/`check:bundle` 0 hit/`gen:api` xanh; audit exit 0; E2E full 35/35. Xem `runs/52-A9/test-report.md`.
+  - Debt: đóng DEBT-370/374/368/362/264; mở DEBT-375…387 (387 = 308 `Location` từ `Host` cho path `//`, 🟡).
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
 - **Run vừa đóng**: `51-A7` ✅ 4/4 — fe-admin 1349, E2E 35. Xem `runs/51-A7/summary.md`.
 - **Việc tiếp theo**: sau M6 → M7 hardening (B7.*, T7, X2/X3/X5); A4–A6 fe-admin chờ Q3 (plan §12). Debt đáng chú ý: DEBT-124/143 (super_admin xuyên tenant), DEBT-140 (audit OAuth chưa gắn tenant), DEBT-177, DEBT-095, DEBT-054/096.

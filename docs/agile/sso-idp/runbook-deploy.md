@@ -168,3 +168,54 @@ Emergency rotate ghi `keys.json` mới rồi mới xoá PEM cũ (best-effort). P
 - Xử lý: xác nhận kid **không** có trong `keys.json` và **chính là kid đã biết bị lộ** (`oldKid` của lần
   emergency) rồi mới xoá thủ công `<kid>.pem`. Thư mục dùng chung nhiều process ⇒ orphan khác có thể là
   PEM vừa tạo của process đang rotate: KHÔNG xoá kid không xác định được nguồn gốc.
+
+## 7. fe-admin (BFF) — image & deploy
+
+Image Node một process (`node serve.mjs`, srvx), đặt **sau reverse proxy TLS**. Không chứa `.env`,
+key, `src/`, test hay devDependencies; chạy user `1000:1000`, rootfs read-only được.
+
+**Build** (context = gốc repo; ignore = `fe-admin/Dockerfile.dockerignore`, allowlist):
+
+```bash
+docker build -f fe-admin/Dockerfile -t <registry>/veyrigate-fe-admin:<version> .
+bash fe-admin/scripts/docker-smoke.sh <registry>/veyrigate-fe-admin:<version>   # 13 check, như CI `fe-admin-image`
+```
+
+**Env** (chỉ từ môi trường process; image không đọc file `.env`, không có `--env-file`):
+
+| Biến | Ghi chú |
+|---|---|
+| `OIDC_ISSUER`, `ADMIN_API_BASE_URL`, `APP_URL` | Bắt buộc `https` ở build prod. `APP_URL` là origin trần (không path, không `/` cuối) |
+| `ADMIN_API_RESOURCE` | Resource indicator của admin API |
+| `OIDC_CLIENT_ID` | Client confidential của fe-admin |
+| `OIDC_CLIENT_SECRET`, `SESSION_SECRET` | ≥ 32 ký tự, ngẫu nhiên, lấy từ secret store; không đặt trong image/compose commit |
+| `SESSION_REDIS_URL` | Nên `rediss://` + user ACL chỉ `~fea:*` (DEBT-280) |
+| `HOST`, `PORT` | Mặc định image `0.0.0.0`, `3000` |
+
+- **Env lỗi ⇒ container thoát mã 1** (tự kiểm `/healthz` lúc boot). Log chỉ có **tên biến** + lý do
+  cố định, không bao giờ giá trị.
+- **Không bật trust proxy**: URL tuyệt đối dựng từ `APP_URL`, không từ `Host`/`X-Forwarded-*`.
+- **Chỉ 1 replica** cho tới khi xong DEBT-278.
+- **Rate limit `/auth/login` ở proxy** (DEBT-284).
+- Sau proxy TLS, trình duyệt không gửi `Sec-Fetch-Site` có thể bị CSRF check chặn nhầm (DEBT-376).
+
+**Healthcheck**: `GET|HEAD /healthz` ⇒ `200 ok`, `no-store`. Đây là **liveness**, không phải readiness:
+không chạm Redis/IdP (Redis/IdP chết ⇒ 503 theo từng request, `/healthz` vẫn 200). `/ready` ⇒ DEBT-378.
+Image có `HEALTHCHECK` (30 s, timeout 3 s, start 15 s, 3 lần).
+
+**Header**:
+- Mọi response của app (trang, `/auth/*`, `/_serverFn`, 404, 413, 500, 503): CSP nonce, `nosniff`,
+  XFO `DENY`, HSTS (khi `APP_URL` https), mặc định `cache-control: no-store`.
+- `/assets/*` (tên có hash, phục vụ từ `dist/client`): `nosniff` + `cache-control: public, max-age=31536000, immutable`.
+  Asset không tồn tại ⇒ 404 có header của app.
+- Body: mọi method ≠ GET/HEAD/OPTIONS bị giới hạn 64 KiB theo `Content-Length` (sai ⇒ 400, quá ⇒ 413,
+  không có mà vẫn có body/chunked ⇒ 411), trước khi router đọc body (DEBT-370).
+
+**Dừng**: `docker stop` gửi SIGTERM ⇒ srvx đóng graceful tối đa 5 s (`SERVER_SHUTDOWN_TIMEOUT`) rồi
+thoát mã 0. Để `stop -t` ≥ 10 s.
+
+**Cập nhật base image** (`ARG NODE_IMAGE` trong `fe-admin/Dockerfile`, ghim theo digest):
+1. Chọn bản Node phát hành ≥ 14 ngày, trùng `.nvmrc` + `engines` (đổi cả ba cùng lúc, DEBT-379).
+2. `docker buildx imagetools inspect node:<version>-bookworm-slim` ⇒ lấy `Digest` (index digest).
+3. Sửa `NODE_IMAGE=node:<version>-bookworm-slim@sha256:<digest>`; không dùng tag trần.
+4. Build + `docker-smoke.sh` xanh trước khi merge.

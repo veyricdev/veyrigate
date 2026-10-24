@@ -1,8 +1,8 @@
 // Run 51 tester lượt 3: the dashboard fires 8 independent queries on load; Sign out pressed while
 // all 8 are pending must not navigate to /auth/login (the logout POST would be aborted). Plus a
-// DEBT-374 characterisation: with the signing-out flag stuck (no unload, no bfcache restore) the
-// root guard still sends a viewer-less navigation to login (fail closed), only the client-side
-// automatic redirect is muted.
+// DEBT-374: while the 10 s signing-out window is open (the POST did not unload the page) the root
+// guard still sends a viewer-less navigation to login (fail closed), only the client-side automatic
+// redirect is muted; once the window is over it navigates again.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClientProvider, useQueries, type QueryClient } from "@tanstack/react-query";
@@ -25,7 +25,10 @@ let assign: ReturnType<typeof vi.fn>;
 let submits: SubmitEvent[];
 const onSubmit = (event: Event) => submits.push(event as SubmitEvent);
 
+// Only Date is faked; the clock only moves forward so no test inherits an open sign-out window.
+let clock = Date.now();
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"], now: clock });
   assign = vi.fn();
   submits = [];
   vi.stubGlobal("location", { ...window.location, pathname: "/", search: "", assign });
@@ -35,6 +38,8 @@ afterEach(() => {
   cleanup();
   document.removeEventListener("submit", onSubmit);
   vi.unstubAllGlobals();
+  clock = Date.now() + 10_001;
+  vi.useRealTimers();
 });
 
 const KEYS = ["clients", "users", "resources", "keys", "health", "audit-a", "audit-b", "audit-c"];
@@ -87,13 +92,18 @@ describe("sign-out race with the 8 dashboard queries pending", () => {
   });
 });
 
-describe("DEBT-374 characterisation: signing-out flag stuck (POST did not unload the page)", () => {
+describe("DEBT-374: signing-out window open (POST did not unload the page)", () => {
   it("automatic client redirect is muted, but the root guard still redirects a viewer-less navigation to login", async () => {
-    beginSignOut(createQueryClient()); // no pageshow follows => flag stays on
+    const start = Date.now();
+    beginSignOut(createQueryClient());
     expect(isSigningOut()).toBe(true);
 
     signInAgain();
-    expect(assign).not.toHaveBeenCalled(); // the UX gap DEBT-374 describes
+    expect(assign).not.toHaveBeenCalled(); // muted inside the window
+
+    vi.setSystemTime(start + 10_001);
+    signInAgain();
+    expect(assign).toHaveBeenCalledTimes(1); // window over: not stuck any more
 
     viewer.mockResolvedValue(null);
     const beforeLoad = RootRoute.options.beforeLoad as unknown as (ctx: {
@@ -111,7 +121,8 @@ describe("DEBT-374 characterisation: signing-out flag stuck (POST did not unload
     expect(options.reloadDocument).toBe(true);
   });
 
-  it("control: with a viewer the guard lets the navigation through even while the flag is stuck", async () => {
+  it("control: with a viewer the guard lets the navigation through even inside the window", async () => {
+    beginSignOut(createQueryClient());
     viewer.mockResolvedValue({ sub: "u1", email: "a@example.com", roles: ["super_admin"], tenantId: "t1" });
     const beforeLoad = RootRoute.options.beforeLoad as unknown as (ctx: {
       location: { href: string };

@@ -1,6 +1,7 @@
 import "@tanstack/react-start/server-only";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
+import { logServerError } from "./errors";
 
 /**
  * A7 (DEBT-269/266/298): every response that goes through the server entry gets a strict CSP with a
@@ -43,7 +44,18 @@ export async function withSecurityHeaders(
   { appUrl, issuer }: { appUrl?: string; issuer?: string } = {},
 ): Promise<Response> {
   const nonce = randomBytes(16).toString("base64");
-  const res = await requestNonce.run({ nonce }, handle);
+  let res: Response;
+  try {
+    res = await requestNonce.run({ nonce }, handle);
+  } catch (err) {
+    // DEBT-368: a throw would reach the host's bare 500 without these headers. Logged with a
+    // request id (name + message only); the response stays fixed text.
+    logServerError("server entry", err);
+    res = new Response("Internal Server Error", {
+      status: 500,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    });
+  }
   const headers = new Headers(res.headers);
   headers.set("content-security-policy", contentSecurityPolicy(nonce, issuer));
   headers.set("x-frame-options", "DENY");

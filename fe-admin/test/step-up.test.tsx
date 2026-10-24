@@ -231,6 +231,9 @@ describe("step-up round-trip", () => {
   });
 
   it("sign-out drops a pending intent before the POST", async () => {
+    // Signed out 20 s "ago" (fake Date): the 10 s signing-out window (DEBT-374) is already over once
+    // afterEach restores the real clock, so later tests get automatic sign-in back.
+    vi.useFakeTimers({ now: Date.now() - 20_000, toFake: ["Date"] });
     await stepUpOnce();
     render(
       <QueryClientProvider client={queryClient}>
@@ -242,8 +245,6 @@ describe("step-up round-trip", () => {
     fireEvent.submit(form);
     expect(sessionStorage.getItem(KEY)).toBeNull();
     clearIntent(); // idempotent
-    // signing out switches automatic sign-in off until the page comes back from bfcache (run 51)
-    window.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: true }));
   });
 });
 

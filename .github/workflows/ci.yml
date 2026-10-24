@@ -1,7 +1,7 @@
 name: CI
 
 # Chặn merge khi CI đỏ: cần bật branch protection trên GitHub
-# (Settings → Branches → require status checks "quality", "int", "e2e", "secrets", "promtool" + CodeQL).
+# (Settings → Branches → require status checks "quality", "int", "e2e", "secrets", "promtool", "fe-admin-image" + CodeQL).
 # Không cấu hình được trong repo (DEBT-227).
 on:
   push:
@@ -236,3 +236,26 @@ jobs:
           docker run --rm -v "$PWD/ops/prometheus:/ops/prometheus:ro" --entrypoint promtool
           prom/prometheus:v3.15.0@sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e
           test rules /ops/prometheus/alerts.test.yml
+
+  # fe-admin image (run 52, A9): build the production image and run the smoke test against it
+  # (non-root, healthcheck, headers on assets, 413, exit on bad env, image hygiene). Nothing is
+  # pushed and no registry is logged into; fake .invalid URLs, secrets generated per run.
+  fe-admin-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Build image
+        run: docker build -f fe-admin/Dockerfile -t veyrigate-fe-admin:ci .
+
+      - name: Smoke test image
+        run: bash fe-admin/scripts/docker-smoke.sh veyrigate-fe-admin:ci

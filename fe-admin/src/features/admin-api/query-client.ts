@@ -4,32 +4,27 @@ import { AdminRequestError } from "./types";
 /** Retry only what may succeed later: `unavailable` and the generic 500/503 (thrown) errors. */
 export const isTransient = (error: unknown) => !(error instanceof AdminRequestError) || error.code === "unavailable";
 
-let signingOut = false;
+/** How long after Sign out automatic navigation stays muted (DEBT-374: never stuck for good). */
+const SIGN_OUT_WINDOW_MS = 10_000;
+let signingOutUntil = 0;
 
 /**
- * Sign-out started (run 51): from now on no automatic navigation (sign in again, step-up) may run,
- * since it would abort the logout POST before it reaches the IdP end_session and the still-live IdP
- * session would sign the admin straight back in. Queries in flight are cancelled; an `unauthenticated`
- * that still arrives (a mutation, a direct call) is ignored. Cleared only if the page comes back
- * from the back/forward cache.
+ * Sign-out started (run 51): for the next 10 s no automatic navigation (sign in again, step-up) may
+ * run, since it would abort the logout POST before it reaches the IdP end_session and the still-live
+ * IdP session would sign the admin straight back in. Queries in flight are cancelled; an
+ * `unauthenticated` that still arrives (a mutation, a direct call) is ignored. The window expires on
+ * its own (DEBT-374): if the POST never unloads the page, automatic sign-in works again afterwards.
  */
 export function beginSignOut(queryClient: QueryClient): void {
-  signingOut = true;
-  addEventListener(
-    "pageshow",
-    (event) => {
-      if (event.persisted) signingOut = false;
-    },
-    { once: true },
-  );
+  signingOutUntil = Date.now() + SIGN_OUT_WINDOW_MS;
   void queryClient.cancelQueries();
 }
 
-export const isSigningOut = () => signingOut;
+export const isSigningOut = () => Date.now() < signingOutUntil;
 
 /** Session over => full reload through the login route (like the root guard), back to this page. */
 export function signInAgain(): void {
-  if (signingOut) return;
+  if (isSigningOut()) return;
   location.assign(`/auth/login?returnTo=${encodeURIComponent(location.pathname + location.search)}`);
 }
 
