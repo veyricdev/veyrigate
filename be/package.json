@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:int": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand --forceExit --testTimeout=20000 --globalSetup ./test/int-preflight.mjs --globalTeardown ./test/int-teardown.mjs --testRegex \"\\.int-spec\\.ts$\"",
+    "test:vault": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand --forceExit --testTimeout=60000 --globalSetup ./test/vault-preflight.mjs --globalTeardown ./test/int-teardown.mjs --testRegex \"\\.vault-spec\\.ts$\"",
     "db:sync-indexes": "node --env-file-if-exists=.env dist/database/mongo/sync-indexes.js",
     "db:seed-dev": "node --env-file-if-exists=.env dist/database/seed-dev.js",
     "db:seed": "node --env-file-if-exists=.env dist/database/seed.js"

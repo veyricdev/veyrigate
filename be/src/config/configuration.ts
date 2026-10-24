@@ -43,9 +43,21 @@ export interface SessionConfig {
   cookieSecure: boolean;
 }
 
+/** Vault Transit key provider (run 53). The token itself is never in config: only its file path. */
+export interface VaultConfig {
+  addr: string;
+  tokenFile: string;
+  mount: string;
+  key: string;
+  timeoutMs: number;
+}
+
 export interface KeysConfig {
   provider: Env['KEY_PROVIDER'];
-  localDir: string;
+  /** Set iff provider = local (validated). */
+  localDir: string | undefined;
+  /** Set iff provider = vault (validated). */
+  vault: VaultConfig | undefined;
 }
 
 /** Federation credentials (B5.1): optional; a provider is enabled only when both are set. */
@@ -129,6 +141,16 @@ export function buildConfig(env: Env): Config {
     keys: {
       provider: env.KEY_PROVIDER,
       localDir: env.KEY_LOCAL_DIR,
+      vault:
+        env.KEY_PROVIDER === 'vault'
+          ? {
+              addr: env.VAULT_ADDR!,
+              tokenFile: env.VAULT_TOKEN_FILE!,
+              mount: env.VAULT_TRANSIT_MOUNT,
+              key: env.VAULT_TRANSIT_KEY!,
+              timeoutMs: env.VAULT_TIMEOUT_MS,
+            }
+          : undefined,
     },
     federation: {
       googleClientId: env.GOOGLE_CLIENT_ID,

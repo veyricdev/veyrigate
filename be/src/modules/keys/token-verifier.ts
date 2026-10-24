@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createLocalJWKSet, jwtVerify, type JWTPayload } from 'jose';
+import { createLocalJWKSet, decodeProtectedHeader, jwtVerify, type JWTPayload } from 'jose';
 import type { AppConfig } from '../../config/configuration';
 import { KEY_PROVIDER, type KeyProvider } from './key-provider';
 
@@ -35,6 +35,17 @@ export class TokenVerifier {
   }
 
   /**
+   * Key set for `token`, passing its header `kid` as a refresh hint (another instance may have rotated).
+   * A token whose header does not decode throws here, exactly as `jwtVerify` would (401/inactive).
+   */
+  private async jwksFor(token: string): Promise<ReturnType<typeof createLocalJWKSet>> {
+    const { kid } = decodeProtectedHeader(token);
+    return createLocalJWKSet({
+      keys: await this.keys.getPublicKeys(typeof kid === 'string' ? kid : undefined),
+    });
+  }
+
+  /**
    * Verify an `id_token_hint` for RP-initiated logout (B4.7, OIDC RP-Initiated Logout §2). Unlike
    * {@link verify} this ACCEPTS an expired token (the session is usually already dead at logout)
    * but still fails closed on everything else: RS256 + current JWKS signature, `iss` must match,
@@ -44,7 +55,7 @@ export class TokenVerifier {
    * fail closed (ignore the hint, fall back to the default redirect) — never 500.
    */
   async verifyIdTokenHint(token: string): Promise<{ sub: string; aud: string }> {
-    const jwks = createLocalJWKSet({ keys: await this.keys.getPublicKeys() });
+    const jwks = await this.jwksFor(token);
     const { payload, protectedHeader } = await jwtVerify(token, jwks, {
       issuer: this.issuer,
       algorithms: ['RS256'],
@@ -65,7 +76,7 @@ export class TokenVerifier {
   }
 
   async verify(token: string, audience: string): Promise<JWTPayload> {
-    const jwks = createLocalJWKSet({ keys: await this.keys.getPublicKeys() });
+    const jwks = await this.jwksFor(token);
     const { payload } = await jwtVerify(token, jwks, {
       issuer: this.issuer,
       audience,
@@ -86,7 +97,7 @@ export class TokenVerifier {
    * failure so the caller can map it to 401 / `active:false` (never 500).
    */
   async verifyAccessToken(token: string): Promise<AccessTokenClaims> {
-    const jwks = createLocalJWKSet({ keys: await this.keys.getPublicKeys() });
+    const jwks = await this.jwksFor(token);
     const { payload } = await jwtVerify(token, jwks, {
       issuer: this.issuer,
       algorithms: ['RS256'],

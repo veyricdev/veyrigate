@@ -1,0 +1,9 @@
+# Summary — run 53 B7.3 phần 1 (M7, lane BE) — ✅ PASS 3/3 task (Dockerfile BE → 53b, Redis Sentinel → 53c)
+
+- **Phạm vi**: A [BE] `KeyProvider` không còn trả private key (`signJwt` + `jws.ts` chỉ RS256, `getPublicKeys(kidHint?)`), TokenSigner/Verifier giữ nguyên định dạng token (golden test). B [BE] `VaultTransitKeyProvider`: rsa-2048, `sha2-256`+`pkcs1v15`, `key_version` + kiểm `vault:vN:` + tự verify trước khi trả, kid = thumbprint RFC 7638, kiểm key (exportable/plaintext backup/type/size) mỗi lần refresh, JWKS theo cửa sổ version, cache 30 s single-flight không stale, kid lạ ≤1 refresh/5 s, rotate thường/khẩn cấp (rotate → config → trim), token Vault trong private field; config `KEY_PROVIDER=local|vault`, prod bắt buộc vault + https, không `VAULT_TOKEN`; policy `ops/vault/idp-signer.hcl`. C `test:vault` (fail khi thiếu Vault), CI Vault token masked, runbook-deploy §8, runbook-ops §1, INV-19.
+- **Ghi nhận Vault 2.1.2 thật khác tài liệu**: ký dưới `min_encryption_version` ⇒ 500; `GET keys` ẩn version dưới floor; thiếu quyền ⇒ 403; Vault down + cache hết hạn ⇒ 401/`active:false` (fail-closed nhưng sai tín hiệu, DEBT-394).
+- **Verify**: be unit 475, int 1221, vault 22/22 (14 dev + 8 tester: verify bởi client JWKS chuẩn, chặn none/HS256/PS256, kid flood, emergency rotate, Vault down, không lộ token, prod config), fe-admin 1415, fe-sso-test 269, E2E 35/35 (provider local), audit high 0; mutation 10 + 4 RED; `be/keys` không đổi; container Vault tạm đã dọn; grep token 0 trong repo.
+- **Commit**: (điền sau).
+- **Vòng lặp**: tech-lead=1, BE dev=1, senior=1 (PASS), tester=1 (PASS).
+- **Debt**: đóng DEBT-071/159; mở 388 🟡 (refresh/code commit trước khi ký — Vault blip ⇒ reuse ⇒ revoke family), 389–393, **394 🟡**, **395 🟡** (ký lỗi ⇒ refresh bỏ single-flight), 396 (ponytail).
+- **Run 53b**: `be/Dockerfile` + smoke + CI `be-image` (khuôn run 52). **53c**: Redis Sentinel, 503 + `Retry-After`, DEBT-394/395. Nên làm DEBT-388 trước khi bật Vault ở prod.

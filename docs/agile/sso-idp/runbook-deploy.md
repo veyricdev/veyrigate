@@ -219,3 +219,64 @@ thoát mã 0. Để `stop -t` ≥ 10 s.
 2. `docker buildx imagetools inspect node:<version>-bookworm-slim` ⇒ lấy `Digest` (index digest).
 3. Sửa `NODE_IMAGE=node:<version>-bookworm-slim@sha256:<digest>`; không dùng tag trần.
 4. Build + `docker-smoke.sh` xanh trước khi merge.
+
+## 8. Vault Transit KeyProvider (production, run 53)
+
+Production **bắt buộc** `KEY_PROVIDER=vault` (`local` bị từ chối lúc boot). Private key RSA nằm trong
+Vault Transit, `exportable=false`; app chỉ gửi dữ liệu cần ký (RS256 = `sha2-256` + `pkcs1v15`) và tự
+verify chữ ký trước khi trả token.
+
+**Chuẩn bị Vault** (ops, một lần; `<mount>`/`<key>` khớp env bên dưới):
+
+```bash
+vault secrets enable -path=<mount> transit
+vault write -f <mount>/keys/<key> type=rsa-2048 exportable=false allow_plaintext_backup=false
+# KHÔNG đặt auto_rotate_period: rotate phải đi qua POST /admin/keys/rotate để có audit.
+# ví dụ mount=transit, key=idp-signer (đổi theo VAULT_TRANSIT_MOUNT / VAULT_TRANSIT_KEY):
+sed -e 's#<mount>#transit#g' -e 's#<key>#idp-signer#g' ops/vault/idp-signer.hcl > /tmp/idp-signer.hcl
+vault policy write idp-signer /tmp/idp-signer.hcl
+```
+
+- Policy `ops/vault/idp-signer.hcl`: chỉ `sign`/`read`/`rotate` của **một** key, `config` chỉ nhận
+  `min_decryption_version`/`min_encryption_version`, `trim` chỉ nhận `min_available_version`. Không cấp
+  `export`, `backup`, `delete`, key khác.
+- Token app: **Vault Agent** auto-auth (AppRole hoặc Kubernetes) với `sink "file"` ⇒ đường dẫn này là
+  `VAULT_TOKEN_FILE`. File quyền `0400`, owner là uid chạy app (1000). App đọc file lúc boot và đọc lại
+  một lần khi Vault trả 403 (Agent đã renew). **Không** có biến `VAULT_TOKEN`.
+- TLS: `VAULT_ADDR` phải `https://` ở production (zod chặn). CA riêng ⇒ `NODE_EXTRA_CA_CERTS=/path/ca.pem`.
+  Không dùng cờ tắt xác thực TLS.
+
+**Env**
+
+| Biến | Bắt buộc | Ghi chú |
+|---|---|---|
+| `KEY_PROVIDER` | có | `vault` (production), `local` chỉ dev/test |
+| `VAULT_ADDR` | khi `vault` | URL, `https:` ở production |
+| `VAULT_TOKEN_FILE` | khi `vault` | Sink của Vault Agent |
+| `VAULT_TRANSIT_MOUNT` | không | Mặc định `transit`; `^[a-z0-9][a-z0-9_-]*(/[a-z0-9_-]+)*$` |
+| `VAULT_TRANSIT_KEY` | khi `vault` | `^[A-Za-z0-9_-]+$` |
+| `VAULT_TIMEOUT_MS` | không | Mặc định 2000, tối đa 10000; `sign`/đọc key retry 1 lần (mạng/timeout/5xx) |
+| `KEY_LOCAL_DIR` | khi `local` | Không dùng với `vault` |
+
+**Boot từ chối** (app không khởi động, log chỉ tên lỗi, không token/đường dẫn): token file thiếu/rỗng,
+key không tồn tại (404) hoặc không có quyền (403), key không phải `rsa-2048/3072/4096`, `exportable` hoặc
+`allow_plaintext_backup` = true, `supports_signing` ≠ true, metadata Vault không đúng dạng.
+
+**Hành vi chạy**
+- `kid` = RFC 7638 thumbprint của public key (không phải số version).
+- Metadata key (JWKS) cache **30 s** trong mỗi instance. Emergency rotate ở instance A: A ngừng chấp nhận
+  key cũ ngay; instance khác ≤ 30 s. Vault từ chối ký bằng version cũ ngay với **mọi** instance (instance
+  cache cũ tự refresh rồi ký lại bằng key mới). RP ngoài theo cache JWKS của họ (DEBT-157).
+- Token mang `kid` lạ (instance khác vừa rotate) ⇒ refresh metadata tối đa 1 lần / 5 s.
+- Rotate normal: version cũ còn trong JWKS tới `creation_time(mới) + ACCESS_TOKEN_TTL + 30 s`.
+- **Vault down**: không cấp được token (`/token` 5xx, không phát token chưa ký). Verify (`/userinfo`,
+  `/introspect`, admin API) chạy bằng cache tới khi hết hạn (≤ 30 s); sau đó verify thất bại và hiện là
+  `401 invalid_token` / `{active:false}` (fail-closed, chưa phân biệt với token sai — DEBT-394). `/ready`
+  không kiểm Vault (DEBT-390).
+- Backup/HA/unseal của Vault là trách nhiệm hạ tầng (DEBT-391): mất storage Vault = mất key ký.
+
+**Kiểm sau deploy**: `curl -sS $IDP/jwks.json` có 1 key `kid` dạng 43 ký tự base64url;
+`vault read <mount>/keys/<key>` ⇒ `exportable false`, `allow_plaintext_backup false`.
+
+**Test**: `pnpm -C be test:vault` (cần `VAULT_TEST_ADDR` + `VAULT_TEST_ROOT_TOKEN` của một Vault dev tạm;
+thiếu ⇒ fail kèm lệnh `docker run`, không skip). CI chạy trong job `int`.

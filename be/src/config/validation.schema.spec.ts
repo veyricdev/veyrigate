@@ -25,6 +25,14 @@ const BASE: Record<string, string> = {
   RATE_LIMIT_MAX: '100',
 };
 
+/** Valid Vault key-provider env (run 53): production requires KEY_PROVIDER=vault over https. */
+const VAULT: Record<string, string> = {
+  KEY_PROVIDER: 'vault',
+  VAULT_ADDR: 'https://vault.internal:8200',
+  VAULT_TOKEN_FILE: '/run/vault/token',
+  VAULT_TRANSIT_KEY: 'idp-signer',
+};
+
 describe('SESSION_COOKIE_SECURE / session TTL validation (B2.3, C1/C2)', () => {
   it('missing → true', () => {
     expect(validateEnv(BASE).SESSION_COOKIE_SECURE).toBe(true);
@@ -38,12 +46,17 @@ describe('SESSION_COOKIE_SECURE / session TTL validation (B2.3, C1/C2)', () => {
 
   it('"false" in production → throws naming the variable (app does not boot)', () => {
     expect(() =>
-      validateEnv({ ...BASE, NODE_ENV: 'production', SESSION_COOKIE_SECURE: 'false' }),
+      validateEnv({ ...BASE, ...VAULT, NODE_ENV: 'production', SESSION_COOKIE_SECURE: 'false' }),
     ).toThrow(/SESSION_COOKIE_SECURE: .*production/);
   });
 
   it('"true" in production → ok', () => {
-    const env = validateEnv({ ...BASE, NODE_ENV: 'production', SESSION_COOKIE_SECURE: 'true' });
+    const env = validateEnv({
+      ...BASE,
+      ...VAULT,
+      NODE_ENV: 'production',
+      SESSION_COOKIE_SECURE: 'true',
+    });
     expect(env.SESSION_COOKIE_SECURE).toBe(true);
   });
 
@@ -172,7 +185,7 @@ describe('NODE_ENV is required (DEBT-098, Q-26.3: no silent default)', () => {
 
   it('each allowed value is accepted as-is', () => {
     for (const value of ['development', 'test', 'production']) {
-      expect(validateEnv({ ...BASE, NODE_ENV: value }).NODE_ENV).toBe(value);
+      expect(validateEnv({ ...BASE, ...VAULT, NODE_ENV: value }).NODE_ENV).toBe(value);
     }
   });
 });
@@ -262,5 +275,103 @@ describe('METRICS_TOKEN (B7.2, Q-37.1)', () => {
 
   it('shorter than 32 chars → boot fails naming the variable', () => {
     expect(() => validateEnv({ ...BASE, METRICS_TOKEN: 'a'.repeat(31) })).toThrow(/METRICS_TOKEN/);
+  });
+});
+
+describe('KEY_PROVIDER / Vault Transit env (run 53, V13)', () => {
+  const noLocalDir = () => {
+    const env = { ...BASE };
+    delete env.KEY_LOCAL_DIR;
+    return env;
+  };
+
+  it('production + local (or default provider) → boot fails naming KEY_PROVIDER', () => {
+    expect(() => validateEnv({ ...BASE, NODE_ENV: 'production', KEY_PROVIDER: 'local' })).toThrow(
+      /KEY_PROVIDER: .*production/,
+    );
+    expect(() => validateEnv({ ...BASE, NODE_ENV: 'production' })).toThrow(/KEY_PROVIDER/);
+  });
+
+  it('production + vault over http → boot fails naming VAULT_ADDR (value not echoed)', () => {
+    const addr = 'http://vault-canary.internal:8200';
+    let msg = '';
+    try {
+      validateEnv({ ...BASE, ...VAULT, NODE_ENV: 'production', VAULT_ADDR: addr });
+    } catch (err) {
+      msg = (err as Error).message;
+    }
+    expect(msg).toMatch(/VAULT_ADDR: .*https/);
+    expect(msg).not.toContain('vault-canary');
+  });
+
+  it('production + vault over https → ok; http is fine outside production', () => {
+    expect(validateEnv({ ...BASE, ...VAULT, NODE_ENV: 'production' }).KEY_PROVIDER).toBe('vault');
+    expect(() =>
+      validateEnv({ ...BASE, ...VAULT, NODE_ENV: 'test', VAULT_ADDR: 'http://127.0.0.1:18200' }),
+    ).not.toThrow();
+  });
+
+  it.each(['VAULT_ADDR', 'VAULT_TOKEN_FILE', 'VAULT_TRANSIT_KEY'])(
+    'vault without %s → boot fails naming it',
+    (name) => {
+      const env = { ...BASE, ...VAULT };
+      delete env[name];
+      expect(() => validateEnv(env)).toThrow(new RegExp(`${name}: `));
+    },
+  );
+
+  it('vault does not need KEY_LOCAL_DIR; local does', () => {
+    const cfg = buildConfig(validateEnv({ ...noLocalDir(), ...VAULT })).keys;
+    expect(cfg).toEqual({
+      provider: 'vault',
+      localDir: undefined,
+      vault: {
+        addr: 'https://vault.internal:8200',
+        tokenFile: '/run/vault/token',
+        mount: 'transit',
+        key: 'idp-signer',
+        timeoutMs: 2000,
+      },
+    });
+    expect(() => validateEnv(noLocalDir())).toThrow(/KEY_LOCAL_DIR: /);
+  });
+
+  it('aws-kms (or any unknown provider) → boot fails', () => {
+    expect(() => validateEnv({ ...BASE, KEY_PROVIDER: 'aws-kms' })).toThrow(/KEY_PROVIDER/);
+  });
+
+  it('there is no VAULT_TOKEN variable: a token in env is not read into config', () => {
+    const cfg = buildConfig(validateEnv({ ...BASE, ...VAULT, VAULT_TOKEN: 's.canary-token' }));
+    expect(JSON.stringify(cfg)).not.toContain('canary-token');
+  });
+
+  it.each([
+    ['VAULT_TRANSIT_KEY', '..'],
+    ['VAULT_TRANSIT_KEY', 'a/b'],
+    ['VAULT_TRANSIT_KEY', 'a.b'],
+    ['VAULT_TRANSIT_KEY', ''],
+    ['VAULT_TRANSIT_MOUNT', '../sys'],
+    ['VAULT_TRANSIT_MOUNT', 'transit/../sys'],
+    ['VAULT_TRANSIT_MOUNT', '/transit'],
+    ['VAULT_TRANSIT_MOUNT', 'transit/'],
+    ['VAULT_TRANSIT_MOUNT', 'Transit'],
+    ['VAULT_TIMEOUT_MS', '0'],
+    ['VAULT_TIMEOUT_MS', '10001'],
+  ])('%s=%p → boot fails naming it', (name, value) => {
+    expect(() => validateEnv({ ...BASE, ...VAULT, [name]: value })).toThrow(
+      new RegExp(`${name}: `),
+    );
+  });
+
+  it('nested mount and custom timeout are accepted', () => {
+    const cfg = buildConfig(
+      validateEnv({
+        ...BASE,
+        ...VAULT,
+        VAULT_TRANSIT_MOUNT: 'idp/transit_1',
+        VAULT_TIMEOUT_MS: '10000',
+      }),
+    ).keys.vault;
+    expect(cfg).toMatchObject({ mount: 'idp/transit_1', timeoutMs: 10000 });
   });
 });

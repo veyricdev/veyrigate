@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { SignJWT, type JWTPayload } from 'jose';
+import type { JWTPayload } from 'jose';
 import { randomUUID } from 'node:crypto';
 import type { AppConfig } from '../../config/configuration';
 import { KEY_PROVIDER, type KeyProvider } from './key-provider';
@@ -30,17 +30,17 @@ export class TokenSigner {
   }
 
   async sign(claims: JWTPayload, options: SignOptions): Promise<string> {
-    const { kid, privateKey } = await this.keys.getSigningKey();
-    const jwt = new SignJWT(claims)
-      .setProtectedHeader({ alg: 'RS256', kid, typ: options.typ ?? 'JWT' })
-      .setIssuer(this.issuer)
-      .setAudience(options.audience)
-      .setIssuedAt()
-      .setExpirationTime(Math.floor(Date.now() / 1000) + options.expiresInSec)
-      .setJti(randomUUID());
-    if (options.subject) {
-      jwt.setSubject(options.subject);
-    }
-    return jwt.sign(privateKey);
+    // Same claims, order and values as the former jose `SignJWT` chain (golden test in keys.spec).
+    const iat = Math.floor(Date.now() / 1000);
+    const payload: JWTPayload = {
+      ...claims,
+      iss: this.issuer,
+      aud: options.audience,
+      iat,
+      exp: iat + options.expiresInSec,
+      jti: randomUUID(),
+      ...(options.subject ? { sub: options.subject } : {}),
+    };
+    return this.keys.signJwt({ typ: options.typ ?? 'JWT' }, payload);
   }
 }

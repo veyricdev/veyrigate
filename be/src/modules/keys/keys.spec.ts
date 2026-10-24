@@ -3,12 +3,13 @@ import { Logger } from '@nestjs/common';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import type { ConfigService } from '@nestjs/config';
-import { SignJWT, decodeProtectedHeader } from 'jose';
+import { SignJWT, createLocalJWKSet, decodeJwt, decodeProtectedHeader, jwtVerify } from 'jose';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AuditAction } from '../security/audit/audit-action.enum';
 import type { AuditService } from '../security/audit/audit.service';
+import { encodeCompactJws } from './jws';
 import { KEY_PROVIDER } from './key-provider';
 import { KeyRotationService } from './key-rotation.service';
 import { KeysController } from './keys.controller';
@@ -166,6 +167,68 @@ describe('Keys (B1.9, INV-19)', () => {
       .setExpirationTime('1m')
       .sign(new TextEncoder().encode('x'.repeat(32)));
     await expect(verifier.verify(hs, AUD)).rejects.toThrow();
+  });
+
+  describe('KeyProvider.signJwt (run 53 Task A: no private key crosses the interface)', () => {
+    it('golden: TokenSigner output = old SignJWT shape (header {alg,kid,typ}, claims order/types) and verifies with JWKS', async () => {
+      const before = Math.floor(Date.now() / 1000);
+      const token = await signer.sign(
+        { scope: 'read', client_id: 'app_1' },
+        { audience: AUD, subject: 'usr_1', expiresInSec: 60, typ: 'at+jwt' },
+      );
+      const header = decodeProtectedHeader(token);
+      const [{ kid }] = await provider.getPublicKeys();
+      expect(Object.keys(header)).toEqual(['alg', 'kid', 'typ']);
+      expect(header).toEqual({ alg: 'RS256', kid, typ: 'at+jwt' });
+      const claims = decodeJwt(token);
+      expect(Object.keys(claims)).toEqual([
+        'scope',
+        'client_id',
+        'iss',
+        'aud',
+        'iat',
+        'exp',
+        'jti',
+        'sub',
+      ]);
+      expect(claims.iat).toBeGreaterThanOrEqual(before);
+      expect(Number.isInteger(claims.iat)).toBe(true);
+      expect(claims.exp).toBe((claims.iat as number) + 60);
+      expect(claims.jti).toMatch(/^[0-9a-f-]{36}$/);
+      const { payload } = await jwtVerify(
+        token,
+        createLocalJWKSet({ keys: await provider.getPublicKeys() }),
+        { issuer: ISSUER, audience: AUD, algorithms: ['RS256'] },
+      );
+      expect(payload).toMatchObject({ iss: ISSUER, aud: AUD, sub: 'usr_1', scope: 'read' });
+
+      // No subject => no `sub` claim (same as SignJWT without setSubject); default typ is JWT.
+      const idt = await signer.sign({}, { audience: AUD, expiresInSec: 60 });
+      expect(decodeProtectedHeader(idt).typ).toBe('JWT');
+      expect(decodeJwt(idt)).not.toHaveProperty('sub');
+    });
+
+    it('encodeCompactJws refuses any alg other than RS256 and never calls the signer', async () => {
+      const sign = jest.fn(async (_input: Buffer) => Buffer.from('x'));
+      for (const alg of ['none', 'HS256', 'PS256', 'rs256']) {
+        await expect(
+          encodeCompactJws({ alg, kid: 'k', typ: 'JWT' } as never, {}, sign),
+        ).rejects.toThrow(/RS256/);
+      }
+      expect(sign).not.toHaveBeenCalled();
+    });
+
+    it('TokenVerifier passes the token kid to getPublicKeys (kid hint) and keeps throwing on a malformed token', async () => {
+      const spy = jest.spyOn(provider, 'getPublicKeys');
+      const token = await signer.sign({}, { audience: AUD, expiresInSec: 60 });
+      await verifier.verify(token, AUD);
+      expect(spy).toHaveBeenLastCalledWith(decodeProtectedHeader(token).kid);
+      spy.mockClear();
+      await expect(verifier.verify('not-a-jwt', AUD)).rejects.toThrow();
+      await expect(verifier.verifyAccessToken('a.b.c')).rejects.toThrow();
+      await expect(verifier.verifyIdTokenHint('')).rejects.toThrow();
+      expect(spy).not.toHaveBeenCalled();
+    });
   });
 
   describe('verifyAccessToken (RFC 9068, token confusion)', () => {

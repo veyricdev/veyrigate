@@ -18,6 +18,9 @@ const optionalCredential = z
   .string()
   .optional()
   .transform((v) => (v ? v : undefined));
+// Optional string where an empty value means unset (run 53: Vault vars stay empty for KEY_PROVIDER=local).
+const optionalNonEmpty = <T extends z.ZodType>(schema: T) =>
+  z.preprocess((v) => (v === '' ? undefined : v), schema.optional());
 
 export const envSchema = z
   .object({
@@ -50,8 +53,24 @@ export const envSchema = z
       .default('true')
       .transform((v) => v === 'true'),
 
-    KEY_PROVIDER: z.enum(['local', 'aws-kms', 'vault']).default('local'),
-    KEY_LOCAL_DIR: z.string().min(1),
+    // Signing key provider (plan D9, run 53). `local` = dev-only PEM files (forbidden in production,
+    // superRefine below); `vault` = HashiCorp Vault Transit, the private key never leaves Vault.
+    KEY_PROVIDER: z.enum(['local', 'vault']).default('local'),
+    KEY_LOCAL_DIR: optionalNonEmpty(z.string()), // required when KEY_PROVIDER=local
+    // Vault Transit (required when KEY_PROVIDER=vault). The token is read from VAULT_TOKEN_FILE
+    // (Vault Agent sink): there is deliberately NO `VAULT_TOKEN` variable (env leaks via inspect/proc).
+    VAULT_ADDR: optionalNonEmpty(
+      z.url({ protocol: /^https?$/, error: 'VAULT_ADDR must be an http(s) URL' }),
+    ),
+    VAULT_TOKEN_FILE: optionalNonEmpty(z.string()),
+    VAULT_TRANSIT_MOUNT: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9_-]*(\/[a-z0-9_-]+)*$/, 'VAULT_TRANSIT_MOUNT has an invalid format')
+      .default('transit'),
+    VAULT_TRANSIT_KEY: optionalNonEmpty(
+      z.string().regex(/^[A-Za-z0-9_-]+$/, 'VAULT_TRANSIT_KEY has an invalid format'),
+    ),
+    VAULT_TIMEOUT_MS: positiveInt.max(10000).default(2000),
 
     SMTP_URL: z.string().min(1),
 
@@ -106,6 +125,38 @@ export const envSchema = z
         code: 'custom',
         path: ['SESSION_COOKIE_SECURE'],
         message: 'SESSION_COOKIE_SECURE=false is not allowed when NODE_ENV=production',
+      });
+    }
+    if (env.NODE_ENV === 'production' && env.KEY_PROVIDER !== 'vault') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['KEY_PROVIDER'],
+        message: 'KEY_PROVIDER must be vault when NODE_ENV=production (local is dev-only)',
+      });
+    }
+    const required =
+      env.KEY_PROVIDER === 'local'
+        ? (['KEY_LOCAL_DIR'] as const)
+        : (['VAULT_ADDR', 'VAULT_TOKEN_FILE', 'VAULT_TRANSIT_KEY'] as const);
+    for (const name of required) {
+      if (!env[name]) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [name],
+          message: `${name} is required when KEY_PROVIDER=${env.KEY_PROVIDER}`,
+        });
+      }
+    }
+    if (
+      env.NODE_ENV === 'production' &&
+      env.KEY_PROVIDER === 'vault' &&
+      env.VAULT_ADDR &&
+      !env.VAULT_ADDR.startsWith('https:')
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['VAULT_ADDR'],
+        message: 'VAULT_ADDR must use https when NODE_ENV=production',
       });
     }
     if (env.SESSION_IDLE_TTL > env.SESSION_ABSOLUTE_TTL) {

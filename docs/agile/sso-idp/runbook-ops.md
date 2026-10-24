@@ -70,7 +70,17 @@ lạ ký hợp lệ. Sau khi xoay: alert `SsoEmergencyKeyRotation`
 **Rollback**: **KHÔNG có**. Key cũ đã bị xoá khỏi state, không đưa lại JWKS. Người dùng/RP chỉ cần
 đăng nhập lại hoặc refresh.
 
-**Production**: TBD B7.3 (KMS/Vault chưa chốt — Q5). Không có lệnh production ở đây.
+**Production (Vault Transit, run 53)** — cùng bước 1–3 và 5 ở trên (bước 4 chỉ cho dev). Emergency trên Vault gồm 3 bước
+trong một request: `rotate` → `config min_decryption_version = min_encryption_version = N` → `trim min_available_version = N`.
+- **`trim` KHÔNG đảo ngược**: vật liệu key cũ bị huỷ trong Vault. Đúng ý khi key lộ; không có rollback.
+- Kiểm trên Vault (token ops, không phải token app): `vault read <mount>/keys/<key>` ⇒ `latest_version` = N,
+  `min_decryption_version` = `min_encryption_version` = `min_available_version` = N, `keys` chỉ còn **1** version.
+- Instance khác ngừng chấp nhận key cũ trong ≤ 30 s (cache metadata); không instance nào ký được bằng key cũ nữa (Vault chặn).
+- `config` lỗi ⇒ response 5xx + audit `result:"failure"`; key mới đã active nhưng key cũ còn ký/verify được (DEBT-389).
+  **Trước khi chạy lại** kiểm `GET /admin/keys` (DEBT-158): mỗi lần chạy lại emergency tạo thêm 1 version — chấp nhận được,
+  lần chạy sau sẽ hội tụ (min_* = latest, trim).
+- `trim` lỗi ⇒ rotate vẫn `200`, log ERROR `trim failed after emergency rotation (new kid …)`; key cũ đã không ký/verify được.
+  Ops trim tay: `vault write <mount>/keys/<key>/trim min_available_version=N` (N = `latest_version`).
 
 ---
 

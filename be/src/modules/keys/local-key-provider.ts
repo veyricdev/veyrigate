@@ -1,8 +1,16 @@
 import { Logger } from '@nestjs/common';
-import { createPrivateKey, createPublicKey, generateKeyPairSync, randomUUID } from 'node:crypto';
+import {
+  createPrivateKey,
+  createPublicKey,
+  generateKeyPairSync,
+  randomUUID,
+  sign,
+} from 'node:crypto';
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { KeyObject } from 'node:crypto';
+import type { JWTPayload } from 'jose';
+import { encodeCompactJws } from './jws';
 import type {
   KeyMetadata,
   KeyProvider,
@@ -78,6 +86,18 @@ export class LocalKeyProvider implements KeyProvider {
     }
   }
 
+  /** RS256 = RSASSA-PKCS1-v1_5 + SHA-256 (the `node:crypto` default padding for RSA keys). */
+  async signJwt(header: { typ: string }, payload: JWTPayload): Promise<string> {
+    const { kid, privateKey } = await this.getSigningKey();
+    return encodeCompactJws({ alg: 'RS256', kid, typ: header.typ }, payload, async (input) =>
+      sign('sha256', input, privateKey),
+    );
+  }
+
+  /**
+   * Dev/test only — NOT part of `KeyProvider` (run 53): tests use it to forge tokens with the real
+   * key. Production code signs through `signJwt` and never sees a private key.
+   */
   async getSigningKey(): Promise<{ kid: string; privateKey: KeyObject }> {
     try {
       return await this.loadSigningKey();

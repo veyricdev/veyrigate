@@ -2,9 +2,9 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `53` — chưa bắt đầu (B7.3 Dockerfile BE + Vault Transit KeyProvider + Redis Sentinel, hoặc sweep 🟡 deploy 384/385/387/376). A6.3b roles chờ analyst chốt DEBT-149/142; DEBT-344 chờ quyết định retention; DEBT-369/371 hẹn 2026-11-04.
-  - Tester: smoke image 13/13 (đã dọn đúng tên); fe-admin 64 file/1415 (+2 file/46 test rủi ro: `serve-mjs-risk`, `body-limit-risk`), be 416, fe-sso-test 269; lint/`-r typecheck`/build/`check:bundle` 0 hit/`gen:api` xanh; audit exit 0; E2E full 35/35. Xem `runs/52-A9/test-report.md`.
-  - Debt: đóng DEBT-370/374/368/362/264; mở DEBT-375…387 (387 = 308 `Location` từ `Host` cho path `//`, 🟡).
+- **Run hiện tại**: `53-B7.3` — backend-dev **xong Task A/B/C** (KeyProvider `signJwt`, `VaultTransitKeyProvider`, `test:vault`/CI/runbook) → senior-reviewer **PASS** (0 🔴, mở DEBT-395/396 🟡) → tester **PASS** (`runs/53-B7.3/test-report.md`: be 475, int 1221, vault 22 = 14 dev + 8 tester T1–T8, fe-admin 1415, fe-sso-test 269, E2E 35; không debt mới) → cổng: **orchestrator đóng run 53**. Sau đó 53b (`be/Dockerfile`), rồi 53c (Redis Sentinel + Redis-down 503 + DEBT-394). Kế hoạch 53b/53c ở cuối `runs/53-B7.3/tasks.md`. Container `vg-b73-vault` đã dọn. A6.3b roles chờ analyst chốt DEBT-149/142; DEBT-344 chờ quyết định retention; DEBT-369/371 hẹn 2026-11-04.
+  - Tech-lead run 53: mở DEBT-388…393 (388 = tiêu code/xoay RT trước khi ký ⇒ Vault chập chờn làm revoke family, 🟡). Backend-dev: đóng DEBT-071/159, mở DEBT-394 (Vault down + cache hết ⇒ verify ra 401/`active:false`, chưa 503). Số liệu dev: be unit 475, int 1221, vault 14, E2E 35, mutation 10/10. Tester: DEBT-394/395 có characterisation (T5/T8), giữ 🟡.
+  - Test Vault: `VAULT_TEST_ADDR=… VAULT_TEST_ROOT_TOKEN=… pnpm -C be test:vault` (thiếu ⇒ fail kèm lệnh `docker run`, xem runbook-deploy §8).
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
 - **Run vừa đóng**: `52-A9` ✅ 3/3 — fe-admin 1415, E2E 35, smoke image 13/13. Xem `runs/52-A9/summary.md`.
 - **Việc tiếp theo**: sau M6 → M7 hardening (B7.*, T7, X2/X3/X5); A4–A6 fe-admin chờ Q3 (plan §12). Debt đáng chú ý: DEBT-124/143 (super_admin xuyên tenant), DEBT-140 (audit OAuth chưa gắn tenant), DEBT-177, DEBT-095, DEBT-054/096.

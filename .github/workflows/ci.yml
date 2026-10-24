@@ -130,6 +130,26 @@ jobs:
       - name: Integration tests (security suite)
         run: pnpm -C be test:int
 
+      # Vault Transit KeyProvider (run 53): throwaway dev Vault, digest-pinned, loopback only. The
+      # root token is random per run, masked before it is used, and only lives in this job's env
+      # (no GitHub secret). `test:vault` FAILS (never skips) if Vault is not healthy.
+      - name: Start Vault (dev, throwaway)
+        run: |
+          TOKEN=$(openssl rand -hex 16)
+          echo "::add-mask::$TOKEN"
+          docker run -d --name vg-ci-vault --cap-add=IPC_LOCK -e VAULT_DEV_ROOT_TOKEN_ID="$TOKEN" \
+            -p 127.0.0.1:18200:8200 \
+            hashicorp/vault:2.1.2@sha256:c2f666266f383d2cf424d86b8bb8ce7d065562173ffec2b476d762943608bb55
+          for i in $(seq 1 30); do
+            [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18200/v1/sys/health)" = 200 ] && break
+            sleep 1
+          done
+          echo "VAULT_TEST_ADDR=http://127.0.0.1:18200" >> "$GITHUB_ENV"
+          echo "VAULT_TEST_ROOT_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+
+      - name: Vault Transit tests
+        run: pnpm -C be test:vault
+
   # E2E thật (DEBT-004 / X1): Playwright 1 kịch bản login → /authorize → /token → claims.
   # Mongo single-node (chưa dùng transaction — DEBT-083) + Redis service. Env BE/FE đều là giá trị
   # GIẢ không-secret: BE/FE do playwright.config.ts (e2e/config/env.ts) cấp qua webServer.env; chỉ

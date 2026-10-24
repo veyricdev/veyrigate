@@ -1,4 +1,4 @@
-import type { KeyObject } from 'node:crypto';
+import type { JWTPayload } from 'jose';
 
 /** Public signing key as published in JWKS — never contains private members. */
 export interface PublicJwk {
@@ -28,14 +28,21 @@ export interface RotationResult {
 }
 
 /**
- * Signing key source (plan D9, spec §6.4). Implementations keep the private key
- * inside the provider (KMS/Vault in prod) and only hand out a signing handle.
+ * Signing key source (plan D9, spec §6.4). The private key never leaves the provider (Vault Transit
+ * in prod, INV-19): callers get a signed token, never key material.
  */
 export interface KeyProvider {
-  /** Active key used to sign new tokens. */
-  getSigningKey(): Promise<{ kid: string; privateKey: KeyObject }>;
-  /** Keys valid for verification: the active key plus retiring keys not yet expired. */
-  getPublicKeys(): Promise<PublicJwk[]>;
+  /**
+   * Sign a JWT with the active key in ONE call (no "read kid, rotate, sign with another key" race).
+   * The provider sets the protected header `{alg: 'RS256', kid, typ}`.
+   */
+  signJwt(header: { typ: string }, payload: JWTPayload): Promise<string>;
+  /**
+   * Keys valid for verification: the active key plus retiring keys not yet expired. `kidHint` is
+   * the `kid` of the token being verified: a provider whose key set may be stale (another instance
+   * rotated) may refresh once when the hint is unknown (rate-limited); others ignore it.
+   */
+  getPublicKeys(kidHint?: string): Promise<PublicJwk[]>;
   /** Metadata of the same key set as `getPublicKeys()` (read-only, no key material). */
   listKeys(): Promise<KeyMetadata[]>;
   /**
