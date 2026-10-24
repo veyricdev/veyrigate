@@ -2,11 +2,11 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `52-A9` — tech-lead PASS (có fold) → frontend-dev XONG T1/2/3 → senior PASS (0 🔴, DEBT-384…386) → **tester PASS** (2026-10-24) → chờ **orchestrator** đóng run (summary + commit). A6.3b roles chờ analyst chốt DEBT-149/142; DEBT-344 chờ quyết định retention; DEBT-369/371 hẹn 2026-11-04.
+- **Run hiện tại**: `53` — chưa bắt đầu (B7.3 Dockerfile BE + Vault Transit KeyProvider + Redis Sentinel, hoặc sweep 🟡 deploy 384/385/387/376). A6.3b roles chờ analyst chốt DEBT-149/142; DEBT-344 chờ quyết định retention; DEBT-369/371 hẹn 2026-11-04.
   - Tester: smoke image 13/13 (đã dọn đúng tên); fe-admin 64 file/1415 (+2 file/46 test rủi ro: `serve-mjs-risk`, `body-limit-risk`), be 416, fe-sso-test 269; lint/`-r typecheck`/build/`check:bundle` 0 hit/`gen:api` xanh; audit exit 0; E2E full 35/35. Xem `runs/52-A9/test-report.md`.
   - Debt: đóng DEBT-370/374/368/362/264; mở DEBT-375…387 (387 = 308 `Location` từ `Host` cho path `//`, 🟡).
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `51-A7` ✅ 4/4 — fe-admin 1349, E2E 35. Xem `runs/51-A7/summary.md`.
+- **Run vừa đóng**: `52-A9` ✅ 3/3 — fe-admin 1415, E2E 35, smoke image 13/13. Xem `runs/52-A9/summary.md`.
 - **Việc tiếp theo**: sau M6 → M7 hardening (B7.*, T7, X2/X3/X5); A4–A6 fe-admin chờ Q3 (plan §12). Debt đáng chú ý: DEBT-124/143 (super_admin xuyên tenant), DEBT-140 (audit OAuth chưa gắn tenant), DEBT-177, DEBT-095, DEBT-054/096.
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
@@ -54,6 +54,7 @@
 | [49](runs/49-A6.5/summary.md) | M5 | A6.5 Keys (+ JWKS cooldown, DEBT-346/347/348) | ✅ fe-admin 1206 + E2E 33 | `7ea8902` |
 | [50](runs/50-A6.6/summary.md) | M5 | A6.6 Dashboard (+ DEBT-352/358) | ✅ fe-admin 1284 + E2E 34 | `b9d8675` |
 | [51](runs/51-A7/summary.md) | M7 | A7 Hardening FE (+ DEBT-360/269/366, zod 4.6.6, race đăng xuất) | ✅ fe-admin 1349 + E2E 35 | `ab83dfd` |
+| [52](runs/52-A9/summary.md) | M7 | A9 Dockerfile fe-admin (+ DEBT-370/374/368/362/264) | ✅ fe-admin 1415 + E2E 35 + smoke 13 | `ddf8a8f` |
 
 ## Chặn / cần người quyết định
 
