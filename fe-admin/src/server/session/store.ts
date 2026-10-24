@@ -1,7 +1,7 @@
 import "@tanstack/react-start/server-only";
 import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes } from "node:crypto";
 import type { Redis } from "ioredis";
-import { z } from "zod";
+import { z } from "@/lib/zod";
 import { ServiceUnavailableError } from "../errors";
 
 /**

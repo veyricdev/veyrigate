@@ -3,15 +3,14 @@ import { Link, createFileRoute } from "@tanstack/react-router";
 import { useQueries, type UseQueryResult } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import {
+  auditListQuery,
   useBackendHealth,
   useClients,
   useResourcePage,
   useSigningKeys,
   useUsers,
 } from "@/features/admin-api/hooks";
-import { listAudit } from "@/features/admin-api/audit";
-import { adminKeys } from "@/features/admin-api/keys";
-import { AdminRequestError, unwrap, type BackendHealth } from "@/features/admin-api/types";
+import { AdminRequestError, type BackendHealth } from "@/features/admin-api/types";
 import { alertLabel } from "@/features/audit/alert-label";
 import { COUNT_LIMIT, RECENT_LIMIT, SECURITY_ACTIONS, countText, mergeRecent } from "@/features/dashboard/summary";
 
@@ -91,7 +90,7 @@ function CountCard({
     const text = countText(query.data);
     body = (
       <p className="text-3xl font-semibold">
-        {text === String(query.data.items.length) ? (
+        {query.data.nextCursor === null ? (
           text
         ) : (
           <>
@@ -191,13 +190,7 @@ function HealthBlock() {
 
 function SecurityEvents() {
   const queries = useQueries({
-    queries: SECURITY_ACTIONS.map((action) => {
-      const params = { action, limit: RECENT_LIMIT };
-      return {
-        queryKey: adminKeys.audit.list(params),
-        queryFn: async () => unwrap(await listAudit({ data: params })),
-      };
-    }),
+    queries: SECURITY_ACTIONS.map((action) => auditListQuery({ action, limit: RECENT_LIMIT })),
   });
   const failed = queries.filter((q) => q.isError);
   let body: ReactNode;

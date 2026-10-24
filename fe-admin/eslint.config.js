@@ -20,8 +20,23 @@ export default tseslint.config(
         "error",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_", ignoreRestSiblings: true },
       ],
-      // No console.* of secrets/tokens (BFF holds them server-side).
-      "no-console": ["warn", { allow: ["error", "warn"] }],
+    },
+  },
+  // INV-20 (A7): no console in the app; logging goes through src/server/errors.ts only (fixed
+  // text + request id, never a token, cookie or upstream body). Any other log line needs an
+  // explicit, reviewed eslint-disable with its reason.
+  { files: ["src/**/*.{ts,tsx}"], rules: { "no-console": "error" } },
+  { files: ["src/server/errors.ts"], rules: { "no-console": "off" } },
+  // DEBT-366: zod only through src/lib/zod.ts (jitless config before any schema is built: no
+  // `new Function` probe under the strict CSP, whatever the production chunking).
+  {
+    files: ["src/**/*.{ts,tsx}"],
+    ignores: ["src/lib/zod.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        { paths: [{ name: "zod", message: 'Import { z } from "@/lib/zod" (jitless config, strict CSP).' }], patterns: ["zod/*"] },
+      ],
     },
   },
 );

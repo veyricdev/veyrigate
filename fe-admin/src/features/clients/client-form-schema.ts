@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "@/lib/zod";
 import {
   AUTH_METHODS,
   CLIENT_TYPES,

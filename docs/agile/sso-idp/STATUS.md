@@ -2,7 +2,10 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `51-A7` — chưa bắt đầu (DEBT-360 test song song + A7 hardening FE + DEBT-359). A6.3b roles chờ analyst chốt DEBT-149/142; DEBT-344 chờ quyết định retention. Đang mở DEBT-309…312, 317, 320…325, 329, 331…338, 342…345, 349…351, 353…357, 359, 360.
+- **Run hiện tại**: `51-A7`. **Tester lượt 3 PASS ⇒ orchestrator đóng run (commit).**
+  - Race đăng xuất đã đóng: `beginSignOut()` (cờ + `cancelQueries()`), `signInAgain`/`reauthenticate`/`startStepUp` bỏ qua khi đang đăng xuất. Test dev `sign-out-race.test.tsx` (3) + tester `sign-out-race-guard.test.tsx` (3: 8 query pending, characterisation DEBT-374 guard gốc fail-closed).
+  - Verify lượt 3: fe-admin 61 file/1349, be 416, fe-sso-test 269; lint/`-r typecheck`/build/`check:bundle` (0 hit)/`gen:api` xanh; audit exit 0; harness prod + Chromium 0 vi phạm. E2E `fe-admin.spec.ts` riêng 5/5, full 35/35.
+  - Debt run 51: DEBT-367…374 (DEBT-374 cờ đăng xuất có thể kẹt, fail-closed, 🟡).
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
 - **Run vừa đóng**: `50-A6.6` ✅ 3/3 — fe-admin 1284, E2E 34. Xem `runs/50-A6.6/summary.md`.
 - **Việc tiếp theo**: sau M6 → M7 hardening (B7.*, T7, X2/X3/X5); A4–A6 fe-admin chờ Q3 (plan §12). Debt đáng chú ý: DEBT-124/143 (super_admin xuyên tenant), DEBT-140 (audit OAuth chưa gắn tenant), DEBT-177, DEBT-095, DEBT-054/096.

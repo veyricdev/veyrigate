@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { z } from "zod";
+import { z } from "@/lib/zod";
+import { isSigningOut } from "./query-client";
 
 /**
  * Step-up round-trip without losing the form (plan A5 / D3, run 43 F3). The draft lives in this
@@ -99,6 +100,7 @@ export function clearIntent(): void {
 
 /** `step_up_required`: keep the draft, then re-authenticate (`prompt=login&max_age=0`) and come back. */
 export function startStepUp(schema: z.ZodType, intent: StepUpIntent): void {
+  if (isSigningOut()) return; // the logout POST must not be replaced, nor a draft kept after it
   if (!saveIntent(schema, intent)) {
     toast.warning("Your changes could not be kept. Please enter them again after confirming your identity.");
   }
@@ -107,5 +109,6 @@ export function startStepUp(schema: z.ZodType, intent: StepUpIntent): void {
 
 /** Re-authenticate (`prompt=login&max_age=0`) and come back to `path`; stores nothing. */
 export function reauthenticate(path: string): void {
+  if (isSigningOut()) return;
   location.assign(`/auth/login?stepup=1&returnTo=${encodeURIComponent(path)}`);
 }

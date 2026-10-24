@@ -232,12 +232,18 @@ describe("step-up round-trip", () => {
 
   it("sign-out drops a pending intent before the POST", async () => {
     await stepUpOnce();
-    render(<SignOutButton />);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SignOutButton />
+      </QueryClientProvider>,
+    );
     const form = screen.getByRole("button", { name: "Sign out" }).closest("form")!;
     form.addEventListener("submit", (e) => e.preventDefault()); // no navigation in the test DOM
     fireEvent.submit(form);
     expect(sessionStorage.getItem(KEY)).toBeNull();
     clearIntent(); // idempotent
+    // signing out switches automatic sign-in off until the page comes back from bfcache (run 51)
+    window.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: true }));
   });
 });
 

@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "@/lib/zod";
 
 /**
  * Server function inputs (run 43 F2), validated on both sides by `.inputValidator`. A path id can

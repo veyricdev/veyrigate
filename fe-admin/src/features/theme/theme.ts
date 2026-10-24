@@ -14,6 +14,15 @@ export function themeClass(theme: Theme): string | undefined {
   return theme === "system" ? undefined : theme;
 }
 
+/**
+ * UI preference cookie written by JS (`theme`, `sidebar_state`): never HttpOnly (JS writes it, no
+ * secret, the server whitelists the value), always SameSite=Lax, Secure when the page is https.
+ */
+export function writePrefCookie(name: string, value: string, maxAgeSec: number) {
+  const secure = location.protocol === "https:" ? "; Secure" : "";
+  document.cookie = `${name}=${value}; Path=/; Max-Age=${maxAgeSec}; SameSite=Lax${secure}`;
+}
+
 export function persistTheme(theme: Theme) {
-  document.cookie = `${THEME_COOKIE}=${theme}; Path=/; Max-Age=${ONE_YEAR}; SameSite=Lax`;
+  writePrefCookie(THEME_COOKIE, theme, ONE_YEAR);
 }

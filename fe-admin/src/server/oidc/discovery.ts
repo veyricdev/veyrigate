@@ -1,5 +1,5 @@
 import "@tanstack/react-start/server-only";
-import { z } from "zod";
+import { z } from "@/lib/zod";
 import { ServiceUnavailableError } from "../errors";
 
 export type FetchFn = typeof fetch;

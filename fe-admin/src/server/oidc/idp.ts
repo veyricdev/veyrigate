@@ -1,5 +1,5 @@
 import "@tanstack/react-start/server-only";
-import { z } from "zod";
+import { z } from "@/lib/zod";
 import { fetchWithTimeout, type Discovery, type FetchFn } from "./discovery";
 
 /**
@@ -91,6 +91,7 @@ export async function revokeRefreshToken(c: IdpConfig, d: Discovery, refreshToke
       3000,
     );
   } catch {
+    // eslint-disable-next-line no-console -- fixed text, nothing from the token or the IdP
     console.warn("revoke: refresh token revocation failed (best-effort)");
   }
 }

@@ -98,7 +98,7 @@ describe("/callback lab branches (lab:true)", () => {
     const router = await renderAt(true, "/callback?error=invalid_request&state=s&iss=x");
     expect(finishLabCallback).toHaveBeenCalledOnce();
     expect(finishLogin).not.toHaveBeenCalled();
-    expect(router.state.location.pathname).toBe("/lab");
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe("/lab"));
   });
 
   it("purpose:lab with a code ⇒ still no exchange", async () => {
@@ -113,7 +113,7 @@ describe("/callback lab branches (lab:true)", () => {
     const router = await renderAt(true, `/callback?code=c&state=${TAMPERED_STATE}&iss=x`);
     expect(finishStateTamper).toHaveBeenCalledOnce();
     expect(finishLogin).not.toHaveBeenCalled();
-    expect(router.state.location.pathname).toBe("/lab");
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe("/lab"));
     expect(window.sessionStorage.getItem("oidc:lab_expect")).toBeNull();
   });
 

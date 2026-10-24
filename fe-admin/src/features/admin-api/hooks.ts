@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createClient, getClient, listClients, listResources, updateClient } from "./clients";
 import { listAudit } from "./audit";
 import { getBackendHealth } from "./health";
@@ -192,13 +192,15 @@ export const useRevokeUserSessions = () => useUserWrite<string, void>(revokeUser
 export const useRevokeUserFamily = () => useUserWrite<RevokeFamilyParams, void>(revokeUserFamily);
 export const useRevokeUserConsent = () => useUserWrite<RevokeConsentParams, void>(revokeUserConsent);
 
-/** One page of the tenant's audit events (filters from the URL search params). */
-export function useAuditEvents(params: AuditListParams) {
-  return useQuery({
+/** One page of the tenant's audit events: shared by `useAuditEvents` and the dashboard's `useQueries`. */
+export const auditListQuery = (params: AuditListParams) =>
+  queryOptions({
     queryKey: adminKeys.audit.list(params),
     queryFn: async () => unwrap(await listAudit({ data: params })),
   });
-}
+
+/** One page of the tenant's audit events (filters from the URL search params). */
+export const useAuditEvents = (params: AuditListParams) => useQuery(auditListQuery(params));
 
 /**
  * Signing keys (super_admin only: the BE refuses anyone else). Gate by mounting the caller only for

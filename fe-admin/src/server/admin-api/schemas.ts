@@ -1,5 +1,5 @@
 import "@tanstack/react-start/server-only";
-import { z } from "zod";
+import { z } from "@/lib/zod";
 import { AUDIT_RESULTS, AUTH_METHODS, CLIENT_TYPES, GRANT_TYPES } from "@/features/admin-api/inputs";
 
 /**

@@ -35,12 +35,13 @@ function run(canaries?: string) {
   return { code: r.status, out: r.stdout + r.stderr };
 }
 
-describe("check:bundle", () => {
+// Spawns a node process per case; slow under CPU load (DEBT-360), so this file alone gets 20 s.
+describe("check:bundle", { timeout: 20_000 }, () => {
   it("passes a clean client bundle and reports what it scanned", () => {
     client({ "assets/index.js": "console.log('hello')", "assets/index.css": "body{}" });
     const r = run();
     expect(r.code).toBe(0);
-    expect(r.out).toMatch(/scanned 2 client files for 8 server env names \+ 0 canaries: 0 hit/);
+    expect(r.out).toMatch(/scanned 2 client files for 8 server env names \+ 0 canaries, evaluated 1 chunks \(0 Function\/eval call\(s\)\): 0 hit/);
   });
 
   it.each([
@@ -53,7 +54,7 @@ describe("check:bundle", () => {
     "APP_URL",
     "SESSION_REDIS_URL",
   ])("fails when a nested client asset contains %s", (name) => {
-    client({ "assets/index.js": "x", "assets/deep/chunk.js": `const k="${name}"` });
+    client({ "assets/index.js": "export {}", "assets/deep/chunk.js": `const k="${name}"` });
     const r = run();
     expect(r.code).toBe(1);
     expect(r.out).toContain(name);
@@ -70,10 +71,36 @@ describe("check:bundle", () => {
   });
 
   it("ignores empty entries in BUNDLE_CANARIES (no match-everything needle)", () => {
-    client({ "assets/index.js": "x" });
+    client({ "assets/index.js": "export {}" });
     const r = run(",,");
     expect(r.code).toBe(0);
     expect(r.out).toContain("+ 0 canaries");
+  });
+
+  // DEBT-366: the CSP has no 'unsafe-eval'; zod's JIT probe at schema build is `try { Function("") }`.
+  it.each([
+    ["a caught probe (zod style)", 'let ok; try { Function(""); ok = true } catch { ok = false } export { ok }'],
+    ["new Function", 'export const f = new Function("return 1")'],
+    ["eval", 'export const v = eval("1")'],
+  ])("fails on a Function/eval call at load in a nested chunk: %s", (_name, code) => {
+    client({ "assets/index.js": "export {}", "assets/deep/chunk.js": code });
+    const r = run();
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("Function/eval call(s) at load");
+  });
+
+  it("passes when Function is only referenced, never called at load (jitless)", () => {
+    client({ "assets/index.js": 'const jitless = true; export const probe = () => (jitless ? false : Function(""))' });
+    const r = run();
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("(0 Function/eval call(s))");
+  });
+
+  it("fails closed when a chunk cannot be evaluated", () => {
+    client({ "assets/index.js": 'throw new Error("boom")' });
+    const r = run();
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("cannot be evaluated (Error)");
   });
 
   it("refuses to pass when dist/client is missing", () => {

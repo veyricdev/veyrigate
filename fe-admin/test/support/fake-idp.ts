@@ -74,7 +74,8 @@ export interface FakeIdp {
   expiresIn: number;
 }
 
-export async function createFakeIdp(redis: Redis): Promise<FakeIdp> {
+/** `appUrl` (default {@link APP_URL}) picks the BFF cookie names/Secure (run 51 https matrix). */
+export async function createFakeIdp(redis: Redis, appUrl = APP_URL): Promise<FakeIdp> {
   const idpKey = await generateKeyPair("RS256", { extractable: true });
   const foreignKey = await generateKeyPair("RS256");
   const jwk = { ...(await exportJWK(idpKey.publicKey)), kid: "k1", alg: "RS256", use: "sig" };
@@ -217,13 +218,13 @@ export async function createFakeIdp(redis: Redis): Promise<FakeIdp> {
   fake.auth = createAuth({
     issuer: ISSUER,
     clientId: CLIENT_ID,
-    appUrl: APP_URL,
+    appUrl,
     adminResource: `${ISSUER}/admin/`,
     idp: { clientId: CLIENT_ID, clientSecret: SECRET, adminApiBaseUrl: ISSUER, fetch: fetchImpl },
     discovery: () => fake.discovery(),
     jwks: () => jwks,
     store,
-    cookies: cookieNames(APP_URL),
+    cookies: cookieNames(appUrl),
     now: () => clock.now,
   });
 

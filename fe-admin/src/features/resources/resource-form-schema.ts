@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "@/lib/zod";
 import {
   RESOURCE_ID,
   RESOURCE_IDENTIFIER_MAX_LEN,

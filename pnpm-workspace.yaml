@@ -23,6 +23,11 @@ auditConfig:
     # globs it parses are written by us in jest/CI config, never user input. Re-review by
     # 2027-01-18 or as soon as a fix ships / jest drops it (DEBT-226).
     - GHSA-vfj7-8cjw-p6xm
+    # happy-dom >=17 <=21.0.3 (high, import-alias host code execution) - dev-only (vitest env in
+    # fe-admin/fe-sso-test), tests render only our own components, no untrusted HTML/scripts. Fix
+    # 21.0.4 is 4 days old (2026-10-20). Bump to 21.0.4 and drop this entry on/after 2026-11-04
+    # (DEBT-369).
+    - GHSA-834v-8h66-3h79
 
 # Release-age pins (run 41, fe-admin A1): transitive deps of @tanstack/react-start 1.168.60 resolved
 # to releases < 14 days old; pin to the newest release <= 2026-10-07 that still satisfies the
@@ -35,3 +40,8 @@ overrides:
   # Run 43 (fe-admin A5): openapi-typescript 7.13.0 (dev, ^1.34.6) resolved @redocly/openapi-core
   # 1.34.21 (2026-10-13, < 14 days); pin the newest older release (1.34.20, 2026-09-09).
   'openapi-typescript>@redocly/openapi-core': 1.34.20
+  # Run 51 (tech-lead): GHSA-mrhx-c7xc-m3w5 (zod <4.6.6, high, memory DoS on oversized constrained
+  # collections; fe-admin BFF validates /_serverFn input with it). Forces transitive copies
+  # (@tanstack/*, @t3-oss/env-core, eslint-plugin-react-hooks) onto the fix. Security exception to the
+  # 14-day rule: 4.6.6 released 2026-10-11, 0 deps. Drop on the next zod bump (DEBT-369).
+  zod: 4.6.6

@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { revalidateLogic, useForm } from "@tanstack/react-form";
-import type { z } from "zod";
+import type { z } from "@/lib/zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useActionNotice } from "@/components/feedback/confirm-action";

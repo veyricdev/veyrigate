@@ -1,5 +1,5 @@
 import "@tanstack/react-start/server-only";
-import { z } from "zod";
+import { z } from "@/lib/zod";
 import type { AdminApiErrorCode, AdminApiFailure, BackendHealth } from "@/features/admin-api/types";
 import type {
   AuditListParams,

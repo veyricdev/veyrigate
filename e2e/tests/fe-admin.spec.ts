@@ -82,7 +82,10 @@ test("fe-admin: BFF login shows the admin, no token in the browser, logout ends 
   expect(html.includes("eyJ"), "no JWT in the SSR HTML").toBe(false);
   const bodies = await Promise.all(appBodies);
   expect(bodies.some((b) => b.path.startsWith("/_serverFn")), "a /_serverFn response was observed").toBe(true);
-  expect(bodies.filter((b) => b.body.includes("eyJ")).map((b) => b.path), "no JWT in any fe-admin document or /_serverFn response").toEqual([]);
+  // JWT shape (base64url JSON header, then "."), not a bare "eyJ": an audit page's opaque
+  // `nextCursor` is base64url(JSON) too and starts with "eyJ" (run 51 tester, dashboard events).
+  const jwt = /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*\./; // JWS, and JWE with an empty key segment
+  expect(bodies.filter((b) => jwt.test(b.body)).map((b) => b.path), "no JWT in any fe-admin document or /_serverFn response").toEqual([]);
 
   // RP-initiated logout: fe-admin POST -> IdP confirmation -> confirm -> back on fe-admin -> the
   // guard sends the browser to login again and the IdP shows its form (IdP session is gone).

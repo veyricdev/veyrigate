@@ -1,5 +1,5 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
-import { z } from "zod";
+import { z } from "@/lib/zod";
 import { Button } from "@/components/ui/button";
 import { PagePending } from "@/components/feedback/route-states";
 import { useResourcePage } from "@/features/admin-api/hooks";

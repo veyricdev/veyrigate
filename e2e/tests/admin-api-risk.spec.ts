@@ -5,7 +5,7 @@ import { ADMIN_SEED_EMAIL, ADMIN_SEED_PASSWORD, BE_PORT, FE_ADMIN_URL } from "..
  * Tester (run 43 A5): the admin server functions over the real fe-admin dev server + real BE.
  *  - called from the app's own page they reach the BE (getClient ok, hostile id => not_found);
  *  - the SAME request replayed without a same-origin signal (no header, foreign Origin/Referer,
- *    Sec-Fetch-Site cross-site/same-site) is refused by the CSRF middleware (403);
+ *    Sec-Fetch-Site cross-site/same-site/none) is refused by the CSRF middleware (403);
  *  - no response carries a JWT, a secret hash or a raw BE body.
  * No DB write: the only mutation targets a client id that does not exist (BE answers 404).
  */
@@ -102,6 +102,8 @@ test("admin server functions: same-origin works, cross-site replay refused, noth
     { name: "look-alike Referer", set: { referer: `${FE_ADMIN_URL}.evil.example/` } },
     { name: "Sec-Fetch-Site cross-site", set: { "sec-fetch-site": "cross-site", origin: FE_ADMIN_URL } },
     { name: "Sec-Fetch-Site same-site", set: { "sec-fetch-site": "same-site" } },
+    // Run 51 (A7): a user-initiated navigation signal is not same-origin either.
+    { name: "Sec-Fetch-Site none", set: { "sec-fetch-site": "none" } },
   ];
   for (const captured of [upd.request, ok.request]) {
     const base: Record<string, string> = {};

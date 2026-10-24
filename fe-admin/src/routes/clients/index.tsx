@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
-import { z } from "zod";
+import { z } from "@/lib/zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PagePending } from "@/components/feedback/route-states";

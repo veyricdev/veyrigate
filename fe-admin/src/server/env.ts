@@ -3,7 +3,7 @@
 // and `pnpm check:bundle` scans the client assets for the variable names as a second net.
 import "@tanstack/react-start/server-only";
 import { createEnv } from "@t3-oss/env-core";
-import { z } from "zod";
+import { z } from "@/lib/zod";
 
 type Source = Record<string, string | undefined>;
 
@@ -57,6 +57,7 @@ export function parseServerEnv(source: Source) {
         return `  - ${String(key)}: ${i.message}`;
       });
       const message = `Invalid server environment variables:\n${lines.join("\n")}`;
+      // eslint-disable-next-line no-console -- variable names + schema messages only, never a value
       console.error(message);
       throw new Error(message);
     },
