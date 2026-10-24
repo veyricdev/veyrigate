@@ -2,11 +2,11 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `53c-B7.3` — backend-dev Task 1–4 (đóng DEBT-013/073 N/A, 394/395/397; mở 400…402) → senior **PASS** (DEBT-403…407) → docs fix (đóng 403/404/406/407; 405 mở) → **tester PASS** (mở DEBT-408 🟢 flake smoke check 10) → cổng: **orchestrator đóng run**. Số liệu tester: be unit 519 ×3, int 1245 (+18 tester), vault 23 (+1), sentinel 2, smoke BE 11/11 ×2 (ảnh cũ check 8 ⇒ 137), root test 519/1416/269, audit high 0, E2E 35, mutation 5/6 RED (M4 bắt bởi smoke). Xem `runs/53c-B7.3/test-report.md`. Sau đó DEBT-388/398. A6.3b roles chờ analyst chốt DEBT-149/142; DEBT-344 chờ quyết định retention; DEBT-369/371 hẹn 2026-11-04, DEBT-379 hẹn 2026-11-03.
+- **Run hiện tại**: không có — **tạm dừng theo yêu cầu người dùng (2026-10-24)**. Khi tiếp tục: DEBT-388 (commit code/RT sau khi ký) trước khi bật Vault ở prod, rồi DEBT-398/401; DEBT-379 từ 2026-11-03, DEBT-369/371 từ 2026-11-04. A6.3b roles chờ analyst chốt DEBT-149/142; DEBT-344 chờ quyết định retention; DEBT-405 chờ người dùng cho phép chạy thử compose mẫu.
   - Tech-lead run 53: mở DEBT-388…393 (388 = tiêu code/xoay RT trước khi ký ⇒ Vault chập chờn làm revoke family, 🟡). Backend-dev: đóng DEBT-071/159, mở DEBT-394 (Vault down + cache hết ⇒ verify ra 401/`active:false`, chưa 503). Số liệu dev: be unit 475, int 1221, vault 14, E2E 35, mutation 10/10. Tester: DEBT-394/395 có characterisation (T5/T8), giữ 🟡.
   - Test Vault: `VAULT_TEST_ADDR=… VAULT_TEST_ROOT_TOKEN=… pnpm -C be test:vault` (thiếu ⇒ fail kèm lệnh `docker run`, xem runbook-deploy §8).
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `53b-B7.3` ✅ 3/3 — smoke BE 11/11, fe-admin 14/14. Xem `runs/53b-B7.3/summary.md`.
+- **Run vừa đóng**: `53c-B7.3` ✅ 4/4 — be 519 + int 1245 + sentinel 2 + vault 23, E2E 35. Xem `runs/53c-B7.3/summary.md`.
 - **Việc tiếp theo**: sau M6 → M7 hardening (B7.*, T7, X2/X3/X5); A4–A6 fe-admin chờ Q3 (plan §12). Debt đáng chú ý: DEBT-124/143 (super_admin xuyên tenant), DEBT-140 (audit OAuth chưa gắn tenant), DEBT-177, DEBT-095, DEBT-054/096.
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
@@ -57,6 +57,7 @@
 | [52](runs/52-A9/summary.md) | M7 | A9 Dockerfile fe-admin (+ DEBT-370/374/368/362/264) | ✅ fe-admin 1415 + E2E 35 + smoke 13 | `ddf8a8f` |
 | [53](runs/53-B7.3/summary.md) | M7 | B7.3 phần 1 Vault Transit KeyProvider (+ DEBT-071/159) | ✅ be 475 + int 1221 + vault 22 + E2E 35 | `4846002` |
 | [53b](runs/53b-B7.3/summary.md) | M7 | B7.3 phần 2 `be/Dockerfile` (+ DEBT-384/385) | ✅ smoke BE 11 + fe-admin 14 | `d8de15f` |
+| [53c](runs/53c-B7.3/summary.md) | M7 | B7.3 phần 3 Redis Sentinel + 503 (+ DEBT-394/395/397/403–407) | ✅ be 519 + int 1245 + E2E 35 | `fc06673` |
 
 ## Chặn / cần người quyết định
 
