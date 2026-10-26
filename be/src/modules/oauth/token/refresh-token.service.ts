@@ -112,19 +112,22 @@ export class RefreshTokenService {
 
   /**
    * Full refresh-token grant (spec §8/§9.3/§9.5, INV-12): validate the requested scope/resource
-   * against the original grant WITHOUT writing, then atomically rotate, then sign new tokens and
-   * audit `TOKEN_REFRESHED`.
+   * against the original grant WITHOUT writing, sign new tokens from the pre-checked document
+   * (DEBT-388), then atomically rotate, re-check and audit `TOKEN_REFRESHED`.
    *
    * Scope may only be narrowed — a requested scope outside the original is `invalid_scope` and no
    * rotation happens (INV-13 spirit: a bad request must not burn a valid refresh token). A body
    * `resource` that differs from the bound resource is `invalid_target`. The minted descendant
    * keeps the ORIGINAL scope (the family grant never widens or permanently narrows, INV-12); only
    * the access token carries the narrowed scope. Reuse/concurrency failures surface as
-   * `RefreshRotationError` (mapped to `invalid_grant` by the controller); sign/audit failure after
-   * the atomic swap fails closed (500, the token is gone → re-login; accepted, DEBT-032).
+   * `RefreshRotationError` (mapped to `invalid_grant` by the controller). DEBT-388: signing runs
+   * BEFORE the swap, so a signing failure (Vault down ⇒ 503) burns nothing — the same RT retries
+   * fine and is never mistaken for reuse. Tokens signed for a request whose swap/re-check then
+   * fails are dropped (never returned, logged or audited). A Mongo/audit failure after the swap
+   * still fails closed (500, the token is gone → re-login; accepted, DEBT-032).
    *
    * DEBT-207 (run 36 G4): `recheck(userId)` is REQUIRED and runs right after a successful `rotate`
-   * and before signing. A returned reason (client disabled / admin lock / membership gone) revokes
+   * and before any token is returned. A returned reason (client disabled / admin lock / membership gone) revokes
    * the whole family, audits `TOKEN_REFRESHED failure <reason>` and throws `RefreshRotationError`
    * (opaque invalid_grant). A thrown recheck revokes best-effort, audits `recheck_failed`
    * best-effort and rethrows (500, fail-closed). "Rotate, then re-read" mirrors the revoking
@@ -190,8 +193,25 @@ export class RefreshTokenService {
       }
     }
 
+    // DEBT-388: sign from the pre-checked doc's immutable fields BEFORE the irreversible swap. A
+    // signing error propagates here with nothing written: the RT stays active (no successor, no
+    // reuse stamp), so the client's retry succeeds. Access token uses the narrowed scope when the
+    // client asked to narrow; otherwise the full granted scope (the descendant keeps the original).
+    const accessScope = effectiveScope ?? original?.scope;
+    const signed =
+      original && accessScope
+        ? await this.tokens.signTokensForRefresh({
+            userId: original.userId.toHexString(),
+            clientId: original.clientId,
+            resource: original.resource,
+            effectiveScope: accessScope,
+            sessionRef: original.sessionRef ?? undefined,
+          })
+        : undefined;
+
     // Atomic single-use rotation is the source of truth (re-validates active/unexpired/owner/
-    // resource). Any invalid/reuse result throws here before any token is signed.
+    // resource). Any invalid/reuse result throws here and the signed tokens are dropped. With no
+    // pre-checked doc this call is a certain miss, kept so a replay still classifies as reuse.
     // DEBT-105: hand the identifiers resolved for the pre-check to rotate (one lookup per refresh).
     const result = await this.rotate(
       value,
@@ -199,18 +219,14 @@ export class RefreshTokenService {
       { ...audit, tenantId: client.tenantId },
       allowedIdentifiers,
     );
+    // Invariant: the swap consumed exactly the doc the tokens were signed for (`tokenHash` is
+    // unique). A violation is a bug: kill the family best-effort and fail closed, no token.
+    if (!signed || !accessScope || !original || !result.rotatedFromId.equals(original._id)) {
+      await this.revokeFamily(result.familyId, result.clientId, new Date()).catch(() => undefined);
+      throw new Error('refresh rotation does not match the pre-checked token');
+    }
     await this.recheckAfterRotate(result, recheck, audit);
-
-    // Access token uses the narrowed scope when the client asked to narrow; otherwise the full
-    // granted scope. The descendant refresh keeps the original scope (done inside `rotate`).
-    const accessScope = effectiveScope ?? result.scope;
-    const { accessToken, idToken } = await this.tokens.signTokensForRefresh({
-      userId: result.userId,
-      clientId: result.clientId,
-      resource: result.resource,
-      effectiveScope: accessScope,
-      sessionRef: result.sessionRef,
-    });
+    const { accessToken, idToken } = signed;
 
     await this.audit.record({
       // `user`: a successful refresh acts on behalf of the resource owner (unlike

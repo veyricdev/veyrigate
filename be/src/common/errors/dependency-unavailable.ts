@@ -6,6 +6,9 @@
 
 /** Seconds a client should wait before retrying after a dependency outage. */
 export const DEPENDENCY_RETRY_AFTER_SEC = 5;
+/** `error_description` of every dependency-outage 503 (global filter and `/token`, DEBT-401). */
+export const DEPENDENCY_UNAVAILABLE_DESCRIPTION =
+  'The service is temporarily unavailable. Try again later.';
 
 /**
  * Redis could not answer. ONLY the shapes observed in the run-53c kill test (runs/53c-B7.3/log.md,

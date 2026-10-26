@@ -380,38 +380,97 @@ describe('run 53 tester: Vault Transit KeyProvider risk tests', () => {
     }
   });
 
-  it('T5: Vault down ⇒ fail-closed: /token 5xx without tokens; verify works from cache ≤ 30 s, then 503 (DEBT-394, run 53c); recovers', async () => {
+  it('T5: Vault down ⇒ /token (code + refresh) and /jwks.json 503 without tokens (DEBT-401); verify from cache ≤ 30 s, then 503 (DEBT-394); Vault back ⇒ SAME code and SAME RT succeed, 0 reuse (DEBT-388)', async () => {
     const k = await newKey();
     const proxy = new CuttableProxy();
     await proxy.up();
     const full = await bootVault(k, `http://127.0.0.1:${proxy.port}`);
+    const OUTAGE = {
+      error: 'temporarily_unavailable',
+      error_description: 'The service is temporarily unavailable. Try again later.',
+    };
+    const expectOutage = (res: {
+      statusCode: number;
+      headers: Record<string, unknown>;
+      body: string;
+    }) => {
+      expect(res.statusCode).toBe(503);
+      expect(res.headers['retry-after']).toBe('5');
+      expect(String(res.headers['cache-control'])).toContain('no-store');
+      expect(JSON.parse(res.body)).toEqual(OUTAGE);
+      expect(res.body).not.toMatch(/eyJ|access_token|refresh_token|"kty"/);
+    };
     try {
-      const ok = await issue(full);
-      const at = ok.res.json<{ access_token: string }>().access_token;
-      await proxy.down();
+      const client = await seedFlowClient(full);
+      const userId = await seedOAuthUser(full.conn, { tenantId: DEFAULT_TENANT_ID });
+      await seedConsent(full.conn, {
+        userId,
+        clientId: client.clientId,
+        resource: FLOW_API_AUD,
+        scopes: ['openid', 'offline_access', 'api.read'],
+      });
+      const sessionId = (await full.app.get(SessionService).create(userId, DEFAULT_TENANT_ID)).id;
+      const newCode = async () => {
+        const verifier = randomBytes(32).toString('base64url');
+        const code = await authorizeCode(full, {
+          ...client,
+          sessionId,
+          resource: FLOW_API_AUD,
+          scope: 'openid offline_access api.read',
+          verifier,
+        });
+        return () =>
+          formPost(full, '/token', client, {
+            grant_type: 'authorization_code',
+            code,
+            redirect_uri: FLOW_REDIRECT,
+            code_verifier: verifier,
+          });
+      };
+      const first = await (await newCode())();
+      expect(first.statusCode).toBe(200);
+      const { access_token: at, refresh_token: rt } = first.json<{
+        access_token: string;
+        refresh_token: string;
+      }>();
+      const refresh = () =>
+        formPost(full, '/token', client, { grant_type: 'refresh_token', refresh_token: rt });
+      const exchange = await newCode(); // minted while Vault is up; /authorize signs nothing
+      const reuse = () =>
+        full.conn.model('AuditLog').countDocuments({
+          action: 'TOKEN_REUSE_DETECTED',
+          clientId: client.clientId,
+        });
 
-      const failed = await issue(full, { client: ok.client, userId: ok.userId });
-      expect(failed.res.statusCode).toBeGreaterThanOrEqual(500);
-      expect(failed.res.body).not.toMatch(/access_token|id_token|refresh_token|eyJ/);
+      await proxy.down();
+      expectOutage(await exchange()); // code grant
+      expectOutage(await refresh()); // refresh grant
 
       // Within the cache TTL: verification still served from the cached key set.
       expect((await userinfo(full, at)).statusCode).toBe(200);
 
-      offset += 31_000; // cache expired, Vault still down
+      offset += 31_000; // cache expired, Vault still down (code TTL 60 s still open)
       const ui = await userinfo(full, at);
       // DEBT-394 (run 53c): an outage, not a bad token ⇒ 503 + Retry-After, never 401/active:false.
       expect(ui.statusCode).toBe(503);
       expect(ui.headers['retry-after']).toBe('5');
       expect(ui.json()).toMatchObject({ error: 'temporarily_unavailable' });
-      const intro = await introspect(full, ok.client, at);
+      const intro = await introspect(full, client, at);
       expect(intro).toEqual({ error: 'temporarily_unavailable' });
-      const jwks = await full.app.inject({ method: 'GET', url: '/jwks.json' });
-      expect(jwks.statusCode).toBeGreaterThanOrEqual(500); // no stale key set served
-      expect(jwks.body).not.toContain('"kty"');
+      expectOutage(await full.app.inject({ method: 'GET', url: '/jwks.json' })); // DEBT-401
       expect(logs.some((l) => /^vault read failed: /.test(l))).toBe(true);
 
       await proxy.up(); // same port
       expect((await userinfo(full, at)).statusCode).toBe(200);
+      expect((await full.app.inject({ method: 'GET', url: '/jwks.json' })).statusCode).toBe(200);
+      // DEBT-388: the failed signs changed no state — the same code and the same RT still work.
+      const again = await exchange();
+      expect(again.statusCode).toBe(200);
+      expect(again.json()).toMatchObject({ access_token: expect.any(String) });
+      const rotated = await refresh();
+      expect(rotated.statusCode).toBe(200);
+      expect(rotated.json()).toMatchObject({ refresh_token: expect.any(String) });
+      expect(await reuse()).toBe(0);
     } finally {
       await full.close();
       await proxy.down().catch(() => undefined);
@@ -531,10 +590,12 @@ describe('run 53 tester: Vault Transit KeyProvider risk tests', () => {
       Array.from({ length: 10 }, () => p.signJwt({ typ: 'JWT' }, { sub: 'x' })),
     );
     expect(results.every((r) => r.status === 'rejected')).toBe(true);
-    for (const r of results)
-      expect(String((r as PromiseRejectedResult).reason.message)).toBe(
-        'vault sign failed: status=500',
-      );
+    // DEBT-401: a 500 that survives the retry + refresh is an outage (⇒ 503); cause keeps the status.
+    for (const r of results) {
+      const reason = (r as PromiseRejectedResult).reason as Error;
+      expect(reason.name).toBe('KeyProviderUnavailableError');
+      expect(String((reason.cause as Error).message)).toBe('vault sign failed: status=500');
+    }
     // DEBT-395 (run 53c): the post-failure refresh is single-flight — 1 shared read (+1 transport retry).
     expect(reads.length).toBeLessThanOrEqual(2);
   });

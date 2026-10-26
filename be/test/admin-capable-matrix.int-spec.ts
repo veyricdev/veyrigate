@@ -221,7 +221,8 @@ describe('DEBT-174 HTTP matrix: 9 client shapes x 4 aud=admin gates (run 31 QA)'
       clientType: 'confidential',
       tokenEndpointAuthMethod: 'client_secret_basic',
     } as unknown as Client;
-    const { response } = await app.get(TokenService).issueForAuthorizationCode(capable, {
+    const tokens = app.get(TokenService);
+    const data = {
       clientId: RP,
       redirectUri: RP_REDIRECT,
       codeChallenge: deriveS256Challenge(VERIFIER),
@@ -230,7 +231,9 @@ describe('DEBT-174 HTTP matrix: 9 client shapes x 4 aud=admin gates (run 31 QA)'
       userId,
       authTime: Date.now(),
       sessionRef: await newSessionRef(),
-    });
+    };
+    const signed = await tokens.signForAuthorizationCode(capable, data); // DEBT-388
+    const { response } = await tokens.issueForAuthorizationCode(capable, data, {}, signed);
     return response.access_token;
   };
 

@@ -7,6 +7,7 @@ import { createServer, type Server, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { inspect } from 'node:util';
+import { KeyProviderUnavailableError } from '../../common/errors/dependency-unavailable';
 import type { VaultConfig } from '../../config/configuration';
 import { KEY_CACHE_TTL_MS, VaultTransitKeyProvider } from './vault-transit-key-provider';
 
@@ -403,7 +404,10 @@ describe('VaultTransitKeyProvider (run 53, unit V7–V12)', () => {
         Array.from({ length: 10 }, () => p.signJwt({ typ: 'JWT' }, {})),
       );
       expect(results.every((r) => r.status === 'rejected')).toBe(true);
-      expect(String((results[0] as PromiseRejectedResult).reason)).toContain('status=500');
+      // DEBT-401: a 500 after the retry + refresh is an outage (503); the cause keeps the status.
+      const reason = (results[0] as PromiseRejectedResult).reason as Error;
+      expect(reason).toBeInstanceOf(KeyProviderUnavailableError);
+      expect(String(reason.cause)).toContain('status=500');
       expect(vault.calls.filter((c) => c === 'sign')).toHaveLength(20);
       expect(vault.calls.filter((c) => c === 'read')).toHaveLength(1);
     });
@@ -413,7 +417,9 @@ describe('VaultTransitKeyProvider (run 53, unit V7–V12)', () => {
       await p.init();
       clock += KEY_CACHE_TTL_MS + 1;
       vault.fail.read = [() => json(503, {}), () => json(503, {})];
-      await expect(p.getPublicKeys()).rejects.toThrow('vault read failed: status=503');
+      const err = (await p.getPublicKeys().catch((e: Error) => e)) as Error;
+      expect(err).toBeInstanceOf(KeyProviderUnavailableError); // DEBT-401
+      expect(String(err.cause)).toContain('vault read failed: status=503');
       await expect(p.listKeys()).resolves.toHaveLength(1); // Vault back ⇒ recovers
     });
 
@@ -462,6 +468,157 @@ describe('VaultTransitKeyProvider (run 53, unit V7–V12)', () => {
     expect(decodeProtectedHeader(token).kid).toBe(newKid);
   });
 
+  describe('DEBT-401: outage (network/timeout/5xx/429) ⇒ KeyProviderUnavailableError, anything else stays', () => {
+    const networkError = (): Response => {
+      throw new TypeError('fetch failed');
+    };
+    const abortError = (): Response => {
+      throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+    };
+    const status = (code: number) => () => json(code, { errors: ['x'] });
+    // Queued enough times to also fail the retry and the DEBT-395 metadata refresh.
+    const outages: Array<[string, () => Response]> = [
+      ['network error', networkError],
+      ['AbortError/TimeoutError', abortError],
+      ['500', status(500)],
+      ['502', status(502)],
+      ['503', status(503)],
+      ['429', status(429)],
+    ];
+
+    const expectUnavailable = (err: unknown, op: 'sign' | 'read') => {
+      expect(err).toBeInstanceOf(KeyProviderUnavailableError);
+      const e = err as Error;
+      expect(e.cause).toBeInstanceOf(Error);
+      expect((e.cause as Error).message).toMatch(new RegExp(`^vault ${op} failed: `));
+      for (const secret of ['vault.unit.test', '8200', 'transit', '/k', TOKEN, dir]) {
+        expect(e.message).not.toContain(secret);
+      }
+    };
+
+    it.each(outages)('signJwt, cache fresh: %s ⇒ unavailable', async (_n, fail) => {
+      const p = make();
+      await p.init();
+      vault.fail.sign = Array.from({ length: 4 }, () => fail);
+      // 5xx triggers the DEBT-395 refresh: it succeeds (same latest) ⇒ the sign error stands.
+      expectUnavailable(await p.signJwt({ typ: 'JWT' }, {}).catch((e: unknown) => e), 'sign');
+    });
+
+    it('signJwt: sign 5xx and the DEBT-395 refresh 5xx too ⇒ unavailable (cause = the read)', async () => {
+      const p = make();
+      await p.init();
+      vault.fail.sign = [status(500), status(500)];
+      vault.fail.read = [status(503), status(503)];
+      expectUnavailable(await p.signJwt({ typ: 'JWT' }, {}).catch((e: unknown) => e), 'read');
+      expect(vault.calls.slice(-4)).toEqual(['sign', 'sign', 'read', 'read']);
+    });
+
+    it.each(outages)('signJwt, cache expired: %s on metadata ⇒ unavailable', async (_n, fail) => {
+      const p = make();
+      await p.init();
+      clock += KEY_CACHE_TTL_MS + 1;
+      vault.fail.read = Array.from({ length: 2 }, () => fail);
+      expectUnavailable(await p.signJwt({ typ: 'JWT' }, {}).catch((e: unknown) => e), 'read');
+    });
+
+    it.each(outages)('getPublicKeys, cache expired: %s ⇒ unavailable', async (_n, fail) => {
+      const p = make();
+      await p.init();
+      clock += KEY_CACHE_TTL_MS + 1;
+      vault.fail.read = Array.from({ length: 2 }, () => fail);
+      expectUnavailable(await p.getPublicKeys().catch((e: unknown) => e), 'read');
+    });
+
+    it('getPublicKeys with an unknown kid hint: refresh outage ⇒ unavailable', async () => {
+      const p = make();
+      await p.init();
+      vault.fail.read = [status(503), status(503)];
+      expectUnavailable(await p.getPublicKeys('unknown-kid').catch((e: unknown) => e), 'read');
+    });
+
+    const notOutage = (err: unknown, match: RegExp) => {
+      expect(err).toBeInstanceOf(Error);
+      expect(err).not.toBeInstanceOf(KeyProviderUnavailableError);
+      expect((err as Error).message).toMatch(match);
+    };
+
+    it.each([
+      ['400', 400],
+      ['403 (twice, token re-read)', 403],
+    ])('signJwt %s ⇒ not unavailable (500)', async (_n, code) => {
+      const p = make();
+      await p.init();
+      vault.fail.sign = Array.from({ length: 4 }, () => status(code));
+      notOutage(
+        await p.signJwt({ typ: 'JWT' }, {}).catch((e: unknown) => e),
+        new RegExp(`vault sign failed: status=${code}`),
+      );
+    });
+
+    it.each([
+      ['400', 400],
+      ['403', 403],
+    ])('getPublicKeys %s on metadata ⇒ not unavailable', async (_n, code) => {
+      const p = make();
+      await p.init();
+      clock += KEY_CACHE_TTL_MS + 1;
+      vault.fail.read = Array.from({ length: 2 }, () => status(code));
+      notOutage(
+        await p.getPublicKeys().catch((e: unknown) => e),
+        new RegExp(`vault read failed: status=${code}`),
+      );
+    });
+
+    it('signature in a bad format ⇒ not unavailable', async () => {
+      const p = make();
+      await p.init();
+      vault.tamper = (s) => s.replace('vault:', '');
+      notOutage(
+        await p.signJwt({ typ: 'JWT' }, {}).catch((e: unknown) => e),
+        /unexpected signature format/,
+      );
+    });
+
+    it('signature that does not verify ⇒ not unavailable', async () => {
+      const p = make();
+      await p.init();
+      vault.tamper = (s) => {
+        const [, ver, b64] = /^vault:v(\d+):(.*)$/.exec(s)!;
+        const buf = Buffer.from(b64, 'base64');
+        buf[10] ^= 0x01;
+        return `vault:v${ver}:${buf.toString('base64')}`;
+      };
+      notOutage(await p.signJwt({ typ: 'JWT' }, {}).catch((e: unknown) => e), /does not verify/);
+    });
+
+    it('metadata of the wrong shape on refresh ⇒ not unavailable (signJwt and getPublicKeys)', async () => {
+      const p = make();
+      await p.init();
+      clock += KEY_CACHE_TTL_MS + 1;
+      const data = vault.data();
+      delete data.latest_version;
+      vault.fail.read = [() => json(200, { data }), () => json(200, { data })];
+      notOutage(
+        await p.signJwt({ typ: 'JWT' }, {}).catch((e: unknown) => e),
+        /unexpected key metadata shape/,
+      );
+      notOutage(await p.getPublicKeys().catch((e: unknown) => e), /unexpected key metadata shape/);
+    });
+
+    it('key became exportable on refresh ⇒ not unavailable', async () => {
+      const p = make();
+      await p.init();
+      clock += KEY_CACHE_TTL_MS + 1;
+      vault.info.exportable = true;
+      notOutage(await p.getPublicKeys().catch((e: unknown) => e), /exportable/);
+    });
+
+    it('init stays unwrapped (boot fail-fast keeps the Vault status)', async () => {
+      vault.fail.read = [status(503), status(503)];
+      await expect(make().init()).rejects.toThrow('vault read failed: status=503');
+    });
+  });
+
   describe('V10: black-hole Vault (TCP accepted, never answered)', () => {
     let server: Server;
     let port: number;
@@ -488,8 +645,10 @@ describe('VaultTransitKeyProvider (run 53, unit V7–V12)', () => {
       );
       await hole.init();
       const started = Date.now();
-      await expect(hole.signJwt({ typ: 'JWT' }, {})).rejects.toThrow(/vault sign failed/);
+      const err = (await hole.signJwt({ typ: 'JWT' }, {}).catch((e: Error) => e)) as Error;
       expect(Date.now() - started).toBeLessThanOrEqual(2 * timeoutMs + 500);
+      expect(err).toBeInstanceOf(KeyProviderUnavailableError); // DEBT-401: timeout ⇒ 503
+      expect(String(err.cause)).toMatch(/vault sign failed: (TimeoutError|AbortError)/);
     });
   });
 });

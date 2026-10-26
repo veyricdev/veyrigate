@@ -1,0 +1,9 @@
+# Summary — run 54 DEBT-388/401/398 (M7, lane BE/ops) — ✅ PASS 3/3 task
+
+- **Phạm vi**: T1 [BE] DEBT-388 ký trước khi commit ở `/token`: code grant `peek` (GET, cùng binding Lua) → gate không I/O → ký → `consume(…, expectedRaw)` (Lua không đổi) → chuỗi kiểm tra cũ → mint family; refresh ký từ `original` rồi `rotate` (không đổi) + bất biến `rotatedFromId == original._id` + `recheckAfterRotate`. Ký lỗi ⇒ code/RT còn nguyên, retry không bị coi là reuse; thua race ⇒ token đã ký bị bỏ (không trả/log/audit). T2 [BE] DEBT-401 provider phân loại lỗi: mạng/timeout/5xx/429 ⇒ 503 + `Retry-After`, 400/403/verify/format ⇒ 500; mô tả 503 riêng (trước đây dùng nhầm câu rate-limit). T3 [ops] DEBT-398 guard `RUN --mount=type=bind` đầu stage build ở 2 Dockerfile chặn `.env*`/key/PEM/`.npmrc`, runbook cần BuildKit + cấm cache `mode=max`.
+- **Không đổi cấu trúc Redis/Mongo**; không grace window (spec §9.5). Ghi nhận: nhiều refresh song song cùng một RT ⇒ reuse detection stamp-first revoke family (đúng thiết kế, T8).
+- **Verify**: be unit 558, int 1267 (C1–C6, R1–R5, T1–T11: hết hạn khi ký, race 8/6, logout khi ký, PKCE sai không ký), vault 26 (T5, V1–V3), smoke BE 11/11 + fe-admin 14/14, canary build FAIL đúng (6 + 3), fe-admin 1416, fe-sso-test 269, E2E 35/35, audit high 0; mutation 9 + 2 RED; không `eyJ` trong log/audit; Docker tạm đã dọn; `be/keys` không đổi.
+- **Sự cố**: backend-dev `Stop-Process` PID 21176 — process jest `test:int` mồ côi của chính nó (đã kiểm command line); hệ thống gắn cảnh báo "Interfere With Workloads"; không đụng container/process khác. Từ tester trở đi cấm kill process (chỉ TaskStop).
+- **Commit**: (điền sau).
+- **Vòng lặp**: tech-lead=1, BE dev=1, senior=1 (PASS), tester=1 (PASS).
+- **Debt**: đóng DEBT-388/401/398; mở 409 (`/token` chưa có deadline tổng khi Vault hố đen), 410 (admin keys API 500 khi Vault down), 411 💭, 412 🟢 (ts-jest cache lạnh làm timeout vault-spec).

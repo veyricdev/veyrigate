@@ -90,6 +90,12 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
 
   const buildService = () =>
     new TokenService(refreshModel as never, signer, audit as unknown as AuditService, config);
+  /** DEBT-388: sign (as the controller does before consume), then issue with those tokens. */
+  const issue = async (c: Client, d: AuthorizationCodeData) => {
+    const svc = buildService();
+    return svc.issueForAuthorizationCode(c, d, {}, await svc.signForAuthorizationCode(c, d));
+  };
+  const PRESIGNED = { accessToken: 'presigned-at' };
 
   beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), 'vg-token-'));
@@ -115,7 +121,7 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
   });
 
   it('access token: iss/aud/sub/scope/client_id/jti present, exp-iat === 900', async () => {
-    const { response: res } = await buildService().issueForAuthorizationCode(client(), codeData());
+    const { response: res } = await issue(client(), codeData());
     const payload = await verifier.verify(res.access_token, RESOURCE);
     expect(payload.iss).toBe(ISSUER);
     expect(payload.aud).toBe(RESOURCE);
@@ -128,7 +134,7 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
   });
 
   it('id token: aud=client_id, nonce byte-for-byte, auth_time floor(ms/1000), amr/acr defaults', async () => {
-    const { response: res } = await buildService().issueForAuthorizationCode(client(), codeData());
+    const { response: res } = await issue(client(), codeData());
     expect(res.id_token).toBeDefined();
     const payload = await verifier.verify(res.id_token!, 'rp-client');
     expect(payload.aud).toBe('rp-client');
@@ -141,10 +147,7 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
 
   it('amr comes from the code (DEBT-030): fed => [fed], pwd => [pwd]', async () => {
     for (const amr of [['fed'], ['pwd']]) {
-      const { response: res } = await buildService().issueForAuthorizationCode(
-        client(),
-        codeData({ amr }),
-      );
+      const { response: res } = await issue(client(), codeData({ amr }));
       expect((await verifier.verify(res.id_token!, 'rp-client')).amr).toEqual(amr);
     }
   });
@@ -162,7 +165,7 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
   });
 
   it('auth_time in access token only when resource is the admin identifier (D3)', async () => {
-    const { response: admin } = await buildService().issueForAuthorizationCode(
+    const { response: admin } = await issue(
       // aud=admin requires a confidential client (DEBT-172).
       client({ clientType: 'confidential', tokenEndpointAuthMethod: 'client_secret_basic' }),
       codeData({ resource: ADMIN_RESOURCE }),
@@ -170,39 +173,35 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
     const adminAt = await verifier.verify(admin.access_token, ADMIN_RESOURCE);
     expect(adminAt.auth_time).toBe(1_700_000_000);
 
-    const { response: normal } = await buildService().issueForAuthorizationCode(
-      client(),
-      codeData(),
-    );
+    const { response: normal } = await issue(client(), codeData());
     const normalAt = await verifier.verify(normal.access_token, RESOURCE);
     expect(normalAt).not.toHaveProperty('auth_time');
   });
 
   it('no nonce in code => id token has no nonce claim (not null/empty)', async () => {
-    const { response: res } = await buildService().issueForAuthorizationCode(
-      client(),
-      codeData({ nonce: undefined }),
-    );
+    const { response: res } = await issue(client(), codeData({ nonce: undefined }));
     const payload = await verifier.verify(res.id_token!, 'rp-client');
     expect(payload).not.toHaveProperty('nonce');
   });
 
   it('id token only when scope has openid', async () => {
-    const { response: res } = await buildService().issueForAuthorizationCode(
-      client(),
-      codeData({ scope: 'profile email' }),
-    );
+    const { response: res } = await issue(client(), codeData({ scope: 'profile email' }));
     expect(res.id_token).toBeUndefined();
   });
 
   it('DEBT-172: an aud=admin code for a PUBLIC client => invalid_target, nothing signed', async () => {
     await expect(
-      buildService().issueForAuthorizationCode(client(), codeData({ resource: ADMIN_RESOURCE })),
+      buildService().issueForAuthorizationCode(
+        client(),
+        codeData({ resource: ADMIN_RESOURCE }),
+        {},
+        PRESIGNED,
+      ),
     ).rejects.toMatchObject({ code: 'invalid_target' });
   });
 
   it('authTime absent => no auth_time claim fabricated (fail-closed for step-up)', async () => {
-    const { response: res } = await buildService().issueForAuthorizationCode(
+    const { response: res } = await issue(
       // aud=admin requires a confidential client (DEBT-172).
       client({ clientType: 'confidential', tokenEndpointAuthMethod: 'client_secret_basic' }),
       codeData({ resource: ADMIN_RESOURCE, authTime: undefined }),
@@ -215,17 +214,22 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
 
   it('missing resource => invalid_target, no token signed, no refresh inserted', async () => {
     await expect(
-      buildService().issueForAuthorizationCode(client(), codeData({ resource: undefined })),
+      buildService().issueForAuthorizationCode(
+        client(),
+        codeData({ resource: undefined }),
+        {},
+        PRESIGNED,
+      ),
     ).rejects.toMatchObject({ code: 'invalid_target' });
     await expect(
-      buildService().issueForAuthorizationCode(client(), codeData({ resource: '' })),
+      buildService().issueForAuthorizationCode(client(), codeData({ resource: '' }), {}, PRESIGNED),
     ).rejects.toBeInstanceOf(TokenError);
     expect(refreshModel.create).not.toHaveBeenCalled();
     expect(audit.record).not.toHaveBeenCalled();
   });
 
   it('D7: refresh minted (hash only) when grant refresh_token AND scope offline_access', async () => {
-    const { response: res } = await buildService().issueForAuthorizationCode(
+    const { response: res } = await issue(
       client({ grantTypes: ['authorization_code', 'refresh_token'] }),
       codeData({ scope: 'openid offline_access' }),
     );
@@ -246,7 +250,7 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
   });
 
   it('D7 fail-closed: no refresh grant => no refresh_token, no DB doc', async () => {
-    const { response: res } = await buildService().issueForAuthorizationCode(
+    const { response: res } = await issue(
       client({ grantTypes: ['authorization_code'] }),
       codeData({ scope: 'openid offline_access' }),
     );
@@ -255,7 +259,7 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
   });
 
   it('D7 fail-closed: no offline_access scope => no refresh_token, no DB doc', async () => {
-    const { response: res } = await buildService().issueForAuthorizationCode(
+    const { response: res } = await issue(
       client({ grantTypes: ['authorization_code', 'refresh_token'] }),
       codeData({ scope: 'openid profile' }),
     );
@@ -264,7 +268,7 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
   });
 
   it('DEBT-059: issueForAuthorizationCode does NOT write audit (controller re-checks first)', async () => {
-    await buildService().issueForAuthorizationCode(
+    await issue(
       client({ grantTypes: ['authorization_code', 'refresh_token'] }),
       codeData({ scope: 'openid offline_access' }),
     );
@@ -276,12 +280,8 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
 
   it('recordIssued(success): TOKEN_ISSUED success, no secret/token in metadata (INV-25)', async () => {
     const data = codeData({ scope: 'openid offline_access' });
-    const res = (
-      await buildService().issueForAuthorizationCode(
-        client({ grantTypes: ['authorization_code', 'refresh_token'] }),
-        data,
-      )
-    ).response;
+    const res = (await issue(client({ grantTypes: ['authorization_code', 'refresh_token'] }), data))
+      .response;
     audit.record.mockClear();
     await buildService().recordIssued(
       client({ grantTypes: ['authorization_code', 'refresh_token'] }),
@@ -330,6 +330,44 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
     await expect(
       buildService().recordIssued(client(), codeData(), 'success', false),
     ).rejects.toThrow('mongo down');
+  });
+
+  it('DEBT-388: issueForAuthorizationCode never signs — returns the pre-signed tokens as is', async () => {
+    const sign = jest.spyOn(signer, 'sign');
+    const { response: res } = await buildService().issueForAuthorizationCode(
+      client(),
+      codeData(),
+      {},
+      { accessToken: 'at-1', idToken: 'id-1' },
+    );
+    expect(sign).not.toHaveBeenCalled();
+    expect(res).toMatchObject({ access_token: 'at-1', id_token: 'id-1', expires_in: ACCESS_TTL });
+    sign.mockRestore();
+  });
+
+  it('DEBT-388: reaching issuance without pre-signed tokens ⇒ plain Error (500), no refresh doc', async () => {
+    const err = await buildService()
+      .issueForAuthorizationCode(
+        client({ grantTypes: ['authorization_code', 'refresh_token'] }),
+        codeData({ scope: 'openid offline_access' }),
+        {},
+        undefined,
+      )
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(TokenError);
+    expect(refreshModel.create).not.toHaveBeenCalled();
+  });
+
+  it('DEBT-388: signForAuthorizationCode writes nothing (no refresh doc, no audit)', async () => {
+    const signed = await buildService().signForAuthorizationCode(
+      client({ grantTypes: ['authorization_code', 'refresh_token'] }),
+      codeData({ scope: 'openid offline_access' }),
+    );
+    expect(signed.accessToken).toMatch(/^eyJ/);
+    expect(signed.idToken).toMatch(/^eyJ/);
+    expect(refreshModel.create).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
   });
 
   it('adminResourceIdentifier derives /admin/ from issuer', () => {

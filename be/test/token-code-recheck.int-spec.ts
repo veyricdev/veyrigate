@@ -1,5 +1,5 @@
 import { jest } from '@jest/globals';
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { MongooseModule, getModelToken } from '@nestjs/mongoose';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -186,8 +186,8 @@ describe('/token code grant re-check after the family insert (run 35 Task 3)', (
     const original = tokens.issueForAuthorizationCode.bind(tokens);
     return jest
       .spyOn(tokens, 'issueForAuthorizationCode')
-      .mockImplementationOnce(async (client, data, audit) => {
-        const out = await original(client, data, audit);
+      .mockImplementationOnce(async (client, data, audit, signed) => {
+        const out = await original(client, data, audit, signed); // DEBT-388: pre-signed tokens
         expect(out.familyId).toBeTruthy();
         await mutate(client.clientId, data.userId);
         return out;
@@ -685,38 +685,44 @@ describe('/token code grant re-check after the family insert (run 35 Task 3)', (
       expect(res.json().refresh_token).toBeTruthy();
     });
 
-    it('tester exposure: a refused refresh (reason or recheck_failed) never signs a token', async () => {
-      const sign = jest.spyOn(tokens, 'signTokensForRefresh');
+    // DEBT-388 (run 54, intentional pin change): tokens are now signed BEFORE the rotate (so a
+    // signing outage burns nothing), hence "never signs" became "never RETURNS": the signed tokens
+    // of a refused refresh are dropped — not in the body, not audited as success, not logged.
+    it('tester exposure: a refused refresh (reason or recheck_failed) never returns a token', async () => {
+      const logs: string[] = [];
+      for (const level of ['log', 'warn', 'error'] as const) {
+        jest
+          .spyOn(Logger.prototype, level)
+          .mockImplementation((msg: unknown) => void logs.push(String(msg)));
+      }
       const a = await firstRefresh();
-      sign.mockClear();
       afterRotate((_cid, uid) => lockOnly(uid));
       const refused = await refreshReq(a.clientId, a.rt);
       expect(refused.statusCode).toBe(400);
-      expect(sign).not.toHaveBeenCalled();
 
       const b = await firstRefresh();
-      sign.mockClear();
       jest
         .spyOn(app.get(UserTenantService), 'isActiveMember')
         .mockRejectedValueOnce(new Error('mongo down'));
       const failed = await refreshReq(b.clientId, b.rt);
       expect(failed.statusCode).toBe(500);
-      expect(sign).not.toHaveBeenCalled();
       for (const r of [refused, failed]) {
-        expect(r.body).not.toMatch(/access_token|refresh_token|id_token/);
+        expect(r.body).not.toMatch(/access_token|refresh_token|id_token|eyJ/);
       }
+      for (const uid of [a.userId, b.userId]) {
+        expect((await refreshedAudits(uid)).filter((e) => e.result === 'success')).toHaveLength(0);
+      }
+      expect(logs.join('\n')).not.toContain('eyJ');
     });
 
+    // DEBT-388: signing happens before rotate now; the pin is "no token returned" (was "not signed").
     it('tester DEBT-067: revokeFamily throws on a refusal => 500, no token, refusal audit kept; replay of the old token gets nothing', async () => {
       const { clientId, userId, rt } = await firstRefresh();
-      const sign = jest.spyOn(tokens, 'signTokensForRefresh');
-      sign.mockClear();
       afterRotate((_cid, uid) => lockOnly(uid));
       jest.spyOn(refresh, 'revokeFamily').mockRejectedValueOnce(new Error('mongo down'));
       const res = await refreshReq(clientId, rt);
       expect(res.statusCode).toBe(500);
-      expect(res.body).not.toMatch(/access_token|refresh_token/);
-      expect(sign).not.toHaveBeenCalled();
+      expect(res.body).not.toMatch(/access_token|refresh_token|eyJ/);
       const audits = await refreshedAudits(userId);
       expect(audits).toHaveLength(1);
       expect(audits[0]).toMatchObject({ result: 'failure', reason: 'user_locked' });

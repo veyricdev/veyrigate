@@ -181,6 +181,13 @@ docker build -f fe-admin/Dockerfile -t <registry>/veyrigate-fe-admin:<version> .
 bash fe-admin/scripts/docker-smoke.sh <registry>/veyrigate-fe-admin:<version>   # 13 check, như CI `fe-admin-image`
 ```
 
+**Build context fail-closed (DEBT-398)**: bước đầu stage `build` quét context qua bind mount (không tạo
+layer) và **dừng build** nếu thấy `.env*`, `*.pem|key|p12|pfx`, `.npmrc`, `be/keys/`, `**/.keys/` (in tên
+file, không in nội dung) ⇒ sửa `.dockerignore`, không xoá bước guard. Cần **BuildKit** (`RUN --mount`;
+mặc định của `docker build` từ Docker 23). **Cấm** `--cache-to …,mode=max` ra registry hay bất cứ đâu
+ngoài máy build (cache `max` chứa layer trung gian của stage `build`); nếu cần cache từ xa chỉ dùng
+`mode=min` hoặc không export cache.
+
 **Env** (chỉ từ môi trường process; image không đọc file `.env`, không có `--env-file`):
 
 | Biến | Ghi chú |
@@ -300,6 +307,13 @@ docker build -f be/Dockerfile --target build -t <registry>/veyrigate-be:<version
 docker build -f be/Dockerfile -t <registry>/veyrigate-be:<version> .
 bash be/scripts/docker-smoke.sh <registry>/veyrigate-be:<version> <registry>/veyrigate-be:<version>-build
 ```
+
+**Build context fail-closed (DEBT-398)**: bước đầu stage `build` quét context qua bind mount (không tạo
+layer) và **dừng build** nếu thấy `.env*`, `*.pem|key|p12|pfx`, `.npmrc`, `be/keys/`, `**/.keys/` (in tên
+file, không in nội dung) ⇒ sửa `.dockerignore`, không xoá bước guard. Cần **BuildKit** (`RUN --mount`;
+mặc định của `docker build` từ Docker 23). **Cấm** `--cache-to …,mode=max` ra registry hay bất cứ đâu
+ngoài máy build (cache `max` chứa layer trung gian của stage `build`); nếu cần cache từ xa chỉ dùng
+`mode=min` hoặc không export cache.
 
 Smoke (như CI `be-image`, 11 check) dựng mạng `vg-b73b-net` + Mongo/Redis/Vault dev (TLS) tạm, rồi
 kiểm: non-root, `HEALTHCHECK` healthy, `/health` + `/ready` 200, `/jwks.json` đúng key Vault Transit,

@@ -32,6 +32,7 @@ import { RefreshRotationError, RefreshTokenService } from './refresh-token.servi
 import { errorForLog } from '../../../common/logger/error-log';
 import {
   DEPENDENCY_RETRY_AFTER_SEC,
+  DEPENDENCY_UNAVAILABLE_DESCRIPTION,
   isDependencyUnavailable,
 } from '../../../common/errors/dependency-unavailable';
 
@@ -49,8 +50,9 @@ const CODE_VERIFIER_RE = /^[A-Za-z0-9\-._~]{43,128}$/;
  * `POST /token` grant `authorization_code` (B4.4, spec ?8/?9.3/?9.5).
  *
  * Order (so a bad request never destroys a valid code ? INV-13): parse form => resolve client
- * auth => authenticate client => check the client may use this grant => consume+bind the code
- * (atomic, binds client_id/redirect_uri/PKCE challenge) => issue tokens. Every response (success
+ * auth => authenticate client => check the client may use this grant => peek+bind the code =>
+ * sign (DEBT-388) => consume+bind the code (atomic, binds client_id/redirect_uri/PKCE challenge)
+ * => re-checks => return the signed tokens. Every response (success
  * or error) is `no-store`; 401 `invalid_client` via Basic carries `WWW-Authenticate`. OAuth
  * errors are rendered here, not via the global filter (which maps by status only).
  */
@@ -173,16 +175,41 @@ export class TokenController {
       throw new TokenError('invalid_grant');
     }
 
-    // 4) Atomic consume-with-binding: client_id + redirect_uri + PKCE challenge must all match,
-    // otherwise the code is left intact (INV-13). A mismatch/missing/expired code => invalid_grant.
+    // 4) DEBT-388: sign BEFORE the irreversible consume, so a signing failure (Vault down ⇒ 503)
+    // leaves the code usable for the client's retry. `peek` reads with the same binding as the
+    // consume script (a wrong verifier/redirect never reaches the signer; code intact, INV-13).
     const challenge = deriveS256Challenge(verifier);
-    const data = await this.codes.consume(code, client.clientId, redirectUri, challenge);
+    const peeked = await this.codes.peek(code, client.clientId, redirectUri, challenge);
+    if (!peeked) {
+      throw new TokenError('invalid_grant');
+    }
+    // Pure gate (no I/O), same predicates as the refusals below: a code those refuse is NOT
+    // signed, but still goes through `consume` so the refusal burns it exactly as before.
+    const bodyResource = body.get('resource');
+    const p = peeked.data;
+    const signable =
+      (bodyResource === undefined || bodyResource === p.resource) &&
+      !!p.sessionRef &&
+      !!p.resource &&
+      !adminTargetForbidden(client, p.resource, this.tokens.adminResource);
+    // A signing error propagates here: nothing consumed, nothing audited (I4).
+    const signed = signable ? await this.tokens.signForAuthorizationCode(client, p) : undefined;
+
+    // Atomic consume-with-binding (Lua, unchanged). Losing the race (or expiry while signing), or a
+    // consumed value different from the peeked one ⇒ invalid_grant; the signed tokens are dropped
+    // (never returned, logged or audited).
+    const data = await this.codes.consume(
+      code,
+      client.clientId,
+      redirectUri,
+      challenge,
+      peeked.raw,
+    );
     if (!data) {
       throw new TokenError('invalid_grant');
     }
 
     // 5) A `resource` in the body (RFC 8707) may only confirm the bound resource, never change aud.
-    const bodyResource = body.get('resource');
     if (bodyResource !== undefined && bodyResource !== data.resource) {
       throw new TokenError('invalid_target');
     }
@@ -202,7 +229,12 @@ export class TokenController {
     }
 
     const audit = { ip: req.ip, requestId: req.id };
-    const { response, familyId } = await this.tokens.issueForAuthorizationCode(client, data, audit);
+    const { response, familyId } = await this.tokens.issueForAuthorizationCode(
+      client,
+      data,
+      audit,
+      signed,
+    );
 
     // DEBT-051 / INV-29: the `exists` check above is a fail-fast read; a logout can still slip in
     // between it and the family insert (TOCTOU). Re-check AFTER the insert for EVERY code grant —
@@ -487,6 +519,7 @@ export class TokenController {
         });
     }
     // Dependency outage (Redis / key provider, run 53c): 503 + Retry-After, no token (fail-closed).
+    // Same description as the global filter (DEBT-401), not the client-auth rate-limit sentence.
     if (unavailable) {
       this.logger.error(errorForLog(err));
       return reply
@@ -494,7 +527,7 @@ export class TokenController {
         .header('Retry-After', String(DEPENDENCY_RETRY_AFTER_SEC))
         .send({
           error: 'temporarily_unavailable',
-          error_description: descriptionFor('temporarily_unavailable'),
+          error_description: DEPENDENCY_UNAVAILABLE_DESCRIPTION,
         });
     }
     const tokenError =

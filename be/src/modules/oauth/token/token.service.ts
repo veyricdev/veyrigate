@@ -65,6 +65,12 @@ export interface TokenResponse {
   refresh_token?: string;
 }
 
+/** Access (+ ID) token signed for a code grant BEFORE the code is consumed (DEBT-388). */
+export interface SignedCodeTokens {
+  accessToken: string;
+  idToken?: string;
+}
+
 /**
  * `/token` grant `authorization_code` (B4.4, spec ?8/?9.3/?9.5).
  *
@@ -95,40 +101,25 @@ export class TokenService {
   }
 
   /**
-   * Issue tokens for a consumed authorization code. `client` is the authenticated client; `data`
-   * is the context the code was bound to (resource/scope/userId/nonce/authTime). Throws
-   * `TokenError` for domain failures; lets infrastructure errors (sign/DB/audit) propagate so the
-   * controller returns a fail-closed 500 without a partially issued token.
-   *
-   * Returns the signed `response` plus the `familyId` of any refresh family just minted (undefined
-   * when none). The controller uses `familyId` to re-check session liveness AFTER the insert and
-   * revoke the family if the browser session was terminated during the code's exchange window
-   * (DEBT-051, §15 inv. 29). `familyId` stays server-side (never in the HTTP body / logs).
+   * Sign the access token (+ ID token when the scope has `openid`) for a code grant (DEBT-388). The
+   * controller calls this on the PEEKED code, before `consume`, so a signing failure (Vault down)
+   * leaves the code usable. Pure: no write, no audit, no log. The tokens only leave the server via
+   * `issueForAuthorizationCode` once the consume won and every re-check passed; otherwise dropped.
    */
-  async issueForAuthorizationCode(
+  async signForAuthorizationCode(
     client: Client,
     data: AuthorizationCodeData,
-    audit: { ip?: string; userAgent?: string; requestId?: string } = {},
-  ): Promise<{ response: TokenResponse; familyId?: string }> {
-    // An access token must target a concrete resource; a code with no bound resource (the public
-    // client case) cannot mint one, and RefreshToken.resource is schema-required (fail-closed).
+  ): Promise<SignedCodeTokens> {
     if (!data.resource) {
       throw new TokenError('invalid_target');
     }
-    // DEBT-172/174: a non-admin-capable client never redeems an `aud=admin` code (already consumed).
-    if (adminTargetForbidden(client, data.resource, this.adminResource)) {
-      throw new TokenError('invalid_target');
-    }
-    const resource = data.resource;
-    const scope = data.scope;
-    const scopes = scope.length ? scope.split(' ') : [];
+    const scopes = data.scope.length ? data.scope.split(' ') : [];
     const authTimeSec =
       typeof data.authTime === 'number' ? Math.floor(data.authTime / 1000) : undefined;
-
     const accessToken = await this.signAccessToken(
       data.userId,
-      resource,
-      scope,
+      data.resource,
+      data.scope,
       client.clientId,
       authTimeSec,
       data.sessionRef,
@@ -140,6 +131,45 @@ export class TokenService {
           authTimeSec,
         )
       : undefined;
+    return { accessToken, ...(idToken ? { idToken } : {}) };
+  }
+
+  /**
+   * Issue tokens for a consumed authorization code. `client` is the authenticated client; `data`
+   * is the context the code was bound to (resource/scope/userId/nonce/authTime); `signed` are the
+   * tokens `signForAuthorizationCode` produced for the same code before it was consumed (DEBT-388).
+   * Throws `TokenError` for domain failures; lets infrastructure errors (DB/audit) propagate so the
+   * controller returns a fail-closed 500 without a partially issued token.
+   *
+   * Returns the signed `response` plus the `familyId` of any refresh family just minted (undefined
+   * when none). The controller uses `familyId` to re-check session liveness AFTER the insert and
+   * revoke the family if the browser session was terminated during the code's exchange window
+   * (DEBT-051, §15 inv. 29). `familyId` stays server-side (never in the HTTP body / logs).
+   */
+  async issueForAuthorizationCode(
+    client: Client,
+    data: AuthorizationCodeData,
+    audit: { ip?: string; userAgent?: string; requestId?: string },
+    signed: SignedCodeTokens | undefined,
+  ): Promise<{ response: TokenResponse; familyId?: string }> {
+    // An access token must target a concrete resource; a code with no bound resource (the public
+    // client case) cannot mint one, and RefreshToken.resource is schema-required (fail-closed).
+    if (!data.resource) {
+      throw new TokenError('invalid_target');
+    }
+    // DEBT-172/174: a non-admin-capable client never redeems an `aud=admin` code (already consumed).
+    if (adminTargetForbidden(client, data.resource, this.adminResource)) {
+      throw new TokenError('invalid_target');
+    }
+    // Invariant (DEBT-388): the controller's pre-sign gate uses the same predicates as the checks
+    // above, so a code that reaches this point was signed. Never sign here (the code is consumed).
+    if (!signed) {
+      throw new Error('code grant reached issuance without pre-signed tokens');
+    }
+    const { accessToken, idToken } = signed;
+    const resource = data.resource;
+    const scope = data.scope;
+    const scopes = scope.length ? scope.split(' ') : [];
 
     const issueRefresh =
       client.grantTypes.includes('refresh_token') && scopes.includes('offline_access');

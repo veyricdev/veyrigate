@@ -9,6 +9,7 @@ import {
 import { errorForLog } from '../logger/error-log';
 import {
   DEPENDENCY_RETRY_AFTER_SEC,
+  DEPENDENCY_UNAVAILABLE_DESCRIPTION,
   isDependencyUnavailable,
 } from '../errors/dependency-unavailable';
 
@@ -75,7 +76,7 @@ export class OAuthExceptionFilter implements ExceptionFilter {
       if (isDependencyUnavailable(exception)) {
         status = HttpStatus.SERVICE_UNAVAILABLE;
         error = 'temporarily_unavailable';
-        description = 'The service is temporarily unavailable. Try again later.';
+        description = DEPENDENCY_UNAVAILABLE_DESCRIPTION;
         reply.header('Retry-After', String(DEPENDENCY_RETRY_AFTER_SEC));
       }
     }

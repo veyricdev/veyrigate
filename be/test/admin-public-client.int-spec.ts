@@ -382,7 +382,8 @@ describe.each(MISFITS)(
     it('AdminTokenGuard: an aud=admin AT minted while the client was admin-capable => 401 invalid_token once the DB record drifts (control: capable => 200)', async () => {
       await setShape(CAPABLE);
       const client = await app.get(ClientService).findByClientId(SPA);
-      const { response } = await app.get(TokenService).issueForAuthorizationCode(client!, {
+      const tokens = app.get(TokenService);
+      const data = {
         clientId: SPA,
         redirectUri: SPA_REDIRECT,
         codeChallenge: deriveS256Challenge(VERIFIER),
@@ -391,7 +392,9 @@ describe.each(MISFITS)(
         userId,
         authTime: Date.now(),
         sessionRef: sha256((await app.get(SessionService).create(userId, DEFAULT_TENANT_ID)).id),
-      });
+      };
+      const signed = await tokens.signForAuthorizationCode(client!, data); // DEBT-388
+      const { response } = await tokens.issueForAuthorizationCode(client!, data, {}, signed);
       const me = () =>
         app.inject({
           method: 'GET',

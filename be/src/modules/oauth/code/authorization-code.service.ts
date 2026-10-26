@@ -100,17 +100,46 @@ export class AuthorizationCodeService {
   }
 
   /**
+   * Read-only look at a code (DEBT-388): `GET` (no `DEL`, TTL untouched) + the SAME three-field
+   * binding as the consume script, so `/token` can sign before consuming without a wrong verifier
+   * or redirect_uri ever reaching the signer (INV-13). `raw` is passed back to `consume` as
+   * `expectedRaw`. Never logs.
+   */
+  async peek(
+    code: string,
+    clientId: string,
+    redirectUri: string,
+    codeChallenge: string,
+  ): Promise<{ raw: string; data: AuthorizationCodeData } | null> {
+    if (!code) return null;
+    const raw = await this.redis.client.get(codeKey(code));
+    if (!raw) return null;
+    const data = JSON.parse(raw) as AuthorizationCodeData;
+    if (
+      data.clientId !== clientId ||
+      data.redirectUri !== redirectUri ||
+      data.codeChallenge !== codeChallenge
+    ) {
+      return null;
+    }
+    return { raw, data };
+  }
+
+  /**
    * Atomically consume a code bound to `clientId`/`redirectUri`/`codeChallenge` (spec §9.5 /
    * §15 #13). Returns null when missing, expired, already consumed, or when any of the three
    * identifiers do not match — in the mismatch case the code is left intact so a subsequent
    * legitimate consume can still succeed (INV-13). `codeChallenge` is `S256(code_verifier)`, so
    * a wrong `code_verifier` cannot delete another holder's code (PKCE bound *before* DEL).
+   * `expectedRaw` (DEBT-388): the value `peek` saw; a consumed value that differs is refused (null)
+   * — a code is immutable after `SET NX`, so a difference means the signed tokens are not for it.
    */
   async consume(
     code: string,
     clientId: string,
     redirectUri: string,
     codeChallenge: string,
+    expectedRaw?: string,
   ): Promise<AuthorizationCodeData | null> {
     if (!code) return null;
     const raw = await (this.redis.client as unknown as AuthCodeRedis).consumeAuthCode(
@@ -119,6 +148,7 @@ export class AuthorizationCodeService {
       redirectUri,
       codeChallenge,
     );
-    return raw ? (JSON.parse(raw) as AuthorizationCodeData) : null;
+    if (!raw || (expectedRaw !== undefined && raw !== expectedRaw)) return null;
+    return JSON.parse(raw) as AuthorizationCodeData;
   }
 }

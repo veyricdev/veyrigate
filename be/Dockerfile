@@ -9,6 +9,14 @@
 ARG NODE_IMAGE=node:22.23.2-bookworm-slim@sha256:48e4b67d85f87bd551df43704e24d252f56cc5f8e9718841aace50f19948f0f9
 
 FROM ${NODE_IMAGE} AS build
+# DEBT-398: fail closed if the build context holds anything secret-looking (an ignore rule was
+# lost). First step, on a read-only bind mount of the context: nothing reaches a layer or the cache.
+# Names only (never contents); src/modules/keys, src/routes/keys are code, so no bare `*/keys/*`.
+RUN --mount=type=bind,target=/ctx sh -ec 'cd /ctx; \
+  bad=$(find . \( -name ".env*" -o -name "*.pem" -o -name "*.key" -o -name "*.p12" -o -name "*.pfx" \
+    -o -name ".npmrc" -o -path "./be/keys" -o -path "./be/keys/*" -o -path "*/.keys" -o -path "*/.keys/*" \) -print); \
+  if [ -n "$bad" ]; then echo "secret-looking files in the build context (check the .dockerignore):" >&2; \
+    echo "$bad" >&2; exit 1; fi'
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 WORKDIR /repo
 RUN corepack enable

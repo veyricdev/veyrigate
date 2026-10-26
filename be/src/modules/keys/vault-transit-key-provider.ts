@@ -3,6 +3,7 @@ import { calculateJwkThumbprint, type JWTPayload } from 'jose';
 import { createPublicKey, verify, type KeyObject } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
+import { KeyProviderUnavailableError } from '../../common/errors/dependency-unavailable';
 import type { VaultConfig } from '../../config/configuration';
 import { encodeCompactJws } from './jws';
 import type {
@@ -123,7 +124,16 @@ export class VaultTransitKeyProvider implements KeyProvider {
     await this.refresh(true);
   }
 
+  /** DEBT-401: Vault unreachable/overloaded ⇒ `KeyProviderUnavailableError` (503); else as thrown. */
   async signJwt(header: { typ: string }, payload: JWTPayload): Promise<string> {
+    try {
+      return await this.signOnce(header, payload);
+    } catch (err) {
+      throw asUnavailable(err);
+    }
+  }
+
+  private async signOnce(header: { typ: string }, payload: JWTPayload): Promise<string> {
     const set = await this.keySet();
     try {
       return await this.signWith(set, header, payload);
@@ -142,6 +152,14 @@ export class VaultTransitKeyProvider implements KeyProvider {
   }
 
   async getPublicKeys(kidHint?: string): Promise<PublicJwk[]> {
+    try {
+      return await this.publicKeys(kidHint);
+    } catch (err) {
+      throw asUnavailable(err);
+    }
+  }
+
+  private async publicKeys(kidHint?: string): Promise<PublicJwk[]> {
     let set = await this.keySet();
     if (
       kidHint !== undefined &&
@@ -402,6 +420,19 @@ export class VaultTransitKeyProvider implements KeyProvider {
       throw new VaultNetworkError(op, (err as Error).name || 'Error');
     }
   }
+}
+
+/**
+ * DEBT-401: only "Vault not reachable / overloaded" (network error, timeout, unreadable body, 5xx,
+ * 429 — after the retry and the DEBT-395 refresh) becomes an outage (503). 400/403, a bad signature
+ * or metadata shape and a misconfigured key stay as thrown (500): they need an operator, not a retry.
+ * The wrapper's message carries no address, path, key name or token (`cause` keeps the original).
+ */
+function asUnavailable(err: unknown): unknown {
+  const outage =
+    err instanceof VaultNetworkError ||
+    (err instanceof VaultStatusError && (err.status >= 500 || err.status === 429));
+  return outage ? new KeyProviderUnavailableError(err) : err;
 }
 
 /** RSA public key (PEM) ⇒ JWKS entry with kid = RFC 7638 thumbprint. RSA ≥ 2048 bits only. */
