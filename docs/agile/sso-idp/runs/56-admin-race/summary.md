@@ -5,5 +5,5 @@
 - **Verify**: be unit 589, int 1347 + 1 skip (L6), fe-admin 1416, fe-sso-test 269, E2E 35/35, audit high 0; mutation 13 + 3 + 1 RED.
 - **Vòng lặp**: tech-lead=1, BE dev=3 (impl+418/419, retry 1, retry 2), senior=3 (PASS, REJECT E2E `count`, PASS), tester=2 (FAIL DEBT-420, PASS).
 - **Quyết định người dùng (2026-10-26)**: đóng run 56, L6 (lock∥unlock không barrier — trail đôi khi lệch DB, trạng thái/quyền vẫn đúng) quarantine `it.skip`; DEBT-420 gộp DEBT-422 làm ở run 57 (mốc thời gian đơn điệu theo user, audit dùng mốc đó).
-- **Commit**: (điền sau).
+- **Commit**: `b634def`.
 - **Debt**: đóng DEBT-147/148/153/156/166/209/418/419/421/423; mở 416 (FE thông báo 403 khoá super_admin), 417 💭, **420 🟡 (run 57)**, 422 🟡 (run 57).
