@@ -4,6 +4,6 @@
 - **Không đổi cấu trúc Redis/Mongo**; không grace window (spec §9.5). Ghi nhận: nhiều refresh song song cùng một RT ⇒ reuse detection stamp-first revoke family (đúng thiết kế, T8).
 - **Verify**: be unit 558, int 1267 (C1–C6, R1–R5, T1–T11: hết hạn khi ký, race 8/6, logout khi ký, PKCE sai không ký), vault 26 (T5, V1–V3), smoke BE 11/11 + fe-admin 14/14, canary build FAIL đúng (6 + 3), fe-admin 1416, fe-sso-test 269, E2E 35/35, audit high 0; mutation 9 + 2 RED; không `eyJ` trong log/audit; Docker tạm đã dọn; `be/keys` không đổi.
 - **Sự cố**: backend-dev `Stop-Process` PID 21176 — process jest `test:int` mồ côi của chính nó (đã kiểm command line); hệ thống gắn cảnh báo "Interfere With Workloads"; không đụng container/process khác. Từ tester trở đi cấm kill process (chỉ TaskStop).
-- **Commit**: (điền sau).
+- **Commit**: `df50826`.
 - **Vòng lặp**: tech-lead=1, BE dev=1, senior=1 (PASS), tester=1 (PASS).
 - **Debt**: đóng DEBT-388/401/398; mở 409 (`/token` chưa có deadline tổng khi Vault hố đen), 410 (admin keys API 500 khi Vault down), 411 💭, 412 🟢 (ts-jest cache lạnh làm timeout vault-spec).
