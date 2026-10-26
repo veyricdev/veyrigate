@@ -29,6 +29,14 @@
   Alert: `ops/prometheus/alerts.yml`.
 - **Production vs dev (chung)**: chưa có KMS (Q5/B7.3). `KEY_PROVIDER=local` (`LocalKeyProvider`, thư
   mục `KEY_LOCAL_DIR`) là bản dev, **chỉ hỗ trợ 1 node** (DEBT-159). Mọi bước key cho production = **TBD B7.3**.
+- **Đồng hồ (NTP) bắt buộc trên mọi instance BE** (run 56, DEBT-209): disable client ghi `lastDisabledAt`;
+  code/AT/context tạo tới `lastDisabledAt + 5 s` (`CLIENT_DISABLE_MARGIN_MS`) chết vĩnh viễn kể cả khi
+  enable lại. Lệch đồng hồ giữa instance > 5 s làm biên này vô hiệu: artefact chỉ sống lại khi đồng hồ
+  instance **mint** đi TRƯỚC (nhanh hơn) instance **ghi disable** quá 5 s (hoặc instance ghi disable
+  chạy chậm); instance mint chạy chậm cho `t` nhỏ hơn ⇒ artefact bị coi là trước disable ⇒ chết
+  (fail-closed). Khi điều tra, soi node có đồng hồ nhanh nhất so với node đã xử lý lệnh disable. Kiểm: `timedatectl show -p NTPSynchronized` = `yes` trên từng node. Disable khẩn
+  rồi enable lại ⇒ người dùng của client phải đăng nhập/consent lại; resource server tự verify JWT vẫn tin
+  AT cũ tới `exp` (≤ 15') — cần cắt tức thời thì resource server phải gọi `/introspect`.
 
 ---
 

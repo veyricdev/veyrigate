@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import type { AppConfig } from '../../../config/configuration';
 import { AuditAction } from '../../security/audit/audit-action.enum';
 import { AuditService } from '../../security/audit/audit.service';
-import { ClientService, type Client } from '../../clients/client.service';
+import { ClientService, type Client, mintedBeforeDisable } from '../../clients/client.service';
 import { isRegisteredRedirectUri } from '../../clients/redirect-uri.validator';
 import { ResourceService } from '../../resources/resource.service';
 import { InvalidResourceError } from '../../resources/resource.validator';
@@ -167,13 +167,14 @@ export class AuthorizeService {
     const ctx = await this.contexts.consume(requestId);
     // Only a login context resumes here; a consent context belongs to POST /authorize/consent.
     if (!ctx || ctx.kind !== 'login') return null;
+    // DEBT-130/209: every resume exit re-checks the client first (disabled, redirect_uri removed,
+    // or disabled + re-enabled since this context was created): first-party page, no redirect.
+    if (!(await this.trustedClient(ctx))) return null;
     // B6.2 / OIDC Core §3.1.2.1: a context created because re-authentication was demanded must
     // only resume with a session that authenticated AFTER that demand. Otherwise (no session, or the
     // old session re-used by calling `/authorize?request_id=` directly) => `login_required` to the RP.
     // The context is already consumed (single-use), so this cannot loop or later mint a code.
     if (ctx.reauthAfter !== undefined && (session === null || session.authTime < ctx.reauthAfter)) {
-      // DEBT-130: never send `state` to a redirect_uri the admin removed (or of a disabled client).
-      if (!(await this.trustedClient(ctx))) return null;
       const err = new AuthorizeRedirectError('login_required', 'Re-authentication is required.');
       err.redirectUri = ctx.redirectUri;
       err.state = ctx.originalState;
@@ -504,10 +505,15 @@ export class AuthorizeService {
   /**
    * DEBT-130: the context's client, re-read, when it is still enabled and still registers the
    * stored redirect_uri; else null (the caller shows a first-party page, never redirects there).
+   * DEBT-209: also null for a context created before the client's last disable (+ margin).
    */
   private async trustedClient(ctx: AuthorizeRequestContext): Promise<Client | null> {
     const client = await this.clients.findByClientId(ctx.clientId);
-    return client && isRegisteredRedirectUri(client.redirectUris, ctx.redirectUri) ? client : null;
+    return client &&
+      isRegisteredRedirectUri(client.redirectUris, ctx.redirectUri) &&
+      !mintedBeforeDisable(client, ctx.createdAt)
+      ? client
+      : null;
   }
 
   private validateScope(raw: string | undefined, client: Client): string {

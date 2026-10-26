@@ -32,6 +32,8 @@ export const ClientSchema = new Schema(
     // access tokens are inactive (`ClientService.findByClientId` filters `disabledAt: null`, which
     // also matches older documents without the field). Reversible; there is no DELETE.
     disabledAt: { type: Date, default: null },
+    // DEBT-209: time of the latest disable, NOT cleared by enable (no default: absent = never).
+    lastDisabledAt: { type: Date },
   },
   { timestamps: true },
 );

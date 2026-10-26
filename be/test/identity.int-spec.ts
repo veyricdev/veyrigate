@@ -124,7 +124,8 @@ describe('Identity services on real Mongo (B2.2)', () => {
     expect(locked?.failedLoginCount).toBe(10);
     expect(locked?.lockedUntil).toEqual(new Date('2026-01-01T00:15:00Z'));
     expect(failures.filter((failure) => failure?.newlyLocked)).toHaveLength(1);
-    const reset = await users.resetFailedLogins(u.sub);
+    expect(await users.adminUnlock(u.sub, true)).toMatchObject({ failedLoginCount: 10 });
+    const reset = await users.findById(u.sub);
     expect(reset?.failedLoginCount).toBe(0);
     expect(reset?.lockedUntil).toBeUndefined();
   });

@@ -1403,5 +1403,73 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
       expect(JSON.stringify(audits)).not.toContain(ref);
       await sessionSvc.revoke(a.sessionId);
     });
+
+    // run 56 Task 1 (DEBT-209): a context created before a disable is dead after the re-enable.
+    const disableEnable = async (clientId: string) => {
+      const cs = new ClientService(httpClientModel, cfg);
+      const tctx = { tenantId: 'tenant-A' } as never;
+      const sa = { roles: ['super_admin'] };
+      expect(await cs.updateForTenant(tctx, clientId, { disabled: true }, sa)).toBeTruthy();
+      expect(await cs.updateForTenant(tctx, clientId, { disabled: false }, sa)).toBeTruthy();
+    };
+
+    it.each([true, false])(
+      'DEBT-209: consent context created before disable -> enable, approve=%s => 400 page, no Location, no code',
+      async (approve) => {
+        const clientId = await mkClient();
+        const a = await signedIn();
+        const { csrf, requestId } = await screen(clientId, a.sessionId);
+        await disableEnable(clientId);
+        const codesBefore = await codeKeys();
+        expectPage(await post(a.sessionId, csrf, requestId, approve));
+        expect(await codeKeys()).toBe(codesBefore);
+        expect(await consentSvc.find(a.userId, clientId, undefined)).toBeNull();
+        expect(await consentAudits(a.userId)).toHaveLength(0);
+        await sessionSvc.revoke(a.sessionId);
+      },
+    );
+
+    it('DEBT-209: login context created before disable -> enable, resumed with a signed-in session => 400 page (control: 200 consent screen)', async () => {
+      const clientId = await mkClient();
+      const a = await signedIn();
+      const login = async () => {
+        const res = await httpApp.inject({ method: 'GET', url: query(clientId) }); // no session
+        expect(res.statusCode).toBe(302);
+        return loginRequestId(res.headers['location'] as string);
+      };
+      const resume = (rid: string) =>
+        httpApp.inject({
+          method: 'GET',
+          url: `/authorize?request_id=${encodeURIComponent(rid)}`,
+          cookies: { [SESSION_COOKIE]: a.sessionId },
+        });
+      expect((await resume(await login())).statusCode).toBe(200);
+
+      const rid = await login();
+      await disableEnable(clientId);
+      expectPage(await resume(rid));
+      await sessionSvc.revoke(a.sessionId);
+    });
+
+    it('DEBT-209: prompt=login context created before disable -> enable, resumed with the OLD session => 400 page, no login_required redirect', async () => {
+      const clientId = await mkClient();
+      const a = await signedIn();
+      const res = await httpApp.inject({
+        method: 'GET',
+        url: query(clientId, '&prompt=login'),
+        cookies: { [SESSION_COOKIE]: a.sessionId },
+      });
+      expect(res.statusCode).toBe(302);
+      const rid = loginRequestId(res.headers['location'] as string);
+      await disableEnable(clientId);
+      expectPage(
+        await httpApp.inject({
+          method: 'GET',
+          url: `/authorize?request_id=${encodeURIComponent(rid)}`,
+          cookies: { [SESSION_COOKIE]: a.sessionId },
+        }),
+      );
+      await sessionSvc.revoke(a.sessionId);
+    });
   });
 });

@@ -554,9 +554,19 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
         tenantId: TENANT_A,
         targetType: 'user',
         result: 'success',
-        metadata: { count: 1 },
+        // DEBT-420: recorded right after the lock write (before the revoke) => no session count.
+        metadata: { level: 'tenant_admin' },
       });
-      // Second lock: revokes again (idempotent) and audits that revoke (DEBT-152, like sessions/revoke).
+      // DEBT-421: the revoke and its session count are their own event once the revoke is done.
+      expect(
+        await auditModel.findOne({ action: 'SESSION_REVOKED', targetId: target }).lean(),
+      ).toMatchObject({
+        actorId: tadminA,
+        tenantId: TENANT_A,
+        result: 'success',
+        metadata: { scope: 'all', count: 1, via: 'lock' },
+      });
+      // Second lock: revokes again (idempotent) and audits it (DEBT-152, like sessions/revoke).
       expect(
         (await call('POST', `/admin/users/${target}/lock`, await tok(tadminA))).statusCode,
       ).toBe(200);
@@ -638,7 +648,20 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
         await auditModel
           .findOne({ action: 'ADMIN_USER_LOCKED', targetId: target, result: 'success' })
           .lean(),
-      ).toMatchObject({ metadata: { count: 0 } });
+      ).toMatchObject({ metadata: { level: 'tenant_admin' } });
+      // DEBT-152 + DEBT-420: the trail ends on the retry's success, never on the failure.
+      const trail = await auditModel
+        .find({ action: 'ADMIN_USER_LOCKED', targetId: target })
+        .sort({ timestamp: 1, _id: 1 })
+        .lean();
+      expect(trail.map((e) => String(e.result))).toEqual(['success', 'failure', 'success']);
+      // DEBT-421: only the completed revoke (the retry) has a SESSION_REVOKED, with its count.
+      const revoked = await auditModel.find({ action: 'SESSION_REVOKED', targetId: target }).lean();
+      expect(revoked).toHaveLength(1);
+      expect(revoked[0]).toMatchObject({
+        result: 'success',
+        metadata: { scope: 'all', count: 0, via: 'lock' },
+      });
     });
 
     it('sessions/revoke => AT 401, refresh invalid_grant, login still possible; audit SESSION_REVOKED scope=all', async () => {
@@ -1637,6 +1660,175 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
       expect(fam.every((d) => d.revokedAt)).toBe(true);
       expect((await refresh(rotated.json().refresh_token as string)).statusCode).toBe(400);
       expect(await stored(familyId)).toHaveLength(0);
+    });
+  });
+  describe('run 56 Task 2 — lock level + atomic unlock audit (DEBT-147/153)', () => {
+    const lock = async (id: string, as: string) =>
+      call('POST', `/admin/users/${id}/lock`, await tok(as));
+    const unlock = async (id: string, as: string) =>
+      call('POST', `/admin/users/${id}/unlock`, await tok(as));
+    const levelOf = async (id: string) =>
+      ((await userModel.findById(id).lean()) as { adminLockLevel?: string } | null)?.adminLockLevel;
+    const unlockAudits = (id: string, result = 'success') =>
+      auditModel.countDocuments({ action: 'ADMIN_USER_UNLOCKED', targetId: id, result });
+    /** A request held by a spy until released (barrier). */
+    function barrier(count = 1) {
+      let held = 0;
+      let reach!: () => void;
+      const reached = new Promise<void>((r) => (reach = r));
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      const hold = async () => {
+        if (++held === count) reach();
+        await gate;
+      };
+      return { reached, release, hold };
+    }
+    async function expectSuperLockKept(id: string, res: Awaited<ReturnType<typeof call>>) {
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toEqual({ error: 'forbidden' });
+      expect((await lockedUntilOf(id))?.getTime()).toBe(ADMIN_LOCKED_UNTIL.getTime());
+      expect(await unlockAudits(id)).toBe(0);
+      expect(
+        await auditModel
+          .findOne({ action: 'ADMIN_USER_UNLOCKED', targetId: id, result: 'failure' })
+          .lean(),
+      ).toMatchObject({ actorId: tadminA, reason: 'locked_by_super_admin' });
+    }
+
+    it('(a) super_admin lock => tenant_admin unlock 403 (lock kept, failure audit); super_admin unlock 200', async () => {
+      const id = await mkUser({ [TENANT_A]: [] });
+      expect((await lock(id, superA)).statusCode).toBe(200);
+      expect(await levelOf(id)).toBe('super_admin');
+      expect(
+        await auditModel
+          .findOne({ action: 'ADMIN_USER_LOCKED', targetId: id, result: 'success' })
+          .lean(),
+      ).toMatchObject({ metadata: { level: 'super_admin' } });
+      await expectSuperLockKept(id, await unlock(id, tadminA));
+      const un = await unlock(id, superA);
+      expect(un.statusCode).toBe(200);
+      expect(un.json()).toMatchObject({ locked: false, lockedUntil: null });
+      expect(await levelOf(id)).toBeUndefined();
+      expect(await unlockAudits(id)).toBe(1);
+    });
+
+    it('(b) tenant_admin lock => tenant_admin unlock 200 + one audit; reset password keeps lock + level', async () => {
+      const id = await mkUser({ [TENANT_A]: [] });
+      expect((await lock(id, tadminA)).statusCode).toBe(200);
+      expect(await levelOf(id)).toBe('tenant_admin');
+      await moduleRef.get(UserService).setPassword(id, await hashPassword(NEW_PASSWORD));
+      expect((await lockedUntilOf(id))?.getTime()).toBe(ADMIN_LOCKED_UNTIL.getTime());
+      expect(await levelOf(id)).toBe('tenant_admin');
+      const un = await unlock(id, tadminA);
+      expect(un.statusCode).toBe(200);
+      expect(un.json()).toMatchObject({ locked: false, lockedUntil: null });
+      expect(await unlockAudits(id)).toBe(1);
+    });
+
+    it('(c) tenant_admin lock on a super-locked user => 200, level stays super_admin; tenant_admin unlock => 403', async () => {
+      const id = await mkUser({ [TENANT_A]: [] });
+      expect((await lock(id, superA)).statusCode).toBe(200);
+      const res = await lock(id, tadminA);
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ locked: true });
+      expect(await levelOf(id)).toBe('super_admin');
+      await expectSuperLockKept(id, await unlock(id, tadminA));
+      // super_admin over a tenant_admin lock raises the level.
+      const id2 = await mkUser({ [TENANT_A]: [] });
+      expect((await lock(id2, tadminA)).statusCode).toBe(200);
+      expect((await lock(id2, superA)).statusCode).toBe(200);
+      expect(await levelOf(id2)).toBe('super_admin');
+    });
+
+    it('(d) legacy sentinel without level => tenant_admin unlock 403, super_admin 200', async () => {
+      const id = await mkUser({ [TENANT_A]: [] });
+      await userModel.updateOne({ _id: id }, { $set: { lockedUntil: ADMIN_LOCKED_UNTIL } });
+      await expectSuperLockKept(id, await unlock(id, tadminA));
+      expect((await unlock(id, superA)).statusCode).toBe(200);
+      expect(await lockedUntilOf(id)).toBeNull();
+    });
+
+    it('(e) brute-force lock (no level) => tenant_admin unlock 200 + audit', async () => {
+      const id = await mkUser({ [TENANT_A]: [] });
+      await userModel.updateOne(
+        { _id: id },
+        { $set: { lockedUntil: new Date(Date.now() + 15 * MIN), failedLoginCount: 5 } },
+      );
+      expect((await unlock(id, tadminA)).statusCode).toBe(200);
+      expect(await lockedUntilOf(id)).toBeNull();
+      expect((await userModel.findById(id).lean())?.failedLoginCount).toBe(0);
+      expect(await unlockAudits(id)).toBe(1);
+    });
+
+    it('(f) race: K=5 unlocks held right before the write, released together => exactly 1 UNLOCKED success', async () => {
+      const id = await mkUser({ [TENANT_A]: [] });
+      expect((await lock(id, tadminA)).statusCode).toBe(200);
+      const svc = moduleRef.get(UserService);
+      const real = svc.adminUnlock.bind(svc);
+      const K = 5;
+      const b = barrier(K);
+      jest.spyOn(svc, 'adminUnlock').mockImplementation(async (...args) => {
+        await b.hold();
+        return real(...args);
+      });
+      const token = await tok(tadminA);
+      const pending = Array.from({ length: K }, () =>
+        call('POST', `/admin/users/${id}/unlock`, token),
+      );
+      await b.reached;
+      b.release();
+      const res = await Promise.all(pending);
+      expect(res.map((r) => r.statusCode)).toEqual(Array(K).fill(200));
+      expect(await lockedUntilOf(id)).toBeNull();
+      expect(await unlockAudits(id)).toBe(1);
+    });
+
+    it('(g) race: unlock reads "not locked", lock completes meanwhile, unlock released => unlocked AND 1 UNLOCKED after LOCKED', async () => {
+      const id = await mkUser({ [TENANT_A]: [] });
+      const svc = moduleRef.get(UserService);
+      const real = svc.adminUnlock.bind(svc);
+      const b = barrier();
+      jest.spyOn(svc, 'adminUnlock').mockImplementationOnce(async (...args) => {
+        await b.hold();
+        return real(...args);
+      });
+      const pending = unlock(id, superA);
+      await b.reached;
+      expect((await lock(id, superA)).statusCode).toBe(200);
+      b.release();
+      expect((await pending).statusCode).toBe(200);
+      expect(await lockedUntilOf(id)).toBeNull();
+      const trail = await auditModel
+        .find({ targetId: id, action: { $in: ['ADMIN_USER_LOCKED', 'ADMIN_USER_UNLOCKED'] } })
+        .sort({ _id: 1 })
+        .lean();
+      expect(trail.map((e) => `${String(e.action)}:${String(e.result)}`)).toEqual([
+        'ADMIN_USER_LOCKED:success',
+        'ADMIN_USER_UNLOCKED:success',
+      ]);
+    });
+
+    it('(h) user not locked, failedLoginCount 0 => unlock 200 without any audit', async () => {
+      const id = await mkUser({ [TENANT_A]: [] });
+      const res = await unlock(id, tadminA);
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ locked: false, lockedUntil: null });
+      expect(await unlockAudits(id)).toBe(0);
+      expect(await unlockAudits(id, 'failure')).toBe(0);
+    });
+    it('(i) DEBT-420: the LOCKED success audit write fails => the revoke still runs (fail-closed), 5xx, lock kept', async () => {
+      const id = await mkUser({ [TENANT_A]: [] });
+      const flow = await realFlow(id);
+      expect((await userinfo(flow.access_token)).statusCode).toBe(200);
+      jest
+        .spyOn(moduleRef.get(AuditService), 'record')
+        .mockRejectedValueOnce(new Error('audit down'));
+      const res = await lock(id, tadminA);
+      expect(res.statusCode).toBeGreaterThanOrEqual(500);
+      expect(res.body).not.toContain('audit down');
+      expect((await lockedUntilOf(id))?.getTime()).toBe(ADMIN_LOCKED_UNTIL.getTime());
+      expect((await userinfo(flow.access_token)).statusCode).toBe(401);
     });
   });
 });

@@ -7,6 +7,7 @@ import {
   type SessionEndLookup,
   type UserExistence,
 } from './access-token-liveness';
+import { CLIENT_DISABLE_MARGIN_MS, mintedBeforeDisable } from '../clients/client.service';
 
 /**
  * Task 0 unit coverage for the resourceId↔identifier mapping in `isAccessTokenLive` (spec §7).
@@ -17,7 +18,7 @@ import {
 describe('isAccessTokenLive — resource mapping (Task 0)', () => {
   const SUB = new Types.ObjectId().toHexString();
   const AUD = 'https://api.example.com/';
-  const claims = { sub: SUB, client_id: 'client-a', aud: AUD };
+  const claims = { sub: SUB, client_id: 'client-a', aud: AUD, iat: 1 };
 
   const ADMIN_AUD = 'https://idp.example.com/admin/';
   const liveClient: ClientLookup = {
@@ -142,7 +143,7 @@ describe('isAccessTokenLive — admin-capable client invariant (DEBT-177)', () =
 
   it.each(shapes)('aud=admin, client %s => live only if admin-capable', async (_n, shape, ok) => {
     const exists = jest.fn<UserExistence['exists']>().mockResolvedValue(true);
-    const claims = { sub: SUB, client_id: 'c', aud: ADMIN_AUD };
+    const claims = { sub: SUB, client_id: 'c', aud: ADMIN_AUD, iat: 1 };
     expect(
       await isAccessTokenLive(claims, lookup(shape), { exists }, sessions, resources, ADMIN_AUD),
     ).toBe(ok);
@@ -151,7 +152,7 @@ describe('isAccessTokenLive — admin-capable client invariant (DEBT-177)', () =
   });
 
   it.each(shapes)('ordinary aud, client %s => unaffected (still live)', async (_n, shape) => {
-    const claims = { sub: SUB, client_id: 'c', aud: API_AUD };
+    const claims = { sub: SUB, client_id: 'c', aud: API_AUD, iat: 1 };
     expect(
       await isAccessTokenLive(claims, lookup(shape), users, sessions, resources, ADMIN_AUD),
     ).toBe(true);
@@ -163,9 +164,58 @@ describe('isAccessTokenLive — admin-capable client invariant (DEBT-177)', () =
         .fn<ClientLookup['findByClientId']>()
         .mockRejectedValue(new Error('mongo down')),
     };
-    const claims = { sub: SUB, client_id: 'c', aud: ADMIN_AUD };
+    const claims = { sub: SUB, client_id: 'c', aud: ADMIN_AUD, iat: 1 };
     await expect(
       isAccessTokenLive(claims, clients, users, sessions, resources, ADMIN_AUD),
     ).rejects.toThrow('mongo down');
+  });
+});
+
+/** DEBT-209/156: an access token issued at or before the client's last disable (+ margin) is dead. */
+describe('isAccessTokenLive / mintedBeforeDisable — last disable epoch (DEBT-209)', () => {
+  const SUB = new Types.ObjectId().toHexString();
+  const AUD = 'https://api.example.com/';
+  const users: UserExistence = { exists: async () => true };
+  const sessions: SessionEndLookup = { isEnded: async () => false };
+  const resources: ResourceLookup = { identifiersFor: async () => [AUD] };
+  const DISABLED = new Date('2026-10-26T10:00:00.000Z');
+  const client = (lastDisabledAt?: Date): ClientLookup => ({
+    findByClientId: async () => ({
+      allowedResources: ['res-api'],
+      clientType: 'confidential',
+      tokenEndpointAuthMethod: 'client_secret_basic',
+      ...(lastDisabledAt ? { lastDisabledAt } : {}),
+    }),
+  });
+  const live = (iatMs: number, lastDisabledAt?: Date) =>
+    isAccessTokenLive(
+      { sub: SUB, client_id: 'c', aud: AUD, iat: Math.floor(iatMs / 1000) },
+      client(lastDisabledAt),
+      users,
+      sessions,
+      resources,
+      'https://idp.example.com/admin/',
+    );
+
+  it('pure predicate: <= lastDisabledAt + margin => true; after => false; never disabled => false', () => {
+    const t = DISABLED.getTime();
+    expect(mintedBeforeDisable({ lastDisabledAt: DISABLED }, t - 60_000)).toBe(true);
+    expect(mintedBeforeDisable({ lastDisabledAt: DISABLED }, t + CLIENT_DISABLE_MARGIN_MS)).toBe(
+      true,
+    );
+    expect(
+      mintedBeforeDisable({ lastDisabledAt: DISABLED }, t + CLIENT_DISABLE_MARGIN_MS + 1),
+    ).toBe(false);
+    expect(mintedBeforeDisable({}, 0)).toBe(false);
+    expect(mintedBeforeDisable({ lastDisabledAt: null }, 0)).toBe(false);
+    expect(CLIENT_DISABLE_MARGIN_MS).toBe(5_000);
+  });
+
+  it('AT issued before the disable => not live; issued after disable + margin => live; no epoch => live', async () => {
+    const t = DISABLED.getTime();
+    expect(await live(t - 60_000, DISABLED)).toBe(false);
+    expect(await live(t + 4_000, DISABLED)).toBe(false); // in-flight inside the margin
+    expect(await live(t + 6_000, DISABLED)).toBe(true);
+    expect(await live(t - 60_000)).toBe(true);
   });
 });

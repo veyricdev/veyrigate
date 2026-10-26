@@ -12,6 +12,7 @@ import { Types, type Connection, type Model } from 'mongoose';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { sha256 } from '../src/common/crypto/crypto.util';
 import { deriveS256Challenge } from '../src/common/crypto/pkce.util';
 import { registry } from '../src/common/metrics/metrics';
 import { MODELS } from '../src/database/mongo/models';
@@ -505,6 +506,147 @@ describe('/token code grant re-check after the family insert (run 35 Task 3)', (
     const retry = await exchange(clientId, code);
     expect(retry.statusCode).toBe(400);
     expect(retry.json().error).toBe('invalid_grant');
+  });
+
+  // Run 56 Task 1 (DEBT-209/156): disable stamps `lastDisabledAt`; a code minted at or before it
+  // (+ CLIENT_DISABLE_MARGIN_MS) stays dead after the client is enabled again.
+  describe('run 56 Task 1 — a code minted before a disable is dead after re-enable (DEBT-209)', () => {
+    const SUPER = { roles: ['super_admin'] };
+    const tctx = { tenantId: TENANT } as never;
+    /** Admin disable (stamp + sweep, as the controller does) then enable again. */
+    const disableEnable = async (clientId: string) => {
+      const svc = app.get(ClientService);
+      expect(await svc.updateForTenant(tctx, clientId, { disabled: true }, SUPER)).toBeTruthy();
+      await refresh.revokeForClient(clientId, new Date());
+      expect(await svc.updateForTenant(tctx, clientId, { disabled: false }, SUPER)).toBeTruthy();
+    };
+    /** Barrier: `hold()` parks the caller until `release()`; `reached` resolves when parked. */
+    function barrier() {
+      let reach!: () => void;
+      const reached = new Promise<void>((r) => (reach = r));
+      let release!: () => void;
+      const gate = new Promise<void>((r) => (release = r));
+      return { reached, release, hold: async () => (reach(), gate) };
+    }
+
+    it('(a) code -> disable -> enable -> /token => invalid_grant, nothing signed, reason client_disabled', async () => {
+      const { clientId, userId, code } = await issueCode();
+      await disableEnable(clientId);
+      const sign = jest.spyOn(tokens, 'signForAuthorizationCode');
+      await expectRefused(await exchange(clientId, code), userId, 'client_disabled', false);
+      expect(sign).not.toHaveBeenCalled();
+    });
+
+    it('(b) race: /token held after client auth + peek, disable+enable done, released => invalid_grant, family revoked', async () => {
+      const { clientId, userId, code } = await issueCode();
+      const codes = app.get(AuthorizationCodeService);
+      const real = codes.peek.bind(codes);
+      const b = barrier();
+      jest.spyOn(codes, 'peek').mockImplementationOnce(async (...args) => {
+        const out = await real(...args);
+        await b.hold();
+        return out;
+      });
+      const pending = exchange(clientId, code);
+      await b.reached;
+      await disableEnable(clientId);
+      b.release();
+      await expectRefused(await pending, userId, 'client_disabled');
+    });
+
+    it('(c) race: disable+enable right after the family insert, before the re-check => family revoked, no token', async () => {
+      const { clientId, userId, code } = await issueCode();
+      afterInsert((cid) => disableEnable(cid));
+      await expectRefused(await exchange(clientId, code), userId, 'client_disabled');
+    });
+
+    it('(f) a code without issuedAt (pre-run-56) on a client that has a lastDisabledAt => invalid_grant; never disabled => 200', async () => {
+      const stripIssuedAt = async (code: string) => {
+        const key = `authz_code:${sha256(code)}`;
+        const data = JSON.parse((await redis.get(key))!) as Record<string, unknown>;
+        expect(typeof data.issuedAt).toBe('number');
+        delete data.issuedAt;
+        await redis.set(key, JSON.stringify(data), 'KEEPTTL');
+      };
+      const legacy = await issueCode();
+      await stripIssuedAt(legacy.code);
+      await clientModel.updateOne(
+        { clientId: legacy.clientId },
+        { $set: { lastDisabledAt: new Date(Date.now() - 3_600_000) } },
+      );
+      await expectRefused(
+        await exchange(legacy.clientId, legacy.code),
+        legacy.userId,
+        'client_disabled',
+        false,
+      );
+
+      const neverDisabled = await issueCode();
+      await stripIssuedAt(neverDisabled.code);
+      expect((await exchange(neverDisabled.clientId, neverDisabled.code)).statusCode).toBe(200);
+    });
+
+    it('(f) control: a client disabled long ago (lastDisabledAt 1h back) still exchanges fresh codes', async () => {
+      const { clientId, code } = await issueCode();
+      await clientModel.updateOne(
+        { clientId },
+        { $set: { lastDisabledAt: new Date(Date.now() - 3_600_000) } },
+      );
+      expect((await exchange(clientId, code)).statusCode).toBe(200);
+    });
+
+    it('(g) a repeated disable (already disabled) keeps lastDisabledAt == the first disabledAt; enable keeps it', async () => {
+      const clientId = await mkClient();
+      const svc = app.get(ClientService);
+      await svc.updateForTenant(tctx, clientId, { disabled: true }, SUPER);
+      const first = await clientModel.findOne({ clientId }).lean();
+      expect(first?.lastDisabledAt).toBeInstanceOf(Date);
+      expect(first?.lastDisabledAt?.getTime()).toBe(first?.disabledAt?.getTime());
+      await new Promise((r) => setTimeout(r, 20));
+      await svc.updateForTenant(tctx, clientId, { disabled: true }, SUPER);
+      await svc.updateForTenant(tctx, clientId, { disabled: false }, SUPER);
+      const after = await clientModel.findOne({ clientId }).lean();
+      expect(after?.disabledAt ?? null).toBeNull();
+      expect(after?.lastDisabledAt?.getTime()).toBe(first?.lastDisabledAt?.getTime());
+    });
+
+    it('(h) in-flight: /authorize held before the code is stored, disable+enable, released => code refused at /token', async () => {
+      const clientId = await mkClient();
+      const userId = await seedOAuthUser(conn, { tenantId: TENANT });
+      await seedConsent(conn, { userId, clientId, resource: RESOURCE, scopes: SCOPE.split(' ') });
+      const { id } = await app.get(SessionService).create(userId, DEFAULT_TENANT_ID);
+      const codes = app.get(AuthorizationCodeService);
+      const real = codes.create.bind(codes);
+      const b = barrier();
+      jest.spyOn(codes, 'create').mockImplementationOnce(async (...args) => {
+        await b.hold();
+        return real(...args);
+      });
+      const pending = app.inject({
+        method: 'GET',
+        url: `/authorize?${new URLSearchParams({
+          response_type: 'code',
+          client_id: clientId,
+          redirect_uri: REDIRECT,
+          scope: SCOPE,
+          resource: RESOURCE,
+          state: 'rp-state',
+          code_challenge: CHALLENGE,
+          code_challenge_method: 'S256',
+        }).toString()}`,
+        cookies: { [SESSION_COOKIE]: id },
+      });
+      await b.reached;
+      await disableEnable(clientId);
+      b.release();
+      const res = await pending;
+      expect(res.statusCode).toBe(302);
+      const code = new URL(res.headers['location'] as string).searchParams.get('code')!;
+      expect(code).toBeTruthy();
+      const sign = jest.spyOn(tokens, 'signForAuthorizationCode');
+      await expectRefused(await exchange(clientId, code), userId, 'client_disabled', false);
+      expect(sign).not.toHaveBeenCalled();
+    });
   });
 
   // Run 36 Task 2 (DEBT-207, G4): the refresh grant re-reads client / user (admin lock) /

@@ -227,7 +227,7 @@ export async function seedDevUser(
         {
           $set: { passwordHash, failedLoginCount: 0 },
           $min: { emailVerifiedAt: now },
-          $unset: { lockedUntil: 1 },
+          $unset: { lockedUntil: 1, adminLockLevel: 1 },
         },
         { upsert: true },
       )

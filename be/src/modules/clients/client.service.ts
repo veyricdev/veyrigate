@@ -31,8 +31,28 @@ export interface Client {
   tenantId: string;
   /** Admin disable (B6.3a); null/absent = enabled. */
   disabledAt?: Date | null;
+  /** DEBT-209: time of the latest disable, kept across enable (absent = never disabled since run 56). */
+  lastDisabledAt?: Date | null;
   createdAt?: Date;
   updatedAt?: Date;
+}
+
+/**
+ * DEBT-209/156: slack around a disable for an `/authorize` in flight at that moment and for clock
+ * skew between instances (instances must run NTP, runbook-ops). Spec §9.11.
+ */
+export const CLIENT_DISABLE_MARGIN_MS = 5_000;
+
+/**
+ * DEBT-209/156: an artefact (authorization code, access token, authorize context) created at `tMs`
+ * belongs to before the client's last disable (+ margin), so it stays dead after a re-enable.
+ * A client never disabled since this field exists => false (previous behaviour).
+ */
+export function mintedBeforeDisable(client: Pick<Client, 'lastDisabledAt'>, tMs: number): boolean {
+  return (
+    client.lastDisabledAt != null &&
+    tMs <= client.lastDisabledAt.getTime() + CLIENT_DISABLE_MARGIN_MS
+  );
 }
 
 export interface CreateClientInput {
@@ -346,7 +366,8 @@ export class ClientService {
         const stamp = await this.repo.updateOne(
           ctx,
           { ...filter, disabledAt: null },
-          { $set: { disabledAt } },
+          // DEBT-209: the disable epoch is written in the SAME update as the stamp.
+          { $set: { disabledAt, lastDisabledAt: disabledAt } },
         );
         // DEBT-161: the stamp lost a race (a concurrent disable already stamped, or a concurrent
         // enable / admin grant made the filter miss). Report what the DB holds, never a disable

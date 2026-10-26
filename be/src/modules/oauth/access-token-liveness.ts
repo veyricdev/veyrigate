@@ -1,5 +1,5 @@
 import { Types } from 'mongoose';
-import type { Client } from '../clients/client.service';
+import { type Client, mintedBeforeDisable } from '../clients/client.service';
 import type { AccessTokenClaims } from '../keys/token-verifier';
 import { isAdminCapableClient } from './token/token.service';
 
@@ -11,7 +11,10 @@ import { isAdminCapableClient } from './token/token.service';
 export interface ClientLookup {
   findByClientId(
     clientId: string,
-  ): Promise<Pick<Client, 'allowedResources' | 'clientType' | 'tokenEndpointAuthMethod'> | null>;
+  ): Promise<Pick<
+    Client,
+    'allowedResources' | 'clientType' | 'tokenEndpointAuthMethod' | 'lastDisabledAt'
+  > | null>;
 }
 
 /** The user lookup the liveness check needs: existence of `sub` only (never a projection). */
@@ -70,7 +73,7 @@ const SESSION_REF_RE = /^[0-9a-f]{64}$/;
  * fail-closed), never be swallowed into `false`/`true` here.
  */
 export async function isAccessTokenLive(
-  claims: Pick<AccessTokenClaims, 'sub' | 'client_id' | 'aud' | 'sid'>,
+  claims: Pick<AccessTokenClaims, 'sub' | 'client_id' | 'aud' | 'sid' | 'iat'>,
   clients: ClientLookup,
   users: UserExistence,
   sessions: SessionEndLookup,
@@ -96,6 +99,10 @@ export async function isAccessTokenLive(
   }
   const client = await clients.findByClientId(claims.client_id);
   if (!client) {
+    return false;
+  }
+  // DEBT-209/156: issued before the client's last disable (+ margin) => dead even after re-enable.
+  if (mintedBeforeDisable(client, claims.iat * 1000)) {
     return false;
   }
   // DEBT-177: an `aud=admin` token dies with its client's admin capability (same predicate as every

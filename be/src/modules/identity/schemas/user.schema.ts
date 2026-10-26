@@ -10,6 +10,8 @@ export const UserSchema = new Schema(
     emailVerifiedAt: { type: Date },
     failedLoginCount: { type: Number, default: 0 },
     lockedUntil: { type: Date },
+    // Level of an admin lock (DEBT-153); absent with the admin sentinel => super_admin.
+    adminLockLevel: { type: String, enum: ['tenant_admin', 'super_admin'] },
     lockTransitionNonce: { type: String, select: false },
   },
   { timestamps: true },

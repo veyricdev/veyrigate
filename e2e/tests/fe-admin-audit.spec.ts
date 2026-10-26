@@ -52,8 +52,31 @@ test("fe-admin audit: lock + unlock of the E2E user are listed under their filte
     await expect(locked).toBeVisible();
     await expect(locked.getByRole("link", { name: userId! })).toHaveAttribute("href", `/users/${userId}`);
     await locked.getByRole("button", { name: "Details" }).click();
-    await expect(table.getByRole("definition").filter({ hasText: /^\d+$/ }).first()).toBeVisible();
-    await expect(table.getByRole("term").filter({ hasText: /^count$/ }).first()).toBeVisible();
+    // Run 56 (DEBT-420/421): LOCKED success = the lock is written (metadata `level`); the session
+    // count of the revoke is on its own SESSION_REVOKED event.
+    await expect(table.getByRole("term").filter({ hasText: /^level$/ }).first()).toBeVisible();
+    await expect(
+      table.getByRole("definition").filter({ hasText: /^(tenant_admin|super_admin)$/ }).first(),
+    ).toBeVisible();
+
+    await page.getByLabel("Action").selectOption("SESSION_REVOKED");
+    await page.getByRole("button", { name: "Filter", exact: true }).click();
+    await page.waitForURL((u) => isAdminApp(u) && u.searchParams.get("action") === "SESSION_REVOKED");
+    // DEBT-423: the revoke event must be the lock's own (same target, `via: lock`), not another
+    // SESSION_REVOKED of the E2E user (sessions/revoke, logout-all) inside the `from` window.
+    expect(new URL(page.url()).searchParams.get("targetId")).toBe(userId);
+    const revoked = table.getByRole("row").filter({ hasText: "SESSION_REVOKED" }).first();
+    await expect(revoked).toBeVisible();
+    await expect(revoked.getByRole("link", { name: userId! })).toHaveAttribute("href", `/users/${userId}`);
+    const revokedDetails = revoked.getByRole("button", { name: "Details" });
+    const detailsId = await revokedDetails.getAttribute("aria-controls");
+    expect(detailsId).toBeTruthy();
+    await revokedDetails.click();
+    const metadata = page.locator(`[id="${detailsId}"]`).getByRole("region", { name: "Metadata" });
+    await expect(metadata.getByRole("term").filter({ hasText: /^via$/ })).toBeVisible();
+    await expect(metadata.getByRole("definition").filter({ hasText: /^lock$/ })).toBeVisible();
+    await expect(metadata.getByRole("term").filter({ hasText: /^count$/ })).toBeVisible();
+    await expect(metadata.getByRole("definition").filter({ hasText: /^\d+$/ })).toBeVisible();
 
     await page.getByLabel("Action").selectOption("ADMIN_USER_UNLOCKED");
     await page.getByRole("button", { name: "Filter", exact: true }).click();

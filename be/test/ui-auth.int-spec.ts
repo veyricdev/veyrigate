@@ -326,7 +326,7 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
       async (_name, lockOf) => {
         const user = await verifiedUser();
         const wrong = await postLogin(user.email, 'wrong password');
-        await users.resetFailedLogins(user.sub); // the wrong attempt above bumped the counter
+        await users.adminUnlock(user.sub, true); // the wrong attempt above bumped the counter
         const lockedUntil = lockOf();
         const spy = lockAfterRead(lockedUntil);
 
@@ -391,7 +391,7 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
       async (_name, lock) => {
         const user = await verifiedUser();
         const wrong = await postLogin(user.email, 'wrong password');
-        await users.resetFailedLogins(user.sub);
+        await users.adminUnlock(user.sub, true);
         const created = lockAfterEstablish(lock);
 
         const res = await postLogin(user.email, LOGIN_PASSWORD);

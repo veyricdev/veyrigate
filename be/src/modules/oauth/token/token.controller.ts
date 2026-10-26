@@ -15,7 +15,7 @@ import {
 } from '../../clients/client-auth-request';
 import { applyCors, requestOrigin } from '../../clients/client-cors.helper';
 import { ClientCorsService } from '../../clients/client-cors.service';
-import { ClientService, type Client } from '../../clients/client.service';
+import { ClientService, type Client, mintedBeforeDisable } from '../../clients/client.service';
 import { isRegisteredRedirectUri } from '../../clients/redirect-uri.validator';
 import { UserTenantService } from '../../identity/user-tenant.service';
 import { ADMIN_LOCKED_UNTIL, UserService } from '../../identity/user.service';
@@ -191,7 +191,8 @@ export class TokenController {
       (bodyResource === undefined || bodyResource === p.resource) &&
       !!p.sessionRef &&
       !!p.resource &&
-      !adminTargetForbidden(client, p.resource, this.tokens.adminResource);
+      !adminTargetForbidden(client, p.resource, this.tokens.adminResource) &&
+      !mintedBeforeDisable(client, p.issuedAt ?? 0);
     // A signing error propagates here: nothing consumed, nothing audited (I4).
     const signed = signable ? await this.tokens.signForAuthorizationCode(client, p) : undefined;
 
@@ -229,6 +230,11 @@ export class TokenController {
     }
 
     const audit = { ip: req.ip, requestId: req.id };
+    // DEBT-209: a code minted before the client's last disable (+ margin) stays dead after a
+    // re-enable. Same predicate as the pre-sign gate (nothing was signed); the code is consumed.
+    if (mintedBeforeDisable(client, data.issuedAt ?? 0)) {
+      return this.refuseGrant(client, data, undefined, 'client_disabled', audit);
+    }
     const { response, familyId } = await this.tokens.issueForAuthorizationCode(
       client,
       data,
@@ -379,7 +385,8 @@ export class TokenController {
     data: AuthorizationCodeData,
   ): Promise<string | null> {
     const fresh = await this.clients.findByClientId(clientId);
-    if (!fresh) return 'client_disabled';
+    // DEBT-209/156: also a disable + re-enable that happened during this exchange.
+    if (!fresh || mintedBeforeDisable(fresh, data.issuedAt ?? 0)) return 'client_disabled';
     if (!isRegisteredRedirectUri(fresh.redirectUris, data.redirectUri)) {
       return 'redirect_uri_unregistered';
     }

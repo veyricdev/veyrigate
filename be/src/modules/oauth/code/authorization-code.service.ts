@@ -29,6 +29,8 @@ export interface AuthorizationCodeData {
   sessionRef: string;
   /** Session authentication methods (DEBT-030). Absent on pre-run-32 codes => ID token `['pwd']`. */
   amr?: string[];
+  /** Mint time, epoch ms (DEBT-209), set by `create` only. Absent on pre-run-56 codes => 0. */
+  issuedAt?: number;
 }
 
 /** Redis key is sha256(code), never the raw code (tech-lead C1) — mirrors `sess:{sha256(id)}`. */
@@ -82,9 +84,10 @@ export class AuthorizationCodeService {
 
   /** Issue a new authorization code. Returns the raw code (for the redirect only) and its data. */
   async create(
-    data: AuthorizationCodeData,
+    input: Omit<AuthorizationCodeData, 'issuedAt'>,
   ): Promise<{ code: string; data: AuthorizationCodeData }> {
     const code = generateToken();
+    const data: AuthorizationCodeData = { ...input, issuedAt: Date.now() };
     // PX + NX: set with TTL atomically; NX guards against the astronomically unlikely id reuse.
     const ok = await this.redis.client.set(
       codeKey(code),

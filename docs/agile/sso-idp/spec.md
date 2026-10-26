@@ -403,6 +403,12 @@ Phần quản trị client/resource là hạ tầng điều khiển của toàn 
 - Thay đổi `allowedResources` / quyền truy cập resource
 - Thay đổi vai trò của một admin khác
 
+**Khoá tài khoản theo mức (run 56, DEBT-147/153)**: admin lock lưu `adminLockLevel` (`tenant_admin`/`super_admin`) cùng câu ghi với `lockedUntil` = sentinel. tenant_admin không mở và không hạ mức khoá do super_admin đặt (403 `forbidden`, audit `ADMIN_USER_UNLOCKED failure reason:'locked_by_super_admin'`); sentinel cũ không có mức được coi là mức super_admin. Unlock là một `findOneAndUpdate` có điều kiện mức trong filter, audit `UNLOCKED success` tính từ document **trước** câu ghi (đúng 1 event cho mỗi lần mở khoá thật). Lock (run 56 retry, DEBT-420/421): `ADMIN_USER_LOCKED success {level}` = **đã ghi khoá**, ghi ngay sau câu ghi (trước revoke) để trail khớp DB khi lock ∥ unlock; việc thu hồi phiên/refresh family là event riêng `SESSION_REVOKED success {scope:'all', count, via:'lock'}` chỉ ghi khi revoke xong; revoke lỗi ⇒ `ADMIN_USER_LOCKED failure revoke_failed` + 5xx (retry idempotent). Cùng mili-giây thì thứ tự hiển thị trên admin API chưa xác định (DEBT-422).
+
+**Cấp secret song song với cấp `admin` (run 56, DEBT-166)**: tenant_admin cấp secret ⇒ sau khi insert, server đọc lại client; client đã thành admin-capable ⇒ revoke chính version vừa tạo, audit `CLIENT_SECRET_CREATED|ROTATED failure reason:'admin_granted_concurrently'`, 403, không trả plaintext.
+
+**Disable rồi enable lại client (run 56, DEBT-209/156)**: lệnh disable ghi `clients.lastDisabledAt` cùng câu với `disabledAt` (enable không xoá). Authorization code mang `issuedAt` (ms); mọi artefact tạo tại `t <= lastDisabledAt + CLIENT_DISABLE_MARGIN_MS` (5 s, phủ `/authorize` đang dở và lệch đồng hồ giữa instance) vẫn chết sau khi enable: code (`/token` cổng trước ký + re-check sau insert family, `invalid_grant` reason `client_disabled`), access token (`iat`, ở `/introspect`, `/userinfo`, demo, `AdminTokenGuard`), AuthorizeRequestContext (`createdAt`, trang 400 first-party, không redirect). Dữ liệu cũ: client không có `lastDisabledAt` ⇒ như trước; code không `issuedAt` ⇒ coi là 0. **Chấp nhận**: resource server tự verify JWT cục bộ vẫn tin AT tới `exp` (≤ 15') sau disable — muốn tức thời phải dùng `/introspect`.
+
 ### 9.12 Account enumeration prevention
 
 Các endpoint `/login`, `/register`, `/password/reset`, `/password/verify-email` không được trả response khác biệt giữa "tài khoản không tồn tại" và các trường hợp khác (ví dụ "sai mật khẩu"). Cụ thể, `/password/reset` luôn trả cùng một thông điệp ("nếu email tồn tại, một email đã được gửi") bất kể email đó có tồn tại trong hệ thống hay không, và luôn áp dụng rate limit đa chiều (IP + email + device) như nhau cho cả hai trường hợp.
@@ -413,12 +419,12 @@ Hiện tại access token dùng dạng bearer thông thường (`Authorization: 
 
 ## 10. Data model chính
 
-- **User**: `email`, hashed password (argon2), `profile`, `mfaSecret` (placeholder, chưa bật), `emailVerifiedAt`, `failedLoginCount`, `lockedUntil`
+- **User**: `email`, hashed password (argon2), `profile`, `mfaSecret` (placeholder, chưa bật), `emailVerifiedAt`, `failedLoginCount`, `lockedUntil`, `adminLockLevel` (mức admin lock, 9.11)
 - **FederatedIdentity** (collection riêng): `userId`, `provider`, `providerId`, `email`, `emailVerified`, `createdAt`, `lastLoginAt`
-- **Client**: `client_id`, `clientType` (`public`/`confidential`), `token_endpoint_auth_method`, `redirect_uris[]`, `allowedCorsOrigins[]`, `allowedResources[]`, `scopes[]`, `tenantId`
+- **Client**: `client_id`, `clientType` (`public`/`confidential`), `token_endpoint_auth_method`, `redirect_uris[]`, `allowedCorsOrigins[]`, `allowedResources[]`, `scopes[]`, `tenantId`, `disabledAt`, `lastDisabledAt` (9.11)
 - **ClientCredential**: `clientId`, `secretHash`, `version`, `createdAt`, `expiresAt`, `revokedAt`
 - **Resource**: `resourceId`, `identifier` (absolute URI, unique), `scopes[]`
-- **AuthorizationCode** (Redis, atomic consume+bind — mục 9.5): `clientId`, `redirectUri`, `codeChallenge`, `resource`, `scope`, `nonce`, `userId`, TTL 60s, single-use
+- **AuthorizationCode** (Redis, atomic consume+bind — mục 9.5): `clientId`, `redirectUri`, `codeChallenge`, `resource`, `scope`, `nonce`, `userId`, `issuedAt` (9.11), TTL 60s, single-use
 - **AuthorizeRequestContext** (Redis, TTL 5–10 phút, single-use): `clientId`, `redirectUri`, `codeChallenge`, `scope`, `resource`, `originalState`, `nonce`
 - **RefreshToken**: `tokenHash` (không lưu plaintext), `familyId`, `parentId`, `userId`, `clientId`, `scope[]`, `resource`, `issuedAt`, `expiresAt`, `revokedAt`, `replacedBy`, `reuseDetectedAt`, `familyRevokedAt` (đóng dấu bởi MỌI đường revoke family — reuse lẫn `/revoke` — trước khi revoke, để một `rotate` song song re-read thấy và tự revoke hậu duệ; INV-11 race close), `deviceId`, `ip`, `userAgent`
 - **PasswordResetToken / EmailVerificationToken**: `tokenHash`, `userId`, `expiresAt`, `usedAt`

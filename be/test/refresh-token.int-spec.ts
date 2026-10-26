@@ -1491,6 +1491,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
         client_id: string;
         aud: string;
         sid?: string;
+        iat: number;
       };
       expect(claims.sid).toBe(sessionRef);
       const clients = {

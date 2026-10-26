@@ -28,6 +28,7 @@ import {
   AdminGrantSecretRevokeError,
   type Client,
   ClientService,
+  ForbiddenClientConfigError,
 } from '../clients/client.service';
 import { AdminAuthError, AdminAuthErrorFilter } from '../identity/tenant-context/admin-auth.errors';
 import {
@@ -304,11 +305,13 @@ export class AdminClientsController {
     // one version without expiry (DEBT-133). `hasActive` only names the audit action.
     const rotate = await this.credentials.hasActive(client.clientId);
     const issued = await this.credentials.rotateSecret(client.clientId);
+    const action = rotate ? AuditAction.CLIENT_SECRET_ROTATED : AuditAction.CLIENT_SECRET_CREATED;
+    await this.recheckIssued(ctx, actor, client.clientId, issued.version, action, req);
     // Audit BEFORE returning: if it fails the request is a 5xx and the plaintext is never sent
     // (DEBT-129). The secret itself never enters the audit/log.
     await this.audit.record({
       ...adminAuditBase(req, ctx),
-      action: rotate ? AuditAction.CLIENT_SECRET_ROTATED : AuditAction.CLIENT_SECRET_CREATED,
+      action,
       targetType: 'client',
       targetId: client.clientId,
       clientId: client.clientId,
@@ -316,6 +319,50 @@ export class AdminClientsController {
       metadata: { version: issued.version },
     });
     return { clientId: client.clientId, version: issued.version, clientSecret: issued.secret };
+  }
+
+  /**
+   * DEBT-166: `mustModify` is a read; a super_admin may grant `admin` between it and the insert.
+   * The grant side is revoke -> update -> revoke, so re-reading AFTER the insert closes the race:
+   * still not admin-capable => the insert precedes the update, hence the 2nd revoke pass; admin
+   * capable => revoke our own version and refuse. Never returns the plaintext on these branches
+   * (404 / 403 / 5xx). `rotateSecret` already started the grace of the previous version: accepted,
+   * on an admin-capable client the grant's revoke passes kill every version anyway.
+   */
+  private async recheckIssued(
+    ctx: TenantContext,
+    actor: AdminActor,
+    clientId: string,
+    version: number,
+    action: AuditAction,
+    req: HttpRequest,
+  ): Promise<void> {
+    let refused: unknown;
+    try {
+      const current = await this.clients.getForTenant(ctx, clientId);
+      if (!current) refused = AdminAuthError.notFound();
+      else await this.clients.assertMayModify(current, actor);
+    } catch (err) {
+      refused = err;
+    }
+    if (refused === undefined) return;
+    // Fail-closed: a revoke failure (or any re-read error) is a 5xx, never the plaintext.
+    await this.credentials.revokeSecret(clientId, version);
+    if (refused instanceof ForbiddenClientConfigError) {
+      await this.audit
+        .record({
+          ...adminAuditBase(req, ctx),
+          action,
+          targetType: 'client',
+          targetId: clientId,
+          clientId,
+          result: 'failure',
+          reason: 'admin_granted_concurrently',
+          metadata: { version },
+        })
+        .catch(() => undefined);
+    }
+    throw toAdminError(refused);
   }
 
   @Delete(':clientId/secrets/:version')

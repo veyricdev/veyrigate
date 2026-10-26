@@ -647,4 +647,29 @@ describe('/introspect (B4.6 Task 3, RFC 7662) on real Mongo', () => {
       spy.mockRestore();
     }
   });
+  it('run 56 (DEBT-209/156): an AT issued before a disable is inactive after re-enable; iat past lastDisabledAt + margin => active', async () => {
+    const cid = `${TOKEN_CLIENT}-d209`;
+    const clients = new ClientService(clientModel, cfg);
+    await clients.create({
+      clientId: cid,
+      clientType: 'confidential',
+      tokenEndpointAuthMethod: 'client_secret_basic',
+      allowedResources: [RESOURCE_ID],
+      tenantId: 'tenant-A',
+    });
+    const token = await access({ clientId: cid });
+    const rs = { authorization: basic(RS_CLIENT, rsSecret) };
+    expect((await post(form({ token }), rs)).json().active).toBe(true);
+    const tctx = { tenantId: 'tenant-A' } as never;
+    const sa = { roles: ['super_admin'] };
+    await clients.updateForTenant(tctx, cid, { disabled: true }, sa);
+    await clients.updateForTenant(tctx, cid, { disabled: false }, sa);
+    expect(await post(form({ token }), rs).then((r) => r.json())).toEqual({ active: false });
+    // Control: the same token with its iat now AFTER lastDisabledAt + margin => live again.
+    await clientModel.updateOne(
+      { clientId: cid },
+      { $set: { lastDisabledAt: new Date(Date.now() - 3_600_000) } },
+    );
+    expect((await post(form({ token }), rs)).json().active).toBe(true);
+  });
 });

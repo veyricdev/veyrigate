@@ -33,7 +33,7 @@ import {
   type TenantContext,
 } from '../identity/tenant-context/tenant-context';
 import { type UserTenant, UserTenantService } from '../identity/user-tenant.service';
-import { ADMIN_LOCKED_UNTIL, UserService, type UserView } from '../identity/user.service';
+import { UserService, type UserView } from '../identity/user.service';
 import { ConsentService } from '../oauth/consent/consent.service';
 import { RefreshTokenService } from '../oauth/token/refresh-token.service';
 import { AuditAction } from '../security/audit/audit-action.enum';
@@ -155,11 +155,25 @@ export class AdminUsersController {
     const t = await this.mustFind(ctx, rawId);
     if (t.id === ctx.userId) throw AdminAuthError.forbidden();
     await this.assertMayTouchAccount(ctx, actor, t.id);
-    const after = await this.users.updateStatus(t.id, { lockedUntil: ADMIN_LOCKED_UNTIL });
+    const level = actor.roles.includes('super_admin') ? 'super_admin' : 'tenant_admin';
+    const after = await this.users.adminLock(t.id, level);
     if (!after) throw AdminAuthError.notFound();
 
     // Lock first, THEN revoke: a revoke fault keeps the lock (5xx, retry is idempotent).
+    // Audit: `LOCKED success` = lock written; `SESSION_REVOKED success {via:'lock'}` = revoke done.
     const base = { ...adminAuditBase(req, ctx), targetType: 'user', targetId: t.id };
+    // DEBT-420: the success event is recorded right after the lock write (its timestamp is taken
+    // before any further I/O), NOT after the slow revoke: an unlock landing after this write can
+    // only audit after it, so the trail ends on the DB state. Every lock still audits success
+    // (DEBT-152: a retry after `revoke_failed` ends on success). Started before the revoke and
+    // awaited after it, so a failing audit write never skips the revoke (fail-closed), then 5xx.
+    const audited = this.audit.record({
+      ...base,
+      action: AuditAction.ADMIN_USER_LOCKED,
+      result: 'success',
+      metadata: { level },
+    });
+    audited.catch(() => undefined); // observed below; avoids an unhandled rejection if revoke throws
     const { sessionCount } = await this.auth.revokeAllUserCredentials(
       t.id,
       new Date(),
@@ -172,13 +186,14 @@ export class AdminUsersController {
           metadata: { failedStep },
         }),
     );
-    // Every successful revoke is audited (DEBT-152): a retry after `revoke_failed` must not leave
-    // the trail ending on the failure.
+    await audited;
+    // DEBT-421: `LOCKED success` = the lock is written; the revoke (with its session count) is its
+    // own event, recorded only once the revoke completed (same shape as `sessions/revoke`).
     await this.audit.record({
       ...base,
-      action: AuditAction.ADMIN_USER_LOCKED,
+      action: AuditAction.SESSION_REVOKED,
       result: 'success',
-      metadata: { count: sessionCount },
+      metadata: { scope: 'all', count: sessionCount, via: 'lock' },
     });
     return toAdminUser(after, t.member, new Date());
   }
@@ -197,17 +212,24 @@ export class AdminUsersController {
   ) {
     const t = await this.mustFind(ctx, rawId);
     await this.assertMayTouchAccount(ctx, actor, t.id);
-    const after = await this.users.resetFailedLogins(t.id);
-    if (!after) throw AdminAuthError.notFound();
-    if (t.user.lockedUntil != null || t.user.failedLoginCount > 0) {
-      await this.audit.record({
-        ...adminAuditBase(req, ctx),
-        action: AuditAction.ADMIN_USER_UNLOCKED,
-        targetType: 'user',
-        targetId: t.id,
-        result: 'success',
-      });
+    const base = {
+      ...adminAuditBase(req, ctx),
+      action: AuditAction.ADMIN_USER_UNLOCKED,
+      targetType: 'user',
+      targetId: t.id,
+    };
+    // DEBT-147/153: one atomic write with the level rule in its filter; the audit diff comes from
+    // the document BEFORE that write (never from `t.user`, read earlier).
+    const before = await this.users.adminUnlock(t.id, actor.roles.includes('super_admin'));
+    if (before === 'forbidden') {
+      await this.audit.record({ ...base, result: 'failure', reason: 'locked_by_super_admin' });
+      throw AdminAuthError.forbidden();
     }
+    if (!before) throw AdminAuthError.notFound();
+    if (before.lockedUntil != null || before.failedLoginCount > 0) {
+      await this.audit.record({ ...base, result: 'success' });
+    }
+    const after = { ...before, failedLoginCount: 0, lockedUntil: undefined };
     return toAdminUser(after, t.member, new Date());
   }
 

@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { isValidObjectId, type Model, type Types } from 'mongoose';
+import { isValidObjectId, type Model, type QueryFilter, type Types } from 'mongoose';
 import { hashPassword } from '../../common/crypto/crypto.util';
 import { mapDuplicate } from './identity.errors';
 import { randomUUID } from 'node:crypto';
@@ -13,6 +13,7 @@ interface UserDoc {
   emailVerifiedAt?: Date;
   failedLoginCount: number;
   lockedUntil?: Date;
+  adminLockLevel?: AdminLockLevel;
   lockTransitionNonce?: string;
   createdAt: Date;
   updatedAt: Date;
@@ -52,6 +53,19 @@ const PUBLIC_FIELDS = '-passwordHash -mfaSecret';
 
 /** Admin lock = "until an admin unlocks" (B6.3b). Only admin unlock clears it, never a reset. */
 export const ADMIN_LOCKED_UNTIL = new Date('9999-12-31T23:59:59.999Z');
+
+/** Who set an admin lock (DEBT-153): only that level or higher may lift it. */
+export type AdminLockLevel = 'tenant_admin' | 'super_admin';
+
+/**
+ * Users whose lock a tenant_admin may change: no admin lock (unlocked or brute-force lock), or an
+ * admin lock of level `tenant_admin`. A sentinel without level (pre-run-56 data) counts as
+ * super_admin (fail-closed). Used inside the write filter so a concurrent lock cannot slip past.
+ */
+const tenantAdminMayChangeLock = (sub: string): QueryFilter<UserDoc> => ({
+  _id: sub,
+  $or: [{ lockedUntil: { $ne: ADMIN_LOCKED_UNTIL } }, { adminLockLevel: 'tenant_admin' }],
+});
 
 function toView(doc: UserDoc): UserView {
   return {
@@ -227,25 +241,11 @@ export class UserService {
     return { user: toView(doc), newlyLocked };
   }
 
-  async resetFailedLogins(sub: string): Promise<UserView | null> {
-    if (!isValidObjectId(sub)) return null;
-    const doc = await this.users
-      .findByIdAndUpdate(
-        sub,
-        { $set: { failedLoginCount: 0 }, $unset: { lockedUntil: 1 } },
-        { returnDocument: 'after' },
-      )
-      .select(PUBLIC_FIELDS)
-      .lean<UserDoc>()
-      .exec();
-    return doc ? toView(doc) : null;
-  }
-
   /**
    * Login success path (DEBT-154): clear the counter and an EXPIRED lock, but only while the user is
    * not locked at write time (`lockedUntil` missing, null or <= now). An admin lock or a brute-force
    * lock set after the login read its snapshot does not match => null, and login must fail. Admin
-   * unlock keeps using `resetFailedLogins`.
+   * unlock uses `adminUnlock`.
    */
   async clearFailedLoginsIfUnlocked(sub: string, now = new Date()): Promise<UserView | null> {
     if (!isValidObjectId(sub)) return null;
@@ -292,6 +292,58 @@ export class UserService {
       .lean<UserDoc>()
       .exec();
     return doc ? toView(doc) : null;
+  }
+
+  /**
+   * Admin lock until an admin unlocks (B6.3b), recording its level. super_admin always (re)sets
+   * level `super_admin`; tenant_admin never lowers a higher-level lock: it is left as is and the
+   * current user is returned (the caller still revokes, idempotent). null = no such user.
+   */
+  async adminLock(sub: string, level: AdminLockLevel): Promise<UserView | null> {
+    if (!isValidObjectId(sub)) return null;
+    const filter: QueryFilter<UserDoc> =
+      level === 'super_admin' ? { _id: sub } : tenantAdminMayChangeLock(sub);
+    // Two rounds: a miss followed by a concurrent unlock makes the filter match on the retry.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const doc = await this.users
+        .findOneAndUpdate(
+          filter,
+          { $set: { lockedUntil: ADMIN_LOCKED_UNTIL, adminLockLevel: level } },
+          { returnDocument: 'after' },
+        )
+        .select(PUBLIC_FIELDS)
+        .lean<UserDoc>()
+        .exec();
+      if (doc) return toView(doc);
+      const current = await this.findById(sub);
+      if (!current) return null;
+      if (current.lockedUntil?.getTime() === ADMIN_LOCKED_UNTIL.getTime()) return current;
+    }
+    throw new Error('adminLock: the user lock changed concurrently; retry');
+  }
+
+  /**
+   * Admin unlock (DEBT-147/153): clear the lock, its level and the counter in ONE write and return
+   * the document BEFORE it (the caller audits from that, not from an earlier read). A tenant_admin
+   * may not lift a super_admin (or legacy unlevelled) lock: 'forbidden'. null = no such user.
+   */
+  async adminUnlock(
+    sub: string,
+    actorIsSuperAdmin: boolean,
+  ): Promise<UserView | 'forbidden' | null> {
+    if (!isValidObjectId(sub)) return null;
+    const before = await this.users
+      .findOneAndUpdate(
+        actorIsSuperAdmin ? { _id: sub } : tenantAdminMayChangeLock(sub),
+        { $set: { failedLoginCount: 0 }, $unset: { lockedUntil: 1, adminLockLevel: 1 } },
+        { returnDocument: 'before' },
+      )
+      .select(PUBLIC_FIELDS)
+      .lean<UserDoc>()
+      .exec();
+    if (before) return toView(before);
+    if (actorIsSuperAdmin) return null;
+    return (await this.users.exists({ _id: sub }).exec()) ? 'forbidden' : null;
   }
 
   async updateStatus(sub: string, patch: UserStatusPatch): Promise<UserView | null> {

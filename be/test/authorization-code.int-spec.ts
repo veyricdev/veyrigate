@@ -20,6 +20,9 @@ const dataFor = (userId: string): AuthorizationCodeData => ({
   sessionRef: sha256(`${RUN}-session`),
 });
 
+/** The stored/consumed payload = the input + the `issuedAt` that `create` stamps (DEBT-209). */
+const stamped = (d: AuthorizationCodeData) => ({ ...d, issuedAt: expect.any(Number) });
+
 describe('AuthorizationCodeService on real Redis (B4.3, spec §9.1 step 3 / §9.5)', () => {
   let redis: IORedis;
   let svc: AuthorizationCodeService;
@@ -37,15 +40,18 @@ describe('AuthorizationCodeService on real Redis (B4.3, spec §9.1 step 3 / §9.
 
   it('stores only sha256(code): no raw code in any key, correct payload + TTL', async () => {
     const d = dataFor(`${RUN}-user-a`);
+    const before = Date.now();
     const { code, data } = await svc.create(d);
+    expect(data.issuedAt).toBeGreaterThanOrEqual(before);
+    expect(data.issuedAt).toBeLessThanOrEqual(Date.now());
     expect(code).toMatch(/^[A-Za-z0-9_-]{43}$/); // 32 bytes base64url (CSPRNG, crypto.util B1.5)
-    expect(data).toEqual(d);
+    expect(data).toEqual(stamped(d));
 
     expect(await redis.exists(`authz_code:${code}`)).toBe(0);
     const raw = await redis.get(`authz_code:${sha256(code)}`);
     expect(raw).not.toBeNull();
     expect(raw).not.toContain(code);
-    expect(JSON.parse(raw!)).toEqual(d);
+    expect(JSON.parse(raw!)).toEqual(stamped(d));
 
     const pttl = await redis.pttl(`authz_code:${sha256(code)}`);
     expect(pttl).toBeGreaterThan(0);
@@ -65,7 +71,7 @@ describe('AuthorizationCodeService on real Redis (B4.3, spec §9.1 step 3 / §9.
     expect(await redis.exists(`authz_code:${sha256(code)}`)).toBe(1);
 
     const consumed = await svc.consume(code, d.clientId, d.redirectUri, d.codeChallenge);
-    expect(consumed).toEqual(d);
+    expect(consumed).toEqual(stamped(d));
   });
 
   it('C5(a): wrong redirectUri → null, code still intact (EXISTS=1), valid consume right after still succeeds', async () => {
@@ -78,7 +84,7 @@ describe('AuthorizationCodeService on real Redis (B4.3, spec §9.1 step 3 / §9.
     expect(await redis.exists(`authz_code:${sha256(code)}`)).toBe(1);
 
     const consumed = await svc.consume(code, d.clientId, d.redirectUri, d.codeChallenge);
-    expect(consumed).toEqual(d);
+    expect(consumed).toEqual(stamped(d));
   });
 
   it('C5(b): two concurrent consumes with the correct identity — exactly one succeeds', async () => {
@@ -91,7 +97,7 @@ describe('AuthorizationCodeService on real Redis (B4.3, spec §9.1 step 3 / §9.
     ]);
     const wins = [a, b].filter((x) => x !== null);
     expect(wins).toHaveLength(1);
-    expect(wins[0]).toEqual(d);
+    expect(wins[0]).toEqual(stamped(d));
     expect(await redis.exists(`authz_code:${sha256(code)}`)).toBe(0);
   });
 
@@ -117,7 +123,7 @@ describe('AuthorizationCodeService on real Redis (B4.3, spec §9.1 step 3 / §9.
   it('C5(d): single-use — consuming an already-consumed code returns null', async () => {
     const d = dataFor(`${RUN}-user-g`);
     const { code } = await svc.create(d);
-    expect(await svc.consume(code, d.clientId, d.redirectUri, d.codeChallenge)).toEqual(d);
+    expect(await svc.consume(code, d.clientId, d.redirectUri, d.codeChallenge)).toEqual(stamped(d));
     expect(await svc.consume(code, d.clientId, d.redirectUri, d.codeChallenge)).toBeNull();
   });
 
@@ -145,7 +151,7 @@ describe('AuthorizationCodeService on real Redis (B4.3, spec §9.1 step 3 / §9.
     const { code, data } = await svc.create(d);
     expect(data.authTime).toBe(1_700_000_000);
     const consumed = await svc.consume(code, d.clientId, d.redirectUri, d.codeChallenge);
-    expect(consumed).toEqual(d);
+    expect(consumed).toEqual(stamped(d));
     expect(consumed?.authTime).toBe(1_700_000_000);
   });
 
@@ -187,7 +193,7 @@ describe('AuthorizationCodeService on real Redis (B4.3, spec §9.1 step 3 / §9.
     );
     const wins = results.filter((x) => x !== null);
     expect(wins).toHaveLength(1);
-    expect(wins[0]).toEqual(d);
+    expect(wins[0]).toEqual(stamped(d));
     expect(await redis.exists(`authz_code:${sha256(code)}`)).toBe(0);
   });
 });

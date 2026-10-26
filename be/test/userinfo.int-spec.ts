@@ -461,4 +461,27 @@ describe('/userinfo (B4.6 Task 2) on real Mongo', () => {
     expect(res.statusCode).toBe(500);
     expect(res.json()).not.toHaveProperty('sub');
   });
+  it('run 56 (DEBT-209/156): an AT issued before a disable => 401 after re-enable; iat past lastDisabledAt + margin => 200', async () => {
+    const cid = `${CLIENT}-d209`;
+    const clients = new ClientService(clientModel, cfg);
+    await clients.create({
+      clientId: cid,
+      clientType: 'public',
+      tokenEndpointAuthMethod: 'none',
+      allowedResources: [RESOURCE_ID],
+      tenantId: 'tenant-A',
+    });
+    const token = await accessToken({ clientId: cid });
+    expect((await get({ authorization: `Bearer ${token}` })).statusCode).toBe(200);
+    const tctx = { tenantId: 'tenant-A' } as never;
+    const sa = { roles: ['super_admin'] };
+    await clients.updateForTenant(tctx, cid, { disabled: true }, sa);
+    await clients.updateForTenant(tctx, cid, { disabled: false }, sa);
+    expect((await get({ authorization: `Bearer ${token}` })).statusCode).toBe(401);
+    await clientModel.updateOne(
+      { clientId: cid },
+      { $set: { lastDisabledAt: new Date(Date.now() - 3_600_000) } },
+    );
+    expect((await get({ authorization: `Bearer ${token}` })).statusCode).toBe(200);
+  });
 });
