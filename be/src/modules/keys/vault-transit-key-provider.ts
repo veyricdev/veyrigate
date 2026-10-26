@@ -172,8 +172,15 @@ export class VaultTransitKeyProvider implements KeyProvider {
     return this.live(set).map(({ entry }) => entry.jwk);
   }
 
+  /** DEBT-410: same outage split as `getPublicKeys` (admin keys API ⇒ 503, not 500). */
   async listKeys(): Promise<KeyMetadata[]> {
-    return this.live(await this.keySet()).map(({ entry, retireAt }) => ({
+    let set: KeySet;
+    try {
+      set = await this.keySet();
+    } catch (err) {
+      throw asUnavailable(err);
+    }
+    return this.live(set).map(({ entry, retireAt }) => ({
       kid: entry.kid,
       alg: 'RS256' as const,
       status: retireAt === null ? ('active' as const) : ('retiring' as const),

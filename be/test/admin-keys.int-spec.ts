@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { hashPassword } from '../src/common/crypto/crypto.util';
 import { deriveS256Challenge } from '../src/common/crypto/pkce.util';
+import { DEPENDENCY_UNAVAILABLE_DESCRIPTION } from '../src/common/errors/dependency-unavailable';
 import { OAuthExceptionFilter } from '../src/common/filters/oauth-exception.filter';
 import { MODELS } from '../src/database/mongo/models';
 import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
@@ -36,6 +37,7 @@ import { KEY_PROVIDER } from '../src/modules/keys/key-provider';
 import { KeyRotationService } from '../src/modules/keys/key-rotation.service';
 import { KeysController } from '../src/modules/keys/keys.controller';
 import { LocalKeyProvider } from '../src/modules/keys/local-key-provider';
+import { VaultTransitKeyProvider } from '../src/modules/keys/vault-transit-key-provider';
 import { TokenSigner } from '../src/modules/keys/token-signer';
 import { TokenVerifier } from '../src/modules/keys/token-verifier';
 import { AuthorizeController } from '../src/modules/oauth/authorize/authorize.controller';
@@ -90,6 +92,7 @@ describe('Admin API B6.3c (keys + tenants) on real Mongo + Redis', () => {
   let app: NestFastifyApplication;
   let redis: IORedis;
   let keyDir: string;
+  let provider: LocalKeyProvider;
   let signer: TokenSigner;
   let sessions: SessionService;
   let consents: ConsentService;
@@ -244,7 +247,7 @@ describe('Admin API B6.3c (keys + tenants) on real Mongo + Redis', () => {
   beforeAll(async () => {
     redis = new IORedis(REDIS_URL, { maxRetriesPerRequest: 1 });
     keyDir = await mkdtemp(join(tmpdir(), 'vg-admin-keys-int-'));
-    const provider = new LocalKeyProvider(keyDir);
+    provider = new LocalKeyProvider(keyDir);
     await provider.init();
 
     moduleRef = await Test.createTestingModule({
@@ -514,6 +517,66 @@ describe('Admin API B6.3c (keys + tenants) on real Mongo + Redis', () => {
         tenantId: TENANT_A,
         metadata: { mode: 'emergency', oldKid },
       });
+    });
+  });
+
+  describe('DEBT-410: Vault down on the admin keys API (signing/JWKS keep the real key)', () => {
+    /** The REAL Vault provider code, every request a network error (cold cache: no `init`). */
+    const vaultDown = () =>
+      new VaultTransitKeyProvider(
+        {
+          addr: 'http://vault.int.test:8200',
+          tokenFile: join(keyDir, 'absent-token'),
+          mount: 'transit',
+          key: 'k',
+          timeoutMs: 100,
+        },
+        TTL,
+        {
+          fetchFn: () => Promise.reject(new TypeError('fetch failed')),
+        },
+      );
+
+    it('GET /admin/keys super_admin => 503 temporarily_unavailable, Retry-After 5, no-store, no key data', async () => {
+      const down = vaultDown();
+      jest.spyOn(provider, 'listKeys').mockImplementation(() => down.listKeys());
+      const res = await call('GET', '/admin/keys', await tok(superA));
+      expect(res.statusCode).toBe(503);
+      expect(res.headers['retry-after']).toBe('5');
+      expect(res.headers['cache-control']).toContain('no-store');
+      expect(res.json()).toEqual({
+        error: 'temporarily_unavailable',
+        error_description: DEPENDENCY_UNAVAILABLE_DESCRIPTION,
+      });
+      expect(res.body).not.toMatch(/kid|kty|vault\.int\.test|transit/);
+    });
+
+    it('tenant_admin => still 403 (authorization before the provider is called)', async () => {
+      const spy = jest.spyOn(provider, 'listKeys').mockImplementation(() => vaultDown().listKeys());
+      const res = await call('GET', '/admin/keys', await tok(tadminA));
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toEqual({ error: 'forbidden' });
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('POST /admin/keys/rotate on a network error => 500 (not 503) + audited failure', async () => {
+      const down = vaultDown();
+      jest
+        .spyOn(provider, 'rotate')
+        .mockImplementation((mode, retainSec) => down.rotate(mode, retainSec));
+      const since = new Date();
+      const res = await call('POST', '/admin/keys/rotate', await tok(superA), { mode: 'normal' });
+      expect(res.statusCode).toBe(500);
+      expect(res.headers['retry-after']).toBeUndefined();
+      expect(res.json()).toMatchObject({ error: 'server_error' });
+      const event = await auditModel
+        .findOne({
+          action: AuditAction.SIGNING_KEY_ROTATED,
+          result: 'failure',
+          timestamp: { $gte: since },
+        })
+        .lean();
+      expect(event).toMatchObject({ reason: 'rotate_failed', metadata: { mode: 'normal' } });
     });
   });
 

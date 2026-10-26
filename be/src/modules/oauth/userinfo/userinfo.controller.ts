@@ -1,4 +1,5 @@
 import { Controller, Get, Header, HttpStatus, Req, Res } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Types, type Model } from 'mongoose';
 import type { HttpRequest } from '../../../common/http/http.types';
@@ -9,7 +10,9 @@ import { ClientService } from '../../clients/client.service';
 import { TokenVerifier } from '../../keys/token-verifier';
 import { ResourceService } from '../../resources/resource.service';
 import { SessionService } from '../../sessions/session.service';
+import type { AppConfig } from '../../../config/configuration';
 import { isAccessTokenLive } from '../access-token-liveness';
+import { adminResourceIdentifier } from '../token/token.service';
 import { KeyProviderUnavailableError } from '../../../common/errors/dependency-unavailable';
 
 /** Reply members the `/userinfo` controller needs (Fastify, structural like TokenReply). */
@@ -62,6 +65,8 @@ const PROFILE_STRING_CLAIMS = [
  */
 @Controller()
 export class UserinfoController {
+  private readonly adminAud: string;
+
   constructor(
     @InjectModel('User') private readonly users: Model<UserDoc>,
     private readonly verifier: TokenVerifier,
@@ -69,7 +74,10 @@ export class UserinfoController {
     private readonly cors: ClientCorsService,
     private readonly sessions: SessionService,
     private readonly resources: ResourceService,
-  ) {}
+    config: ConfigService,
+  ) {
+    this.adminAud = adminResourceIdentifier(config.getOrThrow<AppConfig>('app').issuer);
+  }
 
   @Get('/userinfo')
   @Header('Cache-Control', 'no-store')
@@ -119,6 +127,7 @@ export class UserinfoController {
       },
       this.sessions,
       this.resources,
+      this.adminAud,
     );
     const user = fetched.user;
     if (!live || user === null) {

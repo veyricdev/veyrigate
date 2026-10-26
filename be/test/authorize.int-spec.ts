@@ -1157,4 +1157,251 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
     }
     await sessionSvc.revoke(id);
   });
+  // ---- run 55 DEBT-123 (consent context bound to the session that opened it) + DEBT-130 (every
+  // consent/resume exit re-checks the client and redirect_uri before redirecting anywhere).
+  describe('run 55: DEBT-123 session binding + DEBT-130 re-check before any redirect', () => {
+    const REDIRECT = 'https://app.example.com/callback';
+    let n = 0;
+
+    /** A dedicated client per case (the DEBT-130 cases mutate it). */
+    const mkClient = async (): Promise<string> => {
+      const clientId = `${RUN}-r55-${++n}`;
+      await new ClientService(httpClientModel, cfg).create({
+        clientId,
+        clientType: 'public',
+        tokenEndpointAuthMethod: 'none',
+        redirectUris: [REDIRECT, 'https://app.example.com/other'],
+        allowedResources: [],
+        scopes: ['openid', 'profile'],
+        tenantId: 'tenant-A',
+      });
+      return clientId;
+    };
+    const query = (clientId: string, extra = '') =>
+      `/authorize?response_type=code&client_id=${clientId}` +
+      `&redirect_uri=${encodeURIComponent(REDIRECT)}` +
+      `&scope=${encodeURIComponent('openid profile')}&state=victim-state&nonce=rp-nonce` +
+      `&code_challenge=${VALID_CHALLENGE}&code_challenge_method=S256${extra}`;
+    const screen = async (clientId: string, sessionId: string) => {
+      const res = await httpApp.inject({
+        method: 'GET',
+        url: query(clientId),
+        cookies: { [SESSION_COOKIE]: sessionId },
+      });
+      expect(res.statusCode).toBe(200);
+      return {
+        csrf: res.body.match(/name="_csrf" value="([^"]+)"/)?.[1] as string,
+        requestId: res.body.match(/name="request_id" value="([^"]+)"/)?.[1] as string,
+      };
+    };
+    const signedIn = async () => {
+      const userId = await member();
+      const { id } = await sessionSvc.create(userId, 'tenant-A');
+      return { userId, sessionId: id };
+    };
+    const post = (sessionId: string, csrf: string, requestId: string, approve: boolean) =>
+      httpApp.inject({
+        method: 'POST',
+        url: '/authorize/consent',
+        cookies: { [SESSION_COOKIE]: sessionId },
+        payload: { _csrf: csrf, request_id: requestId, approve: String(approve) },
+      });
+    const codeKeys = async () => (await httpRedis.keys('authz_code:*')).length;
+    const auditModel = () => httpApp.get<Model<AuditEvent>>(getModelToken('AuditLog'));
+    const consentAudits = (userId: string) =>
+      auditModel()
+        .find({
+          actorId: userId,
+          action: { $in: [AuditAction.OAUTH_CONSENT_GRANTED, AuditAction.OAUTH_CONSENT_DENIED] },
+        })
+        .lean<AuditEvent[]>();
+    /** First-party error page: 400, no Location, nothing of the RP request echoed. */
+    const expectPage = (res: {
+      statusCode: number;
+      headers: Record<string, unknown>;
+      body: string;
+    }) => {
+      expect(res.statusCode).toBe(400);
+      expect(res.headers['location']).toBeUndefined();
+      expect(res.body).not.toContain('victim-state');
+      expect(res.body).not.toContain('app.example.com');
+    };
+    const loginRequestId = (location: string) => {
+      const returnTo = new URL(location, ISSUER).searchParams.get('returnTo')!;
+      return new URLSearchParams(returnTo.split('?')[1]).get('request_id')!;
+    };
+    const legacyConsentContext = async (clientId: string) =>
+      (
+        await httpApp.get(AuthorizeRequestContextService).create({
+          kind: 'consent',
+          clientId,
+          redirectUri: REDIRECT,
+          codeChallenge: VALID_CHALLENGE,
+          scope: 'openid profile',
+          originalState: 'victim-state',
+        })
+      ).requestId;
+
+    it.each([true, false])(
+      'transplant: B (own session + own valid CSRF) POSTs the request_id of A, approve=%s => 400 page, no code, no consent, no audit; A then gets the expired page',
+      async (approve) => {
+        const clientId = await mkClient();
+        const a = await signedIn();
+        const { csrf: csrfA, requestId } = await screen(clientId, a.sessionId);
+        const b = await signedIn();
+        const { csrf: csrfB } = await screen(clientId, b.sessionId); // B's own valid CSRF
+        const codesBefore = await codeKeys();
+
+        const res = await post(b.sessionId, csrfB, requestId, approve);
+        expectPage(res);
+        expect(await codeKeys()).toBe(codesBefore);
+        expect(await consentSvc.find(b.userId, clientId, undefined)).toBeNull();
+        expect(await consentSvc.find(a.userId, clientId, undefined)).toBeNull();
+        expect(await consentAudits(b.userId)).toHaveLength(0);
+
+        // Single-use: the context was burned by B's attempt.
+        expectPage(await post(a.sessionId, csrfA, requestId, true));
+        expect(await codeKeys()).toBe(codesBefore);
+        await sessionSvc.revoke(a.sessionId);
+        await sessionSvc.revoke(b.sessionId);
+      },
+    );
+
+    it.each([true, false])(
+      'a consent context without sessionRef (written before this release), approve=%s => 400 page, no redirect',
+      async (approve) => {
+        const clientId = await mkClient();
+        const a = await signedIn();
+        const { csrf } = await screen(clientId, a.sessionId);
+        expectPage(await post(a.sessionId, csrf, await legacyConsentContext(clientId), approve));
+        expect(await consentSvc.find(a.userId, clientId, undefined)).toBeNull();
+        expect(await consentAudits(a.userId)).toHaveLength(0);
+        await sessionSvc.revoke(a.sessionId);
+      },
+    );
+
+    it('DEBT-130: redirect_uri removed after the screen rendered => deny gives 400 page, no Location', async () => {
+      const clientId = await mkClient();
+      const a = await signedIn();
+      const { csrf, requestId } = await screen(clientId, a.sessionId);
+      await httpClientModel.updateOne(
+        { clientId },
+        { $set: { redirectUris: ['https://app.example.com/other'] } },
+      );
+      expectPage(await post(a.sessionId, csrf, requestId, false));
+      expect(await consentAudits(a.userId)).toHaveLength(0);
+      await sessionSvc.revoke(a.sessionId);
+    });
+
+    it('DEBT-130: client disabled after the screen rendered => deny gives 400 page, no Location', async () => {
+      const clientId = await mkClient();
+      const a = await signedIn();
+      const { csrf, requestId } = await screen(clientId, a.sessionId);
+      await httpClientModel.updateOne({ clientId }, { $set: { disabledAt: new Date() } });
+      expectPage(await post(a.sessionId, csrf, requestId, false));
+      await sessionSvc.revoke(a.sessionId);
+    });
+
+    it('DEBT-130: a login context POSTed to the consent door => 400 when its redirect_uri is gone, 302 login_required while it is registered', async () => {
+      const clientId = await mkClient();
+      const a = await signedIn();
+      const { csrf } = await screen(clientId, a.sessionId);
+      const login = async () => {
+        const res = await httpApp.inject({ method: 'GET', url: query(clientId) }); // no session
+        expect(res.statusCode).toBe(302);
+        return loginRequestId(res.headers['location'] as string);
+      };
+
+      const control = await post(a.sessionId, csrf, await login(), true);
+      expect(control.statusCode).toBe(302);
+      const url = new URL(control.headers['location'] as string);
+      expect(url.searchParams.get('error')).toBe('login_required');
+      expect(url.searchParams.get('state')).toBe('victim-state');
+
+      const rid = await login();
+      await httpClientModel.updateOne(
+        { clientId },
+        { $set: { redirectUris: ['https://app.example.com/other'] } },
+      );
+      expectPage(await post(a.sessionId, csrf, rid, true));
+      await sessionSvc.revoke(a.sessionId);
+    });
+
+    it('DEBT-130: resume of a prompt=login context with the OLD session => 400 page when the redirect_uri is gone (302 login_required while registered)', async () => {
+      const clientId = await mkClient();
+      const a = await signedIn();
+      const reauth = async () => {
+        const res = await httpApp.inject({
+          method: 'GET',
+          url: query(clientId, '&prompt=login'),
+          cookies: { [SESSION_COOKIE]: a.sessionId },
+        });
+        expect(res.statusCode).toBe(302);
+        return loginRequestId(res.headers['location'] as string);
+      };
+      const resume = (rid: string) =>
+        httpApp.inject({
+          method: 'GET',
+          url: `/authorize?request_id=${encodeURIComponent(rid)}`,
+          cookies: { [SESSION_COOKIE]: a.sessionId }, // never re-authenticated
+        });
+
+      const control = await resume(await reauth());
+      expect(control.statusCode).toBe(302);
+      const url = new URL(control.headers['location'] as string);
+      expect(url.origin + url.pathname).toBe(REDIRECT);
+      expect(url.searchParams.get('error')).toBe('login_required');
+
+      const rid = await reauth();
+      await httpClientModel.updateOne(
+        { clientId },
+        { $set: { redirectUris: ['https://app.example.com/other'] } },
+      );
+      expectPage(await resume(rid));
+      await sessionSvc.revoke(a.sessionId);
+    });
+
+    it('control: the session that opened the screen approves => 302 code; denies => 302 access_denied + state + iss', async () => {
+      const clientId = await mkClient();
+      const a = await signedIn();
+      const first = await screen(clientId, a.sessionId);
+      const deny = await post(a.sessionId, first.csrf, first.requestId, false);
+      expect(deny.statusCode).toBe(302);
+      const d = new URL(deny.headers['location'] as string);
+      expect(d.searchParams.get('error')).toBe('access_denied');
+      expect(d.searchParams.get('state')).toBe('victim-state');
+      expect(d.searchParams.get('iss')).toBe(ISSUER);
+
+      const second = await screen(clientId, a.sessionId);
+      const approve = await post(a.sessionId, second.csrf, second.requestId, true);
+      expect(approve.statusCode).toBe(302);
+      const ok = new URL(approve.headers['location'] as string);
+      expect(ok.searchParams.get('code')).toBeTruthy();
+      expect(ok.searchParams.get('state')).toBe('victim-state');
+      await sessionSvc.revoke(a.sessionId);
+    });
+
+    it('sessionRef stays server-side: not on the consent page, the redirect URL or the audit trail', async () => {
+      const clientId = await mkClient();
+      const a = await signedIn();
+      const res = await httpApp.inject({
+        method: 'GET',
+        url: query(clientId),
+        cookies: { [SESSION_COOKIE]: a.sessionId },
+      });
+      const ref = (await sessionSvc.get(a.sessionId))!.ref;
+      expect(res.body).not.toContain(ref);
+      const requestId = res.body.match(/name="request_id" value="([^"]+)"/)?.[1] as string;
+      const raw = await httpRedis.get(`authz_ctx:${requestId}`);
+      expect(JSON.parse(raw!).sessionRef).toBe(ref);
+      const csrf = res.body.match(/name="_csrf" value="([^"]+)"/)?.[1] as string;
+      const approve = await post(a.sessionId, csrf, requestId, true);
+      expect(approve.statusCode).toBe(302);
+      expect(approve.headers['location']).not.toContain(ref);
+      const audits = await auditModel().find({ actorId: a.userId }).lean();
+      expect(audits.length).toBeGreaterThan(0);
+      expect(JSON.stringify(audits)).not.toContain(ref);
+      await sessionSvc.revoke(a.sessionId);
+    });
+  });
 });

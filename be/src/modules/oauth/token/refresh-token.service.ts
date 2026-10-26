@@ -140,7 +140,8 @@ export class RefreshTokenService {
       'clientId' | 'allowedResources' | 'clientType' | 'tokenEndpointAuthMethod' | 'tenantId'
     >,
     request: { scope?: string; resource?: string },
-    recheck: (userId: string) => Promise<string | null>,
+    /** DEBT-207/216: `resource` is the rotated doc's (never the request body's). */
+    recheck: (userId: string, resource: string) => Promise<string | null>,
     audit: AuditCtx = {},
   ): Promise<TokenResponse> {
     const tokenHash = sha256(value);
@@ -259,7 +260,7 @@ export class RefreshTokenService {
   /** DEBT-207: current-state re-check of a refresh after `rotate` (see `issueForRefresh`). */
   private async recheckAfterRotate(
     result: RotationResult,
-    recheck: (userId: string) => Promise<string | null>,
+    recheck: (userId: string, resource: string) => Promise<string | null>,
     audit: AuditCtx,
   ): Promise<void> {
     const refuse = (reason: string) =>
@@ -294,7 +295,7 @@ export class RefreshTokenService {
         );
     let reason: string | null;
     try {
-      reason = await recheck(result.userId);
+      reason = await recheck(result.userId, result.resource);
     } catch (err) {
       const revoked = await this.revokeFamily(result.familyId, result.clientId, new Date()).then(
         () => true,

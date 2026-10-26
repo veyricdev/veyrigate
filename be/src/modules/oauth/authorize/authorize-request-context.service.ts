@@ -37,6 +37,12 @@ export interface AuthorizeRequestContext {
    * after this instant.
    */
   reauthAfter?: number;
+  /**
+   * DEBT-123: `Session.ref` of the session that opened the consent screen (`consent` contexts only).
+   * `POST /authorize/consent` refuses any other session (and a context without it). Server-side
+   * only: never rendered, logged, audited or put in a URL.
+   */
+  sessionRef?: string;
   createdAt: number;
   expiresAt: number;
 }

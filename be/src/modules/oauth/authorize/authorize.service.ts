@@ -172,6 +172,8 @@ export class AuthorizeService {
     // old session re-used by calling `/authorize?request_id=` directly) => `login_required` to the RP.
     // The context is already consumed (single-use), so this cannot loop or later mint a code.
     if (ctx.reauthAfter !== undefined && (session === null || session.authTime < ctx.reauthAfter)) {
+      // DEBT-130: never send `state` to a redirect_uri the admin removed (or of a disabled client).
+      if (!(await this.trustedClient(ctx))) return null;
       const err = new AuthorizeRedirectError('login_required', 'Re-authentication is required.');
       err.redirectUri = ctx.redirectUri;
       err.state = ctx.originalState;
@@ -302,6 +304,8 @@ export class AuthorizeService {
         scope,
         resource,
         params,
+        undefined,
+        session.ref,
       );
       await this.recordAuthorize(client, audit, session.userId, 'consent_required');
       return {
@@ -328,8 +332,9 @@ export class AuthorizeService {
    * `request_id`/`_csrf`) is never trusted for `redirect_uri`/`state`/`scope`/`resource`/`client_id`
    * (anti-param-tampering, symmetric with resume). Returns null when the context is missing/expired/
    * already consumed (replay) so the controller shows a first-party "expired" page (no redirect:
-   * `redirect_uri` is gone with the context) — and, on approve, also when the client is now
-   * disabled/gone or no longer registers the stored `redirect_uri`/allows the stored resource (B6.3a).
+   * `redirect_uri` is gone with the context) — and also when the client is now disabled/gone or no
+   * longer registers the stored `redirect_uri` (every branch, DEBT-130), when `session` is not the
+   * one that opened the screen (DEBT-123), or, on approve, no longer allows the stored resource.
    *
    * `approve=false` (deny) redirects `access_denied` and writes NO consent and NO code. `approve=true`
    * records consent (owner = session.userId) and issues a code. The session is re-checked by the
@@ -343,6 +348,11 @@ export class AuthorizeService {
   ): Promise<{ redirectUri: string; code?: string; state?: string; denied?: boolean } | null> {
     const ctx = await this.contexts.consume(requestId);
     if (!ctx) return null;
+    // DEBT-130 + B6.3a: the client may have been disabled, or the admin may have removed the stored
+    // redirect_uri while this context waited (TTL <= 10'). Checked before EVERY exit that redirects
+    // (login_required, deny, approve): first-party error page (null), nothing sent there.
+    const client = await this.trustedClient(ctx);
+    if (!client) return null;
     // Only a consent context (created with a live, sufficiently fresh session) can be decided here.
     // A login context -- notably a re-auth one (`prompt=login`/`max_age`, B6.2) -- must never mint
     // a code with the old session via this door (OIDC Core §3.1.2.1, INV-26). Already consumed, so
@@ -353,24 +363,22 @@ export class AuthorizeService {
       err.state = ctx.originalState;
       throw err;
     }
+    // DEBT-123: only the session that opened this consent screen may decide it (a context without
+    // the binding, e.g. created before it existed, is refused too). Before the deny branch: a deny
+    // from another session would otherwise hand the victim's `state` to that session's browser.
+    if (ctx.sessionRef === undefined || ctx.sessionRef !== session.ref) return null;
 
     if (!approve) {
       await this.recordConsent(ctx.clientId, audit, session.userId, 'denied');
       return { redirectUri: ctx.redirectUri, state: ctx.originalState, denied: true };
     }
 
-    // The client could have changed between render and POST: re-resolve it and bound the granted
-    // scopes by its *current* scopes so a scope the client has since lost is never carried forward.
-    const client = await this.clients.findByClientId(ctx.clientId);
-    // B6.3a: the client may have been disabled, or the admin may have removed the stored
-    // redirect_uri / resource while this context waited (TTL <= 10'). Then the stored redirect_uri
-    // is no longer trusted: first-party error page (null), no redirect there, no code minted.
+    // The client (re-read above) bounds the granted scopes by its *current* scopes so a scope it
+    // has since lost is never carried forward. B6.3a: a resource it no longer allows => no code.
     if (
-      !client ||
-      !isRegisteredRedirectUri(client.redirectUris, ctx.redirectUri) ||
-      (ctx.resource !== undefined &&
-        (adminTargetForbidden(client, ctx.resource, this.adminAud) ||
-          (await this.resources.resolveForClient(client.allowedResources, ctx.resource)) === null))
+      ctx.resource !== undefined &&
+      (adminTargetForbidden(client, ctx.resource, this.adminAud) ||
+        (await this.resources.resolveForClient(client.allowedResources, ctx.resource)) === null)
     ) {
       return null;
     }
@@ -476,6 +484,7 @@ export class AuthorizeService {
     resource: string | undefined,
     params: AuthorizeParams,
     reauthAfter?: number,
+    sessionRef?: string,
   ): Promise<{ requestId: string }> {
     const { requestId } = await this.contexts.create({
       kind,
@@ -487,8 +496,18 @@ export class AuthorizeService {
       originalState: params.state,
       nonce: params.nonce,
       ...(reauthAfter !== undefined ? { reauthAfter } : {}),
+      ...(sessionRef !== undefined ? { sessionRef } : {}),
     });
     return { requestId };
+  }
+
+  /**
+   * DEBT-130: the context's client, re-read, when it is still enabled and still registers the
+   * stored redirect_uri; else null (the caller shows a first-party page, never redirects there).
+   */
+  private async trustedClient(ctx: AuthorizeRequestContext): Promise<Client | null> {
+    const client = await this.clients.findByClientId(ctx.clientId);
+    return client && isRegisteredRedirectUri(client.redirectUris, ctx.redirectUri) ? client : null;
   }
 
   private validateScope(raw: string | undefined, client: Client): string {

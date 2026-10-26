@@ -613,6 +613,70 @@ describe('VaultTransitKeyProvider (run 53, unit V7–V12)', () => {
       notOutage(await p.getPublicKeys().catch((e: unknown) => e), /exportable/);
     });
 
+    describe('DEBT-410: listKeys (admin keys API) follows the same split', () => {
+      it.each(outages)('cache expired: %s ⇒ unavailable', async (_n, fail) => {
+        const p = make();
+        await p.init();
+        clock += KEY_CACHE_TTL_MS + 1;
+        vault.fail.read = Array.from({ length: 2 }, () => fail);
+        expectUnavailable(await p.listKeys().catch((e: unknown) => e), 'read');
+      });
+
+      it('a real AbortError (not TimeoutError) ⇒ unavailable', async () => {
+        const p = make();
+        await p.init();
+        clock += KEY_CACHE_TTL_MS + 1;
+        const abort = (): Response => {
+          throw new DOMException('This operation was aborted', 'AbortError');
+        };
+        vault.fail.read = [abort, abort];
+        const err = await p.listKeys().catch((e: unknown) => e);
+        expectUnavailable(err, 'read');
+        expect(((err as Error).cause as Error).message).toContain('AbortError');
+      });
+
+      it.each([
+        ['400', 400],
+        ['403 (twice, token re-read)', 403],
+      ])('%s on metadata ⇒ not unavailable', async (_n, code) => {
+        const p = make();
+        await p.init();
+        clock += KEY_CACHE_TTL_MS + 1;
+        vault.fail.read = Array.from({ length: 2 }, () => status(code));
+        notOutage(
+          await p.listKeys().catch((e: unknown) => e),
+          new RegExp(`vault read failed: status=${code}`),
+        );
+      });
+
+      it('metadata of the wrong shape ⇒ not unavailable', async () => {
+        const p = make();
+        await p.init();
+        clock += KEY_CACHE_TTL_MS + 1;
+        const data = vault.data();
+        delete data.latest_version;
+        vault.fail.read = [() => json(200, { data })];
+        notOutage(await p.listKeys().catch((e: unknown) => e), /unexpected key metadata shape/);
+      });
+
+      it('cache still fresh ⇒ no Vault call (an outage is not noticed)', async () => {
+        const p = make();
+        await p.init();
+        const before = vault.calls.length;
+        vault.fail.read = [networkError, networkError];
+        await expect(p.listKeys()).resolves.toHaveLength(1);
+        expect(vault.calls).toHaveLength(before);
+      });
+
+      it('pinned: rotate on a network error stays a plain error (500, the mutation may have run)', async () => {
+        const p = make();
+        await p.init();
+        vault.fail.rotate = [networkError];
+        const err = await p.rotate('normal', TTL).catch((e: unknown) => e);
+        notOutage(err, /vault rotate failed: TypeError/);
+      });
+    });
+
     it('init stays unwrapped (boot fail-fast keeps the Vault status)', async () => {
       vault.fail.read = [status(503), status(503)];
       await expect(make().init()).rejects.toThrow('vault read failed: status=503');

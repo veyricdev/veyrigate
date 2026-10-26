@@ -1,4 +1,5 @@
 import { Controller, HttpStatus, Logger, Post, Req, Res } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Types, type Model } from 'mongoose';
 import { sha256 } from '../../../common/crypto/crypto.util';
@@ -18,7 +19,9 @@ import { ClientService, type Client } from '../../clients/client.service';
 import { TokenVerifier } from '../../keys/token-verifier';
 import { ResourceService } from '../../resources/resource.service';
 import { SessionService } from '../../sessions/session.service';
+import type { AppConfig } from '../../../config/configuration';
 import { isAccessTokenLive } from '../access-token-liveness';
+import { adminResourceIdentifier } from '../token/token.service';
 import { errorForLog } from '../../../common/logger/error-log';
 import {
   DEPENDENCY_RETRY_AFTER_SEC,
@@ -80,6 +83,7 @@ const INACTIVE = { active: false } as const;
 @Controller()
 export class IntrospectController {
   private readonly logger = new Logger(IntrospectController.name);
+  private readonly adminAud: string;
 
   constructor(
     @InjectModel('RefreshToken') private readonly refreshTokens: Model<RefreshDoc>,
@@ -89,7 +93,10 @@ export class IntrospectController {
     private readonly verifier: TokenVerifier,
     private readonly sessions: SessionService,
     private readonly resources: ResourceService,
-  ) {}
+    config: ConfigService,
+  ) {
+    this.adminAud = adminResourceIdentifier(config.getOrThrow<AppConfig>('app').issuer);
+  }
 
   @Post('/introspect')
   async introspect(@Req() req: HttpRequest, @Res() reply: IntrospectReply): Promise<unknown> {
@@ -189,6 +196,7 @@ export class IntrospectController {
       { exists: async (id) => (await this.users.exists({ _id: id })) !== null },
       this.sessions,
       this.resources,
+      this.adminAud,
     );
     if (!live) {
       return INACTIVE;

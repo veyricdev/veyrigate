@@ -51,6 +51,8 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { UiController } from '../src/modules/ui/ui.controller';
+import { IntrospectController } from '../src/modules/oauth/introspect/introspect.controller';
+import { UserinfoController } from '../src/modules/oauth/userinfo/userinfo.controller';
 
 /**
  * DEBT-172 (run 30 retry 1) + DEBT-174/173(3) (run 31): runtime guard — a client that is not
@@ -185,7 +187,14 @@ describe.each(MISFITS)(
           MongooseModule.forRoot(MONGO_URI, { serverSelectionTimeoutMS: 5000 }),
           MongooseModule.forFeature(MODELS),
         ],
-        controllers: [AuthorizeController, TokenController, UiController, AdminController],
+        controllers: [
+          AuthorizeController,
+          TokenController,
+          UiController,
+          AdminController,
+          UserinfoController,
+          IntrospectController,
+        ],
         providers: [
           AuthorizeService,
           AuthorizeRequestContextService,
@@ -411,6 +420,70 @@ describe.each(MISFITS)(
       expect(res.statusCode).toBe(401);
       expect(res.json()).toMatchObject({ error: 'invalid_token' });
       expect(res.headers['www-authenticate']).toBeDefined();
+    });
+
+    it('DEBT-177: /userinfo and /introspect treat an aud=admin AT as dead once its client is no longer admin-capable (control: capable => 200 / active)', async () => {
+      // A resource server allowed to introspect aud=admin tokens (caller authorization, DEBT-040).
+      const RS = `rs-introspector-${randomUUID()}`;
+      await db.collection('clients').insertOne({
+        clientId: RS,
+        clientType: 'confidential',
+        tokenEndpointAuthMethod: 'client_secret_basic',
+        grantTypes: ['authorization_code'],
+        redirectUris: ['https://rs.example.com/cb'],
+        postLogoutRedirectUris: [],
+        allowedCorsOrigins: [],
+        allowedResources: ['admin'],
+        scopes: ['openid'],
+        tenantId: DEFAULT_TENANT_ID,
+      });
+      const { secret } = await app.get(ClientCredentialService).createSecret(RS);
+
+      await setShape(CAPABLE);
+      const client = await app.get(ClientService).findByClientId(SPA);
+      const tokens = app.get(TokenService);
+      const data = {
+        clientId: SPA,
+        redirectUri: SPA_REDIRECT,
+        codeChallenge: deriveS256Challenge(VERIFIER),
+        resource: ADMIN_AUD,
+        scope: 'openid admin.read',
+        userId,
+        authTime: Date.now(),
+        sessionRef: sha256((await app.get(SessionService).create(userId, DEFAULT_TENANT_ID)).id),
+      };
+      const signed = await tokens.signForAuthorizationCode(client!, data);
+      const { response } = await tokens.issueForAuthorizationCode(client!, data, {}, signed);
+      const at = response.access_token;
+      const userinfo = () =>
+        app.inject({ method: 'GET', url: '/userinfo', headers: { authorization: `Bearer ${at}` } });
+      const introspect = () =>
+        app.inject({
+          method: 'POST',
+          url: '/introspect',
+          headers: {
+            'content-type': 'application/x-www-form-urlencoded',
+            authorization: 'Basic ' + Buffer.from(`${RS}:${secret}`).toString('base64'),
+          },
+          payload: new URLSearchParams({ token: at }).toString(),
+        });
+
+      // Control: the client is unchanged (capable) => live everywhere.
+      expect((await userinfo()).statusCode).toBe(200);
+      expect((await introspect()).json()).toMatchObject({ active: true, aud: ADMIN_AUD });
+
+      await setShape(misfit);
+      const ui = await userinfo();
+      expect(ui.statusCode).toBe(401);
+      expect(ui.headers['www-authenticate']).toContain('invalid_token');
+      expect(ui.body).not.toMatch(/admin-capable|clientType|tokenEndpointAuthMethod|public|none/i);
+      const intro = await introspect();
+      expect(intro.statusCode).toBe(200);
+      expect(intro.json()).toEqual({ active: false });
+
+      // Back to capable => live again (the check reads the CURRENT client, no sticky state).
+      await setShape(CAPABLE);
+      expect((await userinfo()).statusCode).toBe(200);
     });
   },
 );

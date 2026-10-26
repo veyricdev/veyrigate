@@ -179,6 +179,7 @@ export class AdminTokenGuard implements CanActivate {
       { exists: async (id) => (await this.users.exists({ _id: id })) !== null },
       this.sessions,
       this.resources,
+      this.adminAud,
     );
     if (!live || !seen.client) throw AdminAuthError.invalidToken();
     // DEBT-173(3): an `aud=admin` token minted before its client stopped being admin-capable (type /

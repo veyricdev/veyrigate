@@ -435,9 +435,17 @@ export class TokenController {
         },
         { scope: body.get('scope'), resource: body.get('resource') },
         // DEBT-207: after rotate, the client (re-read), user and membership must still be valid.
-        async (userId) => {
+        // DEBT-216: and the family's resource must still be allowed by that re-read client (same
+        // predicate and reason as the code grant, DEBT-210).
+        async (userId, resource) => {
           const fresh = await this.clients.findByClientId(client.clientId);
           if (!fresh) return 'client_disabled';
+          if (
+            adminTargetForbidden(fresh, resource, this.tokens.adminResource) ||
+            (await this.resources.resolveForClient(fresh.allowedResources, resource)) === null
+          ) {
+            return 'resource_not_allowed';
+          }
           return this.subjectFailure(userId, fresh.tenantId);
         },
         audit,

@@ -12,6 +12,7 @@ import { TokenVerifier } from '../keys/token-verifier';
 import { ResourceService } from '../resources/resource.service';
 import { SessionService } from '../sessions/session.service';
 import { isAccessTokenLive } from '../oauth/access-token-liveness';
+import { adminResourceIdentifier } from '../oauth/token/token.service';
 import { KeyProviderUnavailableError } from '../../common/errors/dependency-unavailable';
 
 /** Reply members the demo controller needs (Fastify, structural like UserinfoReply). */
@@ -45,6 +46,7 @@ interface DemoReply {
 export class DemoController {
   private readonly demoIdentifier: string;
   private readonly isProduction: boolean;
+  private readonly adminAud: string;
 
   constructor(
     @InjectModel('User') private readonly users: Model<{ _id: Types.ObjectId }>,
@@ -57,6 +59,7 @@ export class DemoController {
   ) {
     const app = config.getOrThrow<AppConfig>('app');
     this.demoIdentifier = `${app.issuer.replace(/\/+$/, '')}/demo/`;
+    this.adminAud = adminResourceIdentifier(app.issuer);
     this.isProduction = app.nodeEnv === 'production';
   }
 
@@ -99,6 +102,7 @@ export class DemoController {
       { exists: async (id) => (await this.users.exists({ _id: id })) !== null },
       this.sessions,
       this.resources,
+      this.adminAud,
     );
     if (!live) {
       return this.unauthorized(req, reply);

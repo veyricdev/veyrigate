@@ -2,12 +2,12 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `55` — chưa bắt đầu (DEBT-409/410 Vault deadline + admin keys 503, sweep 🟡 BE). DEBT-379 từ 2026-11-03, DEBT-369/371 từ 2026-11-04. A6.3b roles chờ analyst chốt DEBT-149/142; DEBT-344 chờ quyết định retention; DEBT-405 chờ người dùng cho phép chạy thử compose mẫu.
+- **Run hiện tại**: `55-oauth-sweep` — backend-dev **xong 4/4** (F4 DEBT-410, F2 DEBT-177, F3 DEBT-216, F1 DEBT-123/130; DEBT-409 rút, giữ mở; mở DEBT-413 💭, DEBT-414 🟢). Số liệu dev: be unit 587, int 1285, vault 26, fe-admin 1416, fe-sso-test 269, E2E 35, mutation 12/12. Senior **PASS** (0 🔴/0 🟡, 3 💭, không debt mới; `runs/55-oauth-sweep/review-senior.md`). Tester **PASS** (int 1306 = dev 1285 + tester 21, vault 31 = 26 + 5, be 587, root test ×2 xanh, E2E 35, mutation tester 10/10; mở DEBT-415 💭; `runs/55-oauth-sweep/test-report.md`). → tiếp: **orchestrator** đóng run. DEBT-379 từ 2026-11-03, DEBT-369/371 từ 2026-11-04. A6.3b roles chờ analyst chốt DEBT-149/142; DEBT-344 chờ quyết định retention; DEBT-405 chờ người dùng cho phép chạy thử compose mẫu.
   - Tech-lead run 53: mở DEBT-388…393 (388 = tiêu code/xoay RT trước khi ký ⇒ Vault chập chờn làm revoke family, 🟡). Backend-dev: đóng DEBT-071/159, mở DEBT-394 (Vault down + cache hết ⇒ verify ra 401/`active:false`, chưa 503). Số liệu dev: be unit 475, int 1221, vault 14, E2E 35, mutation 10/10. Tester: DEBT-394/395 có characterisation (T5/T8), giữ 🟡.
   - Test Vault: `VAULT_TEST_ADDR=… VAULT_TEST_ROOT_TOKEN=… pnpm -C be test:vault` (thiếu ⇒ fail kèm lệnh `docker run`, xem runbook-deploy §8).
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
 - **Run vừa đóng**: `54-DEBT388` ✅ 3/3 — be 558 + int 1267 + vault 26, E2E 35. Xem `runs/54-DEBT388/summary.md`.
-- **Việc tiếp theo**: sau M6 → M7 hardening (B7.*, T7, X2/X3/X5); A4–A6 fe-admin chờ Q3 (plan §12). Debt đáng chú ý: DEBT-124/143 (super_admin xuyên tenant), DEBT-140 (audit OAuth chưa gắn tenant), DEBT-177, DEBT-095, DEBT-054/096.
+- **Việc tiếp theo**: sau M6 → M7 hardening (B7.*, T7, X2/X3/X5); A4–A6 fe-admin chờ Q3 (plan §12). Debt đáng chú ý: DEBT-124/143 (super_admin xuyên tenant), DEBT-140 (audit OAuth chưa gắn tenant), DEBT-095, DEBT-054/096.
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
 

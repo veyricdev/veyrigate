@@ -28,7 +28,7 @@ import { AuditAction } from '../src/modules/security/audit/audit-action.enum';
 import type { AuditEvent } from '../src/modules/security/audit/audit.types';
 import { AuthorizationCodeService } from '../src/modules/oauth/code/authorization-code.service';
 import { TokenController } from '../src/modules/oauth/token/token.controller';
-import { TokenService } from '../src/modules/oauth/token/token.service';
+import { TokenService, adminResourceIdentifier } from '../src/modules/oauth/token/token.service';
 import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
 import { SessionService } from '../src/modules/sessions/session.service';
 import { AuthenticationService } from '../src/modules/authentication/authentication.service';
@@ -1493,10 +1493,23 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
         sid?: string;
       };
       expect(claims.sid).toBe(sessionRef);
-      const clients = { findByClientId: async () => ({ allowedResources: [RESOURCE_ID] }) };
+      const clients = {
+        findByClientId: async () => ({
+          allowedResources: [RESOURCE_ID],
+          clientType: 'confidential' as const,
+          tokenEndpointAuthMethod: 'client_secret_basic' as const,
+        }),
+      };
       const users = { exists: async () => true };
       const resources = { identifiersFor: async () => [RESOURCE] };
-      const live = await isAccessTokenLive(claims, clients, users, sessionSvc, resources);
+      const live = await isAccessTokenLive(
+        claims,
+        clients,
+        users,
+        sessionSvc,
+        resources,
+        adminResourceIdentifier(ISSUER),
+      );
       expect(live).toBe(false);
     });
 

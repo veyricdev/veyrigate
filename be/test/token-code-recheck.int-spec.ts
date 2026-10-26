@@ -35,7 +35,7 @@ import { AuthorizationCodeService } from '../src/modules/oauth/code/authorizatio
 import { ConsentService, type Consent } from '../src/modules/oauth/consent/consent.service';
 import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
 import { TokenController } from '../src/modules/oauth/token/token.controller';
-import { TokenService } from '../src/modules/oauth/token/token.service';
+import { TokenService, adminResourceIdentifier } from '../src/modules/oauth/token/token.service';
 import { ResourceService } from '../src/modules/resources/resource.service';
 import { AuditAction } from '../src/modules/security/audit/audit-action.enum';
 import { AuditService } from '../src/modules/security/audit/audit.service';
@@ -649,6 +649,102 @@ describe('/token code grant re-check after the family insert (run 35 Task 3)', (
       const audits = await refreshedAudits(userId);
       expect(audits).toHaveLength(1);
       expect(audits[0]).toMatchObject({ result: 'failure', reason: 'recheck_failed' });
+    });
+
+    // ---- run 55 DEBT-216: the refresh re-check also requires the family's resource to be still
+    // allowed by the client RE-READ after rotate (same predicate/reason as the code grant, DEBT-210).
+    const noTokenIn = (body: string) => {
+      expect(body).not.toContain('access_token');
+      expect(body).not.toContain('refresh_token');
+      expect(body).not.toContain('eyJ');
+    };
+
+    it('DEBT-216 race: resource removed right after rotate => invalid_grant, family revoked, reason resource_not_allowed, retry is not reuse', async () => {
+      const { clientId, userId, rt } = await firstRefresh();
+      afterRotate((cid) => dropResource(cid));
+      const res = await refreshReq(clientId, rt);
+      noTokenIn(res.body);
+      const docs = await familyDocs(userId);
+      expect(docs.every((d) => d.familyRevokedAt)).toBe(true);
+      await expectRefreshRefused(clientId, userId, rt, res, 'resource_not_allowed');
+    });
+
+    it('DEBT-216 control: another resource removed right after rotate => 200 (no false refusal)', async () => {
+      const { clientId, userId, rt } = await firstRefresh();
+      await clientModel.updateOne({ clientId }, { $set: { allowedResources: ['api', 'other'] } });
+      afterRotate((cid) =>
+        clientModel.updateOne({ clientId: cid }, { $set: { allowedResources: ['api'] } }),
+      );
+      const res = await refreshReq(clientId, rt);
+      expect(res.statusCode).toBe(200);
+      expect(res.json().access_token).toBeTruthy();
+      expect((await refreshedAudits(userId))[0]).toMatchObject({ result: 'success' });
+    });
+
+    it('DEBT-216 admin variant: aud=admin family, client downgraded to {confidential, none} right after rotate => invalid_grant, reason resource_not_allowed', async () => {
+      const ADMIN_AUD = adminResourceIdentifier(ISSUER);
+      const resources = app.get(ResourceService);
+      if (!(await resources.findByIdentifier(ADMIN_AUD))) {
+        await resources.create({ resourceId: 'admin', identifier: ADMIN_AUD });
+      }
+      const clientId = `${RUN}-adm${++seq}`;
+      await clientModel.create({
+        clientId,
+        clientType: 'confidential',
+        tokenEndpointAuthMethod: 'client_secret_basic',
+        grantTypes: ['authorization_code', 'refresh_token'],
+        redirectUris: [REDIRECT],
+        postLogoutRedirectUris: [],
+        allowedCorsOrigins: [],
+        allowedResources: ['api', 'admin'],
+        scopes: ['openid', 'offline_access', 'admin.read'],
+        tenantId: TENANT,
+      });
+      const { secret } = await app.get(ClientCredentialService).createSecret(clientId);
+      const userId = await seedOAuthUser(conn, { tenantId: TENANT });
+      const client = (await app.get(ClientService).findByClientId(clientId))!;
+      const data = {
+        clientId,
+        redirectUri: REDIRECT,
+        codeChallenge: CHALLENGE,
+        resource: ADMIN_AUD,
+        scope: 'openid offline_access admin.read',
+        userId,
+        authTime: Date.now(),
+        sessionRef: 'a'.repeat(64),
+      };
+      const signed = await tokens.signForAuthorizationCode(client, data);
+      const { response } = await tokens.issueForAuthorizationCode(client, data, {}, signed);
+      const rt = response.refresh_token!;
+      expect(rt).toBeTruthy();
+      const basicRefresh = () =>
+        app.inject({
+          method: 'POST',
+          url: '/token',
+          headers: {
+            'content-type': 'application/x-www-form-urlencoded',
+            authorization: 'Basic ' + Buffer.from(`${clientId}:${secret}`).toString('base64'),
+          },
+          payload: new URLSearchParams({
+            grant_type: 'refresh_token',
+            refresh_token: rt,
+          }).toString(),
+        });
+
+      afterRotate((cid) =>
+        clientModel.updateOne({ clientId: cid }, { $set: { tokenEndpointAuthMethod: 'none' } }),
+      );
+      const res = await basicRefresh();
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ error: 'invalid_grant' });
+      noTokenIn(res.body);
+      const docs = await familyDocs(userId);
+      expect(docs).toHaveLength(2);
+      expect(docs.every((d) => d.revokedAt && d.familyRevokedAt)).toBe(true);
+      const audits = await refreshedAudits(userId);
+      expect(audits).toHaveLength(1);
+      expect(audits[0]).toMatchObject({ result: 'failure', reason: 'resource_not_allowed' });
+      expect(await reuseAudits(clientId)).toHaveLength(0);
     });
 
     // ---- run 36 tester: risk matrix additions (identity/lock kind, exposure, state/replay,

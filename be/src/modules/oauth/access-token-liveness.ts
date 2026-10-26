@@ -1,13 +1,17 @@
 import { Types } from 'mongoose';
+import type { Client } from '../clients/client.service';
 import type { AccessTokenClaims } from '../keys/token-verifier';
+import { isAdminCapableClient } from './token/token.service';
 
 /**
- * The client lookup `/userinfo` and `/introspect` share for access-token liveness: only the one
- * field (`allowedResources`) the liveness check reads, so the helper is decoupled from the full
- * `ClientService`/`Client` shape.
+ * The client lookup `/userinfo` and `/introspect` share for access-token liveness: only the fields
+ * the liveness check reads (`allowedResources`, and the admin-capability pair, DEBT-177), so the
+ * helper is decoupled from the full `ClientService`/`Client` shape.
  */
 export interface ClientLookup {
-  findByClientId(clientId: string): Promise<{ allowedResources: string[] } | null>;
+  findByClientId(
+    clientId: string,
+  ): Promise<Pick<Client, 'allowedResources' | 'clientType' | 'tokenEndpointAuthMethod'> | null>;
 }
 
 /** The user lookup the liveness check needs: existence of `sub` only (never a projection). */
@@ -71,6 +75,8 @@ export async function isAccessTokenLive(
   users: UserExistence,
   sessions: SessionEndLookup,
   resources: ResourceLookup,
+  /** The admin API identifier (`adminResourceIdentifier(issuer)`), DEBT-177. */
+  adminAud: string,
 ): Promise<boolean> {
   // A non-ObjectId `sub` is not a user this IdP ever issued for - reject before touching the DB
   // (and so `users.exists` never throws a CastError that would look like an infrastructure fault).
@@ -90,6 +96,11 @@ export async function isAccessTokenLive(
   }
   const client = await clients.findByClientId(claims.client_id);
   if (!client) {
+    return false;
+  }
+  // DEBT-177: an `aud=admin` token dies with its client's admin capability (same predicate as every
+  // issuance point and `AdminTokenGuard`, DEBT-174), so a downgraded client's token is not live here.
+  if (claims.aud === adminAud && !isAdminCapableClient(client)) {
     return false;
   }
   // Compare the token's `aud` (a URI) against the identifiers of the client's allowed resourceIds,
