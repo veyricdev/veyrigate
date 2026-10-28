@@ -2,7 +2,7 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `60` — chưa bắt đầu. Ứng viên: DEBT-446 🟡 (kiểm `Location` ra ngoài origin), DEBT-379 (Node 22.23.4) từ 2026-11-03, DEBT-369/371 từ 2026-11-04, sweep 🟡 còn lại. Chờ người dùng: **Q58.1/DEBT-214**, A6.3b (DEBT-149/142), DEBT-344, DEBT-405, DEBT-415.
+- **Run hiện tại**: `60-location-guard` — tech-lead **PASS** (mở DEBT-449 💭) → T1 [FE] DEBT-446/447 ✅ frontend-dev (fe-admin 1482, M1–M8 RED, mở DEBT-450 💭); T2 [BE] DEBT-444/445 ✅ backend-dev (be 630 + int 1420, E2E 36, mở DEBT-460 💭) → senior **PASS** (0 🔴, mở DEBT-451 🟡, xem `review-senior.md`) → backend-dev áp DEBT-451 (đóng 451 + gộp đóng 460; be 630, b74/run59 int xanh) → tester **PASS** (fe-admin 1533 gồm 51 test tester, be 630, int 1420, E2E 36, probe build thật 0 `Location` ra ngoài origin; mutation bỏ guard `//` ⇒ lớp cuối chặn 5 832/5 832; không debt mới; xem `test-report.md`) → chờ orchestrator đóng run. DEBT-379 từ 2026-11-03, DEBT-369/371 từ 2026-11-04. Chờ người dùng: **Q58.1/DEBT-214**, A6.3b (DEBT-149/142), DEBT-344, DEBT-405, DEBT-415.
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
 - **Run vừa đóng**: `59-http-edge` ✅ 3/3 — be 627 + int 1420, fe-admin 1455, E2E 36. Xem `runs/59-http-edge/summary.md`. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev `sso-idp` (index audit run 57).
 - **Việc tiếp theo**: M7 còn X3 (chờ Q8), X6 release checklist; lane ADMIN còn A6.3b. Debt 🟡 BE mở: xem `backlog.md` (DEBT-119…256, 321, 334, 344, 389, 392).

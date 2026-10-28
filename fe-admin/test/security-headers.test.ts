@@ -6,6 +6,8 @@ import { currentCspNonce, withSecurityHeaders } from "@/server/security-headers"
 import { markUnavailable, withUnavailableStatus } from "@/server/unavailable";
 
 const ISSUER = "http://localhost:3000";
+// DEBT-446: the app and an issuer with a path (origins are compared, never prefixes)
+const SITE = { appUrl: "http://localhost:3000", issuer: "http://localhost:4000/realm" };
 
 function csp(res: Response): Map<string, string[]> {
   const map = new Map<string, string[]>();
@@ -77,14 +79,14 @@ describe("withSecurityHeaders: other headers", () => {
     const headers = new Headers({ location: "/x" });
     headers.append("set-cookie", "a=1; Path=/; HttpOnly");
     headers.append("set-cookie", "b=; Path=/; Max-Age=0");
-    const res = await withSecurityHeaders(() => new Response(null, { status: 303, headers }));
+    const res = await withSecurityHeaders(() => new Response(null, { status: 303, headers }), SITE);
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/x");
     expect(res.headers.getSetCookie()).toEqual(["a=1; Path=/; HttpOnly", "b=; Path=/; Max-Age=0"]);
   });
 
   it("(d) wraps Response.redirect (immutable headers) without throwing", async () => {
-    const res = await withSecurityHeaders(() => Response.redirect("http://localhost:4000/next", 302));
+    const res = await withSecurityHeaders(() => Response.redirect("http://localhost:4000/next", 302), SITE);
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe("http://localhost:4000/next");
     expect(res.headers.get("x-frame-options")).toBe("DENY");
@@ -169,6 +171,129 @@ describe("withSecurityHeaders: DEBT-368 a throwing handler", () => {
       const res = await withSecurityHeaders(async () => Promise.reject(new Error("boom")));
       expect(res.status).toBe(500);
       expect(res.headers.get("x-frame-options")).toBe("DENY");
+    } finally {
+      log.mockRestore();
+    }
+  });
+});
+
+describe("DEBT-446 Location guard (last line of defence behind the `//` guard)", () => {
+  const withLocation = (location: string, status = 302) => () =>
+    new Response(null, { status, headers: { location } });
+
+  async function blocked(res: Response, log: { mock: { calls: unknown[][] } }, calls = 1) {
+    expect(res.status).toBe(404);
+    expect(await res.text()).toBe("Not Found");
+    expect(res.headers.get("location")).toBeNull();
+    expect(res.headers.getSetCookie()).toEqual([]);
+    expect(res.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    expect(csp(res).get("frame-ancestors")).toEqual(["'none'"]);
+    expect(res.headers.get("x-frame-options")).toBe("DENY");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(log.mock.calls).toHaveLength(calls);
+  }
+
+  it.each([
+    "/x",
+    "/",
+    "/auth/login?returnTo=%2F%2Fevil.example",
+    "http://localhost:3000/next",
+    "HTTP://LOCALHOST:3000/n",
+    "http://localhost:4000/oauth2/authorize?client_id=a",
+  ])("DEBT-446 control: %s keeps status and Location, nothing logged", async (location) => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const res = await withSecurityHeaders(withLocation(location, 307), SITE);
+      expect(res.status).toBe(307);
+      expect(res.headers.get("location")).toBe(location);
+      expect(log).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it.each([
+    "http://evil.example/x",
+    "//evil.example/x",
+    "/\\evil.example",
+    "\\\\evil.example",
+    "/\t/evil.example",
+    "https://localhost:3000/",
+    "http://localhost:3001/",
+    "http://localhost:3000.evil.example/", // unparsable (port): fail-closed
+    "http://localhost:30001/", // string prefix of the app origin, another port
+    "http://localhost:3000@evil.example/",
+    "http://u:p@localhost:3000/",
+    "javascript:alert(1)",
+    "data:text/html,x",
+    "http://[::1",
+  ])("DEBT-446 blocked: %j => 404, no Location/Set-Cookie, A7 headers, one log line without the URL", async (location) => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const res = await withSecurityHeaders(withLocation(location), SITE);
+      await blocked(res, log);
+      const line = String(log.mock.calls[0][0]);
+      expect(line).toContain("location guard failed");
+      expect(line).toContain("blocked an off-origin Location (status 302)");
+      for (const leak of ["evil", "javascript", "u:p", "data:", "/x", "localhost", "[::1"]) {
+        expect(line).not.toContain(leak);
+      }
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("DEBT-446 blocked: Response.redirect (immutable headers) to http://evil.example//x, 308", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const res = await withSecurityHeaders(() => Response.redirect("http://evil.example//x", 308), SITE);
+      await blocked(res, log);
+      expect(String(log.mock.calls[0][0])).toContain("(status 308)");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("DEBT-446 blocked: a 302 off-origin with Set-Cookie drops the cookies too", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const headers = new Headers({ location: "http://evil.example/" });
+      headers.append("set-cookie", "sid=secret; Path=/; HttpOnly");
+      headers.append("set-cookie", "b=1; Path=/");
+      const res = await withSecurityHeaders(() => new Response(null, { status: 302, headers }), SITE);
+      await blocked(res, log);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("DEBT-446 blocked: any status (200 with an off-origin Location) and the original body is cancelled", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const cancel = vi.fn();
+    try {
+      const body = new ReadableStream({ pull: () => undefined, cancel });
+      const res = await withSecurityHeaders(
+        () => new Response(body, { status: 200, headers: { location: "http://evil.example/" } }),
+        SITE,
+      );
+      await blocked(res, log);
+      expect(String(log.mock.calls[0][0])).toContain("(status 200)");
+      expect(cancel).toHaveBeenCalledTimes(1);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("DEBT-446 without site: every absolute Location is blocked, a relative one kept", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const absolute = await withSecurityHeaders(() => Response.redirect("http://localhost:4000/next", 302));
+      await blocked(absolute, log);
+      const relative = await withSecurityHeaders(withLocation("/x"));
+      expect(relative.status).toBe(302);
+      expect(relative.headers.get("location")).toBe("/x");
+      expect(log).toHaveBeenCalledTimes(1);
     } finally {
       log.mockRestore();
     }

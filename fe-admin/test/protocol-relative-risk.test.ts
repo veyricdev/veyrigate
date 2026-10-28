@@ -255,3 +255,23 @@ describe("DEBT-442: no request the guard lets through reaches the router's 308 (
     expect(passed).toBeGreaterThan(5_000);
   }, 60_000);
 });
+
+describe("DEBT-446: the Location guard stops the router's 308 whatever parsed the path", () => {
+  it("DEBT-446 real getNormalizedURL on the raw senior sample => 308 wrapped by withSecurityHeaders => 404", async () => {
+    const { withSecurityHeaders } = await import("@/server/security-headers");
+    const { url, handledProtocolRelativeURL } = getNormalizedURL("http://evil.example//..\\x/y");
+    expect(handledProtocolRelativeURL).toBe(true);
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const res = await withSecurityHeaders(() => Response.redirect(url, 308), {
+        appUrl: "https://admin.example",
+        issuer: "https://idp.example",
+      });
+      expect(res.status).toBe(404);
+      expect(res.headers.get("location")).toBeNull();
+      expect(log).toHaveBeenCalledTimes(1);
+    } finally {
+      log.mockRestore();
+    }
+  });
+});

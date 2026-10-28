@@ -2153,9 +2153,10 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       },
     );
 
-    it('documented: an EMPTY key set ({"keys":[]}) is classified as a token fault (400), nothing created', async () => {
+    it('DEBT-445: an EMPTY key set ({"keys":[]}) is a provider fault => 502, nothing created', async () => {
       const { res, sub } = await withRemoteJwks('empty', json(200, JSON.stringify({ keys: [] })));
-      expect(res.statusCode).toBe(400);
+      expect(res.statusCode).toBe(502);
+      expect(res.body).toContain('The sign-in provider is unavailable');
       await expectNothingCreated(res, sub);
     });
   });

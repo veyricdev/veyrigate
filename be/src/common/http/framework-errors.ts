@@ -32,28 +32,20 @@ const HEADERS: Readonly<Record<string, string>> = {
 
 const logger = new Logger('HttpEdge');
 
-/** The members of Fastify's error/request/reply the handler touches. */
-interface EdgeError {
-  statusCode?: unknown;
-  code?: unknown;
-}
-interface EdgeRequest {
-  method: string;
-}
-interface EdgeReply {
-  readonly elapsedTime: number;
-  code(statusCode: number): unknown;
-  headers(values: Record<string, string>): unknown;
-  send(payload?: unknown): unknown;
-}
+/** Fastify's request/reply types, reached through the adapter (`fastify` is not a dependency of `be`). */
+type Hook = Parameters<Parameters<FastifyAdapter['setOnRequestHook']>[0]>;
 
-export function frameworkErrors(error: EdgeError, request: EdgeRequest, reply: EdgeReply): void {
+export function frameworkErrors(
+  error: { statusCode?: unknown; code?: unknown }, // untrusted at runtime: guarded below
+  request: Pick<Hook[0], 'method'>,
+  reply: Pick<Hook[1], 'code' | 'headers' | 'send' | 'elapsedTime'>,
+): void {
   const sc = error.statusCode;
   const status =
     Number.isInteger(sc) && (sc as number) >= 400 && (sc as number) <= 499 ? (sc as number) : 500;
   if (status === 500) logger.error(`framework error ${String(error.code ?? 'unknown')}`);
   reply.code(status);
-  reply.headers({ ...HEADERS });
+  reply.headers(HEADERS);
   reply.send(status === 500 ? '{"error":"server_error"}' : '{"error":"invalid_request"}');
   httpDuration.observe(
     {

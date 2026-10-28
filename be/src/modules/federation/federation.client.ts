@@ -125,6 +125,10 @@ export async function verifyGoogleIdToken(
     if (!(err instanceof errors.JOSEError) || PROVIDER_JOSE_CODES.has(err.code)) {
       throw new FederationError('provider_unavailable');
     }
+    // DEBT-445: an EMPTY key set is Google's answer, not caused by the token => 502 too.
+    if (err.code === 'ERR_JWKS_NO_MATCHING_KEY' && provider.jwks.jwks?.()?.keys.length === 0) {
+      throw new FederationError('provider_unavailable');
+    }
     throw new FederationError('invalid_identity');
   }
   if (

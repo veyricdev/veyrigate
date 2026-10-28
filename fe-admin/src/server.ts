@@ -20,15 +20,14 @@ try {
 // DEBT-387/442: the pathname the router checks for `//`. Before the router, h3@2.0.1-rc.20 `H3Event`
 // (`decodePathname`, dist/h3-*.mjs) rewrites the request's shared srvx URL when the path has a `%`:
 // `url.pathname = decodeURI(...)`, so `/%5C%5Cx` becomes `///x` (`\` => `/`, tab dropped). Same steps on
-// a copy; the request is not touched. A URIError is h3's 400 before the router: nothing to guard.
+// a copy; the request is not touched (no `%` => decodeURI is the identity, the setter idempotent).
+// A URIError is h3's 400 before the router: nothing to guard.
 function routerPathname(href: string): string {
   const url = new URL(href);
-  if (url.pathname.includes("%")) {
-    try {
-      url.pathname = decodeURI(url.pathname.replaceAll("%25", "%2525"));
-    } catch {
-      // h3 answers 400
-    }
+  try {
+    url.pathname = decodeURI(url.pathname.replaceAll("%25", "%2525"));
+  } catch {
+    // h3 answers 400
   }
   return url.pathname;
 }

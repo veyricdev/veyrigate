@@ -189,9 +189,9 @@ describe('Google remote JWKS failures (DEBT-197)', () => {
     return new Promise<void>((r) => server.close(() => r()));
   });
 
-  const verify = (token: string) =>
+  const verify = (token: string, timeoutMs = 1000) =>
     code(
-      verifyGoogleIdToken(google(createRemoteJWKSet(url, { timeoutDuration: 1000 })), token, {
+      verifyGoogleIdToken(google(createRemoteJWKSet(url, { timeoutDuration: timeoutMs })), token, {
         nonce: NONCE,
       }),
     );
@@ -207,11 +207,7 @@ describe('Google remote JWKS failures (DEBT-197)', () => {
 
   it('JWKS never answers (timeout) => provider_unavailable', async () => {
     answer = { status: 0, body: '' };
-    const jwks = createRemoteJWKSet(url, { timeoutDuration: 200 });
-    const token = await idToken(privateKey);
-    expect(await code(verifyGoogleIdToken(google(jwks), token, { nonce: NONCE }))).toBe(
-      'provider_unavailable',
-    );
+    expect(await verify(await idToken(privateKey), 200)).toBe('provider_unavailable');
   });
 
   it('valid JWKS + valid token => identity', async () => {
@@ -234,6 +230,32 @@ describe('Google remote JWKS failures (DEBT-197)', () => {
   it('valid JWKS without the token kid => invalid_identity', async () => {
     answer = { status: 200, body: goodJwks.replace('"kid":"k1"', '"kid":"k2"') };
     expect(await verify(await idToken(privateKey))).toBe('invalid_identity');
+  });
+
+  // run 60 (DEBT-445): an empty key set is Google's answer, not something the token caused.
+  it('DEBT-445: JWKS {"keys":[]} => provider_unavailable', async () => {
+    answer = { status: 200, body: '{"keys":[]}' };
+    expect(await verify(await idToken(privateKey))).toBe('provider_unavailable');
+  });
+
+  it('DEBT-445 control: JWKS with one key of another kid => invalid_identity', async () => {
+    const other = await generateKeyPair('RS256');
+    const jwk = { ...(await exportJWK(other.publicKey)), kid: 'k2', alg: 'RS256' };
+    answer = { status: 200, body: JSON.stringify({ keys: [jwk] }) };
+    expect(await verify(await idToken(privateKey))).toBe('invalid_identity');
+  });
+
+  it('DEBT-445: {"keys":[]} then a valid JWKS => identity (no stuck error state)', async () => {
+    const jwks = createRemoteJWKSet(url, { timeoutDuration: 1000, cooldownDuration: 0 });
+    answer = { status: 200, body: '{"keys":[]}' };
+    const token = await idToken(privateKey);
+    expect(await code(verifyGoogleIdToken(google(jwks), token, { nonce: NONCE }))).toBe(
+      'provider_unavailable',
+    );
+    answer = { status: 200, body: goodJwks };
+    await expect(verifyGoogleIdToken(google(jwks), token, { nonce: NONCE })).resolves.toMatchObject(
+      { providerId: 'google-sub-1' },
+    );
   });
 });
 

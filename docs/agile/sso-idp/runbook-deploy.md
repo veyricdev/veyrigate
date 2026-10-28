@@ -209,7 +209,7 @@ ngoài máy build (cache `max` chứa layer trung gian của stage `build`); n�
   cố định, không bao giờ giá trị.
 - **Không listen được** (cổng bận, `HOST` không có trên interface…) ⇒ thoát mã 1, log
   `fe-admin: listen failed: <mã lỗi>` (DEBT-384). Đặt `restart: on-failure`/`unless-stopped`.
-- **Không bật trust proxy**: URL tuyệt đối dựng từ `APP_URL`, không từ `Host`/`X-Forwarded-*`. Path bắt đầu `//` (kể cả `/\x`, URL chuẩn hoá thành `//x`, và `/%5C…`, `/%09/…` mà h3 giải mã thành `//…` trước router) ⇒ 404, không redirect (DEBT-387/442); proxy chỉ nên nhận `Host` = host của `APP_URL`.
+- **Không bật trust proxy**: URL tuyệt đối dựng từ `APP_URL`, không từ `Host`/`X-Forwarded-*`. Path bắt đầu `//` (kể cả `/\x`, URL chuẩn hoá thành `//x`, và `/%5C…`, `/%09/…` mà h3 giải mã thành `//…` trước router) ⇒ 404, không redirect (DEBT-387/442); proxy chỉ nên nhận `Host` = host của `APP_URL`. Lớp cuối (DEBT-446): response có `Location` tuyệt đối ngoài origin `APP_URL`/`OIDC_ISSUER` (hoặc có authority/userinfo, không parse được) ⇒ 404 + log `location guard failed … blocked an off-origin Location (status N)`; gặp log này nghĩa là guard `//` đã hồi quy (thường sau nâng h3/srvx/router-core).
 - **Chỉ 1 replica** cho tới khi xong DEBT-278.
 - **Rate limit `/auth/login` ở proxy** (DEBT-284).
 - Sau proxy TLS, trình duyệt không gửi `Sec-Fetch-Site` có thể bị CSRF check chặn nhầm (DEBT-376).

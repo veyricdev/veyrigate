@@ -176,3 +176,28 @@ describe("DEBT-387 a path starting with `//` (router would 308 to an absolute UR
     expect(routerFetch).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("DEBT-446 the real entry checks the router's Location (site from env)", () => {
+  it("DEBT-446 a router 308 to http://evil.example//x for /clients => 404, no Location, A7 headers", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      routerFetch.mockImplementationOnce(async () => Response.redirect("http://evil.example//x", 308));
+      const res = await (await entry()).fetch(new Request(`${URL_BASE}/clients`));
+      expect(routerFetch).toHaveBeenCalledTimes(1);
+      expect(res.status).toBe(404);
+      expect(await res.text()).toBe("Not Found");
+      expect(res.headers.get("location")).toBeNull();
+      expectA7(res);
+      expect(log).toHaveBeenCalledTimes(1);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("DEBT-446 control: a router 302 to the issuer's /authorize keeps 302 and Location", async () => {
+    routerFetch.mockImplementationOnce(async () => Response.redirect("https://idp.example/authorize?client_id=a", 302));
+    const res = await (await entry()).fetch(new Request(`${URL_BASE}/auth/login`));
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("https://idp.example/authorize?client_id=a");
+  });
+});

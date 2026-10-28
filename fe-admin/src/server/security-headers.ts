@@ -35,9 +35,25 @@ function contentSecurityPolicy(nonce: string, issuer: string | undefined): strin
 }
 
 /**
+ * DEBT-446: a `Location` is either a relative reference without authority or an absolute URL whose
+ * origin is one of `origins`, without userinfo. Anything else (or unparsable) is refused.
+ */
+function allowedLocation(loc: string, origins: Set<string>): boolean {
+  try {
+    const absolute = URL.canParse(loc);
+    const u = absolute ? new URL(loc) : new URL(loc, "http://base.invalid");
+    const originOk = absolute ? origins.has(u.origin) : u.origin === "http://base.invalid";
+    return originOk && u.username === "" && u.password === "";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Runs `handle` with a fresh nonce and returns its response with the security headers. The body
  * stream is forwarded untouched and every `Set-Cookie` kept; the original headers are copied, never
- * mutated (a `Response.redirect` has immutable headers).
+ * mutated (a `Response.redirect` has immutable headers). Last line of defence (DEBT-446): a response
+ * whose `Location` leaves the origins of `appUrl`/`issuer` becomes a plain 404 without its headers.
  */
 export async function withSecurityHeaders(
   handle: () => Response | Promise<Response>,
@@ -55,6 +71,15 @@ export async function withSecurityHeaders(
       status: 500,
       headers: { "content-type": "text/plain; charset=utf-8" },
     });
+  }
+  const loc = res.headers.get("location");
+  if (loc !== null) {
+    const origins = new Set([appUrl, issuer].filter((x) => x !== undefined).map((x) => new URL(x).origin));
+    if (!allowedLocation(loc, origins)) {
+      res.body?.cancel().catch(() => {});
+      logServerError("location guard", new Error(`blocked an off-origin Location (status ${res.status})`));
+      res = new Response("Not Found", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
+    }
   }
   const headers = new Headers(res.headers);
   headers.set("content-security-policy", contentSecurityPolicy(nonce, issuer));

@@ -11,7 +11,7 @@ function fakeReply() {
     code: (s: number) => void (state.status = s),
     headers: (h: Record<string, string>) => void Object.assign(state.headers, h),
     send: (p?: unknown) => void (state.body = p),
-  };
+  } as unknown as Parameters<typeof frameworkErrors>[2];
   return { state, reply };
 }
 
