@@ -156,45 +156,54 @@ export class AdminUsersController {
     if (t.id === ctx.userId) throw AdminAuthError.forbidden();
     await this.assertMayTouchAccount(ctx, actor, t.id);
     const level = actor.roles.includes('super_admin') ? 'super_admin' : 'tenant_admin';
-    const after = await this.users.adminLock(t.id, level);
-    if (!after) throw AdminAuthError.notFound();
+    const locked = await this.users.adminLock(t.id, level);
+    if (!locked) throw AdminAuthError.notFound();
+    const { user: after, lockMarkAt } = locked;
+    // Events after `LOCKED success` in this request never sort before it, even when the mark is
+    // ahead of this instance's clock (several writes per ms, or a faster clock elsewhere).
+    const afterMark = () => new Date(Math.max(Date.now(), lockMarkAt.getTime() + 1));
 
     // Lock first, THEN revoke: a revoke fault keeps the lock (5xx, retry is idempotent).
     // Audit: `LOCKED success` = lock written; `SESSION_REVOKED success {via:'lock'}` = revoke done.
     const base = { ...adminAuditBase(req, ctx), targetType: 'user', targetId: t.id };
-    // DEBT-420: the success event is recorded right after the lock write (its timestamp is taken
-    // before any further I/O), NOT after the slow revoke: an unlock landing after this write can
-    // only audit after it, so the trail ends on the DB state. Every lock still audits success
-    // (DEBT-152: a retry after `revoke_failed` ends on success). Started before the revoke and
-    // awaited after it, so a failing audit write never skips the revoke (fail-closed), then 5xx.
-    const audited = this.audit.record({
-      ...base,
-      action: AuditAction.ADMIN_USER_LOCKED,
-      result: 'success',
-      metadata: { level },
-    });
+    // DEBT-420 (run 57): the trail order comes from the per-user mark written by the lock update
+    // itself (strictly increasing in the order Mongo applied lock/unlock writes), used as this
+    // event's timestamp; it no longer depends on when the audit is written or the response order.
+    // Every lock still audits success (DEBT-152: a retry after `revoke_failed` ends on success).
+    // Started before the revoke and awaited after it, so a failing audit write never skips the
+    // revoke (fail-closed), then 5xx.
+    const audited = this.audit.record(
+      { ...base, action: AuditAction.ADMIN_USER_LOCKED, result: 'success', metadata: { level } },
+      { timestamp: lockMarkAt },
+    );
     audited.catch(() => undefined); // observed below; avoids an unhandled rejection if revoke throws
     const { sessionCount } = await this.auth.revokeAllUserCredentials(
       t.id,
       new Date(),
       (failedStep) =>
-        this.audit.record({
-          ...base,
-          action: AuditAction.ADMIN_USER_LOCKED,
-          result: 'failure',
-          reason: 'revoke_failed',
-          metadata: { failedStep },
-        }),
+        this.audit.record(
+          {
+            ...base,
+            action: AuditAction.ADMIN_USER_LOCKED,
+            result: 'failure',
+            reason: 'revoke_failed',
+            metadata: { failedStep },
+          },
+          { timestamp: afterMark() },
+        ),
     );
     await audited;
     // DEBT-421: `LOCKED success` = the lock is written; the revoke (with its session count) is its
     // own event, recorded only once the revoke completed (same shape as `sessions/revoke`).
-    await this.audit.record({
-      ...base,
-      action: AuditAction.SESSION_REVOKED,
-      result: 'success',
-      metadata: { scope: 'all', count: sessionCount, via: 'lock' },
-    });
+    await this.audit.record(
+      {
+        ...base,
+        action: AuditAction.SESSION_REVOKED,
+        result: 'success',
+        metadata: { scope: 'all', count: sessionCount, via: 'lock' },
+      },
+      { timestamp: afterMark() },
+    );
     return toAdminUser(after, t.member, new Date());
   }
 
@@ -219,15 +228,17 @@ export class AdminUsersController {
       targetId: t.id,
     };
     // DEBT-147/153: one atomic write with the level rule in its filter; the audit diff comes from
-    // the document BEFORE that write (never from `t.user`, read earlier).
-    const before = await this.users.adminUnlock(t.id, actor.roles.includes('super_admin'));
-    if (before === 'forbidden') {
+    // the document BEFORE that write (never from `t.user`, read earlier). DEBT-420: the success
+    // event's timestamp is the per-user mark that same write set.
+    const unlocked = await this.users.adminUnlock(t.id, actor.roles.includes('super_admin'));
+    if (unlocked === 'forbidden') {
       await this.audit.record({ ...base, result: 'failure', reason: 'locked_by_super_admin' });
       throw AdminAuthError.forbidden();
     }
-    if (!before) throw AdminAuthError.notFound();
+    if (!unlocked) throw AdminAuthError.notFound();
+    const { before, unlockMarkAt } = unlocked;
     if (before.lockedUntil != null || before.failedLoginCount > 0) {
-      await this.audit.record({ ...base, result: 'success' });
+      await this.audit.record({ ...base, result: 'success' }, { timestamp: unlockMarkAt });
     }
     const after = { ...before, failedLoginCount: 0, lockedUntil: undefined };
     return toAdminUser(after, t.member, new Date());

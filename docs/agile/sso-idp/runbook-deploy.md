@@ -24,6 +24,12 @@ Lỗi bất kỳ ⇒ exit code 1 (deploy dừng).
 `db:sync-indexes` như trên (build index trên collection lớn có thể mất thời gian — chạy trước
 rollout). Xác minh: `db.auditlogs.getIndexes()` có đúng key trên.
 
+**Run 57 (DEBT-422) — thay index audit.** `GET /admin/audit` sắp theo `(timestamp desc, _id desc)`;
+index ghép đổi thành `{tenantId: 1, timestamp: -1, _id: -1}`. `db:sync-indexes` build index mới và
+**drop** `tenantId_1_timestamp_-1_eventId_-1`. Chạy trước rollout (prod `autoIndex:false`); thiếu index
+thì kết quả vẫn đúng, chỉ chậm hơn. Cursor `after` phát hành trước deploy (`{t, e}`) trả 400
+`invalid_request` — fe-admin hiện nút "First page". Xác minh: `getIndexes()` có key mới, không còn key cũ.
+
 ## 2. Di trú index `Consent` M3→M4 (DEBT-028)
 
 **Bối cảnh.** Q1 đổi khoá consent từ `{userId, clientId}` sang

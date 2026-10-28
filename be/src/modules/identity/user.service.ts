@@ -14,6 +14,8 @@ interface UserDoc {
   failedLoginCount: number;
   lockedUntil?: Date;
   adminLockLevel?: AdminLockLevel;
+  /** Per-user strictly increasing mark of admin lock/unlock writes (run 57). Never in a view. */
+  adminLockMarkAt?: Date;
   lockTransitionNonce?: string;
   createdAt: Date;
   updatedAt: Date;
@@ -56,6 +58,19 @@ export const ADMIN_LOCKED_UNTIL = new Date('9999-12-31T23:59:59.999Z');
 
 /** Who set an admin lock (DEBT-153): only that level or higher may lift it. */
 export type AdminLockLevel = 'tenant_admin' | 'super_admin';
+
+/**
+ * Mark of an admin lock/unlock write (run 57, DEBT-420): `max(now, prev + 1 ms)`. Strictly increases
+ * per user in the order Mongo applies the writes, whatever order the responses reach Node in; the
+ * lock/unlock audit uses it as its timestamp. `adminLockMarkExpr` is the same rule inside an update.
+ */
+export function nextAdminLockMark(prev: Date | undefined, now: Date): Date {
+  return new Date(Math.max(now.getTime(), (prev?.getTime() ?? 0) + 1));
+}
+
+const adminLockMarkExpr = (now: Date) => ({
+  $max: [now, { $add: [{ $ifNull: ['$adminLockMarkAt', new Date(0)] }, 1] }],
+});
 
 /**
  * Users whose lock a tenant_admin may change: no admin lock (unlocked or brute-force lock), or an
@@ -295,53 +310,75 @@ export class UserService {
   }
 
   /**
-   * Admin lock until an admin unlocks (B6.3b), recording its level. super_admin always (re)sets
-   * level `super_admin`; tenant_admin never lowers a higher-level lock: it is left as is and the
-   * current user is returned (the caller still revokes, idempotent). null = no such user.
+   * Admin lock until an admin unlocks (B6.3b), recording its level, in ONE atomic pipeline write
+   * that also bumps the per-user mark (run 57). super_admin always (re)sets level `super_admin`;
+   * tenant_admin never lowers a higher-level (or legacy unlevelled) admin lock: the level is kept,
+   * the write (and its mark) still happens. null = no such user.
    */
-  async adminLock(sub: string, level: AdminLockLevel): Promise<UserView | null> {
+  async adminLock(
+    sub: string,
+    level: AdminLockLevel,
+    now = new Date(),
+  ): Promise<{ user: UserView; lockMarkAt: Date } | null> {
     if (!isValidObjectId(sub)) return null;
-    const filter: QueryFilter<UserDoc> =
-      level === 'super_admin' ? { _id: sub } : tenantAdminMayChangeLock(sub);
-    // Two rounds: a miss followed by a concurrent unlock makes the filter match on the retry.
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const doc = await this.users
-        .findOneAndUpdate(
-          filter,
-          { $set: { lockedUntil: ADMIN_LOCKED_UNTIL, adminLockLevel: level } },
-          { returnDocument: 'after' },
-        )
-        .select(PUBLIC_FIELDS)
-        .lean<UserDoc>()
-        .exec();
-      if (doc) return toView(doc);
-      const current = await this.findById(sub);
-      if (!current) return null;
-      if (current.lockedUntil?.getTime() === ADMIN_LOCKED_UNTIL.getTime()) return current;
-    }
-    throw new Error('adminLock: the user lock changed concurrently; retry');
+    const keepHigher = {
+      $and: [
+        { $eq: ['$lockedUntil', ADMIN_LOCKED_UNTIL] },
+        { $ne: ['$adminLockLevel', 'tenant_admin'] },
+      ],
+    };
+    const doc = await this.users
+      .findOneAndUpdate(
+        { _id: sub },
+        [
+          {
+            $set: {
+              lockedUntil: ADMIN_LOCKED_UNTIL,
+              adminLockLevel:
+                level === 'super_admin'
+                  ? 'super_admin'
+                  : { $cond: [keepHigher, { $ifNull: ['$adminLockLevel', '$$REMOVE'] }, level] },
+              adminLockMarkAt: adminLockMarkExpr(now),
+            },
+          },
+        ],
+        { returnDocument: 'after', updatePipeline: true },
+      )
+      .select(PUBLIC_FIELDS)
+      .lean<UserDoc>()
+      .exec();
+    return doc ? { user: toView(doc), lockMarkAt: doc.adminLockMarkAt as Date } : null;
   }
 
   /**
-   * Admin unlock (DEBT-147/153): clear the lock, its level and the counter in ONE write and return
-   * the document BEFORE it (the caller audits from that, not from an earlier read). A tenant_admin
+   * Admin unlock (DEBT-147/153): clear the lock, its level and the counter (and bump the run-57
+   * mark) in ONE write and return the document BEFORE it plus the mark written (the caller audits from that, not from an earlier read). A tenant_admin
    * may not lift a super_admin (or legacy unlevelled) lock: 'forbidden'. null = no such user.
    */
   async adminUnlock(
     sub: string,
     actorIsSuperAdmin: boolean,
-  ): Promise<UserView | 'forbidden' | null> {
+    now = new Date(),
+  ): Promise<{ before: UserView; unlockMarkAt: Date } | 'forbidden' | null> {
     if (!isValidObjectId(sub)) return null;
     const before = await this.users
       .findOneAndUpdate(
         actorIsSuperAdmin ? { _id: sub } : tenantAdminMayChangeLock(sub),
-        { $set: { failedLoginCount: 0 }, $unset: { lockedUntil: 1, adminLockLevel: 1 } },
-        { returnDocument: 'before' },
+        [
+          { $set: { failedLoginCount: 0, adminLockMarkAt: adminLockMarkExpr(now) } },
+          { $unset: ['lockedUntil', 'adminLockLevel'] },
+        ],
+        { returnDocument: 'before', updatePipeline: true },
       )
       .select(PUBLIC_FIELDS)
       .lean<UserDoc>()
       .exec();
-    if (before) return toView(before);
+    // The pre-image is the pipeline's input (atomic), so the mark written is recomputed exactly.
+    if (before)
+      return {
+        before: toView(before),
+        unlockMarkAt: nextAdminLockMark(before.adminLockMarkAt, now),
+      };
     if (actorIsSuperAdmin) return null;
     return (await this.users.exists({ _id: sub }).exec()) ? 'forbidden' : null;
   }

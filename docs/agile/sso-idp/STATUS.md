@@ -2,7 +2,7 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `57-audit-order` — DEBT-420 + DEBT-422 (quyết định người dùng 2026-10-26: mốc thời gian đơn điệu theo user, audit dùng mốc đó; bật lại L6). DEBT-379 từ 2026-11-03, DEBT-369/371 từ 2026-11-04. A6.3b roles chờ DEBT-149/142; DEBT-344 retention; DEBT-405 compose; DEBT-415 cần quyết định.
+- **Run hiện tại**: `57-audit-order` — DEBT-420 + DEBT-422. Backend-dev XONG Task 1+2 (mốc `adminLockMarkAt` = timestamp audit lock/unlock; sort/cursor `(timestamp,_id)`, index mới; L6 bật lại 10/10 xanh; đóng DEBT-420/422, mở DEBT-426 💭) ⇒ senior PASS (mở DEBT-427 🟡: cursor `t` vượt biên Date ⇒ 500; backend-dev đã sửa + đóng, int 1355 xanh) ⇒ tester **PASS** 2026-10-28 (int 1366, unit 594, E2E 36, L6 25/25 lượt, mutation 5/5 RED; xem runs/57-audit-order/test-report.md) ⇒ **orchestrator đóng run**. ⚠ Người dùng: chạy `pnpm -C be db:sync-indexes` trên DB dev `sso-idp`. DEBT-379 từ 2026-11-03, DEBT-369/371 từ 2026-11-04. A6.3b roles chờ DEBT-149/142; DEBT-344 retention; DEBT-405 compose; DEBT-415 cần quyết định.
   - Tech-lead run 53: mở DEBT-388…393 (388 = tiêu code/xoay RT trước khi ký ⇒ Vault chập chờn làm revoke family, 🟡). Backend-dev: đóng DEBT-071/159, mở DEBT-394 (Vault down + cache hết ⇒ verify ra 401/`active:false`, chưa 503). Số liệu dev: be unit 475, int 1221, vault 14, E2E 35, mutation 10/10. Tester: DEBT-394/395 có characterisation (T5/T8), giữ 🟡.
   - Test Vault: `VAULT_TEST_ADDR=… VAULT_TEST_ROOT_TOKEN=… pnpm -C be test:vault` (thiếu ⇒ fail kèm lệnh `docker run`, xem runbook-deploy §8).
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).

@@ -48,8 +48,8 @@ const EXPECTED: Record<string, { key: Record<string, number>; unique?: boolean; 
       { key: { actorId: 1 } },
       { key: { clientId: 1 } },
       { key: { action: 1 } },
-      // B6.3b: `GET /admin/audit` (tenant, newest first, cursor timestamp+eventId).
-      { key: { tenantId: 1, timestamp: -1, eventId: -1 } },
+      // B6.3b: `GET /admin/audit` (tenant, newest first); run 57 (DEBT-422): cursor timestamp+_id.
+      { key: { tenantId: 1, timestamp: -1, _id: -1 } },
     ],
   };
 
@@ -71,7 +71,7 @@ describe('Mongo indexes after explicit sync (B1.6, spec §10)', () => {
   it.each(Object.keys(EXPECTED))('%s has exactly the §10 indexes (+ _id)', async (name) => {
     const indexes = (await conn.models[name].collection.indexes()) as IndexInfo[];
     const actual = indexes
-      .filter((i) => !('_id' in i.key))
+      .filter((i) => !(Object.keys(i.key).length === 1 && '_id' in i.key)) // default `_id_` only
       .map((i) => ({ key: i.key, unique: !!i.unique, ttl: i.expireAfterSeconds }));
     const expected = EXPECTED[name].map((e) => ({ key: e.key, unique: !!e.unique, ttl: e.ttl }));
     expect(actual).toHaveLength(expected.length);
@@ -170,6 +170,16 @@ describe('Consent index migration M3→M4 (DEBT-028)', () => {
     expect(
       nonId.some((i) => i.key.userId === 1 && i.key.clientId === 1 && !('resource' in i.key)),
     ).toBe(false);
+  });
+
+  it('run 57 (DEBT-422): syncAllIndexes drops the old audit {tenantId,timestamp,eventId} index', async () => {
+    const audit = conn.models.AuditLog.collection;
+    const old = await audit.createIndex({ tenantId: 1, timestamp: -1, eventId: -1 });
+    const dropped = await syncAllIndexes(conn);
+    expect(dropped.AuditLog).toContain(old);
+    const keys = ((await audit.indexes()) as IndexInfo[]).map((i) => i.key);
+    expect(keys).toContainEqual({ tenantId: 1, timestamp: -1, _id: -1 });
+    expect(keys).not.toContainEqual({ tenantId: 1, timestamp: -1, eventId: -1 });
   });
 
   it('fails closed (no data deleted) when legacy data violates the NEW unique key', async () => {

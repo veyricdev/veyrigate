@@ -99,4 +99,30 @@ describe('AuditService (B1.7, INV-25)', () => {
 
     expect(seen).toEqual([AuditAction.TOKEN_REUSE_DETECTED, AuditAction.SIGNING_KEY_ROTATED]);
   });
+
+  it('run 57: opts.timestamp is used as the event timestamp (eventId still random)', async () => {
+    const { service, create } = makeService();
+    const at = new Date('2030-01-02T03:04:05.006Z');
+    const event = await service.record(
+      { actorType: 'admin', action: AuditAction.ADMIN_USER_LOCKED, result: 'success' },
+      { timestamp: at },
+    );
+    const saved = create.mock.calls[0][0] as AuditEvent;
+    expect(saved.timestamp.getTime()).toBe(at.getTime());
+    expect(event.timestamp.getTime()).toBe(at.getTime());
+    expect(saved.eventId).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('run 57: an invalid opts.timestamp rejects and writes nothing', async () => {
+    const { service, create } = makeService();
+    for (const bad of [new Date(Number.NaN), 'x' as unknown as Date, 0 as unknown as Date]) {
+      await expect(
+        service.record(
+          { actorType: 'admin', action: AuditAction.ADMIN_USER_LOCKED, result: 'success' },
+          { timestamp: bad },
+        ),
+      ).rejects.toThrow('invalid audit timestamp');
+    }
+    expect(create).not.toHaveBeenCalled();
+  });
 });

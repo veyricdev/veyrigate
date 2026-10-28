@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import type { Model, QueryFilter } from 'mongoose';
+import type { Model, QueryFilter, Types } from 'mongoose';
 import { randomUUID } from 'node:crypto';
 import { observeAuditEvent } from '../../../common/metrics/metrics';
 import type { TenantContext } from '../../identity/tenant-context/tenant-context';
@@ -47,11 +47,17 @@ export interface AuditQuery {
   to?: Date;
 }
 
-/** Position after the last event of a page (sort `timestamp desc, eventId desc`). */
+/**
+ * Position after the last event of a page (sort `timestamp desc, _id desc`, run 57 / DEBT-422):
+ * `_id` is a total, stable tie-break (in one process it follows `record()` call order).
+ */
 export interface AuditCursor {
   timestamp: Date;
-  eventId: string;
+  id: Types.ObjectId;
 }
+
+/** An admin audit row as read (lean): the event plus its `_id`, used only for the cursor. */
+export type AuditRow = AuditEvent & { _id: Types.ObjectId };
 
 /**
  * Audit log (B1.7, INV-25). `record()` persists the event and throws if the
@@ -80,7 +86,7 @@ export class AuditService {
     q: AuditQuery,
     cursor: AuditCursor | undefined,
     limit: number,
-  ): Promise<AuditEvent[]> {
+  ): Promise<AuditRow[]> {
     if (!ctx?.tenantId) throw new Error('TenantContext required');
     const filter: QueryFilter<AuditEvent> = {};
     for (const key of [
@@ -102,24 +108,33 @@ export class AuditService {
     if (cursor) {
       filter.$or = [
         { timestamp: { $lt: cursor.timestamp } },
-        { timestamp: cursor.timestamp, eventId: { $lt: cursor.eventId } },
+        { timestamp: cursor.timestamp, _id: { $lt: cursor.id } },
       ];
     }
     filter.tenantId = ctx.tenantId;
     return this.auditModel
       .find(filter)
-      .sort({ timestamp: -1, eventId: -1 })
+      .sort({ timestamp: -1, _id: -1 })
       .limit(limit)
-      .lean<AuditEvent[]>()
+      .lean<AuditRow[]>()
       .exec();
   }
 
-  async record(input: AuditEventInput): Promise<AuditEvent> {
+  /**
+   * `opts.timestamp` (run 57, DEBT-420): server-chosen time of the event, e.g. the per-user admin
+   * lock mark written by the same DB update. Deliberately NOT part of `AuditEventInput`, so nothing
+   * spread from a request can set it. Invalid => throws before writing (fail-closed).
+   */
+  async record(input: AuditEventInput, opts?: { timestamp?: Date }): Promise<AuditEvent> {
+    const at = opts?.timestamp;
+    if (at !== undefined && !(at instanceof Date && !Number.isNaN(at.getTime()))) {
+      throw new Error('invalid audit timestamp');
+    }
     const event: AuditEvent = {
       ...input,
       metadata: sanitizeMetadata(input.metadata),
       eventId: randomUUID(),
-      timestamp: new Date(),
+      timestamp: at ? new Date(at.getTime()) : new Date(),
     };
     await this.auditModel.create(event);
     // B7.2: count only PERSISTED events; a metrics failure never fails the audit write.

@@ -640,6 +640,12 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
           .findOne({ action: 'ADMIN_USER_LOCKED', targetId: target, result: 'failure' })
           .lean(),
       ).toMatchObject({ reason: 'revoke_failed', metadata: { failedStep: 'sessions' } });
+      // run 57: put the per-user mark ahead of this clock, so a follow-up event stamped with a bare
+      // `new Date()` would sort BEFORE the retry's `LOCKED success` (m4).
+      await userModel.updateOne(
+        { _id: target },
+        { $set: { adminLockMarkAt: new Date(Date.now() + 3_600_000) } },
+      );
       expect(
         (await call('POST', `/admin/users/${target}/lock`, await tok(tadminA))).statusCode,
       ).toBe(200);
@@ -662,6 +668,10 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
         result: 'success',
         metadata: { scope: 'all', count: 0, via: 'lock' },
       });
+      // run 57: in the same request, the follow-up sorts strictly after `LOCKED success`.
+      expect((revoked[0].timestamp as Date).getTime()).toBeGreaterThan(
+        (trail[2].timestamp as Date).getTime(),
+      );
     });
 
     it('sessions/revoke => AT 401, refresh invalid_grant, login still possible; audit SESSION_REVOKED scope=all', async () => {
@@ -1181,12 +1191,12 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
         ev(`${actor}-B`, at(5), { tenantId: TENANT_B }),
         ev(`${actor}-none`, at(6), { tenantId: undefined }),
       ]);
-      // Expected order for tenant A: newest first, ties by eventId desc.
+      // Expected order for tenant A: newest first, ties by _id desc (run 57: insertion order).
       const expected = [`${actor}-4`, `${actor}-3b`, `${actor}-3a`, `${actor}-2`, `${actor}-1`];
       return { actor, at, expected };
     }
 
-    it('newest first, stable cursor pages (ties by eventId), a write between pages neither repeats nor drops', async () => {
+    it('newest first, stable cursor pages (ties by _id), a write between pages neither repeats nor drops', async () => {
       const { actor, expected } = await seed();
       const token = await tok(tadminA);
       const first = await call('GET', `/admin/audit?actorId=${actor}&limit=2`, token);
@@ -1219,6 +1229,88 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
       // A fresh first page does show the new event, on top.
       const fresh = await call('GET', `/admin/audit?actorId=${actor}&limit=1`, token);
       expect(fresh.json().items[0].eventId).toBe(`${actor}-new`);
+    });
+
+    /** run 57 (DEBT-422): 5 events of one tenant at ONE ms, `_id` ascending, `eventId` descending. */
+    async function seedSameMs() {
+      const actor = `${RUN}-tie-${++seq}`;
+      const ts = new Date(Date.now() - 30 * MIN);
+      const ids = Array.from({ length: 5 }, () => new Types.ObjectId());
+      const ev = (_id: Types.ObjectId, eventId: string, timestamp: Date, tenantId = TENANT_A) => ({
+        _id,
+        eventId,
+        timestamp,
+        actorType: 'admin',
+        actorId: actor,
+        tenantId,
+        action: 'ADMIN_CLIENT_UPDATED',
+        result: 'success',
+      });
+      await auditModel.create(ids.map((id, k) => ev(id, `${actor}-${9 - k}`, ts)));
+      return { actor, ts, ids, ev };
+    }
+    const hexes = (ids: Types.ObjectId[]) => ids.map((i) => i.toHexString());
+
+    it('T2a same-ms events come back in _id desc order, whatever their eventId', async () => {
+      const { actor, ids } = await seedSameMs();
+      const res = await call('GET', `/admin/audit?actorId=${actor}&limit=100`, await tok(tadminA));
+      expect(res.statusCode).toBe(200);
+      const got = (res.json().items as Ev[]).map((e) => e.eventId);
+      // eventId `${actor}-${9-k}` belongs to ids[k]; _id desc => k = 4..0 => suffix 5..9.
+      expect(got).toEqual([5, 6, 7, 8, 9].map((n) => `${actor}-${n}`));
+      expect(hexes(ids)).toEqual([...hexes(ids)].sort()); // _id really ascends in insert order
+    });
+
+    it('T2b cursor pages across a same-ms boundary (limit=2): all 7 events, no repeat, no gap, in order', async () => {
+      const { actor, ts, ev } = await seedSameMs();
+      const before = new Types.ObjectId();
+      const after = new Types.ObjectId();
+      await auditModel.create([
+        ev(after, `${actor}-later`, new Date(ts.getTime() + 1)),
+        ev(before, `${actor}-earlier`, new Date(ts.getTime() - 1)),
+      ]);
+      const token = await tok(tadminA);
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      let pages = 0;
+      do {
+        const page = await call(
+          'GET',
+          `/admin/audit?actorId=${actor}&limit=2${cursor ? `&after=${cursor}` : ''}`,
+          token,
+        );
+        expect(page.statusCode).toBe(200);
+        seen.push(...(page.json().items as Ev[]).map((e) => e.eventId));
+        cursor = page.json().nextCursor as string | null;
+        if (cursor) {
+          const decoded = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as object;
+          expect(Object.keys(decoded).sort()).toEqual(['i', 't']);
+        }
+      } while (cursor && ++pages < 10);
+      expect(seen).toEqual([
+        `${actor}-later`,
+        ...[5, 6, 7, 8, 9].map((n) => `${actor}-${n}`),
+        `${actor}-earlier`,
+      ]);
+    });
+
+    it('T2d cursor holding the _id of a tenant B event, used by tenant A => only tenant A rows, no error', async () => {
+      const { actor, ts, ev } = await seedSameMs();
+      const bId = new Types.ObjectId();
+      await auditModel.create(ev(bId, `${actor}-B`, ts, TENANT_B));
+      const forged = Buffer.from(
+        JSON.stringify({ t: ts.getTime(), i: bId.toHexString() }),
+      ).toString('base64url');
+      const res = await call(
+        'GET',
+        `/admin/audit?actorId=${actor}&limit=100&after=${forged}`,
+        await tok(tadminA),
+      );
+      expect(res.statusCode).toBe(200);
+      // bId is the newest _id: every A event at ts sorts after it.
+      expect((res.json().items as Ev[]).map((e) => e.eventId)).toEqual(
+        [5, 6, 7, 8, 9].map((n) => `${actor}-${n}`),
+      );
     });
 
     it('tenant isolation: B and tenant-less events never show; tenant B admin sees only its own', async () => {
@@ -1393,9 +1485,10 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
       expect(fam.statusCode).toBe(200);
     });
 
-    it('audit cursor: negative / oversized / non-object payloads => 400', async () => {
+    it('audit cursor: negative / oversized / non-object / legacy `{t,e}` / malformed `i` payloads => 400 (T2c)', async () => {
       const token = await tok(tadminA);
       const forged = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64url');
+      const hex = 'a'.repeat(24);
       for (const after of [
         forged({ t: -1, e: 'y' }),
         forged({ t: 1, e: '' }),
@@ -1405,14 +1498,44 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
         forged(null),
         forged(1),
         forged({ t: Number.MAX_SAFE_INTEGER + 2, e: 'y' }),
+        // run 57 (DEBT-422): the pre-run-57 cursor `{t, e}` is refused (client restarts at page 1).
+        forged({ t: 0, e: 'x' }),
+        forged({ t: 1, e: 'y', i: 5 }),
+        forged({ t: 1, i: 'a'.repeat(23) }),
+        forged({ t: 1, i: 'a'.repeat(25) }),
+        forged({ t: 1, i: 'A'.repeat(24) }),
+        forged({ t: 1, i: 'g'.repeat(24) }),
+        forged({ t: 1, i: 1234567890 }),
+        forged({ t: 1, i: { $gt: '' } }),
+        forged({ t: 1, i: [hex] }),
+        forged({ t: 1 }),
+        forged({ i: hex }),
+        forged({ t: -1, i: hex }),
+        forged({ t: 1.5, i: hex }),
+        forged({ t: Number.MAX_SAFE_INTEGER + 2, i: hex }),
+        // DEBT-427: beyond the JS Date range (8.64e15 ms) => 400, never a 5xx cast error.
+        forged({ t: 8.64e15 + 1, i: hex }),
+        forged({ t: 9e15, i: hex }),
+        forged({ t: Number.MAX_SAFE_INTEGER, i: hex }),
       ]) {
         const res = await call('GET', `/admin/audit?after=${after}`, token);
-        expect([after, res.statusCode]).toEqual([after, 400]);
+        expect([after, res.statusCode, res.json()]).toEqual([
+          after,
+          400,
+          { error: 'invalid_request', error_description: 'invalid cursor' },
+        ]);
       }
       // A well-formed cursor from the past is fine (empty page, never 5xx).
-      const ok = await call('GET', `/admin/audit?after=${forged({ t: 0, e: 'x' })}`, token);
+      const ok = await call(
+        'GET',
+        `/admin/audit?after=${forged({ t: 0, i: '0'.repeat(24) })}`,
+        token,
+      );
       expect(ok.statusCode).toBe(200);
       expect(ok.json()).toEqual({ items: [], nextCursor: null });
+      // The largest valid Date (8.64e15) is accepted (200, never 5xx).
+      const max = await call('GET', `/admin/audit?after=${forged({ t: 8.64e15, i: hex })}`, token);
+      expect(max.statusCode).toBe(200);
     });
 
     it('cross-tenant 404 is byte-identical (body + content-type) for families/consents GET and revoke', async () => {
@@ -1801,7 +1924,7 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
       expect(await lockedUntilOf(id)).toBeNull();
       const trail = await auditModel
         .find({ targetId: id, action: { $in: ['ADMIN_USER_LOCKED', 'ADMIN_USER_UNLOCKED'] } })
-        .sort({ _id: 1 })
+        .sort({ timestamp: 1, _id: 1 })
         .lean();
       expect(trail.map((e) => `${String(e.action)}:${String(e.result)}`)).toEqual([
         'ADMIN_USER_LOCKED:success',

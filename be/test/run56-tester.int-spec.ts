@@ -6,7 +6,7 @@ import { Types, type Model } from 'mongoose';
 import { AuthenticationService } from '../src/modules/authentication/authentication.service';
 import { ClientCredentialService } from '../src/modules/clients/client-credential.service';
 import { ClientService } from '../src/modules/clients/client.service';
-import { ADMIN_LOCKED_UNTIL } from '../src/modules/identity/user.service';
+import { ADMIN_LOCKED_UNTIL, UserService } from '../src/modules/identity/user.service';
 import { DEFAULT_TENANT_ID } from '../src/modules/identity/tenant.service';
 import { SESSION_COOKIE } from '../src/modules/sessions/session.cookie';
 import { SessionService } from '../src/modules/sessions/session.service';
@@ -385,9 +385,12 @@ describe('run 56 tester: admin races + disable/enable over real HTTP', () => {
     const unlock = (id: string, at: string) => api('POST', `/admin/users/${id}/unlock`, at);
     const target = () => seedOAuthUser(full.conn, { tenantId: DEFAULT_TENANT_ID });
     const dbUser = (id: string) =>
-      userModel
-        .findById(id)
-        .lean<{ lockedUntil?: Date; adminLockLevel?: string; failedLoginCount?: number }>();
+      userModel.findById(id).lean<{
+        lockedUntil?: Date;
+        adminLockLevel?: string;
+        failedLoginCount?: number;
+        adminLockMarkAt?: Date;
+      }>();
     const lockTrail = (id: string) =>
       audits({ targetId: id, action: { $in: ['ADMIN_USER_LOCKED', 'ADMIN_USER_UNLOCKED'] } });
     const isLocked = (u: { lockedUntil?: Date } | null) =>
@@ -400,8 +403,11 @@ describe('run 56 tester: admin races + disable/enable over real HTTP', () => {
       expect(denied.statusCode).toBe(403);
       expect(denied.json().error).toBe('forbidden');
       expect(isLocked(await dbUser(id))).toBe(true);
+      const markBefore = (await dbUser(id))?.adminLockMarkAt?.getTime() ?? 0;
       expect((await lock(id, tadminAt)).statusCode).toBe(200);
       expect((await dbUser(id))?.adminLockLevel).toBe('super_admin');
+      // run 57: the tenant no-op lock still writes, so its mark (= its audit time) moves forward.
+      expect((await dbUser(id))?.adminLockMarkAt?.getTime()).toBeGreaterThan(markBefore);
       expect((await unlock(id, tadminAt)).statusCode).toBe(403);
       expect((await unlock(id, superAt)).statusCode).toBe(200);
       const u = await dbUser(id);
@@ -487,12 +493,7 @@ describe('run 56 tester: admin races + disable/enable over real HTTP', () => {
       expect(last.action).toBe('ADMIN_USER_UNLOCKED');
     });
 
-    // QUARANTINED (user decision 2026-10-26): DEBT-420 — without a barrier the two writes' responses can
-    // come back to Node in the opposite order Mongo applied them (same root as DEBT-422), so the audit
-    // trail can end on the wrong event in 1–2/10 rounds. Fix is deferred to run 57 (DEBT-420 + DEBT-422:
-    // per-user monotonic stamp written in the same update and used as the audit timestamp, or a
-    // transaction). Re-enable by changing `it.skip` back to `it` once run 57 lands; L5 (barrier) stays on.
-    it.skip('L6 10 rounds super lock || super unlock (from tenant-locked) => final DB state == last success event of the trail', async () => {
+    it('L6 10 rounds super lock || super unlock (from tenant-locked) => final DB state == last success event of the trail', async () => {
       const mismatches: string[] = [];
       for (let i = 0; i < 10; i++) {
         const id = await target();
@@ -531,6 +532,107 @@ describe('run 56 tester: admin races + disable/enable over real HTTP', () => {
       expect(locked).toHaveLength(2);
       expect(revoked).toHaveLength(2);
       for (const r of revoked) expect(r.metadata).toMatchObject({ scope: 'all', via: 'lock' });
+    });
+  });
+
+  // ---------------------------------------------------------------- run 57 (DEBT-420)
+
+  describe('run 57 (DEBT-420): lock/unlock audit timestamp = per-user mark of the write', () => {
+    const lock = (id: string, at: string) => api('POST', `/admin/users/${id}/lock`, at);
+    const unlock = (id: string, at: string) => api('POST', `/admin/users/${id}/unlock`, at);
+    const target = () => seedOAuthUser(full.conn, { tenantId: DEFAULT_TENANT_ID });
+    const markOf = async (id: string) =>
+      (await userModel.findById(id).lean<{ adminLockMarkAt?: Date }>())?.adminLockMarkAt;
+    const isLocked = async (id: string) =>
+      (await userModel.findById(id).lean<{ lockedUntil?: Date }>())?.lockedUntil?.getTime() ===
+      ADMIN_LOCKED_UNTIL.getTime();
+    const successTrail = (id: string) =>
+      audits({
+        targetId: id,
+        action: { $in: ['ADMIN_USER_LOCKED', 'ADMIN_USER_UNLOCKED'] },
+        result: 'success',
+      });
+
+    it('(b) lock written and held BEFORE its audit; super unlock completes; released => DB unlocked, trail ends UNLOCKED, unlock ts == DB mark', async () => {
+      const id = await target();
+      const svc = full.app.get(UserService);
+      const real = svc.adminLock.bind(svc);
+      const b = barrier();
+      jest.spyOn(svc, 'adminLock').mockImplementationOnce(async (...a) => {
+        const r = await real(...a);
+        b.reach();
+        await b.gate;
+        return r;
+      });
+      const pendingLock = lock(id, superAt);
+      await b.reached;
+      expect(await isLocked(id)).toBe(true);
+      expect((await unlock(id, superAt)).statusCode).toBe(200);
+      b.release();
+      expect((await pendingLock).statusCode).toBe(200);
+      expect(await isLocked(id)).toBe(false);
+      const trail = await successTrail(id);
+      expect(trail.map((r) => r.action)).toEqual(['ADMIN_USER_LOCKED', 'ADMIN_USER_UNLOCKED']);
+      expect(trail[1].timestamp.getTime()).toBe((await markOf(id))?.getTime());
+    });
+
+    it('(c) unlock written and held BEFORE its audit; super lock completes; released => DB locked, trail ends LOCKED, lock ts == DB mark', async () => {
+      const id = await target();
+      expect((await lock(id, tadminAt)).statusCode).toBe(200);
+      const svc = full.app.get(UserService);
+      const real = svc.adminUnlock.bind(svc);
+      const b = barrier();
+      jest.spyOn(svc, 'adminUnlock').mockImplementationOnce(async (...a) => {
+        const r = await real(...a);
+        b.reach();
+        await b.gate;
+        return r;
+      });
+      const pendingUnlock = unlock(id, superAt);
+      await b.reached;
+      expect(await isLocked(id)).toBe(false);
+      expect((await lock(id, superAt)).statusCode).toBe(200);
+      b.release();
+      expect((await pendingUnlock).statusCode).toBe(200);
+      expect(await isLocked(id)).toBe(true);
+      const trail = await successTrail(id);
+      expect(trail.map((r) => r.action)).toEqual([
+        'ADMIN_USER_LOCKED',
+        'ADMIN_USER_UNLOCKED',
+        'ADMIN_USER_LOCKED',
+      ]);
+      expect(trail[2].timestamp.getTime()).toBe((await markOf(id))?.getTime());
+    });
+
+    it('(d) same ms: lock, unlock, lock with one injected now => mark +1 ms each step, audits strictly increasing; mark never exposed', async () => {
+      const id = await target();
+      const svc = full.app.get(UserService);
+      const now = new Date(Date.now() + 3_600_000); // fixed, ahead of the clock
+      const realLock = svc.adminLock.bind(svc);
+      const realUnlock = svc.adminUnlock.bind(svc);
+      jest.spyOn(svc, 'adminLock').mockImplementation((sub, level) => realLock(sub, level, now));
+      jest.spyOn(svc, 'adminUnlock').mockImplementation((sub, sup) => realUnlock(sub, sup, now));
+      const bodies: string[] = [];
+      const marks: number[] = [];
+      for (const step of [lock, unlock, lock]) {
+        const res = await step(id, superAt);
+        expect(res.statusCode).toBe(200);
+        bodies.push(res.body);
+        marks.push((await markOf(id))?.getTime() ?? -1);
+      }
+      expect(marks).toEqual([now.getTime(), now.getTime() + 1, now.getTime() + 2]);
+      const trail = await successTrail(id);
+      expect(trail.map((r) => [r.action, r.timestamp.getTime()])).toEqual([
+        ['ADMIN_USER_LOCKED', marks[0]],
+        ['ADMIN_USER_UNLOCKED', marks[1]],
+        ['ADMIN_USER_LOCKED', marks[2]],
+      ]);
+      // Exposure: the mark never leaves the server (responses, user view, audit metadata, log).
+      bodies.push((await api('GET', `/admin/users/${id}`, superAt)).body);
+      for (const body of bodies) expect(body).not.toContain('adminLockMarkAt');
+      const all = await audits({ targetId: id });
+      expect(JSON.stringify(all.map((r) => r.metadata ?? {}))).not.toContain('adminLockMarkAt');
+      expect(pino.join('')).not.toContain('adminLockMarkAt');
     });
   });
 
