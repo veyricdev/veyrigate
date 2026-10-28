@@ -2,9 +2,9 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `58-keys-consent-sweep` — **tester PASS** (cổng tester ✅; xem `runs/58-keys-consent-sweep/test-report.md`): be 614 + int 1387 (+14 test tester) + fe-admin 1416 + fe-sso-test 269 + E2E 36; mutation tester RED đúng, không debt mới → **orchestrator đóng run 58**. Chờ người dùng: **Q58.1 DEBT-214** (đề xuất A), A6.3b (DEBT-149/142), DEBT-344, DEBT-405, DEBT-415. DEBT-379 từ 2026-11-03, DEBT-369/371 từ 2026-11-04.
+- **Run hiện tại**: `59` — chưa bắt đầu. DEBT-379 (Node 22.23.4) từ 2026-11-03, DEBT-369/371 (happy-dom, gỡ ignore braces) từ 2026-11-04; sweep 🟡 BE còn lại. Chờ người dùng: **Q58.1/DEBT-214** (refresh khi bump policy), A6.3b (DEBT-149/142), DEBT-344 retention, DEBT-405 compose mẫu, DEBT-415.
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `57-audit-order` ✅ 2/2 — be 594 + int 1366, E2E 36. Xem `runs/57-audit-order/summary.md`. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev `sso-idp` (index audit mới).
+- **Run vừa đóng**: `58-keys-consent-sweep` ✅ 3/3 — be 614 + int 1387, E2E 36. Xem `runs/58-keys-consent-sweep/summary.md`. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev `sso-idp` (index audit run 57).
 - **Việc tiếp theo**: M7 còn X3 (chờ Q8), X6 release checklist; lane ADMIN còn A6.3b. Debt 🟡 BE mở: xem `backlog.md` (DEBT-119…256, 321, 334, 344, 389, 392).
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
@@ -24,6 +24,7 @@
 | [55](runs/55-oauth-sweep/summary.md) | M7 | Sweep OAuth DEBT-123/130/177/216/410 | ✅ be 587 + int 1306 + vault 31 + E2E 35 | `c3ed4f0` |
 | [56](runs/56-admin-race/summary.md) | M7 | Race admin/disable client DEBT-147/153/156/166/209 (+418/419/421/423) | ✅ be 589 + int 1347 + E2E 35 (L6 → run 57) | `b634def` |
 | [57](runs/57-audit-order/summary.md) | M7 | Thứ tự audit lock/unlock + sort/cursor audit (DEBT-420/422/427) | ✅ be 594 + int 1366 + E2E 36 | `2314f54` |
+| [58](runs/58-keys-consent-sweep/summary.md) | M7 | Sweep 🟡 BE: DEBT-151/158/160/238/389 | ✅ be 614 + int 1387 + E2E 36 | `f7ac551` |
 
 ## Chặn / cần người quyết định
 
