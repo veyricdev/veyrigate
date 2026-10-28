@@ -2,12 +2,10 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `57-audit-order` — DEBT-420 + DEBT-422. Backend-dev XONG Task 1+2 (mốc `adminLockMarkAt` = timestamp audit lock/unlock; sort/cursor `(timestamp,_id)`, index mới; L6 bật lại 10/10 xanh; đóng DEBT-420/422, mở DEBT-426 💭) ⇒ senior PASS (mở DEBT-427 🟡: cursor `t` vượt biên Date ⇒ 500; backend-dev đã sửa + đóng, int 1355 xanh) ⇒ tester **PASS** 2026-10-28 (int 1366, unit 594, E2E 36, L6 25/25 lượt, mutation 5/5 RED; xem runs/57-audit-order/test-report.md) ⇒ **orchestrator đóng run**. ⚠ Người dùng: chạy `pnpm -C be db:sync-indexes` trên DB dev `sso-idp`. DEBT-379 từ 2026-11-03, DEBT-369/371 từ 2026-11-04. A6.3b roles chờ DEBT-149/142; DEBT-344 retention; DEBT-405 compose; DEBT-415 cần quyết định.
-  - Tech-lead run 53: mở DEBT-388…393 (388 = tiêu code/xoay RT trước khi ký ⇒ Vault chập chờn làm revoke family, 🟡). Backend-dev: đóng DEBT-071/159, mở DEBT-394 (Vault down + cache hết ⇒ verify ra 401/`active:false`, chưa 503). Số liệu dev: be unit 475, int 1221, vault 14, E2E 35, mutation 10/10. Tester: DEBT-394/395 có characterisation (T5/T8), giữ 🟡.
-  - Test Vault: `VAULT_TEST_ADDR=… VAULT_TEST_ROOT_TOKEN=… pnpm -C be test:vault` (thiếu ⇒ fail kèm lệnh `docker run`, xem runbook-deploy §8).
+- **Run hiện tại**: `58` — chưa bắt đầu. Ứng viên: DEBT-379 (Node 22.23.4, từ 2026-11-03), DEBT-369/371 (happy-dom + gỡ ignore braces, từ 2026-11-04), sweep 🟡 BE còn lại. Chờ người dùng: A6.3b (DEBT-149/142), DEBT-344 retention, DEBT-405 compose mẫu, DEBT-415.
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `56-admin-race` ✅ 3/3 — be 589 + int 1347 (+1 skip L6), E2E 35. Xem `runs/56-admin-race/summary.md`.
-- **Việc tiếp theo**: sau M6 → M7 hardening (B7.*, T7, X2/X3/X5); A4–A6 fe-admin chờ Q3 (plan §12). Debt đáng chú ý: DEBT-124/143 (super_admin xuyên tenant), DEBT-140 (audit OAuth chưa gắn tenant), DEBT-095, DEBT-054/096.
+- **Run vừa đóng**: `57-audit-order` ✅ 2/2 — be 594 + int 1366, E2E 36. Xem `runs/57-audit-order/summary.md`. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev `sso-idp` (index audit mới).
+- **Việc tiếp theo**: M7 còn X3 (chờ Q8), X6 release checklist; lane ADMIN còn A6.3b. Debt 🟡 BE mở: xem `backlog.md` (DEBT-119…256, 321, 334, 344, 389, 392).
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
 
@@ -15,44 +13,8 @@
 
 | Run | Mốc | Nhóm task | Kết quả | Commit |
 |---|---|---|---|---|
-| [01](runs/01-R1-R2/summary.md)–[04](runs/04-B1.6-B1.10/summary.md) | M0–M1 | R1–R5, B1.1–B1.10 | ✅ 56/56 | `8b75f24`…`1dcb2a8` |
-| [05](runs/05-B2.1-B2.3/summary.md)–[08](runs/08-BUG-logout-action/summary.md) | M2 | B2.1–B2.5, BUG login/logout | ✅ 158/158 | `aea2d3f`, `f62426b` |
-| [09](runs/09-B3.1-B3.4/summary.md) | M2 | B3.1–B3.4 | ✅ 206/206 | `c813f4b` |
-| [10](runs/10-B4.1/summary.md)–[13](runs/13-B4.4/summary.md) | M3–M4 | B4.1, B4.3, B4.2, B4.4 | ✅ 310/310 | `cd15c81`…`c6a8026` |
-| [14](runs/14-B4.5/summary.md)–[16](runs/16-B4.7/summary.md) | M4 | B4.5–B4.7 | ✅ 473/473 | `b529c35`…`8613b4f` |
-| [17](runs/17-introspect-hardening/summary.md) | M4 | introspect-hardening | ✅ 506/506 | `70842e0` |
-| [18](runs/18-consent-session-hardening/summary.md) | M4 | consent-session-hardening | ✅ 531/531 | `46da89a` |
-| [19](runs/19-bugfix/summary.md)–[20](runs/20-bugfix/summary.md) | M4 | bugfix (DEBT-059…061) | ✅ 617/617 | `8a58faa`, `08adee8` |
-| [21](runs/21-T1-T2/summary.md) | M3 | T1–T2 (+ seed-dev) | ✅ 694/694 | `676cd92` |
-| [22](runs/22-X1/summary.md) | M3 | X1 walking skeleton (+ DEBT-076/078/079/080/084/004) | ✅ BE 673 + FE 83 + E2E | `c2cf053` |
-| [23](runs/23-bugfix/summary.md) | M3 | bugfix (DEBT-089/090/091/070) | ✅ BE 680 + E2E | `8a36ae4` |
-| [24](runs/24-T3-B6.5-T4/summary.md) | M3 | T3 + B6.5 + T4 (+ DEBT-100) | ✅ BE 718 + FE 187 | `374863d` |
-| [25](runs/25-T5-T4e2e/summary.md) | M3 | T5 lab + T4 E2E (+ DEBT-101/102) | ✅ FE 240 + E2E 12 + BE 211 | `d823b04` |
-| [26](runs/26-B6.1-B6.2/summary.md) | M5 | B6.1–B6.2 (+ DEBT-098/105/106/122) | ✅ BE 774 + FE 240 + E2E 12 | `7321765` |
-| [27](runs/27-B6.3a/summary.md) | M5 | B6.3a admin API: clients, secrets, resources | ✅ BE 826 + FE 240 + E2E 12 | `b9370c1` |
-| [28](runs/28-B6.3b/summary.md) | M5 | B6.3b admin users, families, consents, audit | ✅ BE 868 + FE 240 + E2E 12 | `c9791aa` |
-| [29](runs/29-B6.3c/summary.md) | M5 | B6.3c keys + tenants (+ DEBT-125/132/145/154) | ✅ BE 914 + FE 240 + E2E 12 | `dc7704d` |
-| [30](runs/30-B6.4/summary.md) | M5 | B6.4 seed (+ DEBT-137/161/163/169/172) | ✅ BE 967 + FE 240 + E2E 12 | `e950419` |
-| [31](runs/31-admin-hardening/summary.md) | M5 | admin-hardening (DEBT-167/170/173–176/178) | ✅ BE 1001 + FE 240 + E2E 12 | `a299314` |
-| [32](runs/32-B5.1-B5.2/summary.md) | M6 | B5.1–B5.2 federation broker (+ DEBT-030) | ✅ BE 1083 + FE 240 + E2E 12 | `4c36371` |
-| [33](runs/33-B5.3-X4/summary.md) | M6 | B5.3 linking + X4 E2E (+ DEBT-184/186/189/191) | ✅ BE 1119 + FE 240 + E2E 16 | `b84fa92` |
-| [34](runs/34-B7.1/summary.md) | M7 | B7.1 security matrix + test infra + CI int (+ INV-15 fix) | ✅ BE 1130 + FE 240 + E2E 16 | `2007080` |
-| [35](runs/35-B7.1b/summary.md) | M7 | B7.1b cross-tenant OAuth, repeated params, code-grant recheck | ✅ BE 1252 + FE 240 + E2E 16 | `29c1a45` |
-| [36](runs/36-B7.1c/summary.md) | M7 | B7.1c refresh/login re-check (+ DEBT-116/141/187/207/210/211/213) | ✅ BE 1281 + FE 240 + E2E 16 | `a80855b` |
-| [37](runs/37-B7.2/summary.md) | M7 | B7.2 observability (+ DEBT-215) | ✅ BE 1363 + FE 240 + E2E 16 | `9a37dbf` |
-| [38](runs/38-B7.4/summary.md) | M7 | B7.4 supply chain & config (+ DEBT-219/223/224) | ✅ BE 1559 + FE 240 + E2E 16 | `11786b9` |
-| [39](runs/39-X2-T7/summary.md) | M7 | X2 E2E đầy đủ + T7 + X5 truy vết | ✅ BE 1581 + FE 269 + E2E 21 | `d8da71c` |
-| [40](runs/40-B7.5/summary.md) | M7 | B7.5 runbook + diễn tập | ✅ BE 1604 | `27b1a69` |
-| [41](runs/41-A1-A3/summary.md) | M5 | A1–A3 fe-admin scaffold + env + UI | ✅ fe-admin 96 | `9851442` |
-| [42](runs/42-A4/summary.md) | M5 | A4 đăng nhập BFF fe-admin (+ DEBT-117/265/274/275) | ✅ fe-admin 237 + E2E 25 | `9d2de22` |
-| [43](runs/43-A5/summary.md) | M5 | A5 API layer fe-admin (+ DEBT-282/289) | ✅ fe-admin 417 + E2E 27 | `3999ef3` |
-| [44](runs/44-A6.1/summary.md) | M5 | A6.1 Clients UI (+ DEBT-281/290/294/296/297/299) | ✅ fe-admin 586 + E2E 28 | `a581963` |
-| [45](runs/45-A6.1b/summary.md) | M5 | A6.1b Secrets dialog, rotate/revoke, disable/enable (+ DEBT-308/313–316) | ✅ fe-admin 682 + E2E 29 | `15cba2d` |
-| [46](runs/46-A6.2/summary.md) | M5 | A6.2 Resources UI (+ DEBT-318/319/327/330) | ✅ fe-admin 901 + E2E 30 | `969583f` |
-| [47](runs/47-A6.3/summary.md) | M5 | A6.3 Users & sessions (+ DEBT-326/328) | ✅ fe-admin 1019 + E2E 31 | `ceeb3d6` |
-| [48](runs/48-A6.4/summary.md) | M5 | A6.4 Audit log (+ reuse tenant, DEBT-339/340/341) | ✅ fe-admin 1120 + E2E 32 | `8ced241` |
-| [49](runs/49-A6.5/summary.md) | M5 | A6.5 Keys (+ JWKS cooldown, DEBT-346/347/348) | ✅ fe-admin 1206 + E2E 33 | `7ea8902` |
-| [50](runs/50-A6.6/summary.md) | M5 | A6.6 Dashboard (+ DEBT-352/358) | ✅ fe-admin 1284 + E2E 34 | `b9d8675` |
+| [01](runs/01-R1-R2/summary.md)–[40](runs/40-B7.5/summary.md) | M0–M7 | BE: R1–R5, B1–B7.5, T1–T7, X1/X2/X4/X5 (xem từng `runs/NN/summary.md`) | ✅ BE 1604 + FE 269 + E2E 21 | `8b75f24`…`27b1a69` |
+| [41](runs/41-A1-A3/summary.md)–[50](runs/50-A6.6/summary.md) | M5 | fe-admin A1–A6.6 (BFF, API layer, clients/resources/users/audit/keys/dashboard) | ✅ fe-admin 1284 + E2E 34 | `9851442`…`b9d8675` |
 | [51](runs/51-A7/summary.md) | M7 | A7 Hardening FE (+ DEBT-360/269/366, zod 4.6.6, race đăng xuất) | ✅ fe-admin 1349 + E2E 35 | `ab83dfd` |
 | [52](runs/52-A9/summary.md) | M7 | A9 Dockerfile fe-admin (+ DEBT-370/374/368/362/264) | ✅ fe-admin 1415 + E2E 35 + smoke 13 | `ddf8a8f` |
 | [53](runs/53-B7.3/summary.md) | M7 | B7.3 phần 1 Vault Transit KeyProvider (+ DEBT-071/159) | ✅ be 475 + int 1221 + vault 22 + E2E 35 | `4846002` |
@@ -61,10 +23,11 @@
 | [54](runs/54-DEBT388/summary.md) | M7 | DEBT-388 ký trước commit, DEBT-401 503 Vault, DEBT-398 guard build | ✅ be 558 + int 1267 + vault 26 + E2E 35 | `df50826` |
 | [55](runs/55-oauth-sweep/summary.md) | M7 | Sweep OAuth DEBT-123/130/177/216/410 | ✅ be 587 + int 1306 + vault 31 + E2E 35 | `c3ed4f0` |
 | [56](runs/56-admin-race/summary.md) | M7 | Race admin/disable client DEBT-147/153/156/166/209 (+418/419/421/423) | ✅ be 589 + int 1347 + E2E 35 (L6 → run 57) | `b634def` |
+| [57](runs/57-audit-order/summary.md) | M7 | Thứ tự audit lock/unlock + sort/cursor audit (DEBT-420/422/427) | ✅ be 594 + int 1366 + E2E 36 | `2314f54` |
 
 ## Chặn / cần người quyết định
 
-Xem `plan.md` §12. Còn mở: **Q3, Q5, Q7–Q9**. **Q1, Q4, Q6 đã chốt** (Q6: access 15', refresh 30d, idle 8h, absolute 30d, secret grace 7d — đọc từ env).
+Xem `plan.md` §12. Còn mở: **Q7–Q9**. Q1, Q3 (BFF), Q4, Q5 (Vault Transit + Redis Sentinel), Q6 đã chốt.
 
 ## Backlog mở
 
