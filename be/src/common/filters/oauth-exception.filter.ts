@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Logger,
 } from '@nestjs/common';
+import { types } from 'node:util';
 import { errorForLog } from '../logger/error-log';
 import {
   DEPENDENCY_RETRY_AFTER_SEC,
@@ -27,10 +28,37 @@ interface HttpReply {
  * The status of a non-`HttpException` `Error` carrying an integer 4xx `statusCode` (Fastify core and
  * its plugins report client errors this way, e.g. @fastify/static 403 on a non-canonical path),
  * else `undefined`. Anything else stays a 500.
+ *
+ * Run 58 (DEBT-238): only when `code` is absent or a Fastify `FST_*` code. An outbound SDK error
+ * carrying `statusCode` 4xx plus its own `code` is a server fault (500 + error log), never the
+ * upstream's status. Invariant: outbound clients wrap their errors (`providerFetchJson`;
+ * `VaultStatusError` uses `status`, not `statusCode`). An `http-errors`-style error without `code`
+ * is still taken as a client error — accepted, no runtime dependency throws one (senior run 38).
+ *
+ * Run 58 retry 1: the ONLY accepted non-`FST_` code is Fastify's mid-body client abort —
+ * `fastify/lib/content-type-parser.js` rawBody `onEnd` tags the request stream's Node
+ * `ConnResetException('aborted')` (`code: 'ECONNRESET'`) with `statusCode` 400 — matched exactly.
+ * Accepted residual risk: an SDK copying `statusCode: 400` onto an upstream `ECONNRESET 'aborted'`
+ * would become a 400 without a log; no runtime dependency does that.
+ * The guard also accepts a native Error from another realm (`types.isNativeError`, Jest VM);
+ * `instanceof` is still needed for `@fastify/error` errors, which are not native.
  */
 export function clientErrorStatus(exception: unknown): number | undefined {
-  if (!(exception instanceof Error)) return undefined;
-  const status = (exception as { statusCode?: unknown }).statusCode;
+  if (!(exception instanceof Error) && !types.isNativeError(exception)) return undefined;
+  const {
+    statusCode: status,
+    code,
+    message,
+  } = exception as { statusCode?: unknown; code?: unknown; message?: unknown };
+  // Fastify rawBody tags the request stream's own abort error with 400 (client gone mid-body).
+  const fastifyBodyAbort = code === 'ECONNRESET' && status === 400 && message === 'aborted';
+  if (
+    !fastifyBodyAbort &&
+    code !== undefined &&
+    !(typeof code === 'string' && code.startsWith('FST_'))
+  ) {
+    return undefined;
+  }
   return typeof status === 'number' && Number.isInteger(status) && status >= 400 && status <= 499
     ? status
     : undefined;

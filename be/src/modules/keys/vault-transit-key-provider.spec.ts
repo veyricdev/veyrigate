@@ -468,6 +468,37 @@ describe('VaultTransitKeyProvider (run 53, unit V7–V12)', () => {
     expect(decodeProtectedHeader(token).kid).toBe(newKid);
   });
 
+  it('DEBT-389: emergency with `config` failing, then re-run ⇒ converges to one key (min_* = trim = latest)', async () => {
+    const p = make();
+    await p.init();
+    const [k1] = (await p.listKeys()).map((k) => k.kid);
+    vault.fail.config = [() => json(503, {})];
+    await expect(p.rotate('emergency', TTL)).rejects.toThrow('vault config failed: status=503');
+
+    // Half-done window (recorded behaviour, not the goal): new key active, old key still listed and
+    // still signable in Vault — but the app always signs with latest.
+    const half = await p.listKeys();
+    expect(half).toHaveLength(2);
+    const k2 = half.find((k) => k.status === 'active')!.kid;
+    expect(half).toEqual([
+      expect.objectContaining({ kid: k1, status: 'retiring' }),
+      expect.objectContaining({ kid: k2, status: 'active', retireAt: null }),
+    ]);
+    expect(decodeProtectedHeader(await p.signJwt({ typ: 'JWT' }, {})).kid).toBe(k2);
+
+    const r = await p.rotate('emergency', TTL);
+    expect(r.oldKid).toBe(k2);
+    const k3 = r.newKid;
+    expect(vault.latest).toBe(3);
+    expect([vault.minDec, vault.minEnc, vault.minAvail]).toEqual([3, 3, 3]);
+    expect([...vault.versions.keys()]).toEqual([3]);
+    expect(await p.listKeys()).toEqual([
+      expect.objectContaining({ kid: k3, status: 'active', retireAt: null }),
+    ]);
+    expect((await p.getPublicKeys()).map((k) => k.kid)).toEqual([k3]);
+    expect((await p.getPublicKeys(k1)).map((k) => k.kid)).not.toContain(k1);
+  });
+
   describe('DEBT-401: outage (network/timeout/5xx/429) ⇒ KeyProviderUnavailableError, anything else stays', () => {
     const networkError = (): Response => {
       throw new TypeError('fetch failed');

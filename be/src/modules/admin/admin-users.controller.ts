@@ -416,7 +416,8 @@ export class AdminUsersController {
   @ApiOperation({
     description:
       'Revokes the consent (the next /authorize asks again) and every refresh family of that ' +
-      'user × client × resource. An already revoked consent is a 404.',
+      'user × client × resource. Idempotent: an already revoked consent of this user/tenant is ' +
+      'a 204 and its families are swept again.',
   })
   async revokeConsent(
     @Tenant() ctx: TenantContext,
@@ -433,21 +434,35 @@ export class AdminUsersController {
     const now = new Date();
     const revoked = await this.consents.revokeById(consentId, t.id, clientIds, now);
     if (!revoked) throw AdminAuthError.notFound();
-    // Consent first, then its families: a refresh racing in between still dies on the family.
-    const count = await this.refreshTokens.revokeForConsent(
-      t.id,
-      revoked.clientId,
-      revoked.resource,
-      now,
-    );
-    await this.audit.record({
+    const { alreadyRevoked } = revoked;
+    const { clientId, resource } = revoked.consent;
+    const event = {
       ...adminAuditBase(req, ctx),
       action: AuditAction.OAUTH_CONSENT_REVOKED,
       targetType: 'user',
       targetId: t.id,
-      clientId: revoked.clientId,
+      clientId,
+    } as const;
+    // Consent first, then its families: a refresh racing in between still dies on the family.
+    // Swept on every call, also when already revoked (DEBT-151): a retry finishes a failed sweep.
+    let count: number;
+    try {
+      count = await this.refreshTokens.revokeForConsent(t.id, clientId, resource, now);
+    } catch (err) {
+      await this.audit
+        .record({
+          ...event,
+          result: 'failure',
+          reason: 'family_sweep_failed',
+          metadata: { clientId, resource, alreadyRevoked },
+        })
+        .catch(() => undefined);
+      throw err;
+    }
+    await this.audit.record({
+      ...event,
       result: 'success',
-      metadata: { clientId: revoked.clientId, resource: revoked.resource, count },
+      metadata: { clientId, resource, count, alreadyRevoked },
     });
   }
 

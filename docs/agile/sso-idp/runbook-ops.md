@@ -60,8 +60,13 @@ lạ ký hợp lệ. Sau khi xoay: alert `SsoEmergencyKeyRotation`
    - **Không idempotent (DEBT-158)**: 5xx/timeout ⇒ **KHÔNG gọi lại mù**. Kiểm trước:
      `GET /admin/keys` (kid active đã khác kid ở bước 2 chưa?) và
      `GET /admin/audit?action=SIGNING_KEY_ROTATED` (event `result:"success"`, `targetId`=newKid,
-     `metadata.mode`, `metadata.oldKid`). Đã xoay ⇒ dừng; chưa ⇒ mới gọi lại. Một lần xoay thừa
-     không phá gì nhưng làm AT mới ký bằng key vừa tạo cũng chết.
+     `metadata.mode`, `metadata.oldKid`). Quy tắc dừng (DEBT-389, run 58):
+     - **normal**: kid active khác bước 2 ⇒ đã xoay, dừng; chưa ⇒ mới gọi lại.
+     - **emergency**: chỉ coi là xong khi `GET /admin/keys` có **đúng 1 item** (`status:"active"`, kid ≠ bước 2).
+       Kid active đã đổi mà còn item `retiring` ⇒ emergency **dở** (Vault `config` lỗi sau `rotate`) ⇒ **gọi lại
+       emergency**: lần chạy lại hội tụ (min_* = latest, trim), tạo thêm 1 version là chấp nhận được. Dấu hiệu trong
+       audit: `SIGNING_KEY_ROTATED result:"failure" reason:"rotate_failed" metadata.mode:"emergency"`.
+     Một lần xoay thừa không phá gì nhưng làm AT mới ký bằng key vừa tạo cũng chết (DEBT-158, chấp nhận).
 4. Dev `LocalKeyProvider`: làm theo [runbook-deploy §6](runbook-deploy.md#6-sau-emergency-rotate--kiểm-key_local_dir-debt-163-dev-localkeyprovider)
    (PEM mồ côi; chỉ xoá đúng `<oldKid>.pem`).
 5. Báo các RP xoá cache JWKS / refetch `/.well-known/openid-configuration` + `/jwks.json` (DEBT-157): RP cache JWKS lâu sẽ từ chối AT mới
@@ -84,9 +89,10 @@ trong một request: `rotate` → `config min_decryption_version = min_encryptio
 - Kiểm trên Vault (token ops, không phải token app): `vault read <mount>/keys/<key>` ⇒ `latest_version` = N,
   `min_decryption_version` = `min_encryption_version` = `min_available_version` = N, `keys` chỉ còn **1** version.
 - Instance khác ngừng chấp nhận key cũ trong ≤ 30 s (cache metadata); không instance nào ký được bằng key cũ nữa (Vault chặn).
-- `config` lỗi ⇒ response 5xx + audit `result:"failure"`; key mới đã active nhưng key cũ còn ký/verify được (DEBT-389).
-  **Trước khi chạy lại** kiểm `GET /admin/keys` (DEBT-158): mỗi lần chạy lại emergency tạo thêm 1 version — chấp nhận được,
-  lần chạy sau sẽ hội tụ (min_* = latest, trim).
+- `config` lỗi ⇒ response 5xx + audit `result:"failure" reason:"rotate_failed"` (DEBT-389). App luôn ký bằng version
+  mới nhất (key mới), nhưng key cũ còn `retiring` trong JWKS và Vault vẫn cho ký bằng version cũ **tới khi chạy lại**.
+  Kiểm `GET /admin/keys` (bước 3): còn item `retiring` ⇒ gọi lại emergency; mỗi lần chạy lại tạo thêm 1 version —
+  chấp nhận được, lần chạy lại hội tụ (min_* = latest, trim; unit test DEBT-389 trong `vault-transit-key-provider.spec.ts`).
 - `trim` lỗi ⇒ rotate vẫn `200`, log ERROR `trim failed after emergency rotation (new kid …)`; key cũ đã không ký/verify được.
   Ops trim tay: `vault write <mount>/keys/<key>/trim min_available_version=N` (N = `latest_version`).
 

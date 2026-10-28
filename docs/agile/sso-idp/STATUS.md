@@ -2,7 +2,7 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `58` — chưa bắt đầu. Ứng viên: DEBT-379 (Node 22.23.4, từ 2026-11-03), DEBT-369/371 (happy-dom + gỡ ignore braces, từ 2026-11-04), sweep 🟡 BE còn lại. Chờ người dùng: A6.3b (DEBT-149/142), DEBT-344 retention, DEBT-405 compose mẫu, DEBT-415.
+- **Run hiện tại**: `58-keys-consent-sweep` — **tester PASS** (cổng tester ✅; xem `runs/58-keys-consent-sweep/test-report.md`): be 614 + int 1387 (+14 test tester) + fe-admin 1416 + fe-sso-test 269 + E2E 36; mutation tester RED đúng, không debt mới → **orchestrator đóng run 58**. Chờ người dùng: **Q58.1 DEBT-214** (đề xuất A), A6.3b (DEBT-149/142), DEBT-344, DEBT-405, DEBT-415. DEBT-379 từ 2026-11-03, DEBT-369/371 từ 2026-11-04.
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
 - **Run vừa đóng**: `57-audit-order` ✅ 2/2 — be 594 + int 1366, E2E 36. Xem `runs/57-audit-order/summary.md`. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev `sso-idp` (index audit mới).
 - **Việc tiếp theo**: M7 còn X3 (chờ Q8), X6 release checklist; lane ADMIN còn A6.3b. Debt 🟡 BE mở: xem `backlog.md` (DEBT-119…256, 321, 334, 344, 389, 392).

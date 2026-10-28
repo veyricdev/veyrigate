@@ -1,0 +1,8 @@
+# Summary — run 58 sweep 🟡 BE: rotate key + consent + error filter (M7, lane BE) — ✅ PASS 3/3 task (DEBT-214 chờ người dùng Q58.1)
+
+- **Phạm vi**: T1 DEBT-389/160 — runbook-ops §1 emergency chỉ xong khi `GET /admin/keys` còn đúng 1 key (chạy lại emergency hội tụ, có unit test fake Vault); spec §10 không phát `SIGNING_KEY_CREATED`; DEBT-158 đóng chấp nhận (super_admin + step-up). T2 DEBT-151 — `revokeById` một `findOneAndUpdate` `$ifNull` + before-image, DELETE consent idempotent (204 kể cả đã revoke, luôn quét family; quét lỗi ⇒ audit `family_sweep_failed` + 5xx, thử lại hội tụ; ngoài tenant/user ⇒ 404 byte-identical). T3 DEBT-238 — `clientErrorStatus` chỉ nhận `code` rỗng/`FST_*` + đúng một ngoại lệ Fastify body abort (`ECONNRESET`+400+`aborted`); guard `instanceof Error || types.isNativeError` (Error khác realm dưới Jest VM).
+- **Bug bắt được trong run**: senior vòng 1 — client ngắt giữa body ⇒ ERROR log flood (ẩn danh) ⇒ tech-lead rà toàn bộ Fastify 5.12.5, chỉ một nguồn ⇒ ngoại lệ chính xác; int test socket thật RST/FIN ⇒ 0 log level 50.
+- **Verify**: be unit 614, int 1387 (14 tester: DELETE lặp/song song/lỗi rồi thử lại/IDOR/guard, abort ở 5 route + 5xx thật vẫn log), fe-admin 1416, fe-sso-test 269, E2E 36/36, audit high 0; mutation 4 + 2 + 7 + 6 RED.
+- **Commit**: (điền sau).
+- **Vòng lặp**: tech-lead=3 (plan, T3 bổ sung ×2), BE dev=2 (impl, retry 1 T3), senior=2 (REJECT T3 abort, PASS), tester=1 (PASS).
+- **Debt**: đóng DEBT-151/158/160/238/389; mở 428 (FE copy consent sau DELETE idempotent), 429 💭 (Vault version tăng mãi), 430 💭 (OpenAPI snapshot không được kiểm với BE thật). **DEBT-214 chờ người dùng (Q58.1)**.

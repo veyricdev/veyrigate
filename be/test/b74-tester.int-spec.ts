@@ -2,13 +2,20 @@ import { jest } from '@jest/globals';
 import { randomBytes } from 'node:crypto';
 import { readFile, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { connect, type AddressInfo } from 'node:net';
 import { Writable } from 'node:stream';
+import { types } from 'node:util';
+import {
+  clientErrorStatus,
+  OAuthExceptionFilter,
+} from '../src/common/filters/oauth-exception.filter';
 import { buildCsp } from '../src/common/http/csp';
 import { ClientService } from '../src/modules/clients/client.service';
 import { FED_BINDING_COOKIE } from '../src/modules/federation/federation.controller';
 import { FederationStateStore } from '../src/modules/federation/federation-state.store';
 import { DEFAULT_TENANT_ID } from '../src/modules/identity/tenant.service';
 import { SessionService } from '../src/modules/sessions/session.service';
+import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { Types } from 'mongoose';
 import {
   authorizeCode,
@@ -580,6 +587,16 @@ describe('B7.4 tester cross-checks', () => {
       ],
       ['Error with status 404 (not statusCode)', Object.assign(new Error('nf'), { status: 404 })],
       ['Error with statusCode string "403"', Object.assign(new Error('s'), { statusCode: '403' })],
+      // run 58 tester (DEBT-238): SDK-shaped / outbound look-alikes must stay server faults.
+      [
+        'run 58 SDK error statusCode 404 + code ESDK_NOT_FOUND',
+        Object.assign(new Error('sdk nf'), { statusCode: 404, code: 'ESDK_NOT_FOUND' }),
+      ],
+      [
+        'run 58 outbound ECONNRESET statusCode 400 "read ECONNRESET"',
+        Object.assign(new Error('read ECONNRESET'), { statusCode: 400, code: 'ECONNRESET' }),
+      ],
+      ['run 58 numeric code 403', Object.assign(new Error('n'), { statusCode: 403, code: 403 })],
     ])(
       '%s thrown on an admin route => 500 server_error + error log + 5xx metric',
       async (_n, err) => {
@@ -616,6 +633,246 @@ describe('B7.4 tester cross-checks', () => {
       expect(res.statusCode).toBe(500);
       expect(res.headers['cache-control']).toBe('no-store');
       expect(await metricCount('/authorize', '5xx')).toBe(before5 + 1);
+    });
+  });
+
+  // ------------------------------------------------------------------ run 58 retry 1 (DEBT-238)
+  describe('run 58 retry 1 DEBT-238: client aborts mid-body', () => {
+    // Own app: Nest binds `filter.catch.bind(filter)` once at init, so the call-through wrapper
+    // must be on the prototype BEFORE boot. A plain wrapper (not jest.spyOn) so the file's
+    // `afterEach(restoreAllMocks)` cannot reset it into a no-op.
+    const abortLines: string[] = [];
+    // nestjs-pino keeps its root logger process-wide: count ERROR lines in BOTH streams.
+    const errorLines = () =>
+      [...lines, ...abortLines].filter((l) => l.includes('"level":50')).length;
+    const settle = () => new Promise((r) => setImmediate(r));
+    const caught: unknown[] = [];
+    const original = OAuthExceptionFilter.prototype.catch;
+    let abortApp: FullApp | undefined;
+    let port = 0;
+
+    beforeAll(async () => {
+      OAuthExceptionFilter.prototype.catch = function (this: OAuthExceptionFilter, e, h) {
+        caught.push(e);
+        return original.call(this, e, h);
+      };
+      abortApp = await bootFullApp({
+        name: 'tester58abort',
+        logStream: new Writable({
+          write(chunk, _enc, cb) {
+            abortLines.push(...String(chunk).split('\n').filter(Boolean));
+            cb();
+          },
+        }),
+      });
+      await abortApp.app.listen(0, '127.0.0.1');
+      port = (abortApp.app.getHttpServer().address() as AddressInfo).port;
+    }, 90_000);
+
+    afterAll(async () => {
+      OAuthExceptionFilter.prototype.catch = original;
+      if (abortApp) await abortApp.close();
+    });
+
+    /**
+     * Tripwire for Node/Fastify: half a body, then the client goes away. Fastify's rawBody tags
+     * the request stream's `ConnResetException('aborted')` with statusCode 400; it must stay a
+     * client error (no ERROR line from any logger). The wrapper proves the path was really taken.
+     */
+    async function abortMidBody(head: string, partial: string, close: 'rst' | 'fin') {
+      caught.length = 0;
+      const unhandled: unknown[] = [];
+      const onUnhandled = (r: unknown) => void unhandled.push(r);
+      process.on('unhandledRejection', onUnhandled);
+      const errBefore = errorLines();
+      try {
+        const socket = connect(port, '127.0.0.1');
+        socket.on('error', () => undefined);
+        await new Promise<void>((r) => socket.once('connect', () => r()));
+        await new Promise<void>((r) => socket.write(head + partial, () => r()));
+        await new Promise((r) => setTimeout(r, 50));
+        if (close === 'rst') socket.resetAndDestroy();
+        else socket.destroy();
+        const deadline = Date.now() + 5000;
+        while (caught.length === 0 && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 20));
+        }
+        expect(caught.length).toBeGreaterThan(0);
+        await settle();
+        await new Promise((r) => setTimeout(r, 50));
+        const err = caught[0] as Error & { code?: unknown; statusCode?: unknown };
+        console.warn(
+          `[run58-retry1] ${close}: ${JSON.stringify({ name: err.name, code: err.code, statusCode: err.statusCode, message: err.message })}`,
+        );
+        expect(types.isNativeError(err)).toBe(true);
+        expect({ code: err.code, statusCode: err.statusCode, message: err.message }).toEqual({
+          code: 'ECONNRESET',
+          statusCode: 400,
+          message: 'aborted',
+        });
+        expect(clientErrorStatus(err)).toBe(400);
+        expect(errorLines()).toBe(errBefore);
+        expect(unhandled).toEqual([]);
+      } finally {
+        process.off('unhandledRejection', onUnhandled);
+      }
+    }
+
+    it('POST /token form body, half sent then RST => 400 path, no "level":50 line', async () => {
+      await abortMidBody(
+        'POST /token HTTP/1.1\r\nHost: localhost\r\n' +
+          'Content-Type: application/x-www-form-urlencoded\r\nContent-Length: 200\r\n\r\n',
+        'grant_type=client_cre',
+        'rst',
+      );
+    });
+
+    it('POST /token JSON body, half sent then FIN => 400 path, no "level":50 line', async () => {
+      await abortMidBody(
+        'POST /token HTTP/1.1\r\nHost: localhost\r\n' +
+          'Content-Type: application/json\r\nContent-Length: 200\r\n\r\n',
+        '{"a":',
+        'fin',
+      );
+    });
+  });
+
+  // ------------------------------------------------------------------ run 58 tester (DEBT-238)
+  describe('run 58 tester DEBT-238: mid-body abort on other routes + real 5xx still logged', () => {
+    // Own app, both global (OAuth) and HTML filters wrapped on the prototype BEFORE boot (Nest binds
+    // `catch` at init). Plain wrappers so the file's `afterEach(restoreAllMocks)` cannot undo them.
+    const tLines: string[] = [];
+    const errorLines = () => [...lines, ...tLines].filter((l) => l.includes('"level":50')).length;
+    const caught: { filter: string; e: unknown }[] = [];
+    const origOAuth = OAuthExceptionFilter.prototype.catch;
+    const origHtml = HtmlExceptionFilter.prototype.catch;
+    let tApp: FullApp | undefined;
+    let port = 0;
+
+    beforeAll(async () => {
+      OAuthExceptionFilter.prototype.catch = function (this: OAuthExceptionFilter, e, h) {
+        caught.push({ filter: 'oauth', e });
+        return origOAuth.call(this, e, h);
+      };
+      HtmlExceptionFilter.prototype.catch = function (this: HtmlExceptionFilter, e, h) {
+        caught.push({ filter: 'html', e });
+        return origHtml.call(this, e, h);
+      };
+      tApp = await bootFullApp({
+        name: 'tester58t',
+        logStream: new Writable({
+          write(chunk, _enc, cb) {
+            tLines.push(...String(chunk).split('\n').filter(Boolean));
+            cb();
+          },
+        }),
+      });
+      await tApp.app.listen(0, '127.0.0.1');
+      port = (tApp.app.getHttpServer().address() as AddressInfo).port;
+    }, 90_000);
+
+    afterAll(async () => {
+      OAuthExceptionFilter.prototype.catch = origOAuth;
+      HtmlExceptionFilter.prototype.catch = origHtml;
+      if (tApp) await tApp.close();
+    });
+
+    async function waitCaught(): Promise<void> {
+      const deadline = Date.now() + 5000;
+      while (caught.length === 0 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      expect(caught.length).toBeGreaterThan(0);
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    async function abort(head: string, partial: string, close: 'rst' | 'fin', filter: string) {
+      caught.length = 0;
+      const unhandled: unknown[] = [];
+      const onUnhandled = (r: unknown) => void unhandled.push(r);
+      process.on('unhandledRejection', onUnhandled);
+      const errBefore = errorLines();
+      try {
+        const socket = connect(port, '127.0.0.1');
+        socket.on('error', () => undefined);
+        await new Promise<void>((r) => socket.once('connect', () => r()));
+        await new Promise<void>((r) => socket.write(head + partial, () => r()));
+        await new Promise((r) => setTimeout(r, 50));
+        if (close === 'rst') socket.resetAndDestroy();
+        else socket.destroy();
+        await waitCaught();
+        expect(caught.map((c) => c.filter)).toEqual([filter]);
+        const err = caught[0].e as Error & { code?: unknown; statusCode?: unknown };
+        expect({ code: err.code, statusCode: err.statusCode, message: err.message }).toEqual({
+          code: 'ECONNRESET',
+          statusCode: 400,
+          message: 'aborted',
+        });
+        expect(clientErrorStatus(err)).toBe(400);
+        expect(errorLines()).toBe(errBefore);
+        expect(unhandled).toEqual([]);
+      } finally {
+        process.off('unhandledRejection', onUnhandled);
+      }
+    }
+
+    const head = (path: string, type: string, extra = 'Content-Length: 300\r\n') =>
+      `POST ${path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: ${type}\r\n${extra}\r\n`;
+    const FORM = 'application/x-www-form-urlencoded';
+
+    it('T58-6 POST /authorize/consent form, half sent then RST => global OAuth filter (body parsed before the route filter), 400 path, no level-50 line', async () => {
+      await abort(head('/authorize/consent', FORM), 'decision=allow&csrf=abc', 'rst', 'oauth');
+    });
+
+    it('T58-7 POST /login form, half sent then FIN => global OAuth filter (body parsed before the route filter), 400 path, no level-50 line', async () => {
+      await abort(head('/login', FORM), 'email=a%40b.test&pass', 'fin', 'oauth');
+    });
+
+    it('T58-8 POST /login chunked form, partial chunk then RST => 400 path, no level-50 line', async () => {
+      await abort(
+        head('/login', FORM, 'Transfer-Encoding: chunked\r\n'),
+        '40\r\nemail=a%40b.test',
+        'rst',
+        'oauth',
+      );
+    });
+
+    it('T58-9 anonymous POST /admin/clients JSON, half sent then RST => OAuth filter, 400 path, no level-50 line', async () => {
+      await abort(
+        head('/admin/clients', 'application/json'),
+        '{"clientId":"x","na',
+        'rst',
+        'oauth',
+      );
+    });
+
+    it('T58-10 POST /introspect form, half sent then FIN => OAuth filter, 400 path, no level-50 line', async () => {
+      await abort(head('/introspect', FORM), 'token=abc', 'fin', 'oauth');
+    });
+
+    it('T58-11 control on the same harness: a real server fault inside the /token handler (renderError path) => 500 server_error AND a level-50 line', async () => {
+      caught.length = 0;
+      const errBefore = errorLines();
+      jest
+        .spyOn(ClientService.prototype, 'findByClientId')
+        .mockRejectedValueOnce(
+          Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET', statusCode: 400 }),
+        );
+      const res = await tApp!.app.inject({
+        method: 'POST',
+        url: '/token',
+        headers: {
+          'content-type': FORM,
+          authorization: 'Basic ' + Buffer.from('some-client:some-secret').toString('base64'),
+        },
+        payload: 'grant_type=refresh_token&refresh_token=not-a-real-rt',
+      });
+      await new Promise((r) => setImmediate(r));
+      expect(res.statusCode).toBe(500);
+      expect(res.json<{ error: string }>().error).toBe('server_error');
+      expect(res.body).not.toContain('ECONNRESET');
+      expect(errorLines()).toBeGreaterThan(errBefore);
     });
   });
 });

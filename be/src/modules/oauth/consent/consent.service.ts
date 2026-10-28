@@ -106,30 +106,34 @@ export class ConsentService {
   }
 
   /**
-   * Admin revoke (B6.3b): atomically stamp `revokedAt` on the ACTIVE consent `id` of `userId` for
-   * one of `clientIds`, returning it, or null when nothing matched (unknown, other user/tenant,
-   * already revoked). `isCovered` then refuses it, so the next `/authorize` asks again.
+   * Admin revoke (B6.3b; idempotent since run 58, DEBT-151): stamp `revokedAt` on consent `id` of
+   * `userId` for one of `clientIds` in ONE round-trip. An already revoked consent keeps its FIRST
+   * `revokedAt` (`$ifNull`); the before-image tells which (`alreadyRevoked`), so a retry can sweep
+   * the families again. Null when nothing matched (unknown, other user/tenant). `isCovered` then
+   * refuses it, so the next `/authorize` asks again. The pipeline is not schema-cast, so the
+   * `userId` filter is cast to ObjectId explicitly (as in `upsertGrant`).
    */
   async revokeById(
     id: string,
     userId: string,
     clientIds: string[],
     now: Date,
-  ): Promise<Consent | null> {
+  ): Promise<{ consent: Consent; alreadyRevoked: boolean } | null> {
     if (clientIds.length === 0) return null;
-    return this.consents
+    const before = await this.consents
       .findOneAndUpdate(
         {
           _id: new Types.ObjectId(id),
           userId: new Types.ObjectId(userId),
           clientId: { $in: clientIds },
-          revokedAt: null,
         },
-        { $set: { revokedAt: now } },
-        { returnDocument: 'after' },
+        [{ $set: { revokedAt: { $ifNull: ['$revokedAt', now] } } }],
+        { returnDocument: 'before', updatePipeline: true },
       )
       .lean<Consent>()
       .exec();
+    if (!before) return null;
+    return { consent: before, alreadyRevoked: before.revokedAt != null };
   }
 
   /**

@@ -283,7 +283,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** @description Revokes the consent (the next /authorize asks again) and every refresh family of that user × client × resource. An already revoked consent is a 404. */
+        /** @description Revokes the consent (the next /authorize asks again) and every refresh family of that user × client × resource. Idempotent: an already revoked consent of this user/tenant is a 204 and its families are swept again. */
         delete: operations["AdminUsersController_revokeConsent"];
         options?: never;
         head?: never;

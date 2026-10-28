@@ -1071,16 +1071,17 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
         result: 'success',
         metadata: { clientId: CLIENT_A, resource: DEMO_AUD, count: 1 },
       });
-      // Already revoked => 404 (chosen contract), no second audit.
+      // Run 58 (DEBT-151, intended change; was "already revoked => 404, no second audit"): an
+      // already revoked consent is an idempotent 204 that sweeps its families again and is audited.
       const again = await call(
         'DELETE',
         `/admin/users/${f.user}/consents/${id}`,
         await tok(tadminA),
       );
-      expect(again.statusCode).toBe(404);
+      expect(again.statusCode).toBe(204);
       expect(
         await auditModel.countDocuments({ action: 'OAUTH_CONSENT_REVOKED', targetId: f.user }),
-      ).toBe(1);
+      ).toBe(2);
       const list = await call('GET', `/admin/users/${f.user}/consents`, await tok(tadminA));
       expect((list.json().items as { id: string }[]).map((i) => i.id)).not.toContain(id);
     });
@@ -1144,6 +1145,309 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
       expect(
         await refreshModel.countDocuments({ familyId: f.foreignFamily, revokedAt: null }),
       ).toBe(0);
+    });
+
+    describe('run 58 DEBT-151: DELETE consent is idempotent, always sweeps, audits every call', () => {
+      const consentOf = async (user: string, clientId = CLIENT_A, resource = DEMO_AUD) =>
+        String(
+          (await consentModel
+            .findOne({ userId: new Types.ObjectId(user), clientId, resource })
+            .lean())!._id,
+        );
+      const del = async (user: string, id: string) =>
+        call('DELETE', `/admin/users/${user}/consents/${id}`, await tok(tadminA));
+      const revokedAtOf = async (id: string) =>
+        ((await consentModel.findById(id).lean())?.revokedAt as Date | null | undefined) ?? null;
+      const audits = (user: string, result?: string) =>
+        auditModel
+          .find({ action: 'OAUTH_CONSENT_REVOKED', targetId: user, ...(result ? { result } : {}) })
+          .sort({ timestamp: 1, _id: 1 })
+          .lean();
+      const familyActive = async (familyId: string) =>
+        refreshModel.countDocuments({ familyId, revokedAt: null });
+
+      it('(a) repeat after a successful revoke => 204, first revokedAt kept, second audit alreadyRevoked:true count:0', async () => {
+        const f = await fixture();
+        const id = await consentOf(f.user);
+        expect((await del(f.user, id)).statusCode).toBe(204);
+        const first = await revokedAtOf(id);
+        expect(first).toBeInstanceOf(Date);
+        const again = await del(f.user, id);
+        expect(again.statusCode).toBe(204);
+        expect(again.body).toBe('');
+        expect((await revokedAtOf(id))!.getTime()).toBe(first!.getTime());
+        const rows = await audits(f.user);
+        expect(rows.map((r) => r.metadata)).toEqual([
+          { clientId: CLIENT_A, resource: DEMO_AUD, count: 1, alreadyRevoked: false },
+          { clientId: CLIENT_A, resource: DEMO_AUD, count: 0, alreadyRevoked: true },
+        ]);
+        expect(rows.every((r) => r.result === 'success')).toBe(true);
+      });
+
+      it('(b) family sweep fails => 5xx + failure audit; the family lived on; retry => 204 and the family dies', async () => {
+        const f = await fixture();
+        const id = await consentOf(f.user);
+        jest
+          .spyOn(moduleRef.get(RefreshTokenService), 'revokeForConsent')
+          .mockRejectedValueOnce(new Error('mongo sweep down'));
+        const res = await del(f.user, id);
+        expect(res.statusCode).toBeGreaterThanOrEqual(500);
+        expect(res.body).not.toContain('mongo sweep down');
+        expect(await revokedAtOf(id)).toBeInstanceOf(Date);
+        // The hole before the fix: the refresh grant does not check consent, the family lives.
+        const rotated = await refresh(f.demo.refresh_token!);
+        expect(rotated.statusCode).toBe(200);
+        expect(await audits(f.user, 'failure')).toEqual([
+          expect.objectContaining({
+            reason: 'family_sweep_failed',
+            metadata: { clientId: CLIENT_A, resource: DEMO_AUD, alreadyRevoked: false },
+          }),
+        ]);
+        expect(await audits(f.user, 'success')).toHaveLength(0);
+
+        expect((await del(f.user, id)).statusCode).toBe(204);
+        expect((await refresh(rotated.json().refresh_token as string)).json().error).toBe(
+          'invalid_grant',
+        );
+        expect(await familyActive(f.demoFamily)).toBe(0);
+        expect(
+          await refreshModel.countDocuments({ familyId: f.demoFamily, familyRevokedAt: null }),
+        ).toBe(0);
+        expect((await audits(f.user, 'success')).map((r) => r.metadata)).toEqual([
+          expect.objectContaining({ alreadyRevoked: true }),
+        ]);
+        expect(await familyActive(f.otherFamily)).toBe(1);
+      });
+
+      it('(c) success audit fails => 5xx with the family already revoked; retry => 204 + exactly one success audit', async () => {
+        const f = await fixture();
+        const id = await consentOf(f.user);
+        jest
+          .spyOn(moduleRef.get(AuditService), 'record')
+          .mockRejectedValueOnce(new Error('audit down'));
+        const res = await del(f.user, id);
+        expect(res.statusCode).toBeGreaterThanOrEqual(500);
+        expect(res.body).not.toContain('audit down');
+        expect(await familyActive(f.demoFamily)).toBe(0);
+        expect((await del(f.user, id)).statusCode).toBe(204);
+        const rows = await audits(f.user);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({
+          result: 'success',
+          metadata: { clientId: CLIENT_A, resource: DEMO_AUD, count: 0, alreadyRevoked: true },
+        });
+      });
+
+      it('(d) two concurrent DELETEs => both 204, one alreadyRevoked:false + one alreadyRevoked:true, family revoked', async () => {
+        const f = await fixture();
+        const id = await consentOf(f.user);
+        const token = await tok(tadminA);
+        const res = await Promise.all([
+          call('DELETE', `/admin/users/${f.user}/consents/${id}`, token),
+          call('DELETE', `/admin/users/${f.user}/consents/${id}`, token),
+        ]);
+        expect(res.map((r) => r.statusCode)).toEqual([204, 204]);
+        const flags = (await audits(f.user, 'success'))
+          .map((r) => (r.metadata as { alreadyRevoked: boolean }).alreadyRevoked)
+          .sort();
+        expect(flags).toEqual([false, true]);
+        expect(await familyActive(f.demoFamily)).toBe(0);
+        expect((await refresh(f.demo.refresh_token!)).json().error).toBe('invalid_grant');
+      });
+
+      it('(e) ALREADY revoked consent of a tenant-B client / another user / unknown / malformed => 404 byte-identical, DB unchanged', async () => {
+        const f = await fixture();
+        const stranger = await mkUser({ [TENANT_A]: [] }, 'str');
+        const sf = await realFlow(stranger);
+        const strangerFamily = (await refreshModel
+          .findOne({ userId: new Types.ObjectId(stranger) })
+          .lean())!.familyId as string;
+        const foreign = await consentOf(f.user, CLIENT_B);
+        const strangers = await consentOf(stranger);
+        const stamp = new Date('2020-01-01T00:00:00.000Z');
+        await consentModel.updateMany(
+          { _id: { $in: [new Types.ObjectId(foreign), new Types.ObjectId(strangers)] } },
+          { $set: { revokedAt: stamp } },
+        );
+        const token = await tok(superA);
+        const shapes = new Set<string>();
+        for (const id of [foreign, strangers, new Types.ObjectId().toHexString(), 'not-an-id']) {
+          const res = await call('DELETE', `/admin/users/${f.user}/consents/${id}`, token);
+          shapes.add(`${res.statusCode} ${String(res.headers['content-type'])} ${res.body}`);
+        }
+        expect([...shapes]).toHaveLength(1);
+        expect([...shapes][0]).toMatch(/^404 application\/json.* \{"error":"not_found"\}$/);
+        expect((await revokedAtOf(foreign))!.getTime()).toBe(stamp.getTime());
+        expect((await revokedAtOf(strangers))!.getTime()).toBe(stamp.getTime());
+        expect(await familyUntouched(f.foreignFamily)).toBe(true);
+        expect(await familyActive(strangerFamily)).toBe(1);
+        expect((await refresh(sf.refresh_token!)).statusCode).toBe(200);
+        expect(await audits(f.user)).toHaveLength(0);
+      });
+    });
+
+    // ---------------------------------------------------------------- run 58 tester (DEBT-151)
+    describe('run 58 tester DEBT-151: retry/replay/concurrency/guard risk matrix', () => {
+      const consentOf = async (user: string, clientId = CLIENT_A, resource = DEMO_AUD) =>
+        String(
+          (await consentModel
+            .findOne({ userId: new Types.ObjectId(user), clientId, resource })
+            .lean())!._id,
+        );
+      const revokedAtOf = async (id: string) =>
+        ((await consentModel.findById(id).lean())?.revokedAt as Date | null | undefined) ?? null;
+      const consentAudits = (user: string, result?: string) =>
+        auditModel
+          .find({ action: 'OAUTH_CONSENT_REVOKED', targetId: user, ...(result ? { result } : {}) })
+          .lean();
+      const familyActive = (familyId: string) =>
+        refreshModel.countDocuments({ familyId, revokedAt: null });
+      /** A refresh that slipped past a sweep (or a resurrected doc): one live RT in the family. */
+      const resurrect = (familyId: string) =>
+        refreshModel.updateOne({ familyId }, { $set: { revokedAt: null, familyRevokedAt: null } });
+
+      it('T58-1 sequential x4 + concurrent x6 => every call 204, family swept EVERY time, first revokedAt kept, exactly one alreadyRevoked:false', async () => {
+        const f = await fixture();
+        const id = await consentOf(f.user);
+        const token = await tok(tadminA);
+        const del = () => call('DELETE', `/admin/users/${f.user}/consents/${id}`, token);
+        expect((await del()).statusCode).toBe(204);
+        const first = (await revokedAtOf(id))!.getTime();
+        for (let i = 0; i < 3; i++) {
+          await resurrect(f.demoFamily);
+          expect(await familyActive(f.demoFamily)).toBe(1);
+          const res = await del();
+          expect(res.statusCode).toBe(204);
+          expect(res.body).toBe('');
+          expect(await familyActive(f.demoFamily)).toBe(0);
+          expect((await revokedAtOf(id))!.getTime()).toBe(first);
+        }
+        await resurrect(f.demoFamily);
+        const burst = await Promise.all(Array.from({ length: 6 }, () => del()));
+        expect(burst.map((r) => r.statusCode)).toEqual(Array(6).fill(204));
+        expect(await familyActive(f.demoFamily)).toBe(0);
+        expect((await revokedAtOf(id))!.getTime()).toBe(first);
+        const rows = await consentAudits(f.user);
+        expect(rows).toHaveLength(10);
+        expect(rows.every((r) => r.result === 'success')).toBe(true);
+        const meta = rows.map((r) => r.metadata as { alreadyRevoked: boolean; count: number });
+        expect(meta.filter((m) => !m.alreadyRevoked)).toHaveLength(1);
+        // First call swept 1, the 3 sequential retries each swept the resurrected doc, the burst once.
+        expect(meta.reduce((s, m) => s + m.count, 0)).toBe(1 + 3 + 1);
+        for (const r of rows) {
+          expect(Object.keys(r.metadata as object).sort()).toEqual(
+            ['alreadyRevoked', 'clientId', 'count', 'resource'].sort(),
+          );
+          expect(JSON.stringify(r)).not.toMatch(/tokenHash|refresh_token/);
+        }
+        // offline_access family: the latest RT is dead; the unrelated family of the same user lives.
+        expect((await refresh(f.demo.refresh_token!)).json().error).toBe('invalid_grant');
+        expect(await familyActive(f.otherFamily)).toBe(1);
+      });
+
+      it('T58-2 sweep fails twice (the 2nd with the failure audit also down) => 500 each, nothing leaks; 3rd call converges', async () => {
+        const f = await fixture();
+        const id = await consentOf(f.user);
+        const token = await tok(tadminA);
+        const del = () => call('DELETE', `/admin/users/${f.user}/consents/${id}`, token);
+        const sweep = jest.spyOn(moduleRef.get(RefreshTokenService), 'revokeForConsent');
+        sweep.mockRejectedValueOnce(new Error('sweep-down-1'));
+        const r1 = await del();
+        expect(r1.statusCode).toBe(500);
+        expect(r1.body).not.toContain('sweep-down');
+        const first = (await revokedAtOf(id))!.getTime();
+        sweep.mockRejectedValueOnce(new Error('sweep-down-2'));
+        jest
+          .spyOn(moduleRef.get(AuditService), 'record')
+          .mockRejectedValueOnce(new Error('audit-down-2'));
+        const r2 = await del();
+        expect(r2.statusCode).toBe(500);
+        expect(r2.body).not.toMatch(/sweep-down|audit-down/);
+        expect(await familyActive(f.demoFamily)).toBe(1);
+        const r3 = await del();
+        expect(r3.statusCode).toBe(204);
+        expect(await familyActive(f.demoFamily)).toBe(0);
+        expect((await revokedAtOf(id))!.getTime()).toBe(first);
+        expect((await refresh(f.demo.refresh_token!)).json().error).toBe('invalid_grant');
+        const fails = await consentAudits(f.user, 'failure');
+        expect(
+          fails.map((r) => [r.reason, (r.metadata as { alreadyRevoked: boolean }).alreadyRevoked]),
+        ).toEqual([['family_sweep_failed', false]]);
+        const ok = await consentAudits(f.user, 'success');
+        expect(ok.map((r) => r.metadata)).toEqual([
+          { clientId: CLIENT_A, resource: DEMO_AUD, count: 1, alreadyRevoked: true },
+        ]);
+      });
+
+      it('T58-3 revokeById (DB) fails => 500, nothing changed, no audit; retry => 204 alreadyRevoked:false', async () => {
+        const f = await fixture();
+        const id = await consentOf(f.user);
+        const token = await tok(tadminA);
+        jest
+          .spyOn(moduleRef.get(ConsentService), 'revokeById')
+          .mockRejectedValueOnce(new Error('mongo-consent-down'));
+        const r1 = await call('DELETE', `/admin/users/${f.user}/consents/${id}`, token);
+        expect(r1.statusCode).toBe(500);
+        expect(r1.body).not.toContain('mongo-consent-down');
+        expect(await revokedAtOf(id)).toBeNull();
+        expect(await familyActive(f.demoFamily)).toBe(1);
+        expect(await consentAudits(f.user)).toHaveLength(0);
+        const r2 = await call('DELETE', `/admin/users/${f.user}/consents/${id}`, token);
+        expect(r2.statusCode).toBe(204);
+        expect((await consentAudits(f.user)).map((r) => r.metadata)).toEqual([
+          { clientId: CLIENT_A, resource: DEMO_AUD, count: 1, alreadyRevoked: false },
+        ]);
+      });
+
+      it('T58-4 tenant-B admin vs a user who IS a member of B: A-client consent (active and revoked) => 404 byte-identical to an unknown id, untouched', async () => {
+        const both = await mkUser({ [TENANT_A]: [], [TENANT_B]: [] }, 'both');
+        const flow = await realFlow(both);
+        const fam = (await refreshModel
+          .findOne({ userId: new Types.ObjectId(both), clientId: CLIENT_A })
+          .lean())!.familyId as string;
+        const id = await consentOf(both);
+        const b = await tok(tadminB, { client: CLIENT_B });
+        const shape = async (cid: string) => {
+          const r = await call('DELETE', `/admin/users/${both}/consents/${cid}`, b);
+          return `${r.statusCode} ${String(r.headers['content-type'])} ${r.body}`;
+        };
+        const unknown = await shape(new Types.ObjectId().toHexString());
+        expect(unknown).toMatch(/^404 /);
+        expect(await shape(id)).toBe(unknown);
+        expect(await revokedAtOf(id)).toBeNull();
+        const stamp = new Date('2021-02-03T04:05:06.000Z');
+        await consentModel.updateOne(
+          { _id: new Types.ObjectId(id) },
+          { $set: { revokedAt: stamp } },
+        );
+        expect(await shape(id)).toBe(unknown);
+        expect((await revokedAtOf(id))!.getTime()).toBe(stamp.getTime());
+        expect(await familyActive(fam)).toBe(1);
+        expect((await refresh(flow.refresh_token!)).statusCode).toBe(200);
+        expect(await consentAudits(both)).toHaveLength(0);
+      });
+
+      it('T58-5 guards on an ALREADY revoked consent: no token 401, stale auth step_up_required, read-only insufficient_scope; no sweep, no audit', async () => {
+        const f = await fixture();
+        const id = await consentOf(f.user);
+        const stamp = new Date('2022-01-01T00:00:00.000Z');
+        await consentModel.updateOne(
+          { _id: new Types.ObjectId(id) },
+          { $set: { revokedAt: stamp } },
+        );
+        const url = `/admin/users/${f.user}/consents/${id}`;
+        const anon = await app.inject({ method: 'DELETE', url });
+        expect(anon.statusCode).toBe(401);
+        const stale = await call('DELETE', url, await tok(tadminA, { authAgoMs: 6 * MIN }));
+        expect(stale.statusCode).toBe(403);
+        expect(stale.json().error).toBe('step_up_required');
+        const ro = await call('DELETE', url, await tok(tadminA, { scope: 'openid admin.read' }));
+        expect(ro.statusCode).toBe(403);
+        expect(ro.json().error).toBe('insufficient_scope');
+        expect(await familyActive(f.demoFamily)).toBe(1);
+        expect((await revokedAtOf(id))!.getTime()).toBe(stamp.getTime());
+        expect(await consentAudits(f.user)).toHaveLength(0);
+      });
     });
   });
 
