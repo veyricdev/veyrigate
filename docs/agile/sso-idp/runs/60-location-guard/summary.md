@@ -2,6 +2,6 @@
 
 - **Phạm vi**: T1 [FE] DEBT-446 — `withSecurityHeaders` kiểm mọi `Location` (mọi status, cả nhánh catch): tuyệt đối phải có origin ∈ {APP_URL, OIDC_ISSUER} và không userinfo; tương đối resolve với base cố định phải giữ origin; không parse được ⇒ chặn. Bị chặn ⇒ 404 text/plain, bỏ toàn bộ header gốc (kể cả `Set-Cookie`), huỷ body, đủ header A7, log 1 dòng không URL/Host. Guard `//` run 59 giữ làm lớp chính. DEBT-447 bỏ `if` thừa trong `routerPathname`. T2 [BE] DEBT-445 JWKS Google rỗng ⇒ 502 `provider_unavailable` (kid lạ vẫn 400); DEBT-444/451/460 `framework-errors.ts` kiểu cấu trúc gọn, bỏ interface/cast thừa.
 - **Verify**: be unit 630, int 1420, fe-admin 1533 (51 tester: `:443`, IDN, IPv6, cách viết đổi authority), fe-sso-test 269, E2E 36/36 (0 dòng `location guard` ⇒ không chặn nhầm), build thật 19 208 target ⇒ 0 Location ra ngoài origin; mutation: bỏ guard `//` trên build thật ⇒ lớp mới chặn 5 832/5 832 redirect 308; M1–M8 + Ma/Mb + 3 mutation T2 RED.
-- **Commit**: (điền sau).
+- **Commit**: `ba921e8`.
 - **Vòng lặp**: tech-lead=1, FE dev=1, BE dev=2 (T2, DEBT-451), senior=1 (PASS), tester=1 (PASS).
 - **Debt**: đóng DEBT-444/445/446/447/451/460; mở 449 💭 (`serve.mjs` assets ngoài guard — kiểm lại khi nâng srvx), 450 (test `session-store` flaky vì `eyJ` ngẫu nhiên trong ciphertext). DEBT-448 (int timeout khi tải cao) tái hiện ở dev — nên xử lý ở run sau.
