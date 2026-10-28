@@ -2,9 +2,9 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: `59-http-edge` — tech-lead **PASS** (2026-10-28): 3 task theo fold cuối tasks.md — T1 [FE] DEBT-387, T2 [BE] DEBT-239 (+414), T3 [BE] DEBT-197 (502); đóng DEBT-135/236 (chấp nhận), mở DEBT-431 → cổng: **frontend-dev (T1) ∥ backend-dev (T2, T3)**. **T1 ✅ frontend-dev** (DEBT-387 đóng; fe-admin 1434 test, smoke 15/15, mutation RED 15/12). **T2/T3 ✅ backend-dev** (DEBT-239/197 đóng, mở DEBT-440/441 💭; be 627 + int 1391, smoke BE 11/11, E2E 36/36) **Senior ✅ PASS** (0 🔴; mở DEBT-442/443/444 🟡). **Tester ❌ FAIL** (2026-10-28): T1 bypass thật — srvx + h3 `H3Event` giải `%5C`/`%09` SAU guard ⇒ `GET /%5C…` + `Host` giả vẫn 308 `Location` theo Host (DEBT-387 mở lại; test-report case T1-B); T2 ✅ (raw socket 17/17, đóng DEBT-443), T3 ✅ (remote JWKS 12/12); be 627 + int 1420, fe-admin 1437/1439 (2 RED = T1-B), E2E 36; mở DEBT-445 💭 **T1 retry 1 ✅ frontend-dev** (guard kiểm cả pathname sau `decodeURI` kiểu h3; DEBT-387/442 đóng; tester corpus 12222 ⇒ 0 redirect; fe-admin 1453, smoke 16/16, E2E 35/36 + lab replay chạy lại pass ⇒ DEBT-432/433 💭) **Senior vòng 2 ✅ PASS** (0 🔴; đối chiếu source h3/srvx/router-core thật, fuzz vi sai 148 620 target 0 bypass; mở DEBT-446 🟡, DEBT-447 💭) **Tester lượt 2 ✅ PASS** (build thật 18 857 target raw ⇒ 0 redirect 308; smoke 16/16; be 627 + int 1420, fe-admin 1455, E2E 36; đóng DEBT-433, DEBT-447 còn ponytail, mở DEBT-448 💭) → cổng: **orchestrator đóng run**. Vòng lặp: tech-lead=1, senior=2, tester=2. DEBT-379 từ 2026-11-03, DEBT-369/371 từ 2026-11-04. Chờ người dùng: **Q58.1/DEBT-214**, A6.3b (DEBT-149/142), DEBT-344, DEBT-405, DEBT-415.
+- **Run hiện tại**: `60` — chưa bắt đầu. Ứng viên: DEBT-446 🟡 (kiểm `Location` ra ngoài origin), DEBT-379 (Node 22.23.4) từ 2026-11-03, DEBT-369/371 từ 2026-11-04, sweep 🟡 còn lại. Chờ người dùng: **Q58.1/DEBT-214**, A6.3b (DEBT-149/142), DEBT-344, DEBT-405, DEBT-415.
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `58-keys-consent-sweep` ✅ 3/3 — be 614 + int 1387, E2E 36. Xem `runs/58-keys-consent-sweep/summary.md`. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev `sso-idp` (index audit run 57).
+- **Run vừa đóng**: `59-http-edge` ✅ 3/3 — be 627 + int 1420, fe-admin 1455, E2E 36. Xem `runs/59-http-edge/summary.md`. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev `sso-idp` (index audit run 57).
 - **Việc tiếp theo**: M7 còn X3 (chờ Q8), X6 release checklist; lane ADMIN còn A6.3b. Debt 🟡 BE mở: xem `backlog.md` (DEBT-119…256, 321, 334, 344, 389, 392).
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
@@ -25,6 +25,7 @@
 | [56](runs/56-admin-race/summary.md) | M7 | Race admin/disable client DEBT-147/153/156/166/209 (+418/419/421/423) | ✅ be 589 + int 1347 + E2E 35 (L6 → run 57) | `b634def` |
 | [57](runs/57-audit-order/summary.md) | M7 | Thứ tự audit lock/unlock + sort/cursor audit (DEBT-420/422/427) | ✅ be 594 + int 1366 + E2E 36 | `2314f54` |
 | [58](runs/58-keys-consent-sweep/summary.md) | M7 | Sweep 🟡 BE: DEBT-151/158/160/238/389 | ✅ be 614 + int 1387 + E2E 36 | `f7ac551` |
+| [59](runs/59-http-edge/summary.md) | M7 | Biên HTTP DEBT-387/442/239/197 (+135/236 đóng chấp nhận) | ✅ be 627 + int 1420 + fe-admin 1455 + E2E 36 | `9c465ee` |
 
 ## Chặn / cần người quyết định
 
