@@ -1,9 +1,10 @@
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
-import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
+import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { existsSync } from 'node:fs';
 import { AppModule } from './app.module';
 import { configureApp } from './bootstrap';
+import { createFastifyAdapter } from './common/http/framework-errors';
 import type { AppConfig } from './config/configuration';
 import { assertTrustProxyConsistent, parseTrustProxy } from './config/trust-proxy';
 
@@ -25,7 +26,7 @@ async function bootstrap(): Promise<void> {
   const parsedTrustProxy = parseTrustProxy(process.env.TRUST_PROXY);
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
-    new FastifyAdapter({ trustProxy: parsedTrustProxy }),
+    createFastifyAdapter(parsedTrustProxy),
     { bufferLogs: true },
   );
 

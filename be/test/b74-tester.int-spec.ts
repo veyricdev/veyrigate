@@ -441,7 +441,6 @@ describe('B7.4 tester cross-checks', () => {
       status: number;
       headers?: Record<string, string>;
       payload?: string;
-      framework?: boolean;
     };
     const json = { 'content-type': 'application/json' };
     const big = `{"a":"${'x'.repeat(1024 * 1024 + 16)}"}`;
@@ -510,22 +509,6 @@ describe('B7.4 tester cross-checks', () => {
         payload: '<a/>',
       },
       {
-        name: 'malformed percent-encoding in path',
-        method: 'GET',
-        url: '/assets/%E0%A4%A',
-        route: '/assets/*',
-        status: 400,
-        framework: true,
-      },
-      {
-        name: 'malformed percent-encoding (unmatched path)',
-        method: 'GET',
-        url: '/nope/%zz%',
-        route: '__unmatched',
-        status: 400,
-        framework: true,
-      },
-      {
         name: 'static forbidden path',
         method: 'GET',
         url: '/assets//styles.css',
@@ -549,18 +532,95 @@ describe('B7.4 tester cross-checks', () => {
         `[retry1] ${c.name}: ${c.method} ${c.url.slice(0, 40)} -> ${res.statusCode} cc=${String(res.headers['cache-control'])} ${res.body.slice(0, 120)}`,
       );
       expect(res.statusCode).toBe(c.status);
-      if (!c.framework) {
-        // through the global filter: no-store, body never quotes request input
-        expect(res.headers['cache-control']).toBe('no-store');
-        expect(res.body).not.toMatch(/evilmark|<a\/>|\{bad|xxxxxxxx|styles\.css/);
-      } else {
-        // Fastify onBadUrl answers before any route/filter (pre-existing): recorded, see report
-        console.warn(`[retry1] badurl headers ${JSON.stringify(res.headers)}`);
-      }
+      // through the global filter: no-store, body never quotes request input
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.body).not.toMatch(/evilmark|<a\/>|\{bad|xxxxxxxx|styles\.css/);
       expect(errorLines()).toBe(errBefore);
       expect(await metricCount(c.route, '5xx')).toBe(before5);
-      // onBadUrl also skips the onResponse hook: not counted at all (DEBT-239), never as 5xx
-      expect(await metricCount(c.route, '4xx')).toBe(before4 + (c.framework ? 0 : 1));
+      expect(await metricCount(c.route, '4xx')).toBe(before4 + 1);
+    });
+
+    // run 59 (DEBT-239): Fastify answers a malformed percent-encoding (`onBadUrl`) or a path param
+    // over find-my-way's 100 chars (`onMaxParamLength`) BEFORE routing, outside every hook. The
+    // shared `frameworkErrors` handler must give it the same helmet headers as a normal response
+    // (compared against a live 404, values never hard-coded here), `no-store`, a fixed body, no
+    // error log and exactly one `__unmatched` 4xx observation.
+    describe('run 59 DEBT-239: pre-routing framework errors', () => {
+      const HELMET = [
+        'content-security-policy',
+        'cross-origin-opener-policy',
+        'cross-origin-resource-policy',
+        'origin-agent-cluster',
+        'referrer-policy',
+        'strict-transport-security',
+        'x-content-type-options',
+        'x-dns-prefetch-control',
+        'x-download-options',
+        'x-frame-options',
+        'x-permitted-cross-domain-policies',
+        'x-xss-protection',
+      ];
+      const RUN = randomBytes(6).toString('hex');
+      let ref: InjectResponse;
+
+      async function metricTotal(cls: string): Promise<number> {
+        const res = await get('/metrics', { authorization: `Bearer ${METRICS_TOKEN}` });
+        let sum = 0;
+        for (const line of res.body.split('\n')) {
+          if (!line.startsWith('sso_http_request_duration_seconds_count{')) continue;
+          if (!line.includes(`status_class="${cls}"`)) continue;
+          sum += Number(line.slice(line.lastIndexOf(' ') + 1));
+        }
+        return sum;
+      }
+
+      const expectHelmetParity = (res: InjectResponse) => {
+        for (const name of HELMET) {
+          expect([name, res.headers[name]]).toEqual([name, ref.headers[name]]);
+        }
+      };
+
+      beforeAll(async () => {
+        ref = await get(`/nope-${RUN}`);
+        expect(ref.statusCode).toBe(404);
+        // the reference really went through helmet: every header in the list is present
+        for (const name of HELMET)
+          expect([name, typeof ref.headers[name]]).toEqual([name, 'string']);
+      });
+
+      it.each([
+        ['malformed percent-encoding under /assets', '/assets/%E0%A4%A', 400],
+        ['malformed percent-encoding (unmatched path)', '/nope/%zz%', 400],
+        ['path param over 100 chars', `/admin/users/${'a'.repeat(101)}`, 414],
+      ])(
+        '%s => %s JSON, helmet parity, no-store, no echo, no log, one __unmatched 4xx',
+        async (_n, url, status) => {
+          const unmatched4 = await metricCount('__unmatched', '4xx');
+          const assets4 = await metricCount('/assets/*', '4xx');
+          const all5 = await metricTotal('5xx');
+          const errBefore = errorLines();
+          const res = await get(url);
+          await settle();
+          expect(res.statusCode).toBe(status);
+          expect(res.headers['cache-control']).toBe('no-store');
+          expect(String(res.headers['content-type'])).toMatch(/^application\/json/);
+          expectHelmetParity(res);
+          expect(res.body).toBe('{"error":"invalid_request"}');
+          for (const echo of ['%zz', '%E0', 'aaaa', 'assets', 'nope']) {
+            expect(res.body).not.toContain(echo);
+          }
+          expect(errorLines()).toBe(errBefore);
+          expect(await metricCount('__unmatched', '4xx')).toBe(unmatched4 + 1);
+          expect(await metricCount('/assets/*', '4xx')).toBe(assets4);
+          expect(await metricTotal('5xx')).toBe(all5);
+        },
+      );
+
+      it('regression: /assets/styles.css 200 still carries the helmet headers', async () => {
+        const res = await get('/assets/styles.css');
+        expect(res.statusCode).toBe(200);
+        expectHelmetParity(res);
+      });
     });
 
     it.each([

@@ -209,7 +209,7 @@ ngoài máy build (cache `max` chứa layer trung gian của stage `build`); n�
   cố định, không bao giờ giá trị.
 - **Không listen được** (cổng bận, `HOST` không có trên interface…) ⇒ thoát mã 1, log
   `fe-admin: listen failed: <mã lỗi>` (DEBT-384). Đặt `restart: on-failure`/`unless-stopped`.
-- **Không bật trust proxy**: URL tuyệt đối dựng từ `APP_URL`, không từ `Host`/`X-Forwarded-*`.
+- **Không bật trust proxy**: URL tuyệt đối dựng từ `APP_URL`, không từ `Host`/`X-Forwarded-*`. Path bắt đầu `//` (kể cả `/\x`, URL chuẩn hoá thành `//x`, và `/%5C…`, `/%09/…` mà h3 giải mã thành `//…` trước router) ⇒ 404, không redirect (DEBT-387/442); proxy chỉ nên nhận `Host` = host của `APP_URL`.
 - **Chỉ 1 replica** cho tới khi xong DEBT-278.
 - **Rate limit `/auth/login` ở proxy** (DEBT-284).
 - Sau proxy TLS, trình duyệt không gửi `Sec-Fetch-Site` có thể bị CSRF check chặn nhầm (DEBT-376).
@@ -341,6 +341,7 @@ Không push, không đăng nhập registry.
 | Tuỳ chọn | `TRUST_PROXY` (§5), `METRICS_TOKEN` (≥ 32, không publish `/metrics` ra ngoài), `GOOGLE_*`/`GITHUB_*` (theo cặp), `CONSENT_*`, `CLIENT_*` | |
 
 - **Env lỗi ⇒ thoát mã 1** trước khi listen; log chỉ có **tên biến** + lý do, không giá trị.
+- URL hỏng (percent-encoding sai) / param > 100 ký tự ⇒ 400/414 JSON cố định `{"error":"invalid_request"}`, có header bảo mật + `no-store`, metric `route="__unmatched"`, không log lỗi (DEBT-239).
 - `NODE_ENV=production` tắt `autoIndex` ⇒ chạy `db:sync-indexes` (§1) **trước** khi chuyển traffic
   (image có `dist/database/mongo/sync-indexes.js`:
   `docker run --rm <env…> <image> node dist/database/mongo/sync-indexes.js`).

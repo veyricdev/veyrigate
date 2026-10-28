@@ -142,3 +142,37 @@ describe("DEBT-370 body limit (any method but GET/HEAD/OPTIONS)", () => {
     expect(routerFetch).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("DEBT-387 a path starting with `//` (router would 308 to an absolute URL built from Host)", () => {
+  const hostile = [
+    "http://evil.example//a",
+    "http://evil.example//evil.example/x?y=1",
+    `${URL_BASE}///a`,
+    `${URL_BASE}//`,
+    "http://evil.example/\\evil.example",
+    // DEBT-442: h3 decodes `%`-paths before the router (`%5C` => `\` => `/`, `%09` dropped)
+    "http://evil.example/%5C",
+    "http://evil.example/%5C%5Cevil.example",
+    "http://evil.example/%09/evil.example",
+    "http://evil.example/./%5C",
+  ];
+  const cases = hostile.flatMap((url) => ["GET", "HEAD", "POST"].map((method) => [method, url] as const));
+
+  it.each(cases)("%s %s => 404, no Location, A7 headers, router not called", async (method, url) => {
+    const init: RequestInit = method === "POST" ? { method, headers: { "content-length": "0" } } : { method };
+    const res = await (await entry()).fetch(new Request(url, init));
+    expect(res.status).toBe(404);
+    if (method !== "HEAD") expect(await res.text()).toBe("Not Found");
+    expect(res.headers.get("location")).toBeNull();
+    expect(res.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    expectA7(res);
+    expect(routerFetch).not.toHaveBeenCalled();
+  });
+
+  // `%2F` stays encoded through decodeURI; a malformed `%` is h3's 400, past the guard.
+  it.each(["/a//b", "/%2F%2Fevil.example", "/", "/a%5C", "/%E0%A4%A"])("%s is not blocked: router called once", async (path) => {
+    const res = await (await entry()).fetch(new Request(URL_BASE + path));
+    expect(await res.text()).toBe("router");
+    expect(routerFetch).toHaveBeenCalledTimes(1);
+  });
+});

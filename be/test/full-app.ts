@@ -1,7 +1,7 @@
 import { Global, Module } from '@nestjs/common';
 import { ConfigModule as NestConfigModule } from '@nestjs/config';
 import { getConnectionToken } from '@nestjs/mongoose';
-import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test, type TestingModuleBuilder } from '@nestjs/testing';
 import { LoggerModule as PinoLoggerModule } from 'nestjs-pino';
 import type { Connection } from 'mongoose';
@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { Writable } from 'node:stream';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/bootstrap';
+import { createFastifyAdapter } from '../src/common/http/framework-errors';
 import { buildPinoHttpOptions, LoggerModule } from '../src/common/logger/logger.module';
 import { ConfigModule } from '../src/config/config.module';
 import { deriveS256Challenge } from '../src/common/crypto/pkce.util';
@@ -123,7 +124,7 @@ export async function bootFullApp(opts: FullAppOptions): Promise<FullApp> {
   if (opts.override) builder = opts.override(builder);
   const moduleRef = await builder.compile();
 
-  const app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter(), {
+  const app = moduleRef.createNestApplication<NestFastifyApplication>(createFastifyAdapter(), {
     bufferLogs: true,
   });
   // `configureApp` resolves `public/` + `views/` from `__dirname` (CJS in `dist/`). Jest runs the TS

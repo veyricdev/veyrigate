@@ -1,0 +1,8 @@
+# Summary — run 59 làm cứng biên HTTP (M7, lane BE/FE) — ✅ PASS 3/3 task
+
+- **Phạm vi**: T1 [FE] DEBT-387/442 — fe-admin `server.ts` trả 404 (header A7, không `location`, không gọi router) khi pathname gốc HOẶC pathname sau bước decode của h3 (`routerPathname`, bản sao URL) bắt đầu `//`; chặn redirect 308 dựng `Location` từ `Host` (kể cả `/%5C%5Cevil`, `/%09/…`, `/./%5C`); smoke check 9b/9c. T2 [BE] DEBT-239 — `framework-errors.ts` (`frameworkErrors` + `createFastifyAdapter` ở main/e2e-main/full-app): URL hỏng/param quá dài ⇒ body cố định `{"error":"invalid_request"}`, đủ header helmet + `no-store`, không echo, không log ERROR, metric `__unmatched`. T3 [BE] DEBT-197 — JWKS Google lỗi (`ERR_JOSE_GENERIC`/`ERR_JWKS_INVALID`/timeout) ⇒ 502 `provider_unavailable`, chữ ký sai/kid lạ vẫn 400. DEBT-135/236 đóng chấp nhận (bằng chứng trong backlog).
+- **Bug bắt được trong run**: tester lượt 1 — bypass trên build thật qua decode của h3 sau guard (1732 target 308) ⇒ retry 1; senior vòng 2 fuzz độc lập 148 620 target, tester lượt 2 18 857 target trên build thật ⇒ 0 redirect.
+- **Verify**: be unit 627, int 1420, fe-admin 1455, fe-sso-test 269, E2E 36/36, smoke fe-admin 16/16 + BE 11/11, audit high 0; mutation RED ở cả 3 task.
+- **Commit**: (điền sau).
+- **Vòng lặp**: tech-lead=1, FE dev=2 (T1, retry 1), BE dev=1, senior=2 (PASS, PASS), tester=2 (FAIL T1 bypass h3 → PASS).
+- **Debt**: đóng DEBT-135/197/236/239/387/442/443/433; mở 432 (E2E lab flaky), 440/441 💭, 444 ponytail, 445 💭, **446 🟡** (lớp kiểm `Location` ra ngoài origin ở response — phòng thủ cuối cho guard phụ thuộc nội bộ h3 RC), 447 💭, 448 💭 (int timeout khi máy tải cao).

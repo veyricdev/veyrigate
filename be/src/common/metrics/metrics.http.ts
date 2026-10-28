@@ -9,7 +9,7 @@ type FastifyInstance = ReturnType<
   ReturnType<NestFastifyApplication['getHttpAdapter']>['getInstance']
 >;
 
-const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']);
+export const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']);
 const logger = new Logger('Metrics');
 let defaultMetricsStarted = false;
 

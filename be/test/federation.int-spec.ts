@@ -2016,6 +2016,148 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
         registry.google.jwks = original;
       }
     });
+
+    // run 59 (DEBT-197): the JWKS endpoint answers, but with a provider fault (non-200 / non-JSON)
+    // => 502 provider_unavailable, never 400; no session, no user, no link.
+    it.each([
+      ['503', 503, '{"error":"unavailable"}'],
+      ['200 broken JSON', 200, 'not json'],
+    ])(
+      'DEBT-197: remote JWKS %s => 502, no session, no user, no link',
+      async (label, status, body) => {
+        const jwksServer = createServer((_req, r) => {
+          r.writeHead(status, { 'content-type': 'application/json' });
+          r.end(body);
+        });
+        await new Promise<void>((r) => jwksServer.listen(0, '127.0.0.1', r));
+        const port = (jwksServer.address() as AddressInfo).port;
+        const original = registry.google.jwks;
+        registry.google.jwks = createRemoteJWKSet(new URL(`http://127.0.0.1:${port}/certs`), {
+          timeoutDuration: 500,
+        });
+        try {
+          const sub = `${RUN}-jwks-${label.replace(/\W+/g, '-')}`;
+          const { res } = await socialLogin('google', (await rpAuthorize()).requestId, {
+            claims: { sub },
+          });
+          expect(res.statusCode).toBe(502);
+          expectNoSession(res);
+          expect(await userModel.countDocuments({ email: `${sub}@example.com` })).toBe(0);
+          expect(await fiModel.countDocuments({ providerId: sub })).toBe(0);
+        } finally {
+          registry.google.jwks = original;
+          await new Promise((r) => jwksServer.close(r));
+        }
+      },
+    );
+  });
+
+  // ------------------------------------------------------------------ run 59 tester (DEBT-197)
+  // A REAL remote JWKS (`createRemoteJWKSet` on a 127.0.0.1 server) behind the full callback: every
+  // provider-side JWKS fault => 502, every token-side fault => 400 (never lifted to 502), and in both
+  // cases no session, no user, no link; the provider body never reaches the page or the audit trail.
+  describe('run 59 tester: remote Google JWKS classification (DEBT-197)', () => {
+    const MARK = `MOCK-JWKS-MARK-${RUN}`;
+    let publicJwk: JWK;
+
+    beforeAll(async () => {
+      const { d, p, q, dp, dq, qi, ...pub } = await exportJWK(googleKey as never);
+      void [d, p, q, dp, dq, qi];
+      publicJwk = { ...pub, kid: 'mock-k1', alg: 'RS256' } as JWK;
+    });
+
+    /** Serve `handler` as the Google JWKS for one login; returns the callback response. */
+    async function withRemoteJwks(
+      label: string,
+      handler: (res: import('node:http').ServerResponse) => void,
+    ) {
+      const jwksServer = createServer((_req, r) => handler(r));
+      await new Promise<void>((r) => jwksServer.listen(0, '127.0.0.1', r));
+      const port = (jwksServer.address() as AddressInfo).port;
+      const original = registry.google.jwks;
+      registry.google.jwks = createRemoteJWKSet(new URL(`http://127.0.0.1:${port}/certs`), {
+        timeoutDuration: 300,
+      });
+      const sub = `${RUN}-t59-${label}`;
+      try {
+        const { res } = await socialLogin('google', (await rpAuthorize()).requestId, {
+          claims: { sub },
+        });
+        return { res, sub };
+      } finally {
+        registry.google.jwks = original;
+        jwksServer.closeAllConnections();
+        await new Promise((r) => jwksServer.close(r));
+      }
+    }
+    const json = (status: number, body: string) => (r: import('node:http').ServerResponse) => {
+      r.writeHead(status, { 'content-type': 'application/json' });
+      r.end(body);
+    };
+
+    async function expectNothingCreated(res: Res, sub: string) {
+      expectNoSession(res);
+      expect(cookieOf(res, 'idp_link')).toBeUndefined();
+      expect(res.body).not.toContain(MARK);
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(await userModel.countDocuments({ email: `${sub}@example.com` })).toBe(0);
+      expect(await fiModel.countDocuments({ providerId: sub })).toBe(0);
+      expect(JSON.stringify(await auditModel.find({}).lean())).not.toContain(MARK);
+    }
+
+    it('control: healthy remote JWKS + valid token => signs in (302), so the negatives below are real', async () => {
+      const { res } = await withRemoteJwks('ok', json(200, JSON.stringify({ keys: [publicJwk] })));
+      expect(res.statusCode).toBe(302);
+    });
+
+    it.each([
+      ['503', json(503, JSON.stringify({ error: MARK }))],
+      ['500-html', json(500, `<html>${MARK}</html>`)],
+      ['200-not-json', json(200, `not json ${MARK}`)],
+      ['200-keys-string', json(200, JSON.stringify({ keys: 'x', mark: MARK }))],
+      ['200-keys-missing', json(200, JSON.stringify({ mark: MARK }))],
+      ['200-json-array', json(200, JSON.stringify([MARK]))],
+      ['timeout', () => undefined], // never answers: jose ERR_JWKS_TIMEOUT
+    ] as const)('provider JWKS fault %s => 502, nothing created', async (label, handler) => {
+      const { res, sub } = await withRemoteJwks(label, handler);
+      expect(res.statusCode).toBe(502);
+      expect(res.body).toContain('The sign-in provider is unavailable');
+      await expectNothingCreated(res, sub);
+    });
+
+    it('JWKS publishing a PRIVATE key (ERR_JWKS_INVALID) => 502, nothing created', async () => {
+      const priv = { ...(await exportJWK(googleKey as never)), kid: 'mock-k1', alg: 'RS256' };
+      const { res, sub } = await withRemoteJwks(
+        'private',
+        json(200, JSON.stringify({ keys: [priv] })),
+      );
+      expect(res.statusCode).toBe(502);
+      await expectNothingCreated(res, sub);
+    });
+
+    it.each([
+      ['other-key-same-kid', 'mock-k1'],
+      ['unknown-kid', 'some-other-kid'],
+    ])(
+      'token fault %s on a healthy JWKS => 400 invalid_identity (never 502), nothing created',
+      async (label, kid) => {
+        const other = await generateKeyPair('RS256');
+        const jwk = { ...(await exportJWK(other.publicKey)), kid, alg: 'RS256' };
+        const { res, sub } = await withRemoteJwks(
+          label,
+          json(200, JSON.stringify({ keys: [jwk] })),
+        );
+        expect(res.statusCode).toBe(400);
+        expect(res.body).toContain('The sign-in could not be verified');
+        await expectNothingCreated(res, sub);
+      },
+    );
+
+    it('documented: an EMPTY key set ({"keys":[]}) is classified as a token fault (400), nothing created', async () => {
+      const { res, sub } = await withRemoteJwks('empty', json(200, JSON.stringify({ keys: [] })));
+      expect(res.statusCode).toBe(400);
+      await expectNothingCreated(res, sub);
+    });
   });
 
   // ------------------------------------------------------------------ tester risk matrix (run 32)

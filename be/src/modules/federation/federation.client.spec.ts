@@ -1,6 +1,15 @@
-import { afterEach, describe, expect, it, jest } from '@jest/globals';
-import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT, type JWK } from 'jose';
+import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
+import {
+  createLocalJWKSet,
+  createRemoteJWKSet,
+  exportJWK,
+  generateKeyPair,
+  SignJWT,
+  type JWK,
+} from 'jose';
 import { readdirSync, readFileSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { buildConfig } from '../../config/configuration';
 import { validateEnv } from '../../config/validation.schema';
@@ -148,6 +157,83 @@ describe('Google ID token verification (B5.1, F3)', () => {
       verifyGoogleIdToken(p, fresh, { nonce: NONCE, reauthSince: since }),
     ).resolves.toMatchObject({ authTime: Math.floor(since / 1000) });
     expect(await verifyGoogleIdToken(p, none, { nonce: NONCE })).not.toHaveProperty('authTime');
+  });
+});
+
+// run 59 (DEBT-197): a real `createRemoteJWKSet` against a local JWKS server. A broken provider
+// answer (non-200, non-JSON, wrong JWKS shape) is the provider being unavailable (502), never a
+// bad identity (400); a token the served JWKS does not validate stays `invalid_identity`.
+describe('Google remote JWKS failures (DEBT-197)', () => {
+  let server: Server;
+  let url: URL;
+  let answer: { status: number; body: string } = { status: 200, body: '{}' };
+  let privateKey: Parameters<SignJWT['sign']>[0];
+  let goodJwks = '';
+
+  beforeAll(async () => {
+    const pair = await generateKeyPair('RS256');
+    privateKey = pair.privateKey;
+    const jwk = { ...(await exportJWK(pair.publicKey)), kid: 'k1', alg: 'RS256' };
+    goodJwks = JSON.stringify({ keys: [jwk] });
+    server = createServer((_req, res) => {
+      if (answer.status === 0) return; // never answer (timeout case)
+      res.writeHead(answer.status, { 'content-type': 'application/json' });
+      res.end(answer.body);
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    url = new URL(`http://127.0.0.1:${(server.address() as AddressInfo).port}/certs`);
+  });
+
+  afterAll(() => {
+    server.closeAllConnections();
+    return new Promise<void>((r) => server.close(() => r()));
+  });
+
+  const verify = (token: string) =>
+    code(
+      verifyGoogleIdToken(google(createRemoteJWKSet(url, { timeoutDuration: 1000 })), token, {
+        nonce: NONCE,
+      }),
+    );
+
+  it.each([
+    ['JWKS 503', 503, '{"error":"unavailable"}'],
+    ['JWKS 200 not JSON', 200, 'not json'],
+    ['JWKS 200 wrong shape', 200, '{"keys":"x"}'],
+  ])('%s => provider_unavailable', async (_n, status, body) => {
+    answer = { status, body };
+    expect(await verify(await idToken(privateKey))).toBe('provider_unavailable');
+  });
+
+  it('JWKS never answers (timeout) => provider_unavailable', async () => {
+    answer = { status: 0, body: '' };
+    const jwks = createRemoteJWKSet(url, { timeoutDuration: 200 });
+    const token = await idToken(privateKey);
+    expect(await code(verifyGoogleIdToken(google(jwks), token, { nonce: NONCE }))).toBe(
+      'provider_unavailable',
+    );
+  });
+
+  it('valid JWKS + valid token => identity', async () => {
+    answer = { status: 200, body: goodJwks };
+    await expect(
+      verifyGoogleIdToken(
+        google(createRemoteJWKSet(url, { timeoutDuration: 1000 })),
+        await idToken(privateKey),
+        { nonce: NONCE },
+      ),
+    ).resolves.toMatchObject({ providerId: 'google-sub-1' });
+  });
+
+  it('valid JWKS + token signed by another key with the same kid => invalid_identity', async () => {
+    answer = { status: 200, body: goodJwks };
+    const other = await generateKeyPair('RS256');
+    expect(await verify(await idToken(other.privateKey))).toBe('invalid_identity');
+  });
+
+  it('valid JWKS without the token kid => invalid_identity', async () => {
+    answer = { status: 200, body: goodJwks.replace('"kid":"k1"', '"kid":"k2"') };
+    expect(await verify(await idToken(privateKey))).toBe('invalid_identity');
   });
 });
 

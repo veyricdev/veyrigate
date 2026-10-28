@@ -17,6 +17,22 @@ try {
   envValid = false; // already logged by onValidationError
 }
 
+// DEBT-387/442: the pathname the router checks for `//`. Before the router, h3@2.0.1-rc.20 `H3Event`
+// (`decodePathname`, dist/h3-*.mjs) rewrites the request's shared srvx URL when the path has a `%`:
+// `url.pathname = decodeURI(...)`, so `/%5C%5Cx` becomes `///x` (`\` => `/`, tab dropped). Same steps on
+// a copy; the request is not touched. A URIError is h3's 400 before the router: nothing to guard.
+function routerPathname(href: string): string {
+  const url = new URL(href);
+  if (url.pathname.includes("%")) {
+    try {
+      url.pathname = decodeURI(url.pathname.replaceAll("%25", "%2525"));
+    } catch {
+      // h3 answers 400
+    }
+  }
+  return url.pathname;
+}
+
 export default createServerEntry({
   fetch(request, opts) {
     return withSecurityHeaders(() => {
@@ -36,6 +52,11 @@ export default createServerEntry({
       // Existing assets are served by the host (serve.mjs); a miss is a plain 404, not the root
       // guard's login redirect (a stale chunk would otherwise load the login HTML as a script).
       if (pathname.startsWith("/assets/")) {
+        return new Response("Not Found", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
+      }
+      // DEBT-387: the router answers a `//x` path with a 308 to an absolute URL built from `Host` (open
+      // redirect / cache poisoning). WHATWG URL already turned `/\x` into `//x`. Plain 404, never a redirect.
+      if (pathname.startsWith("//") || routerPathname(request.url).startsWith("//")) {
         return new Response("Not Found", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
       }
       const refused = rejectBody(request); // DEBT-370: before the router parses anything

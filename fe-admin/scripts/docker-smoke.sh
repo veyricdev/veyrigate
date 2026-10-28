@@ -122,6 +122,21 @@ code="$(curl -sS -o /dev/null -D "$TMP/h" -w '%{http_code}' -X POST -H 'Sec-Fetc
 [ "$(header "$TMP/h" x-content-type-options)" = "nosniff" ] || fail 9 "413 without nosniff"
 pass 9 "70 000-byte POST 413 + nosniff"
 
+# 9b. a `//` path with a forged Host => the app's 404, never a redirect built from Host (DEBT-387)
+code="$(curl -sS --path-as-is -o /dev/null -D "$TMP/h" -w '%{http_code}' -H 'Host: evil.example' "$BASE//a")"
+[ "$code" = "404" ] || fail 9b "//a answered $code"
+[ -z "$(header "$TMP/h" location)" ] || fail 9b "//a has a Location"
+[ -n "$(header "$TMP/h" content-security-policy)" ] || fail 9b "404 without CSP"
+pass 9b "//a with Host evil.example => 404, no Location, CSP"
+
+# 9c. `%5C` decoded by h3 into `\` => `/` before the router: still the app's 404 (DEBT-387/442)
+for path in '/%5C' '/%5C%5Cevil.example'; do
+  code="$(curl -sS --path-as-is -o /dev/null -D "$TMP/h" -w '%{http_code}' -H 'Host: evil.example' "$BASE$path")"
+  [ "$code" = "404" ] || fail 9c "$path answered $code"
+  [ -z "$(header "$TMP/h" location)" ] || fail 9c "$path has a Location"
+done
+pass 9c "/%5C and /%5C%5Cevil.example with Host evil.example => 404, no Location"
+
 # 10. graceful stop on SIGTERM (not killed)
 docker stop -t 10 vg-fea-smoke-ok >/dev/null
 exit_code="$(docker inspect -f '{{.State.ExitCode}}' vg-fea-smoke-ok)"
@@ -168,4 +183,4 @@ exit_code="$(timeout 20 docker wait vg-fea-smoke-listen || echo timeout)"
 docker logs vg-fea-smoke-listen 2>&1 | grep -q "fe-admin: listen failed: EADDRNOTAVAIL" || fail 14 "log does not name the listen error"
 pass 14 "listen error => exit $exit_code, EADDRNOTAVAIL logged"
 
-echo "docker-smoke: 14/14 passed for $IMAGE"
+echo "docker-smoke: 16/16 passed for $IMAGE"

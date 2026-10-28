@@ -32,6 +32,12 @@ export interface ExchangeInput {
 }
 
 const CLOCK_SKEW_SEC = 60;
+/** JOSE error codes caused by the provider's JWKS endpoint, not by the token (DEBT-191/197). */
+const PROVIDER_JOSE_CODES: ReadonlySet<string> = new Set([
+  'ERR_JWKS_TIMEOUT',
+  'ERR_JOSE_GENERIC',
+  'ERR_JWKS_INVALID',
+]);
 
 /** Build the provider authorize URL (base is the hard-coded registry constant). */
 export function buildAuthorizeUrl(provider: FederationProvider, leg: AuthorizeLeg): string {
@@ -112,8 +118,11 @@ export async function verifyGoogleIdToken(
     }));
   } catch (err) {
     // DEBT-191 (F16): a JWKS fetch that never got an answer (network error, timeout) is the
-    // provider being unavailable (502); every JOSE verification failure is a bad identity.
-    if (!(err instanceof errors.JOSEError) || err.code === 'ERR_JWKS_TIMEOUT') {
+    // provider being unavailable (502). DEBT-197: so is a JWKS answer that is not a usable key set —
+    // jose 5.10.0 `runtime/fetch_jwks.js` (non-200 / non-JSON => bare `ERR_JOSE_GENERIC`, the only
+    // places that raise it) and `jwks/local.js` (wrong JWKS shape => `ERR_JWKS_INVALID`). Every
+    // other JOSE failure (signature, claims, alg, unknown kid) is a bad identity (400).
+    if (!(err instanceof errors.JOSEError) || PROVIDER_JOSE_CODES.has(err.code)) {
       throw new FederationError('provider_unavailable');
     }
     throw new FederationError('invalid_identity');
