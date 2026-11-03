@@ -9,8 +9,6 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import {
   authorizeCode,
   bootFullApp,
-  closeFullApp,
-  FULL_APP_BOOT_TIMEOUT_MS,
   FLOW_ADMIN_AUD,
   FLOW_API_AUD,
   formPost,
@@ -18,6 +16,7 @@ import {
   type FullApp,
   type InjectResponse,
 } from './full-app';
+import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 import { seedConsent, seedOAuthUser } from './oauth-fixtures';
 
 /**
@@ -39,7 +38,6 @@ interface Row {
 
 describe('security headers by response type (B7.4)', () => {
   let full: FullApp;
-  let booting: Promise<FullApp> | undefined;
   let client: { clientId: string; secret: string };
   let sessionId = '';
   let accessToken = '';
@@ -62,9 +60,9 @@ describe('security headers by response type (B7.4)', () => {
     return res;
   }
 
-  beforeAll(async () => {
-    booting = bootFullApp({ name: 'headers', env: { METRICS_TOKEN } });
-    full = await booting;
+  // DEBT-448: afterAll waits for a setup that outlived its hook, then cleans up what it opened.
+  const boot = async (): Promise<void> => {
+    full = await bootFullApp({ name: 'headers', env: { METRICS_TOKEN } });
     client = await seedFlowClient(full);
     const userId = await seedOAuthUser(full.conn, { tenantId: DEFAULT_TENANT_ID });
     await full.conn
@@ -94,11 +92,14 @@ describe('security headers by response type (B7.4)', () => {
     adminToken = (await tokens(FLOW_ADMIN_AUD, 'openid admin.read')).json<{
       access_token: string;
     }>().access_token;
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+  };
+  let setup: Promise<void> | undefined;
+  beforeAll(() => (setup = boot()), INT_SETUP_TIMEOUT_MS);
 
   afterAll(async () => {
-    await closeFullApp(booting);
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+    await settled(setup);
+    await full?.close();
+  }, INT_SETUP_TIMEOUT_MS);
 
   afterEach(() => jest.restoreAllMocks());
 

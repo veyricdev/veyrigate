@@ -1,6 +1,6 @@
 import mongoose, { type Connection, Types } from 'mongoose';
 import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
-import { FULL_APP_BOOT_TIMEOUT_MS } from './full-app';
+import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -57,26 +57,23 @@ const EXPECTED: Record<string, { key: Record<string, number>; unique?: boolean; 
 describe('Mongo indexes after explicit sync (B1.6, spec §10)', () => {
   let conn: Connection;
 
-  // Kept so afterAll can wait for a setup that outlived its hook timeout (DEBT-448: under load this
-  // hook took 26.1 s vs 30 s before) and still drop/close what it opened.
+  // DEBT-448: afterAll waits for a setup that outlived its hook, then cleans up what it opened.
+  const boot = async (): Promise<void> => {
+    conn = await mongoose
+      .createConnection(MONGO_URI, { autoIndex: false, serverSelectionTimeoutMS: 5000 })
+      .asPromise();
+    await syncAllIndexes(conn);
+  };
   let setup: Promise<void> | undefined;
-  beforeAll(
-    () =>
-      (setup = (async () => {
-        conn = await mongoose
-          .createConnection(MONGO_URI, { autoIndex: false, serverSelectionTimeoutMS: 5000 })
-          .asPromise();
-        await syncAllIndexes(conn);
-      })()),
-    FULL_APP_BOOT_TIMEOUT_MS,
-  ); // creating 12 collections + indexes can exceed Jest's 5s default
+  // creating 12 collections + indexes can exceed Jest's 5s default
+  beforeAll(() => (setup = boot()), INT_SETUP_TIMEOUT_MS);
 
   afterAll(async () => {
-    await setup?.catch(() => undefined); // a failed setup was already reported by beforeAll
+    await settled(setup);
     if (!conn) return;
     await conn.dropDatabase();
     await conn.close();
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+  }, INT_SETUP_TIMEOUT_MS);
 
   it.each(Object.keys(EXPECTED))('%s has exactly the §10 indexes (+ _id)', async (name) => {
     const indexes = (await conn.models[name].collection.indexes()) as IndexInfo[];

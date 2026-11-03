@@ -16,8 +16,6 @@ import { ANON_COOKIE, CsrfService } from '../src/modules/ui/csrf.service';
 import {
   authorizeCode,
   bootFullApp,
-  closeFullApp,
-  FULL_APP_BOOT_TIMEOUT_MS,
   FLOW_ADMIN_AUD,
   FLOW_API_AUD,
   FLOW_REDIRECT,
@@ -27,6 +25,7 @@ import {
   type FullApp,
   type InjectResponse,
 } from './full-app';
+import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 import { seedConsent } from './oauth-fixtures';
 import { startRedisProxy, type RedisProxy } from './redis-proxy';
 
@@ -62,16 +61,15 @@ type Auth = { clientId: string; secret: string };
 describe('run 53c tester: Redis / key provider down — wider surface, families, logout', () => {
   let proxy: RedisProxy;
   let full: FullApp;
-  let booting: Promise<FullApp> | undefined;
   let client: Auth;
   let userId = '';
   let email = '';
   let csrf: CsrfService;
 
-  beforeAll(async () => {
+  // DEBT-448: afterAll waits for a setup that outlived its hook, then cleans up what it opened.
+  const boot = async (): Promise<void> => {
     proxy = await startRedisProxy();
-    booting = bootFullApp({ name: 'b73c-tester', env: { REDIS_URL: proxy.url } });
-    full = await booting;
+    full = await bootFullApp({ name: 'b73c-tester', env: { REDIS_URL: proxy.url } });
     client = await seedFlowClient(full);
     await full.conn
       .model('Client')
@@ -100,14 +98,17 @@ describe('run 53c tester: Redis / key provider down — wider surface, families,
       scopes: ADMIN_SCOPE.split(' '),
     });
     csrf = full.app.get(CsrfService);
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+  };
+  let setup: Promise<void> | undefined;
+  beforeAll(() => (setup = boot()), INT_SETUP_TIMEOUT_MS);
 
   afterAll(async () => {
+    await settled(setup);
     jest.restoreAllMocks();
     await proxy?.up();
-    await closeFullApp(booting);
+    await full?.close();
     await proxy?.close();
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+  }, INT_SETUP_TIMEOUT_MS);
 
   afterEach(async () => {
     jest.restoreAllMocks();

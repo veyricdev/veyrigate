@@ -14,7 +14,7 @@ import { AuditAction } from '../src/modules/security/audit/audit-action.enum';
 import { AuditService } from '../src/modules/security/audit/audit.service';
 import { SessionService } from '../src/modules/sessions/session.service';
 import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
-import { FULL_APP_BOOT_TIMEOUT_MS } from './full-app';
+import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -36,8 +36,7 @@ describe('Authentication races on real Mongo (B2.4, C2-C6, C13)', () => {
   };
   const messages: MailMessage[] = [];
 
-  // DEBT-448: the setup promise is kept so afterAll can wait for a setup that outlived its hook
-  // timeout (under load it took 19.0 s) and then clean up what it opened.
+  // DEBT-448: afterAll waits for a setup that outlived its hook, then cleans up what it opened.
   const boot = async (): Promise<void> => {
     moduleRef = await Test.createTestingModule({
       imports: [
@@ -72,17 +71,17 @@ describe('Authentication races on real Mongo (B2.4, C2-C6, C13)', () => {
     users = moduleRef.get(UserService);
   };
   let setup: Promise<void> | undefined;
-  beforeAll(() => (setup = boot()), FULL_APP_BOOT_TIMEOUT_MS);
+  beforeAll(() => (setup = boot()), INT_SETUP_TIMEOUT_MS);
 
   afterEach(() => {
     jest.clearAllMocks();
   });
 
   afterAll(async () => {
-    await setup?.catch(() => undefined); // reported by beforeAll
-    await userModel.db.dropDatabase();
-    await moduleRef.close();
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+    await settled(setup);
+    await userModel?.db.dropDatabase();
+    await moduleRef?.close();
+  }, INT_SETUP_TIMEOUT_MS);
 
   it('concurrent registration returns the same success result and creates one account', async () => {
     const results = await Promise.allSettled([

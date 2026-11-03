@@ -1,6 +1,7 @@
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { bootFullApp, closeFullApp, FULL_APP_BOOT_TIMEOUT_MS, type FullApp } from './full-app';
+import { bootFullApp, type FullApp } from './full-app';
+import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 
 /**
  * `@fastify/static` 8 -> 10 regression (run 38, B7.4 Task 1): the real `configureApp` mount of
@@ -9,7 +10,6 @@ import { bootFullApp, closeFullApp, FULL_APP_BOOT_TIMEOUT_MS, type FullApp } fro
  */
 describe('static assets under /assets/ (B7.4)', () => {
   let full: FullApp;
-  let booting: Promise<FullApp> | undefined;
   const publicDir = join(process.cwd(), 'src', 'public');
   // A real dotfile inside public/ for the run, so "404" proves the dotfile rule, not a missing file.
   const dotName = `.vg-dot-${process.pid}-${Date.now()}`;
@@ -17,17 +17,20 @@ describe('static assets under /assets/ (B7.4)', () => {
   // Content of a file just outside public/ (src/app.module.ts) that traversal would expose.
   let outsideMarker = '';
 
-  beforeAll(async () => {
+  // DEBT-448: afterAll waits for a setup that outlived its hook, then cleans up what it opened.
+  const boot = async (): Promise<void> => {
     await writeFile(join(publicDir, dotName), DOT_BODY);
     outsideMarker = (await readFile(join(publicDir, '..', 'app.module.ts'), 'utf8')).slice(0, 40);
-    booting = bootFullApp({ name: 'static' });
-    full = await booting;
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+    full = await bootFullApp({ name: 'static' });
+  };
+  let setup: Promise<void> | undefined;
+  beforeAll(() => (setup = boot()), INT_SETUP_TIMEOUT_MS);
 
   afterAll(async () => {
+    await settled(setup);
     await rm(join(publicDir, dotName), { force: true });
-    await closeFullApp(booting);
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+    await full?.close();
+  }, INT_SETUP_TIMEOUT_MS);
 
   const get = (url: string) => full.app.inject({ method: 'GET', url });
 

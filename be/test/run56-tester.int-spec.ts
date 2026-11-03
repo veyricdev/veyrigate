@@ -13,8 +13,6 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import {
   authorizeCode,
   bootFullApp,
-  closeFullApp,
-  FULL_APP_BOOT_TIMEOUT_MS,
   FLOW_ADMIN_AUD,
   FLOW_API_AUD,
   FLOW_REDIRECT,
@@ -24,6 +22,7 @@ import {
   type FullApp,
   type InjectResponse,
 } from './full-app';
+import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 import { seedConsent, seedOAuthUser } from './oauth-fixtures';
 
 /**
@@ -61,7 +60,6 @@ function barrier() {
 
 describe('run 56 tester: admin races + disable/enable over real HTTP', () => {
   let full: FullApp;
-  let booting: Promise<FullApp> | undefined;
   let redis: IORedis;
   let bff: Auth; // admin-capable BFF (aud=admin tokens)
   let rs: Auth; // resource server allowed to introspect `api`
@@ -77,8 +75,9 @@ describe('run 56 tester: admin races + disable/enable over real HTTP', () => {
   const plaintexts: string[] = [];
   let n = 0;
 
-  beforeAll(async () => {
-    booting = bootFullApp({
+  // DEBT-448: afterAll waits for a setup that outlived its hook, then cleans up what it opened.
+  const boot = async (): Promise<void> => {
+    full = await bootFullApp({
       name: 'run56t',
       logStream: new Writable({
         write(chunk, _e, cb) {
@@ -87,7 +86,6 @@ describe('run 56 tester: admin races + disable/enable over real HTTP', () => {
         },
       }),
     });
-    full = await booting;
     redis = new IORedis(process.env.TEST_REDIS_URL ?? 'redis://localhost:6479', {
       maxRetriesPerRequest: 1,
     });
@@ -101,12 +99,15 @@ describe('run 56 tester: admin races + disable/enable over real HTTP', () => {
     tadminId = await adminUser('tenant_admin');
     superAt = (await login(superId, bff, FLOW_ADMIN_AUD, ADMIN_SCOPE)).access_token;
     tadminAt = (await login(tadminId, bff, FLOW_ADMIN_AUD, ADMIN_SCOPE)).access_token;
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+  };
+  let setup: Promise<void> | undefined;
+  beforeAll(() => (setup = boot()), INT_SETUP_TIMEOUT_MS);
 
   afterAll(async () => {
+    await settled(setup);
     await redis?.quit();
-    await closeFullApp(booting);
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+    await full?.close();
+  }, INT_SETUP_TIMEOUT_MS);
 
   afterEach(() => {
     jest.restoreAllMocks();

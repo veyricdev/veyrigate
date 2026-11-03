@@ -91,3 +91,8 @@ pnpm build && pnpm db:sync-indexes && pnpm db:seed
 Rotations are serialised by an **in-process** mutex and the read paths (`/jwks.json`, verify, sign)
 never write `keys.json` (DEBT-145). The mutex does not span processes: run **one** IdP process per
 `KEY_LOCAL_DIR`. Multi-node needs the KMS/Vault provider (plan B7.3, DEBT-159).
+
+## Integration tests (`pnpm test:int`)
+
+Options live in `jest.int.config.js` (vg-test-* containers must run). Filter with a positional
+(`pnpm test:int authorize`) or `--testPathPatterns <re>`; `--testTimeout=N` overrides the 20 s default.

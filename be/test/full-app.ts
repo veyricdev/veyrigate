@@ -4,7 +4,7 @@ import { getConnectionToken } from '@nestjs/mongoose';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test, type TestingModuleBuilder } from '@nestjs/testing';
 import { LoggerModule as PinoLoggerModule } from 'nestjs-pino';
-import mongoose, { type Connection } from 'mongoose';
+import type { Connection } from 'mongoose';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -26,6 +26,7 @@ import { MAILER, type MailMessage } from '../src/modules/mailer/mailer';
 import { adminResourceIdentifier } from '../src/modules/oauth/token/token.service';
 import { ResourceService } from '../src/modules/resources/resource.service';
 import { SESSION_COOKIE } from '../src/modules/sessions/session.cookie';
+import { dropIntDb } from './int-hooks';
 
 /**
  * The REAL app for integration tests (run 38, B7.4): `AppModule` + `configureApp` exactly like
@@ -57,25 +58,6 @@ export interface FullAppOptions {
 
 export const FULL_APP_ISSUER = 'http://localhost:4000';
 
-/**
- * Budget for a `beforeAll` that boots the full app (and seeds it), and for the `afterAll` that waits
- * for that boot before closing it (DEBT-448, run 61). Measured per hook on a 28-core box: idle
- * ~1.5-2.5 s (compile ~0.3 s, init+ready ~1 s, syncAllIndexes ~0.4 s); under a 28-thread busy-loop
- * load 15-23 s (max 22.8 s, b74-tester; init+ready 7-17 s, syncAllIndexes 4-9 s). ~3x that max.
- */
-export const FULL_APP_BOOT_TIMEOUT_MS = 70_000;
-
-/**
- * `afterAll` partner of a `beforeAll` that keeps its boot promise: when the hook timed out the boot
- * still runs in the background, so wait for it and close what it built (no orphan app holding
- * Mongo/Redis, no orphan DB or key dir). A failed boot was already reported by `beforeAll` and
- * cleaned up by `bootFullApp` itself.
- */
-export async function closeFullApp(pending?: Promise<FullApp>): Promise<void> {
-  const full = await pending?.catch(() => undefined);
-  await full?.close();
-}
-
 export async function bootFullApp(opts: FullAppOptions): Promise<FullApp> {
   const keyDir = await mkdtemp(join(tmpdir(), `vg-${opts.name}-keys-`));
   const started: BootProgress = {};
@@ -86,9 +68,9 @@ export async function bootFullApp(opts: FullAppOptions): Promise<FullApp> {
     // in-flight model index builds of the app can re-create a DB dropped while it is still open.
     await started.ctx?.close().catch(() => undefined);
     if (started.mongoUri && !process.env.TEST_MONGO_URI) {
-      await dropDatabase(started.mongoUri).catch(() => undefined); // best effort; `err` is what matters
+      await dropIntDb(started.mongoUri).catch(() => undefined); // best effort; `err` is what matters
     }
-    await rm(keyDir, { recursive: true, force: true });
+    await rm(keyDir, { recursive: true, force: true }).catch(() => undefined);
     throw err;
   }
 }
@@ -96,15 +78,6 @@ export async function bootFullApp(opts: FullAppOptions): Promise<FullApp> {
 interface BootProgress {
   mongoUri?: string;
   ctx?: INestApplicationContext;
-}
-
-async function dropDatabase(uri: string): Promise<void> {
-  const conn = await mongoose.createConnection(uri, { serverSelectionTimeoutMS: 5000 }).asPromise();
-  try {
-    await conn.dropDatabase();
-  } finally {
-    await conn.close();
-  }
 }
 
 async function startFullApp(

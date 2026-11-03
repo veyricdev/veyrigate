@@ -16,8 +16,6 @@ import { deriveS256Challenge } from '../src/common/crypto/pkce.util';
 import {
   authorizeCode,
   bootFullApp,
-  closeFullApp,
-  FULL_APP_BOOT_TIMEOUT_MS,
   FLOW_API_AUD,
   FLOW_REDIRECT,
   formPost,
@@ -25,6 +23,7 @@ import {
   type FullApp,
   type InjectResponse,
 } from './full-app';
+import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 import { seedConsent } from './oauth-fixtures';
 import { startRedisProxy, type RedisProxy } from './redis-proxy';
 
@@ -48,7 +47,6 @@ type Auth = { clientId: string; secret: string };
 describe('Redis down ⇒ 503 temporarily_unavailable, fail-closed, recovers (run 53c)', () => {
   let proxy: RedisProxy;
   let full: FullApp;
-  let booting: Promise<FullApp> | undefined;
   let client: Auth;
   let userId = '';
   let email = '';
@@ -59,7 +57,8 @@ describe('Redis down ⇒ 503 temporarily_unavailable, fail-closed, recovers (run
   const table: string[] = [];
   let seenUpTo = 0;
 
-  beforeAll(async () => {
+  // DEBT-448: afterAll waits for a setup that outlived its hook, then cleans up what it opened.
+  const boot = async (): Promise<void> => {
     // Record what reaches each error renderer (class | name | message), without changing behaviour.
     const record = (err: unknown) =>
       seen.push(
@@ -86,8 +85,7 @@ describe('Redis down ⇒ 503 temporarily_unavailable, fail-closed, recovers (run
     }
     // (installed before boot: Nest binds the filter methods when it registers them)
     proxy = await startRedisProxy();
-    booting = bootFullApp({ name: 'redis-down', env: { REDIS_URL: proxy.url } });
-    full = await booting;
+    full = await bootFullApp({ name: 'redis-down', env: { REDIS_URL: proxy.url } });
     client = await seedFlowClient(full);
     email = `redis-down-${randomUUID()}@fixture.test`;
     const users = full.app.get(UserService);
@@ -103,15 +101,18 @@ describe('Redis down ⇒ 503 temporarily_unavailable, fail-closed, recovers (run
     });
     sessionId = (await full.app.get(SessionService).create(userId, DEFAULT_TENANT_ID)).id;
     csrf = full.app.get(CsrfService);
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+  };
+  let setup: Promise<void> | undefined;
+  beforeAll(() => (setup = boot()), INT_SETUP_TIMEOUT_MS);
 
   afterAll(async () => {
+    await settled(setup);
     jest.restoreAllMocks();
     console.log(`run 53c — errors seen by the renderers:\n${table.join('\n')}`);
     await proxy?.up();
-    await closeFullApp(booting);
+    await full?.close();
     await proxy?.close();
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+  }, INT_SETUP_TIMEOUT_MS);
 
   /** A fresh code + verifier while Redis is up. */
   async function mintCode(): Promise<{ code: string; verifier: string }> {

@@ -36,7 +36,7 @@ import { AuthorizationCodeService } from '../src/modules/oauth/code/authorizatio
 import { ConsentService, type Consent } from '../src/modules/oauth/consent/consent.service';
 import { UserTenantService, type UserTenant } from '../src/modules/identity/user-tenant.service';
 import { seedOAuthUser } from './oauth-fixtures';
-import { FULL_APP_BOOT_TIMEOUT_MS } from './full-app';
+import { dropIntDb, INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -94,8 +94,7 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
     ref: 'session-ref-test',
   };
 
-  // DEBT-448: the setup promise is kept so afterAll can wait for a setup that outlived its hook
-  // timeout (under load it took 16.2 s) and then clean up what it opened.
+  // DEBT-448: afterAll waits for a setup that outlived its hook, then cleans up what it opened.
   const boot = async (): Promise<void> => {
     connection = await mongoose.createConnection(MONGO_URI, { autoIndex: false }).asPromise();
     for (const { name, schema } of MODELS) connection.model(name, schema);
@@ -146,16 +145,17 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
     });
   };
   let setup: Promise<void> | undefined;
-  beforeAll(() => (setup = boot()), FULL_APP_BOOT_TIMEOUT_MS);
+  beforeAll(() => (setup = boot()), INT_SETUP_TIMEOUT_MS);
 
   afterAll(async () => {
-    await setup?.catch(() => undefined); // reported by beforeAll
-    const keys = await redis.keys('authz_ctx:*');
-    if (keys.length) await redis.del(...keys);
-    await redis.quit();
-    await connection.dropDatabase();
-    await connection.close();
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+    await settled(setup);
+    if (redis) {
+      const keys = await redis.keys('authz_ctx:*');
+      if (keys.length) await redis.del(...keys);
+      await redis.quit();
+    }
+    await connection?.close();
+  }, INT_SETUP_TIMEOUT_MS);
 
   describe('open-redirect boundary (INV-3)', () => {
     it('throws AuthorizeErrorPage (no redirect) for an unknown client_id', async () => {
@@ -1479,3 +1479,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
     });
   });
 });
+
+// DEBT-454: every describe above shares MONGO_URI (the later ones re-create collections with
+// autoIndex), so drop it once, after all of them have closed their apps.
+afterAll(() => dropIntDb(MONGO_URI), INT_SETUP_TIMEOUT_MS);

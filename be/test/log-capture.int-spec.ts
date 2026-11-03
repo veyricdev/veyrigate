@@ -11,8 +11,6 @@ import {
   authorizeCode,
   basicAuth,
   bootFullApp,
-  closeFullApp,
-  FULL_APP_BOOT_TIMEOUT_MS,
   FLOW_ADMIN_AUD,
   FLOW_API_AUD,
   FLOW_REDIRECT,
@@ -21,6 +19,7 @@ import {
   type FullApp,
   type InjectResponse,
 } from './full-app';
+import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 import { seedConsent } from './oauth-fixtures';
 
 /**
@@ -34,7 +33,6 @@ import { seedConsent } from './oauth-fixtures';
  */
 describe('application logs never carry secrets (B7.4)', () => {
   let full: FullApp;
-  let booting: Promise<FullApp> | undefined;
   const lines: string[] = [];
   const secrets = new Map<string, string>();
   const keep = (label: string, value: string | undefined) => {
@@ -71,13 +69,13 @@ describe('application logs never carry secrets (B7.4)', () => {
       payload: new URLSearchParams(fields).toString(),
     });
 
-  beforeAll(async () => {
+  // DEBT-448: afterAll waits for a setup that outlived its hook, then cleans up what it opened.
+  const boot = async (): Promise<void> => {
     keep('metrics token', METRICS_TOKEN);
     keep('email', EMAIL);
     keep('password', PASSWORD);
     keep('uri password', URI_PASSWORD);
-    booting = bootFullApp({ name: 'logs', env: { METRICS_TOKEN }, logStream: stream });
-    full = await booting;
+    full = await bootFullApp({ name: 'logs', env: { METRICS_TOKEN }, logStream: stream });
     const client = await seedFlowClient(full);
     keep('client secret', client.secret);
     keep('basic header', basicAuth(client.clientId, client.secret));
@@ -247,12 +245,15 @@ describe('application logs never carry secrets (B7.4)', () => {
 
     // pino writes synchronously to the stream; one tick for any pending `res.on('finish')` line.
     await new Promise((r) => setImmediate(r));
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+  };
+  let setup: Promise<void> | undefined;
+  beforeAll(() => (setup = boot()), INT_SETUP_TIMEOUT_MS);
 
   afterAll(async () => {
+    await settled(setup);
     jest.restoreAllMocks();
-    await closeFullApp(booting);
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+    await full?.close();
+  }, INT_SETUP_TIMEOUT_MS);
 
   it('capture is live: access lines carry req.id + statusCode, and the 500/URI errors were logged', () => {
     const entries = lines.map(

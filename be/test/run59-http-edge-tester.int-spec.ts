@@ -1,7 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { connect, type AddressInfo } from 'node:net';
 import { Writable } from 'node:stream';
-import { bootFullApp, closeFullApp, FULL_APP_BOOT_TIMEOUT_MS, type FullApp } from './full-app';
+import { bootFullApp, type FullApp } from './full-app';
+import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 
 /**
  * Run 59 tester (DEBT-239/443): pre-routing framework errors (`onBadUrl` 400, `onMaxParamLength`
@@ -71,7 +72,6 @@ function parseAll(text: string): RawRes[] {
 
 describe('run 59 tester: pre-routing framework errors on the real listening app (raw socket)', () => {
   let full: FullApp;
-  let booting: Promise<FullApp> | undefined;
   let port = 0;
   const lines: string[] = [];
   const stream = new Writable({
@@ -125,9 +125,9 @@ describe('run 59 tester: pre-routing framework errors on the real listening app 
   const errorLines = () => lines.filter((l) => /"level":(50|60)/.test(l)).length;
   const settle = () => new Promise((r) => setImmediate(r));
 
-  beforeAll(async () => {
-    booting = bootFullApp({ name: 'tester59edge', env: { METRICS_TOKEN }, logStream: stream });
-    full = await booting;
+  // DEBT-448: afterAll waits for a setup that outlived its hook, then cleans up what it opened.
+  const boot = async (): Promise<void> => {
+    full = await bootFullApp({ name: 'tester59edge', env: { METRICS_TOKEN }, logStream: stream });
     await full.app.listen(0, '127.0.0.1');
     port = (full.app.getHttpServer().address() as AddressInfo).port;
     ref = await one('GET', `/nope-${RUN}`);
@@ -136,11 +136,14 @@ describe('run 59 tester: pre-routing framework errors on the real listening app 
       .filter((h) => !NOT_HELMET.has(h) && !h.startsWith('x-ratelimit') && h !== 'x-request-id')
       .sort();
     console.info(`[run59-tester] reference 404 security headers (${helmet.length}): ${helmet}`);
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+  };
+  let setup: Promise<void> | undefined;
+  beforeAll(() => (setup = boot()), INT_SETUP_TIMEOUT_MS);
 
   afterAll(async () => {
-    await closeFullApp(booting);
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+    await settled(setup);
+    await full?.close();
+  }, INT_SETUP_TIMEOUT_MS);
 
   const expectParity = (res: RawRes) => {
     for (const h of helmet) expect([h, res.headers[h]]).toEqual([h, ref.headers[h]]);

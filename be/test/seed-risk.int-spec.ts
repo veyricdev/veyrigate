@@ -6,7 +6,7 @@ import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
 import { seedBootstrap, type AdminSeedConfig } from '../src/database/seed';
 import { DEFAULT_TENANT_ID } from '../src/modules/identity/tenant.service';
 import { adminResourceIdentifier } from '../src/modules/oauth/token/token.service';
-import { FULL_APP_BOOT_TIMEOUT_MS } from './full-app';
+import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 
 /**
  * Run 30 QA (tester) — risk matrix for `db:seed` (B6.4) beyond the dev-written spec:
@@ -40,19 +40,15 @@ describe('db:seed risk matrix (run 30 QA)', () => {
     return out;
   };
 
-  // Kept so afterAll can wait for a setup that outlived its hook timeout (DEBT-448: under load this
-  // hook took 17.2 s vs 30 s before) and still drop/close what it opened.
+  // DEBT-448: afterAll waits for a setup that outlived its hook, then cleans up what it opened.
+  const boot = async (): Promise<void> => {
+    connection = await mongoose.createConnection(MONGO_URI, { autoIndex: false }).asPromise();
+    for (const { name, schema } of MODELS) connection.model(name, schema);
+    await syncAllIndexes(connection);
+    creds = connection.model<Record<string, unknown>>('ClientCredential');
+  };
   let setup: Promise<void> | undefined;
-  beforeAll(
-    () =>
-      (setup = (async () => {
-        connection = await mongoose.createConnection(MONGO_URI, { autoIndex: false }).asPromise();
-        for (const { name, schema } of MODELS) connection.model(name, schema);
-        await syncAllIndexes(connection);
-        creds = connection.model<Record<string, unknown>>('ClientCredential');
-      })()),
-    FULL_APP_BOOT_TIMEOUT_MS,
-  );
+  beforeAll(() => (setup = boot()), INT_SETUP_TIMEOUT_MS);
 
   beforeEach(() => {
     jest.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -65,11 +61,11 @@ describe('db:seed risk matrix (run 30 QA)', () => {
   });
 
   afterAll(async () => {
-    await setup?.catch(() => undefined); // a failed setup was already reported by beforeAll
+    await settled(setup);
     if (!connection) return;
     await connection.dropDatabase();
     await connection.close();
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+  }, INT_SETUP_TIMEOUT_MS);
 
   it('State/concurrent: two seeds at once on an empty DB => no duplicated document; every returned secret works', async () => {
     for (let round = 0; round < 5; round++) {

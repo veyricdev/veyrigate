@@ -20,8 +20,6 @@ import { Types } from 'mongoose';
 import {
   authorizeCode,
   bootFullApp,
-  closeFullApp,
-  FULL_APP_BOOT_TIMEOUT_MS,
   FLOW_ADMIN_AUD,
   FLOW_API_AUD,
   FLOW_REDIRECT,
@@ -30,6 +28,7 @@ import {
   type FullApp,
   type InjectResponse,
 } from './full-app';
+import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 import { seedConsent, seedOAuthUser } from './oauth-fixtures';
 
 /**
@@ -43,7 +42,6 @@ const GOOGLE_SECRET = `gsecret-${randomBytes(12).toString('hex')}`;
 
 describe('B7.4 tester cross-checks', () => {
   let full: FullApp;
-  let booting: Promise<FullApp> | undefined;
   const lines: string[] = [];
   const stream = new Writable({
     write(chunk, _enc, cb) {
@@ -54,8 +52,9 @@ describe('B7.4 tester cross-checks', () => {
   let client: { clientId: string; secret: string };
   let adminToken = '';
 
-  beforeAll(async () => {
-    booting = bootFullApp({
+  // DEBT-448: afterAll waits for a setup that outlived its hook, then cleans up what it opened.
+  const boot = async (): Promise<void> => {
+    full = await bootFullApp({
       name: 'tester38',
       env: {
         METRICS_TOKEN,
@@ -64,7 +63,6 @@ describe('B7.4 tester cross-checks', () => {
       },
       logStream: stream,
     });
-    full = await booting;
     client = await seedFlowClient(full);
     const userId = await seedOAuthUser(full.conn, { tenantId: DEFAULT_TENANT_ID });
     await full.conn
@@ -97,12 +95,15 @@ describe('B7.4 tester cross-checks', () => {
       })
     ).json<{ access_token: string }>().access_token;
     expect(adminToken).toBeTruthy();
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+  };
+  let setup: Promise<void> | undefined;
+  beforeAll(() => (setup = boot()), INT_SETUP_TIMEOUT_MS);
 
   afterAll(async () => {
+    await settled(setup);
     jest.restoreAllMocks();
-    await closeFullApp(booting);
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+    await full?.close();
+  }, INT_SETUP_TIMEOUT_MS);
 
   afterEach(() => jest.restoreAllMocks());
 
@@ -713,15 +714,15 @@ describe('B7.4 tester cross-checks', () => {
     const caught: unknown[] = [];
     const original = OAuthExceptionFilter.prototype.catch;
     let abortApp: FullApp | undefined;
-    let abortBooting: Promise<FullApp> | undefined;
     let port = 0;
 
-    beforeAll(async () => {
+    // DEBT-448: afterAll waits for a setup that outlived its hook, then cleans up what it opened.
+    const boot = async (): Promise<void> => {
       OAuthExceptionFilter.prototype.catch = function (this: OAuthExceptionFilter, e, h) {
         caught.push(e);
         return original.call(this, e, h);
       };
-      abortBooting = bootFullApp({
+      abortApp = await bootFullApp({
         name: 'tester58abort',
         logStream: new Writable({
           write(chunk, _enc, cb) {
@@ -730,15 +731,17 @@ describe('B7.4 tester cross-checks', () => {
           },
         }),
       });
-      abortApp = await abortBooting;
       await abortApp.app.listen(0, '127.0.0.1');
       port = (abortApp.app.getHttpServer().address() as AddressInfo).port;
-    }, FULL_APP_BOOT_TIMEOUT_MS);
+    };
+    let setup: Promise<void> | undefined;
+    beforeAll(() => (setup = boot()), INT_SETUP_TIMEOUT_MS);
 
     afterAll(async () => {
+      await settled(setup);
       OAuthExceptionFilter.prototype.catch = original;
-      await closeFullApp(abortBooting);
-    }, FULL_APP_BOOT_TIMEOUT_MS);
+      await abortApp?.close();
+    }, INT_SETUP_TIMEOUT_MS);
 
     /**
      * Tripwire for Node/Fastify: half a body, then the client goes away. Fastify's rawBody tags
@@ -813,10 +816,10 @@ describe('B7.4 tester cross-checks', () => {
     const origOAuth = OAuthExceptionFilter.prototype.catch;
     const origHtml = HtmlExceptionFilter.prototype.catch;
     let tApp: FullApp | undefined;
-    let tBooting: Promise<FullApp> | undefined;
     let port = 0;
 
-    beforeAll(async () => {
+    // DEBT-448: afterAll waits for a setup that outlived its hook, then cleans up what it opened.
+    const boot = async (): Promise<void> => {
       OAuthExceptionFilter.prototype.catch = function (this: OAuthExceptionFilter, e, h) {
         caught.push({ filter: 'oauth', e });
         return origOAuth.call(this, e, h);
@@ -825,7 +828,7 @@ describe('B7.4 tester cross-checks', () => {
         caught.push({ filter: 'html', e });
         return origHtml.call(this, e, h);
       };
-      tBooting = bootFullApp({
+      tApp = await bootFullApp({
         name: 'tester58t',
         logStream: new Writable({
           write(chunk, _enc, cb) {
@@ -834,16 +837,18 @@ describe('B7.4 tester cross-checks', () => {
           },
         }),
       });
-      tApp = await tBooting;
       await tApp.app.listen(0, '127.0.0.1');
       port = (tApp.app.getHttpServer().address() as AddressInfo).port;
-    }, FULL_APP_BOOT_TIMEOUT_MS);
+    };
+    let setup: Promise<void> | undefined;
+    beforeAll(() => (setup = boot()), INT_SETUP_TIMEOUT_MS);
 
     afterAll(async () => {
+      await settled(setup);
       OAuthExceptionFilter.prototype.catch = origOAuth;
       HtmlExceptionFilter.prototype.catch = origHtml;
-      await closeFullApp(tBooting);
-    }, FULL_APP_BOOT_TIMEOUT_MS);
+      await tApp?.close();
+    }, INT_SETUP_TIMEOUT_MS);
 
     async function waitCaught(): Promise<void> {
       const deadline = Date.now() + 5000;

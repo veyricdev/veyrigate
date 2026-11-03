@@ -18,7 +18,7 @@ import { TenantScopedRepository } from '../src/modules/identity/tenant-context/t
 import { type UserTenant, UserTenantService } from '../src/modules/identity/user-tenant.service';
 import { SessionCookie } from '../src/modules/sessions/session.cookie';
 import { SessionService } from '../src/modules/sessions/session.service';
-import { FULL_APP_BOOT_TIMEOUT_MS } from './full-app';
+import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 
 const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://localhost:6479';
 const MONGO_URI =
@@ -55,8 +55,7 @@ describe('Tenant context + tenant-scoped repository (B2.1, INV-24)', () => {
   const mallory = new Types.ObjectId().toString(); // no membership
   const users: string[] = [alice, bob, mallory];
 
-  // DEBT-448: the setup promise is kept so afterAll can wait for a setup that outlived its hook
-  // timeout (under load it took 15.2 s) and then clean up what it opened.
+  // DEBT-448: afterAll waits for a setup that outlived its hook, then cleans up what it opened.
   const boot = async (): Promise<void> => {
     redis = new IORedis(REDIS_URL, { maxRetriesPerRequest: 1 });
     const config = {
@@ -100,14 +99,14 @@ describe('Tenant context + tenant-scoped repository (B2.1, INV-24)', () => {
     await svc.addMembership(new Types.ObjectId().toString(), 'tenant-B');
   };
   let setup: Promise<void> | undefined;
-  beforeAll(() => (setup = boot()), FULL_APP_BOOT_TIMEOUT_MS);
+  beforeAll(() => (setup = boot()), INT_SETUP_TIMEOUT_MS);
 
   afterAll(async () => {
-    await setup?.catch(() => undefined); // reported by beforeAll
-    for (const u of users) await sessions.revokeAllForUser(u);
-    await model.db.dropDatabase();
-    await app.close(); // closes the Mongo connection; RedisService quits the client
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+    await settled(setup);
+    if (sessions) for (const u of users) await sessions.revokeAllForUser(u);
+    await model?.db.dropDatabase();
+    await app?.close(); // closes the Mongo connection; RedisService quits the client
+  }, INT_SETUP_TIMEOUT_MS);
 
   const call = (method: 'GET' | 'POST', url: string, sessionId?: string, payload?: unknown) =>
     app

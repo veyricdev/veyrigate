@@ -8,8 +8,6 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import {
   authorizeCode,
   bootFullApp,
-  closeFullApp,
-  FULL_APP_BOOT_TIMEOUT_MS,
   FLOW_ADMIN_AUD,
   FLOW_REDIRECT,
   formPost,
@@ -17,6 +15,7 @@ import {
   type FullApp,
   type InjectResponse,
 } from './full-app';
+import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 import { seedConsent, seedOAuthUser } from './oauth-fixtures';
 
 /**
@@ -65,7 +64,6 @@ function prng(seed: number) {
 
 describe('run 57 tester: lock/unlock audit order + audit cursor over real HTTP', () => {
   let full: FullApp;
-  let booting: Promise<FullApp> | undefined;
   let bff: { clientId: string; secret: string };
   const ids: Record<Op['who'], string> = { super1: '', super2: '', tenant1: '', tenant2: '' };
   const at: Record<Op['who'], string> = { super1: '', super2: '', tenant1: '', tenant2: '' };
@@ -74,8 +72,9 @@ describe('run 57 tester: lock/unlock audit order + audit cursor over real HTTP',
   const pino: string[] = [];
   const bodies: string[] = [];
 
-  beforeAll(async () => {
-    booting = bootFullApp({
+  // DEBT-448: afterAll waits for a setup that outlived its hook, then cleans up what it opened.
+  const boot = async (): Promise<void> => {
+    full = await bootFullApp({
       name: 'run57t',
       logStream: new Writable({
         write(chunk, _e, cb) {
@@ -84,7 +83,6 @@ describe('run 57 tester: lock/unlock audit order + audit cursor over real HTTP',
         },
       }),
     });
-    full = await booting;
     auditModel = full.conn.model<Record<string, unknown>>('AuditLog');
     userModel = full.conn.model<Record<string, unknown>>('User');
     bff = await seedFlowClient(full);
@@ -92,11 +90,14 @@ describe('run 57 tester: lock/unlock audit order + audit cursor over real HTTP',
       ids[who] = await adminUser(who.startsWith('super') ? 'super_admin' : 'tenant_admin');
       at[who] = await login(ids[who]);
     }
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+  };
+  let setup: Promise<void> | undefined;
+  beforeAll(() => (setup = boot()), INT_SETUP_TIMEOUT_MS);
 
   afterAll(async () => {
-    await closeFullApp(booting);
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+    await settled(setup);
+    await full?.close();
+  }, INT_SETUP_TIMEOUT_MS);
 
   afterEach(() => {
     jest.restoreAllMocks();

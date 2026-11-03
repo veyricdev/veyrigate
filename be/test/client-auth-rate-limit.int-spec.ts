@@ -34,6 +34,7 @@ import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.se
 import { UserService } from '../src/modules/identity/user.service';
 import { UserTenantService } from '../src/modules/identity/user-tenant.service';
 import { ConsentService } from '../src/modules/oauth/consent/consent.service';
+import { dropIntDb, INT_SETUP_TIMEOUT_MS } from './int-hooks';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -207,7 +208,6 @@ describe('client-auth failure rate limit (DEBT-029/039 + DEBT-006) on real Mongo
   }, 60_000);
 
   afterAll(async () => {
-    if (clientModel) await clientModel.db.dropDatabase();
     if (app) await app.close();
     if (redis) await redis.quit();
     if (keyDir) await rm(keyDir, { recursive: true, force: true });
@@ -585,3 +585,7 @@ describe('TRUST_PROXY (DEBT-006): X-Forwarded-For vs rate-limit bucket isolation
     }
   });
 });
+
+// DEBT-454: every describe above shares MONGO_URI (the later ones re-create collections with
+// autoIndex), so drop it once, after all of them have closed their apps.
+afterAll(() => dropIntDb(MONGO_URI), INT_SETUP_TIMEOUT_MS);

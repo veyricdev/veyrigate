@@ -29,7 +29,7 @@ import { UiController } from '../src/modules/ui/ui.controller';
 import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
 import { LogoutService } from '../src/modules/oauth/logout/logout.service';
 import { AuthorizeRequestContextService } from '../src/modules/oauth/authorize/authorize-request-context.service';
-import { FULL_APP_BOOT_TIMEOUT_MS } from './full-app';
+import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -46,8 +46,7 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
   let auditModel: Model<Record<string, unknown>>;
   const messages: MailMessage[] = [];
 
-  // DEBT-448: the setup promise is kept so afterAll can wait for a setup that outlived its hook
-  // timeout (under load it took 17.3 s) and then clean up what it opened.
+  // DEBT-448: afterAll waits for a setup that outlived its hook, then cleans up what it opened.
   const boot = async (): Promise<void> => {
     redis = new IORedis(REDIS_URL, { maxRetriesPerRequest: 1 });
     const config = {
@@ -130,15 +129,17 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
     await app.getHttpAdapter().getInstance().ready();
   };
   let setup: Promise<void> | undefined;
-  beforeAll(() => (setup = boot()), FULL_APP_BOOT_TIMEOUT_MS);
+  beforeAll(() => (setup = boot()), INT_SETUP_TIMEOUT_MS);
 
   afterAll(async () => {
-    await setup?.catch(() => undefined); // reported by beforeAll
-    await userModel.db.dropDatabase();
-    const keys = await redis.keys('rl:*');
-    if (keys.length) await redis.del(...keys);
-    await app.close();
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+    await settled(setup);
+    await userModel?.db.dropDatabase();
+    if (redis) {
+      const keys = await redis.keys('rl:*');
+      if (keys.length) await redis.del(...keys);
+    }
+    await app?.close();
+  }, INT_SETUP_TIMEOUT_MS);
 
   const form = async (path: string, cookieHeader?: string) => {
     const response = await app.inject({

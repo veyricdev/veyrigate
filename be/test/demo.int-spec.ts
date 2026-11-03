@@ -21,6 +21,7 @@ import { ResourceService, type Resource } from '../src/modules/resources/resourc
 import { SessionService } from '../src/modules/sessions/session.service';
 import { registerCorsPreflight } from '../src/modules/clients/client-cors.helper';
 import { DemoController } from '../src/modules/demo/demo.controller';
+import { dropIntDb, INT_SETUP_TIMEOUT_MS } from './int-hooks';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -144,7 +145,6 @@ describe('/demo/me (B6.5) on real Mongo', () => {
   }, 60_000);
 
   afterAll(async () => {
-    if (clientModel) await clientModel.db.dropDatabase();
     if (app) await app.close();
     if (keyDir) await rm(keyDir, { recursive: true, force: true });
   });
@@ -374,3 +374,7 @@ describe('/demo/me production defence-in-depth (controller 404)', () => {
     expect(res.statusCode).toBe(404);
   });
 });
+
+// DEBT-454: every describe above shares MONGO_URI (the later ones re-create collections with
+// autoIndex), so drop it once, after all of them have closed their apps.
+afterAll(() => dropIntDb(MONGO_URI), INT_SETUP_TIMEOUT_MS);

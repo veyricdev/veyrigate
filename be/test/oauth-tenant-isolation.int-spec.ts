@@ -30,7 +30,7 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { seedConsent, seedOAuthUser } from './oauth-fixtures';
-import { FULL_APP_BOOT_TIMEOUT_MS } from './full-app';
+import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -100,8 +100,7 @@ describe('OAuth tenant isolation at /authorize + POST /authorize/consent (MT1/MT
     expect(loc.toString()).not.toContain('member');
   };
 
-  // DEBT-448: the setup promise is kept so afterAll can wait for a setup that outlived its hook
-  // timeout (under load it took 20.0 s) and then clean up what it opened.
+  // DEBT-448: afterAll waits for a setup that outlived its hook, then cleans up what it opened.
   const boot = async (): Promise<void> => {
     redis = new IORedis(REDIS_URL, { maxRetriesPerRequest: 1 });
     const moduleRef = await Test.createTestingModule({
@@ -167,15 +166,15 @@ describe('OAuth tenant isolation at /authorize + POST /authorize/consent (MT1/MT
     }
   };
   let setup: Promise<void> | undefined;
-  beforeAll(() => (setup = boot()), FULL_APP_BOOT_TIMEOUT_MS);
+  beforeAll(() => (setup = boot()), INT_SETUP_TIMEOUT_MS);
 
   afterEach(() => jest.restoreAllMocks());
 
   afterAll(async () => {
-    await setup?.catch(() => undefined); // reported by beforeAll
+    await settled(setup);
     if (conn) await conn.dropDatabase();
     if (app) await app.close();
-  }, FULL_APP_BOOT_TIMEOUT_MS);
+  }, INT_SETUP_TIMEOUT_MS);
 
   it('MT1: member of tenant A only, client of tenant B => 302 access_denied, nothing written, audit not_member', async () => {
     const userA = await seedOAuthUser(conn, { tenantId: TENANT_A });
