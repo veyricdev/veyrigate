@@ -6,7 +6,7 @@
 # Base pinned by index digest, same as fe-admin/Dockerfile; refresh with
 # `docker buildx imagetools inspect node:<version>-bookworm-slim` (release >= 14 days old, same version
 # as .nvmrc / engines). Keep bookworm (glibc): @node-rs/argon2 ships a gnu binary, not musl.
-ARG NODE_IMAGE=node:22.23.2-bookworm-slim@sha256:48e4b67d85f87bd551df43704e24d252f56cc5f8e9718841aace50f19948f0f9
+ARG NODE_IMAGE=node:22.23.4-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da
 
 FROM ${NODE_IMAGE} AS build
 # DEBT-398: fail closed if the build context holds anything secret-looking (an ignore rule was

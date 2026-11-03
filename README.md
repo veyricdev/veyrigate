@@ -27,7 +27,7 @@ Các package hiện là **placeholder** (chỉ có `package.json` + script place
 
 ## Yêu cầu
 
-- Node `v22.23.2` (xem `.nvmrc` / `.node-version`)
+- Node `v22.23.4` (xem `.nvmrc` / `.node-version`)
 - pnpm (bật qua `corepack enable`)
 - Docker (cho hạ tầng dev: mongo, redis, mailpit)
 
