@@ -28,7 +28,7 @@
 | [59](runs/59-http-edge/summary.md) | M7 | Biên HTTP DEBT-387/442/239/197 (+135/236 đóng chấp nhận) | ✅ be 627 + int 1420 + fe-admin 1455 + E2E 36 | `9c465ee` |
 | [60](runs/60-location-guard/summary.md) | M7 | Chặn Location ra ngoài origin + dọn run 59 (DEBT-444–447/451/460) | ✅ be 630 + int 1420 + fe-admin 1533 + E2E 36 | `ba921e8` |
 | [61](runs/61-test-stability/summary.md) | M7 | Độ ổn định test DEBT-448/450/432/206/096/054 (gỡ `--forceExit`) | ✅ be 630 + int 1420 + fe-admin 1533 + E2E 36 | `910dc62` |
-| [62](runs/62-node-bump/summary.md) | M7 | Bump Node 22.23.4 (DEBT-379, security) | ✅ smoke BE 11 + fe-admin 16 + unit be 630 / fe-admin 1533 (22.23.4) | — |
+| [62](runs/62-node-bump/summary.md) | M7 | Bump Node 22.23.4 (DEBT-379, security) | ✅ smoke BE 11 + fe-admin 16 + unit be 630 / fe-admin 1533 (22.23.4) | `33efeef` |
 
 ## Chặn / cần người quyết định
 
