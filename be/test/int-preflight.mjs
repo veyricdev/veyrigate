@@ -113,11 +113,22 @@ async function acquireLock() {
     redis.disconnect();
     throw err;
   }
-  const heartbeat = setInterval(() => {
-    redis.eval(EXTEND_LUA, 1, LOCK_KEY, token, LOCK_TTL_MS).catch((err) => {
-      console.warn(`[int-preflight] lock heartbeat failed: ${err.message}`);
-    });
+  const lock = { redis, token, heartbeat: undefined, lost: false };
+  lock.heartbeat = setInterval(() => {
+    redis.eval(EXTEND_LUA, 1, LOCK_KEY, token, LOCK_TTL_MS).then(
+      (n) => {
+        // 0 = the key no longer holds our token (expired or overwritten): this run lost its
+        // exclusivity; int-teardown.mjs fails the run (DEBT-206).
+        if (n === 0 && !lock.lost) {
+          lock.lost = true;
+          console.warn(`[int-preflight] lost ${LOCK_KEY}: another run may have shared vg-test-*`);
+        }
+      },
+      (err) => {
+        console.warn(`[int-preflight] lock heartbeat failed: ${err.message}`);
+      },
+    );
   }, HEARTBEAT_MS);
-  heartbeat.unref();
-  globalThis.__VG_INT_LOCK__ = { redis, token, heartbeat };
+  lock.heartbeat.unref();
+  globalThis.__VG_INT_LOCK__ = lock;
 }

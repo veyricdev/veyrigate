@@ -8,6 +8,8 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import {
   authorizeCode,
   bootFullApp,
+  closeFullApp,
+  FULL_APP_BOOT_TIMEOUT_MS,
   FLOW_ADMIN_AUD,
   FLOW_REDIRECT,
   formPost,
@@ -63,6 +65,7 @@ function prng(seed: number) {
 
 describe('run 57 tester: lock/unlock audit order + audit cursor over real HTTP', () => {
   let full: FullApp;
+  let booting: Promise<FullApp> | undefined;
   let bff: { clientId: string; secret: string };
   const ids: Record<Op['who'], string> = { super1: '', super2: '', tenant1: '', tenant2: '' };
   const at: Record<Op['who'], string> = { super1: '', super2: '', tenant1: '', tenant2: '' };
@@ -72,7 +75,7 @@ describe('run 57 tester: lock/unlock audit order + audit cursor over real HTTP',
   const bodies: string[] = [];
 
   beforeAll(async () => {
-    full = await bootFullApp({
+    booting = bootFullApp({
       name: 'run57t',
       logStream: new Writable({
         write(chunk, _e, cb) {
@@ -81,6 +84,7 @@ describe('run 57 tester: lock/unlock audit order + audit cursor over real HTTP',
         },
       }),
     });
+    full = await booting;
     auditModel = full.conn.model<Record<string, unknown>>('AuditLog');
     userModel = full.conn.model<Record<string, unknown>>('User');
     bff = await seedFlowClient(full);
@@ -88,11 +92,11 @@ describe('run 57 tester: lock/unlock audit order + audit cursor over real HTTP',
       ids[who] = await adminUser(who.startsWith('super') ? 'super_admin' : 'tenant_admin');
       at[who] = await login(ids[who]);
     }
-  }, 90_000);
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
-    if (full) await full.close();
-  });
+    await closeFullApp(booting);
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   afterEach(() => {
     jest.restoreAllMocks();
@@ -267,7 +271,8 @@ describe('run 57 tester: lock/unlock audit order + audit cursor over real HTTP',
       }
       expect(mismatches).toEqual([]);
       expect(totalOps).toBeGreaterThanOrEqual(72);
-    });
+      // DEBT-448: 11.2-13.4 s under a 28-thread CPU load (default 20 s) => ~2x.
+    }, 30_000);
 
     it('M2 same ms: 5 rounds x 7 parallel ops with ONE injected now => marks now..now+writes-1, success ts distinct in that range, replay == DB', async () => {
       const svc = full.app.get(UserService);

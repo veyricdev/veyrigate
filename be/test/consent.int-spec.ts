@@ -3,6 +3,7 @@ import mongoose, { Types, type Connection, type Model } from 'mongoose';
 import { MODELS } from '../src/database/mongo/models';
 import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
 import { ConsentService, type Consent } from '../src/modules/oauth/consent/consent.service';
+import { FULL_APP_BOOT_TIMEOUT_MS } from './full-app';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -23,18 +24,23 @@ describe('ConsentService on real Mongo (B4.2a, spec Â§9.4/Â§10, Q1 user Ã�
   const RES_B = 'https://api-b.example/';
   const ALLOWED = ['openid', 'profile', 'email', 'offline_access'];
 
-  beforeAll(async () => {
+  // DEBT-448: the setup promise is kept so afterAll can wait for a setup that outlived its hook
+  // timeout (under load it took 16.4 s) and then clean up what it opened.
+  const boot = async (): Promise<void> => {
     connection = await mongoose.createConnection(MONGO_URI, { autoIndex: false }).asPromise();
     for (const { name, schema } of MODELS) connection.model(name, schema);
     await syncAllIndexes(connection);
     model = connection.model<Consent>('Consent');
     service = new ConsentService(model, config());
-  }, 30_000);
+  };
+  let setup: Promise<void> | undefined;
+  beforeAll(() => (setup = boot()), FULL_APP_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
+    await setup?.catch(() => undefined); // reported by beforeAll
     await connection.dropDatabase();
     await connection.close();
-  });
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   const user = () => new Types.ObjectId().toHexString();
   const versions = () => service.currentVersions();

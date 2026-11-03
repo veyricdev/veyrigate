@@ -54,6 +54,7 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { UiController } from '../src/modules/ui/ui.controller';
+import { FULL_APP_BOOT_TIMEOUT_MS } from './full-app';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -86,14 +87,21 @@ describe('db:seed bootstrap (B6.4) on real Mongo', () => {
   const adminUser = () =>
     users.findOne({ email: 'seed-admin@example.com' }).select('+passwordHash').lean().exec();
 
-  beforeAll(async () => {
-    connection = await mongoose.createConnection(MONGO_URI, { autoIndex: false }).asPromise();
-    for (const { name, schema } of MODELS) connection.model(name, schema);
-    await syncAllIndexes(connection);
-    users = connection.model<Record<string, unknown>>('User');
-    members = connection.model<Record<string, unknown>>('UserTenant');
-    creds = connection.model<Record<string, unknown>>('ClientCredential');
-  }, 30_000);
+  // Kept so afterAll can wait for a setup that outlived its hook timeout (DEBT-448: under load this
+  // hook took 16.6 s vs 30 s before) and still drop/close what it opened.
+  let setup: Promise<void> | undefined;
+  beforeAll(
+    () =>
+      (setup = (async () => {
+        connection = await mongoose.createConnection(MONGO_URI, { autoIndex: false }).asPromise();
+        for (const { name, schema } of MODELS) connection.model(name, schema);
+        await syncAllIndexes(connection);
+        users = connection.model<Record<string, unknown>>('User');
+        members = connection.model<Record<string, unknown>>('UserTenant');
+        creds = connection.model<Record<string, unknown>>('ClientCredential');
+      })()),
+    FULL_APP_BOOT_TIMEOUT_MS,
+  );
 
   beforeEach(() => {
     jest.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -106,9 +114,11 @@ describe('db:seed bootstrap (B6.4) on real Mongo', () => {
   });
 
   afterAll(async () => {
+    await setup?.catch(() => undefined); // a failed setup was already reported by beforeAll
+    if (!connection) return;
     await connection.dropDatabase();
     await connection.close();
-  });
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   it('twice => identical document counts; secret returned once; credential unchanged on run 2', async () => {
     const first = await seedBootstrap(connection, ADMIN, ISSUER, 'test');

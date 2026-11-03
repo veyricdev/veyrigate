@@ -9,6 +9,8 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import {
   authorizeCode,
   bootFullApp,
+  closeFullApp,
+  FULL_APP_BOOT_TIMEOUT_MS,
   FLOW_ADMIN_AUD,
   FLOW_API_AUD,
   formPost,
@@ -37,6 +39,7 @@ interface Row {
 
 describe('security headers by response type (B7.4)', () => {
   let full: FullApp;
+  let booting: Promise<FullApp> | undefined;
   let client: { clientId: string; secret: string };
   let sessionId = '';
   let accessToken = '';
@@ -60,7 +63,8 @@ describe('security headers by response type (B7.4)', () => {
   }
 
   beforeAll(async () => {
-    full = await bootFullApp({ name: 'headers', env: { METRICS_TOKEN } });
+    booting = bootFullApp({ name: 'headers', env: { METRICS_TOKEN } });
+    full = await booting;
     client = await seedFlowClient(full);
     const userId = await seedOAuthUser(full.conn, { tenantId: DEFAULT_TENANT_ID });
     await full.conn
@@ -90,11 +94,11 @@ describe('security headers by response type (B7.4)', () => {
     adminToken = (await tokens(FLOW_ADMIN_AUD, 'openid admin.read')).json<{
       access_token: string;
     }>().access_token;
-  }, 60_000);
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
-    if (full) await full.close();
-  });
+    await closeFullApp(booting);
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   afterEach(() => jest.restoreAllMocks());
 

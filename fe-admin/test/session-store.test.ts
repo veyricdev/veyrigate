@@ -21,6 +21,18 @@ const secret = () => randomBytes(32).toString("base64url");
 const store = (s = secret()) => createSessionStore({ redis, secret: s, now: () => clock });
 
 const RT = "rt-plain-0123456789";
+// Realistic, distinct JWT fixtures (header.payload.signature, each part >= 20 chars).
+const b64u = (s: string) => Buffer.from(s).toString("base64url");
+const jwt = (payload: object, sig: string) =>
+  ["eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9", b64u(JSON.stringify(payload)), sig].join(".");
+const AT = jwt(
+  { iss: "http://localhost:4000", sub: "user-1", aud: "fe-admin", scope: "openid admin", exp: 1_800_000_900 },
+  "Q2xhaW1zU2lnbmF0dXJlQWNjZXNzVG9rZW4wMDE",
+);
+const IDT = jwt(
+  { iss: "http://localhost:4000", sub: "user-1", aud: "fe-admin", nonce: "n-0123456789", exp: 1_800_000_900 },
+  "SWRUb2tlblNpZ25hdHVyZUZpeHR1cmVWYWx1ZTAy",
+);
 const data = (over: Partial<SessionData> = {}): SessionData => ({
   sub: "user-1",
   tenantId: "t1",
@@ -28,7 +40,7 @@ const data = (over: Partial<SessionData> = {}): SessionData => ({
   email: "admin@example.com",
   createdAt: clock,
   atExp: clock + 900_000,
-  tokens: { accessToken: "eyJhbGciOi.access.sig", refreshToken: RT, idToken: "eyJhbGciOi.id.sig" },
+  tokens: { accessToken: AT, refreshToken: RT, idToken: IDT },
   ...over,
 });
 async function make(s = store(), d = data()) {
@@ -62,10 +74,22 @@ describe("session store (Redis)", () => {
     expect(key.startsWith("fea:sess:")).toBe(true);
     expect(key).not.toContain(cookie);
     const raw = (await redis.get(key))!;
-    expect(raw).not.toContain("eyJ");
-    expect(raw).not.toContain(RT);
-    expect(raw).not.toContain(cookie);
-    expect(JSON.parse(raw).v).toBe(1);
+    // Each secret and each JWT part: absent in clear, as base64 and as base64url.
+    const secrets = [AT, IDT, RT, cookie, ...AT.split("."), ...IDT.split(".")];
+    for (const s of secrets) {
+      for (const form of [s, Buffer.from(s).toString("base64"), b64u(s)]) expect(raw).not.toContain(form);
+    }
+    // Every base64url-looking run decodes to nothing secret (catches "base64-encoded, not encrypted").
+    for (const seg of raw.match(/[A-Za-z0-9_-]{16,}/g) ?? []) {
+      const decoded = Buffer.from(seg, "base64url").toString("latin1");
+      for (const s of [...secrets, "accessToken", "refreshToken", "idToken"]) expect(decoded).not.toContain(s);
+    }
+    const stored = JSON.parse(raw);
+    expect(Object.keys(stored).sort()).toEqual(
+      ["atExp", "createdAt", "email", "roles", "sub", "tenantId", "tokens", "v"],
+    );
+    expect(stored.tokens).toMatch(/^[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{22}$/);
+    expect(stored.v).toBe(1);
   });
 
   it("an unknown / forged cookie => none", async () => {

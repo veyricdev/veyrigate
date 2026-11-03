@@ -8,6 +8,7 @@ import { DuplicateError } from '../src/modules/identity/identity.errors';
 import { DEFAULT_TENANT_ID, TenantService } from '../src/modules/identity/tenant.service';
 import { UserTenantService } from '../src/modules/identity/user-tenant.service';
 import { UserService } from '../src/modules/identity/user.service';
+import { FULL_APP_BOOT_TIMEOUT_MS } from './full-app';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -21,7 +22,9 @@ describe('Identity services on real Mongo (B2.2)', () => {
   let federated: FederatedIdentityService;
   let tenantModel: Model<unknown>;
 
-  beforeAll(async () => {
+  // DEBT-448: the setup promise is kept so afterAll can wait for a setup that outlived its hook
+  // timeout (under load it took 17.3 s) and then clean up what it opened.
+  const boot = async (): Promise<void> => {
     moduleRef = await Test.createTestingModule({
       imports: [
         MongooseModule.forRoot(MONGO_URI, {
@@ -40,12 +43,15 @@ describe('Identity services on real Mongo (B2.2)', () => {
     tenants = moduleRef.get(TenantService);
     memberships = moduleRef.get(UserTenantService);
     federated = moduleRef.get(FederatedIdentityService);
-  }, 30_000);
+  };
+  let setup: Promise<void> | undefined;
+  beforeAll(() => (setup = boot()), FULL_APP_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
+    await setup?.catch(() => undefined); // reported by beforeAll
     await tenantModel.db.dropDatabase();
     await moduleRef.close();
-  });
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   it('seeds default-tenant at boot; running the seed again (also concurrently) does not duplicate', async () => {
     expect(await tenants.findById(DEFAULT_TENANT_ID)).toEqual({

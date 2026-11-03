@@ -560,7 +560,8 @@ describe('TRUST_PROXY (DEBT-006): X-Forwarded-For vs rate-limit bucket isolation
     } finally {
       await app.close();
     }
-  });
+    // DEBT-448: boots its own app; 1.3-2.1 s idle, 17.9 s under a 28-thread CPU load (default 20 s).
+  }, 40_000);
 
   it('TRUST_PROXY=127.0.0.1 => different X-Forwarded-For get independent counters', async () => {
     const app = await buildApp(keyDir, '127.0.0.1');

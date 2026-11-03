@@ -12,6 +12,8 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import {
   authorizeCode,
   bootFullApp,
+  closeFullApp,
+  FULL_APP_BOOT_TIMEOUT_MS,
   FLOW_ADMIN_AUD,
   FLOW_API_AUD,
   FLOW_REDIRECT,
@@ -45,6 +47,7 @@ type Tokens = { access_token: string; refresh_token: string };
 
 describe('Runbook drill (run 40 B7.5): runbook-ops §1 key, §2 reuse, §3 admin recovery', () => {
   let full: FullApp;
+  let booting: Promise<FullApp> | undefined;
   let adminClient: Auth;
   let rp: Auth;
   let superId = '';
@@ -54,7 +57,8 @@ describe('Runbook drill (run 40 B7.5): runbook-ops §1 key, §2 reuse, §3 admin
   let rtModel: Model<Record<string, unknown>>;
 
   beforeAll(async () => {
-    full = await bootFullApp({ name: 'runbook-drill', env: { METRICS_TOKEN } });
+    booting = bootFullApp({ name: 'runbook-drill', env: { METRICS_TOKEN } });
+    full = await booting;
     userModel = full.conn.model<Record<string, unknown>>('User');
     memberModel = full.conn.model<Record<string, unknown>>('UserTenant');
     auditModel = full.conn.model<Record<string, unknown>>('AuditLog');
@@ -80,11 +84,11 @@ describe('Runbook drill (run 40 B7.5): runbook-ops §1 key, §2 reuse, §3 admin
       { userId: new Types.ObjectId(superId), tenantId: DEFAULT_TENANT_ID },
       { $set: { roles: ['super_admin'] } },
     );
-  }, 90_000);
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
-    if (full) await full.close();
-  });
+    await closeFullApp(booting);
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   /** Interactive login (fresh session => fresh `auth_time`) -> code -> `/token`. */
   async function login(

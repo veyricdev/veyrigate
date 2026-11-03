@@ -16,11 +16,19 @@ export default async function intTeardown() {
   if (!lock) return;
   globalThis.__VG_INT_LOCK__ = undefined;
   clearInterval(lock.heartbeat);
+  let released;
   try {
-    await lock.redis.eval(RELEASE_LUA, 1, LOCK_KEY, lock.token);
+    released = await lock.redis.eval(RELEASE_LUA, 1, LOCK_KEY, lock.token);
+    if (released === 0) console.warn(`[int-teardown] ${LOCK_KEY} no longer held this run's token`);
     await lock.redis.quit();
   } catch (err) {
     console.warn(`[int-teardown] could not release ${LOCK_KEY}: ${err.message}`);
     lock.redis.disconnect();
+  }
+  // DEBT-206: a run that lost the lock was not exclusive, so its results cannot be trusted.
+  if (lock.lost || released === 0) {
+    throw new Error(
+      `[int-teardown] ${LOCK_KEY} was lost during this run: failing it (not exclusive)`,
+    );
   }
 }

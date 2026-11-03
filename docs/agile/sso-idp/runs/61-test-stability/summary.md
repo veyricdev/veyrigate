@@ -1,0 +1,8 @@
+# Summary — run 61 độ ổn định test (M7, lane BE/FE test) — ✅ PASS 5/5 task
+
+- **Phạm vi**: T1 [BE] DEBT-448 — `bootFullApp` tự dọn khi lỗi (đóng app → drop DB qua kết nối mới → xoá keyDir → ném lại lỗi gốc); `FULL_APP_BOOT_TIMEOUT_MS = 70_000` + `closeFullApp(pending)` (11 file/13 hook); 15 hook tự dựng giữ promise setup, `afterAll` chờ; 10 test nâng timeout có số đo. T4 [BE] DEBT-206 — mất lock (heartbeat/release 0) ⇒ warn + exit 1. T5 [BE] DEBT-096/054 — gỡ `--forceExit` khỏi `test:int`. T2 [FE] DEBT-450 — assertion `session-store` dùng fixture JWT thật + kiểm đoạn giải mã base64url thay `eyJ`. T3 [FE] DEBT-432 — E2E lab chờ `lab-replay-steps` 20 s (bỏ `toBeEnabled`: nút bị gỡ khi session thu hồi — đúng thiết kế).
+- **Verify**: be unit 630, int 1420 (rảnh ×3, dưới tải 28 luồng ×1; tự thoát ≤1 s, `--detectOpenHandles` 0 handle), 7 suite ×3 dưới tải 192/192; fe-admin 1533, session-store ×50 + ×20; E2E 36/36, lab replay ×10 rảnh + ×10 tải + ×5 tester; mutation T1 (3 điểm ném) 0 DB/keyDir, T4 drill A/B exit 1, M1–M3 store.ts RED, `replayRefreshToken` no-op RED.
+- **Commit**: (điền khi commit).
+- **Vòng lặp**: tech-lead=1, BE dev=1, FE dev=1, senior BE=1 (PASS), senior FE=1 (PASS), tester=1 (PASS).
+- **Debt**: đóng DEBT-448/450/432/206/096/054; mở 452/453 (tech-lead), 454 (DB `vg-int-*` mồ côi từ clrl/authorize/demo), 455 (biên timeout sát), 456 (`--testTimeout` thành mảng), 461–463 🟡 (hằng số kéo AppModule, `closeFullApp` không chờ seed, 2 kiểu mẫu/nuốt lỗi boot muộn), 464 💭 (webServer E2E /ready 120 s). Nit senior FE: thêm `expect(lab-replay-signin).toBeVisible()`.
+- ⚠ Backend-dev dùng `Stop-Process` cho 2 PID của chính mình (đã xác minh) — nhắc lại quy tắc chỉ TaskStop.

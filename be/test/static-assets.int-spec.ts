@@ -1,6 +1,6 @@
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { bootFullApp, type FullApp } from './full-app';
+import { bootFullApp, closeFullApp, FULL_APP_BOOT_TIMEOUT_MS, type FullApp } from './full-app';
 
 /**
  * `@fastify/static` 8 -> 10 regression (run 38, B7.4 Task 1): the real `configureApp` mount of
@@ -9,6 +9,7 @@ import { bootFullApp, type FullApp } from './full-app';
  */
 describe('static assets under /assets/ (B7.4)', () => {
   let full: FullApp;
+  let booting: Promise<FullApp> | undefined;
   const publicDir = join(process.cwd(), 'src', 'public');
   // A real dotfile inside public/ for the run, so "404" proves the dotfile rule, not a missing file.
   const dotName = `.vg-dot-${process.pid}-${Date.now()}`;
@@ -19,13 +20,14 @@ describe('static assets under /assets/ (B7.4)', () => {
   beforeAll(async () => {
     await writeFile(join(publicDir, dotName), DOT_BODY);
     outsideMarker = (await readFile(join(publicDir, '..', 'app.module.ts'), 'utf8')).slice(0, 40);
-    full = await bootFullApp({ name: 'static' });
-  }, 60_000);
+    booting = bootFullApp({ name: 'static' });
+    full = await booting;
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
     await rm(join(publicDir, dotName), { force: true });
-    if (full) await full.close();
-  });
+    await closeFullApp(booting);
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   const get = (url: string) => full.app.inject({ method: 'GET', url });
 

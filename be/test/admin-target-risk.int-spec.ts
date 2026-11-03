@@ -367,5 +367,6 @@ describe('run 30 QA (tester): DEBT-172 runtime guard variants', () => {
       await conn.dropDatabase();
       await conn.close();
     }
-  });
+    // DEBT-448: own connection + index sync; 21.6 s under a 28-thread CPU load (default 20 s).
+  }, 45_000);
 });

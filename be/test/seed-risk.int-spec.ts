@@ -6,6 +6,7 @@ import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
 import { seedBootstrap, type AdminSeedConfig } from '../src/database/seed';
 import { DEFAULT_TENANT_ID } from '../src/modules/identity/tenant.service';
 import { adminResourceIdentifier } from '../src/modules/oauth/token/token.service';
+import { FULL_APP_BOOT_TIMEOUT_MS } from './full-app';
 
 /**
  * Run 30 QA (tester) — risk matrix for `db:seed` (B6.4) beyond the dev-written spec:
@@ -39,12 +40,19 @@ describe('db:seed risk matrix (run 30 QA)', () => {
     return out;
   };
 
-  beforeAll(async () => {
-    connection = await mongoose.createConnection(MONGO_URI, { autoIndex: false }).asPromise();
-    for (const { name, schema } of MODELS) connection.model(name, schema);
-    await syncAllIndexes(connection);
-    creds = connection.model<Record<string, unknown>>('ClientCredential');
-  }, 30_000);
+  // Kept so afterAll can wait for a setup that outlived its hook timeout (DEBT-448: under load this
+  // hook took 17.2 s vs 30 s before) and still drop/close what it opened.
+  let setup: Promise<void> | undefined;
+  beforeAll(
+    () =>
+      (setup = (async () => {
+        connection = await mongoose.createConnection(MONGO_URI, { autoIndex: false }).asPromise();
+        for (const { name, schema } of MODELS) connection.model(name, schema);
+        await syncAllIndexes(connection);
+        creds = connection.model<Record<string, unknown>>('ClientCredential');
+      })()),
+    FULL_APP_BOOT_TIMEOUT_MS,
+  );
 
   beforeEach(() => {
     jest.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -57,9 +65,11 @@ describe('db:seed risk matrix (run 30 QA)', () => {
   });
 
   afterAll(async () => {
+    await setup?.catch(() => undefined); // a failed setup was already reported by beforeAll
+    if (!connection) return;
     await connection.dropDatabase();
     await connection.close();
-  });
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   it('State/concurrent: two seeds at once on an empty DB => no duplicated document; every returned secret works', async () => {
     for (let round = 0; round < 5; round++) {
@@ -273,7 +283,8 @@ describe('db:seed on a never-synced DB (DEBT-176)', () => {
     }
     console.info(`DEBT-176: ${bad.length}/10 rounds with a duplicated document`);
     expect(bad).toEqual([]);
-  }, 120_000);
+    // DEBT-448: 24-38 s idle, 328.7 s under a 28-thread CPU load (each round drops the DB) => ~2x.
+  }, 660_000);
 
   it('data already duplicated (no index, 2 users with the same email) => throws before any write, 0 new documents', async () => {
     await a.dropDatabase();
@@ -328,5 +339,6 @@ describe('db:seed on a never-synced DB (DEBT-176)', () => {
     expect(await uniq('resources', 'identifier')).toBe(true);
     expect(await uniq('usertenants', 'userId,tenantId')).toBe(true);
     expect(await uniq('clientcredentials', 'clientId,version')).toBe(true);
-  });
+    // DEBT-448: 1.6-13.3 s idle, 22.5 s under a 28-thread CPU load (default 20 s) => ~2x.
+  }, 45_000);
 });

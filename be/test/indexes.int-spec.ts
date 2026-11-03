@@ -1,5 +1,6 @@
 import mongoose, { type Connection, Types } from 'mongoose';
 import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
+import { FULL_APP_BOOT_TIMEOUT_MS } from './full-app';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -56,17 +57,26 @@ const EXPECTED: Record<string, { key: Record<string, number>; unique?: boolean; 
 describe('Mongo indexes after explicit sync (B1.6, spec §10)', () => {
   let conn: Connection;
 
-  beforeAll(async () => {
-    conn = await mongoose
-      .createConnection(MONGO_URI, { autoIndex: false, serverSelectionTimeoutMS: 5000 })
-      .asPromise();
-    await syncAllIndexes(conn);
-  }, 30_000); // creating 12 collections + indexes can exceed Jest's 5s default
+  // Kept so afterAll can wait for a setup that outlived its hook timeout (DEBT-448: under load this
+  // hook took 26.1 s vs 30 s before) and still drop/close what it opened.
+  let setup: Promise<void> | undefined;
+  beforeAll(
+    () =>
+      (setup = (async () => {
+        conn = await mongoose
+          .createConnection(MONGO_URI, { autoIndex: false, serverSelectionTimeoutMS: 5000 })
+          .asPromise();
+        await syncAllIndexes(conn);
+      })()),
+    FULL_APP_BOOT_TIMEOUT_MS,
+  ); // creating 12 collections + indexes can exceed Jest's 5s default
 
   afterAll(async () => {
+    await setup?.catch(() => undefined); // a failed setup was already reported by beforeAll
+    if (!conn) return;
     await conn.dropDatabase();
     await conn.close();
-  });
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   it.each(Object.keys(EXPECTED))('%s has exactly the §10 indexes (+ _id)', async (name) => {
     const indexes = (await conn.models[name].collection.indexes()) as IndexInfo[];
@@ -170,7 +180,8 @@ describe('Consent index migration M3→M4 (DEBT-028)', () => {
     expect(
       nonId.some((i) => i.key.userId === 1 && i.key.clientId === 1 && !('resource' in i.key)),
     ).toBe(false);
-  });
+    // DEBT-448: 26.0 / 29.6 s in two runs under a 28-thread CPU load (default 20 s) => ~2x.
+  }, 60_000);
 
   it('run 57 (DEBT-422): syncAllIndexes drops the old audit {tenantId,timestamp,eventId} index', async () => {
     const audit = conn.models.AuditLog.collection;
@@ -180,7 +191,8 @@ describe('Consent index migration M3→M4 (DEBT-028)', () => {
     const keys = ((await audit.indexes()) as IndexInfo[]).map((i) => i.key);
     expect(keys).toContainEqual({ tenantId: 1, timestamp: -1, _id: -1 });
     expect(keys).not.toContainEqual({ tenantId: 1, timestamp: -1, eventId: -1 });
-  });
+    // DEBT-448: 21.3 s under a 28-thread CPU load (default 20 s) => ~2x.
+  }, 45_000);
 
   it('fails closed (no data deleted) when legacy data violates the NEW unique key', async () => {
     // Legacy collection with NO unique index (e.g. one hand-dropped during ops) carrying two docs
@@ -203,5 +215,6 @@ describe('Consent index migration M3→M4 (DEBT-028)', () => {
     const indexes = (await conn.db!.collection('consents').indexes()) as IndexInfo[];
     const nonId = indexes.filter((i) => !('_id' in i.key));
     expect(nonId.some((i) => i.unique)).toBe(false);
-  });
+    // DEBT-448: 12.5 / 15.6 s in two runs under a 28-thread CPU load (default 20 s) => ~2x.
+  }, 35_000);
 });

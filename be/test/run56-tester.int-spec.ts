@@ -13,6 +13,8 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import {
   authorizeCode,
   bootFullApp,
+  closeFullApp,
+  FULL_APP_BOOT_TIMEOUT_MS,
   FLOW_ADMIN_AUD,
   FLOW_API_AUD,
   FLOW_REDIRECT,
@@ -59,6 +61,7 @@ function barrier() {
 
 describe('run 56 tester: admin races + disable/enable over real HTTP', () => {
   let full: FullApp;
+  let booting: Promise<FullApp> | undefined;
   let redis: IORedis;
   let bff: Auth; // admin-capable BFF (aud=admin tokens)
   let rs: Auth; // resource server allowed to introspect `api`
@@ -75,7 +78,7 @@ describe('run 56 tester: admin races + disable/enable over real HTTP', () => {
   let n = 0;
 
   beforeAll(async () => {
-    full = await bootFullApp({
+    booting = bootFullApp({
       name: 'run56t',
       logStream: new Writable({
         write(chunk, _e, cb) {
@@ -84,6 +87,7 @@ describe('run 56 tester: admin races + disable/enable over real HTTP', () => {
         },
       }),
     });
+    full = await booting;
     redis = new IORedis(process.env.TEST_REDIS_URL ?? 'redis://localhost:6479', {
       maxRetriesPerRequest: 1,
     });
@@ -97,12 +101,12 @@ describe('run 56 tester: admin races + disable/enable over real HTTP', () => {
     tadminId = await adminUser('tenant_admin');
     superAt = (await login(superId, bff, FLOW_ADMIN_AUD, ADMIN_SCOPE)).access_token;
     tadminAt = (await login(tadminId, bff, FLOW_ADMIN_AUD, ADMIN_SCOPE)).access_token;
-  }, 90_000);
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
     await redis?.quit();
-    if (full) await full.close();
-  });
+    await closeFullApp(booting);
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   afterEach(() => {
     jest.restoreAllMocks();
@@ -508,7 +512,8 @@ describe('run 56 tester: admin races + disable/enable over real HTTP', () => {
           mismatches.push(`round ${i}: db locked=${locked}, trail ends ${last}`);
       }
       expect(mismatches).toEqual([]);
-    });
+      // DEBT-448: 9.3-10.7 s under a 28-thread CPU load (default 20 s) => ~2x.
+    }, 25_000);
 
     it('L7 8 rounds super lock || tenant unlock on a tenant-locked user => always ends locked at level super_admin', async () => {
       for (let i = 0; i < 8; i++) {

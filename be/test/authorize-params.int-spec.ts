@@ -27,6 +27,7 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { seedOAuthUser } from './oauth-fixtures';
+import { FULL_APP_BOOT_TIMEOUT_MS } from './full-app';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -95,7 +96,9 @@ describe('/authorize repeated parameters (DEBT-204/205, RFC 6749 §3.1)', () => 
     return loc;
   };
 
-  beforeAll(async () => {
+  // DEBT-448: the setup promise is kept so afterAll can wait for a setup that outlived its hook
+  // timeout (under load it took 15.3 s) and then clean up what it opened.
+  const boot = async (): Promise<void> => {
     redis = new IORedis(REDIS_URL, { maxRetriesPerRequest: 1 });
     const moduleRef = await Test.createTestingModule({
       imports: [
@@ -152,16 +155,19 @@ describe('/authorize repeated parameters (DEBT-204/205, RFC 6749 §3.1)', () => 
     sessions = app.get(SessionService);
     const userId = await seedOAuthUser(clientModel.db, { tenantId: 'tenant-A' });
     sessionId = (await sessions.create(userId, 'tenant-A')).id;
-  }, 30_000);
+  };
+  let setup: Promise<void> | undefined;
+  beforeAll(() => (setup = boot()), FULL_APP_BOOT_TIMEOUT_MS);
 
   afterEach(() => jest.restoreAllMocks());
 
   afterAll(async () => {
+    await setup?.catch(() => undefined); // reported by beforeAll
     if (app) {
       await app.get<Model<Client>>(getModelToken('Client')).db.dropDatabase();
       await app.close();
     }
-  });
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   it('control: the same request without repetition => 200 consent screen', async () => {
     const res = await get(query());

@@ -11,6 +11,8 @@ import {
   authorizeCode,
   basicAuth,
   bootFullApp,
+  closeFullApp,
+  FULL_APP_BOOT_TIMEOUT_MS,
   FLOW_ADMIN_AUD,
   FLOW_API_AUD,
   FLOW_REDIRECT,
@@ -32,6 +34,7 @@ import { seedConsent } from './oauth-fixtures';
  */
 describe('application logs never carry secrets (B7.4)', () => {
   let full: FullApp;
+  let booting: Promise<FullApp> | undefined;
   const lines: string[] = [];
   const secrets = new Map<string, string>();
   const keep = (label: string, value: string | undefined) => {
@@ -73,7 +76,8 @@ describe('application logs never carry secrets (B7.4)', () => {
     keep('email', EMAIL);
     keep('password', PASSWORD);
     keep('uri password', URI_PASSWORD);
-    full = await bootFullApp({ name: 'logs', env: { METRICS_TOKEN }, logStream: stream });
+    booting = bootFullApp({ name: 'logs', env: { METRICS_TOKEN }, logStream: stream });
+    full = await booting;
     const client = await seedFlowClient(full);
     keep('client secret', client.secret);
     keep('basic header', basicAuth(client.clientId, client.secret));
@@ -243,12 +247,12 @@ describe('application logs never carry secrets (B7.4)', () => {
 
     // pino writes synchronously to the stream; one tick for any pending `res.on('finish')` line.
     await new Promise((r) => setImmediate(r));
-  }, 120_000);
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
     jest.restoreAllMocks();
-    if (full) await full.close();
-  });
+    await closeFullApp(booting);
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   it('capture is live: access lines carry req.id + statusCode, and the 500/URI errors were logged', () => {
     const entries = lines.map(

@@ -80,6 +80,8 @@ test("lab refresh replay: rotate, replay old RT â‡’ invalid_grant, descendant â‡
   await signInAtIdp(page, run);
 
   await run.click();
+  // Steps render together only after 3 sequential /token round trips (same order as lab-result-* 15 s).
+  await expect(page.getByTestId("lab-replay-steps")).toBeVisible({ timeout: 20_000 });
   for (const step of [1, 2, 3]) {
     await expect(page.getByTestId(`lab-replay-step-${step}`)).toContainText("PASS");
   }

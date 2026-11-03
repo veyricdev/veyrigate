@@ -9,6 +9,7 @@ import { ADMIN_LOCKED_UNTIL } from '../src/modules/identity/user.service';
 import { ClientCredentialService } from '../src/modules/clients/client-credential.service';
 import type { ConfigService } from '@nestjs/config';
 import { seedE2eAdmin, type E2eUserConfig } from './e2e/seed-e2e-admin';
+import { FULL_APP_BOOT_TIMEOUT_MS } from './full-app';
 
 // Throwaway int DB on vg-test-mongo (the DB-name guard is covered by the unit spec; this exercises
 // the writes). Test-only values, never a real credential.
@@ -27,7 +28,9 @@ describe('seed-e2e-admin (run 39 Task 0) on real Mongo', () => {
   let service: ClientCredentialService;
   const output: string[] = [];
 
-  beforeAll(async () => {
+  // DEBT-448: the setup promise is kept so afterAll can wait for a setup that outlived its hook
+  // timeout (under load it took 31.8 s) and then clean up what it opened.
+  const boot = async (): Promise<void> => {
     connection = await mongoose.createConnection(MONGO_URI, { autoIndex: false }).asPromise();
     for (const { name, schema } of MODELS) connection.model(name, schema);
     await syncAllIndexes(connection);
@@ -47,13 +50,16 @@ describe('seed-e2e-admin (run 39 Task 0) on real Mongo', () => {
       output.push(String(chunk));
       return true;
     });
-  });
+  };
+  let setup: Promise<void> | undefined;
+  beforeAll(() => (setup = boot()), FULL_APP_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
+    await setup?.catch(() => undefined); // reported by beforeAll
     jest.restoreAllMocks();
     await connection.dropDatabase();
     await connection.close();
-  });
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   const run = () => seedE2eAdmin(connection, ADMIN, ISSUER, 'test', SECRET);
   const credCount = () => creds.countDocuments({ clientId: 'fe-admin' }).exec();

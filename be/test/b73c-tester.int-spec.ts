@@ -16,6 +16,8 @@ import { ANON_COOKIE, CsrfService } from '../src/modules/ui/csrf.service';
 import {
   authorizeCode,
   bootFullApp,
+  closeFullApp,
+  FULL_APP_BOOT_TIMEOUT_MS,
   FLOW_ADMIN_AUD,
   FLOW_API_AUD,
   FLOW_REDIRECT,
@@ -60,6 +62,7 @@ type Auth = { clientId: string; secret: string };
 describe('run 53c tester: Redis / key provider down — wider surface, families, logout', () => {
   let proxy: RedisProxy;
   let full: FullApp;
+  let booting: Promise<FullApp> | undefined;
   let client: Auth;
   let userId = '';
   let email = '';
@@ -67,7 +70,8 @@ describe('run 53c tester: Redis / key provider down — wider surface, families,
 
   beforeAll(async () => {
     proxy = await startRedisProxy();
-    full = await bootFullApp({ name: 'b73c-tester', env: { REDIS_URL: proxy.url } });
+    booting = bootFullApp({ name: 'b73c-tester', env: { REDIS_URL: proxy.url } });
+    full = await booting;
     client = await seedFlowClient(full);
     await full.conn
       .model('Client')
@@ -96,14 +100,14 @@ describe('run 53c tester: Redis / key provider down — wider surface, families,
       scopes: ADMIN_SCOPE.split(' '),
     });
     csrf = full.app.get(CsrfService);
-  }, 90_000);
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
     jest.restoreAllMocks();
     await proxy?.up();
-    if (full) await full.close();
+    await closeFullApp(booting);
     await proxy?.close();
-  });
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   afterEach(async () => {
     jest.restoreAllMocks();

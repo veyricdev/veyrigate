@@ -59,6 +59,7 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import { SessionCookie, SESSION_COOKIE } from '../src/modules/sessions/session.cookie';
 import { AuditService } from '../src/modules/security/audit/audit.service';
 import { sha256 } from '../src/common/crypto/crypto.util';
+import { FULL_APP_BOOT_TIMEOUT_MS } from './full-app';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -87,7 +88,9 @@ describe('seed-dev (Task 4, B6.4 interim) on real Mongo', () => {
   let clients: ClientService;
   let resources: ResourceService;
 
-  beforeAll(async () => {
+  // DEBT-448: the setup promise is kept so afterAll can wait for a setup that outlived its hook
+  // timeout (under load it took 20.4 s) and then clean up what it opened.
+  const boot = async (): Promise<void> => {
     connection = await mongoose.createConnection(MONGO_URI, { autoIndex: false }).asPromise();
     for (const { name, schema } of MODELS) connection.model(name, schema);
     await syncAllIndexes(connection);
@@ -96,7 +99,9 @@ describe('seed-dev (Task 4, B6.4 interim) on real Mongo', () => {
     // `allowHttpLocalhost` must be on so the http://localhost:5173 redirect URIs pass format checks.
     clients = new ClientService(clientModel, config('development'));
     resources = new ResourceService(resourceModel);
-  }, 30_000);
+  };
+  let setup: Promise<void> | undefined;
+  beforeAll(() => (setup = boot()), FULL_APP_BOOT_TIMEOUT_MS);
 
   afterEach(async () => {
     await clientModel.deleteMany({}).exec();
@@ -104,9 +109,10 @@ describe('seed-dev (Task 4, B6.4 interim) on real Mongo', () => {
   });
 
   afterAll(async () => {
+    await setup?.catch(() => undefined); // reported by beforeAll
     await connection.dropDatabase();
     await connection.close();
-  });
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   it('seeds exactly one public client + the demo AND other resources with the fe-sso-test config', async () => {
     await seedDev(connection, ISSUER, 'development');
@@ -788,7 +794,9 @@ describe('seed-dev: dev user (DEBT-076) on real Mongo', () => {
   const refreshTokens = { revokeAllForUser: jest.fn(async () => 0) };
   const audit = { record: jest.fn(async () => undefined) };
 
-  beforeAll(async () => {
+  // DEBT-448: the setup promise is kept so afterAll can wait for a setup that outlived its hook
+  // timeout (under load it took 15.9 s) and then clean up what it opened.
+  const boot = async (): Promise<void> => {
     moduleRef = await Test.createTestingModule({
       imports: [
         MongooseModule.forRoot(MONGO_URI, {
@@ -814,7 +822,9 @@ describe('seed-dev: dev user (DEBT-076) on real Mongo', () => {
     connection = userModel.db;
     await syncAllIndexes(connection);
     auth = moduleRef.get(AuthenticationService);
-  }, 30_000);
+  };
+  let setup: Promise<void> | undefined;
+  beforeAll(() => (setup = boot()), FULL_APP_BOOT_TIMEOUT_MS);
 
   afterEach(async () => {
     jest.clearAllMocks();
@@ -823,9 +833,10 @@ describe('seed-dev: dev user (DEBT-076) on real Mongo', () => {
   });
 
   afterAll(async () => {
+    await setup?.catch(() => undefined); // reported by beforeAll
     await connection.dropDatabase();
     await moduleRef.close();
-  });
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   it('seeding twice yields exactly one user + one membership (idempotent, no duplicates)', async () => {
     await seedDevUser(connection, devConfig, 'development');

@@ -18,6 +18,7 @@ import type { RateLimitService } from '../src/modules/security/rate-limit/rate-l
 import { DuplicateError } from '../src/modules/identity/identity.errors';
 import { InvalidResourceError } from '../src/modules/resources/resource.validator';
 import { ResourceService, type Resource } from '../src/modules/resources/resource.service';
+import { FULL_APP_BOOT_TIMEOUT_MS } from './full-app';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -59,7 +60,9 @@ describe('Clients + Resources on real Mongo (B3.1–B3.3)', () => {
     cors = new ClientCorsService(clientModel);
   }
 
-  beforeAll(async () => {
+  // DEBT-448: the setup promise is kept so afterAll can wait for a setup that outlived its hook
+  // timeout (under load it took 16.1 s) and then clean up what it opened.
+  const boot = async (): Promise<void> => {
     connection = await mongoose.createConnection(MONGO_URI, { autoIndex: false }).asPromise();
     for (const { name, schema } of MODELS) connection.model(name, schema);
     await syncAllIndexes(connection);
@@ -67,12 +70,15 @@ describe('Clients + Resources on real Mongo (B3.1–B3.3)', () => {
     credentialModel = connection.model<ClientCredential>('ClientCredential');
     resourceModel = connection.model<Resource>('Resource');
     build(config());
-  }, 30_000);
+  };
+  let setup: Promise<void> | undefined;
+  beforeAll(() => (setup = boot()), FULL_APP_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
+    await setup?.catch(() => undefined); // reported by beforeAll
     await connection.dropDatabase();
     await connection.close();
-  });
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   describe('B3.1 — Client creation + redirect_uri validation', () => {
     it('creates a confidential client with valid https redirect/post-logout URIs', async () => {

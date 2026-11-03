@@ -16,6 +16,8 @@ import { deriveS256Challenge } from '../src/common/crypto/pkce.util';
 import {
   authorizeCode,
   bootFullApp,
+  closeFullApp,
+  FULL_APP_BOOT_TIMEOUT_MS,
   FLOW_API_AUD,
   FLOW_REDIRECT,
   formPost,
@@ -46,6 +48,7 @@ type Auth = { clientId: string; secret: string };
 describe('Redis down ⇒ 503 temporarily_unavailable, fail-closed, recovers (run 53c)', () => {
   let proxy: RedisProxy;
   let full: FullApp;
+  let booting: Promise<FullApp> | undefined;
   let client: Auth;
   let userId = '';
   let email = '';
@@ -83,7 +86,8 @@ describe('Redis down ⇒ 503 temporarily_unavailable, fail-closed, recovers (run
     }
     // (installed before boot: Nest binds the filter methods when it registers them)
     proxy = await startRedisProxy();
-    full = await bootFullApp({ name: 'redis-down', env: { REDIS_URL: proxy.url } });
+    booting = bootFullApp({ name: 'redis-down', env: { REDIS_URL: proxy.url } });
+    full = await booting;
     client = await seedFlowClient(full);
     email = `redis-down-${randomUUID()}@fixture.test`;
     const users = full.app.get(UserService);
@@ -99,15 +103,15 @@ describe('Redis down ⇒ 503 temporarily_unavailable, fail-closed, recovers (run
     });
     sessionId = (await full.app.get(SessionService).create(userId, DEFAULT_TENANT_ID)).id;
     csrf = full.app.get(CsrfService);
-  }, 90_000);
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
     jest.restoreAllMocks();
     console.log(`run 53c — errors seen by the renderers:\n${table.join('\n')}`);
     await proxy?.up();
-    if (full) await full.close();
+    await closeFullApp(booting);
     await proxy?.close();
-  });
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   /** A fresh code + verifier while Redis is up. */
   async function mintCode(): Promise<{ code: string; verifier: string }> {

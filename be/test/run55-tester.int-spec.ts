@@ -14,6 +14,8 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import {
   authorizeCode,
   bootFullApp,
+  closeFullApp,
+  FULL_APP_BOOT_TIMEOUT_MS,
   FLOW_ADMIN_AUD,
   FLOW_API_AUD,
   FLOW_REDIRECT,
@@ -49,6 +51,7 @@ type Tokens = { access_token: string; refresh_token: string };
 
 describe('run 55 tester: OAuth sweep risk tests (DEBT-123/130/177/216) over real HTTP', () => {
   let full: FullApp;
+  let booting: Promise<FullApp> | undefined;
   let redis: IORedis;
   let rs: Auth; // resource server allowed to introspect `api` + `admin` tokens
   let clientModel: Model<Record<string, unknown>>;
@@ -59,7 +62,7 @@ describe('run 55 tester: OAuth sweep risk tests (DEBT-123/130/177/216) over real
   let n = 0;
 
   beforeAll(async () => {
-    full = await bootFullApp({
+    booting = bootFullApp({
       name: 'run55t',
       logStream: new Writable({
         write(chunk, _e, cb) {
@@ -68,6 +71,7 @@ describe('run 55 tester: OAuth sweep risk tests (DEBT-123/130/177/216) over real
         },
       }),
     });
+    full = await booting;
     redis = new IORedis(process.env.TEST_REDIS_URL ?? 'redis://localhost:6479', {
       maxRetriesPerRequest: 1,
     });
@@ -82,12 +86,12 @@ describe('run 55 tester: OAuth sweep risk tests (DEBT-123/130/177/216) over real
       scopes: ['api.read'],
     });
     rs = await mkConfidential(['api', 'admin'], ['openid']);
-  }, 90_000);
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
     await redis?.quit();
-    if (full) await full.close();
-  });
+    await closeFullApp(booting);
+  }, FULL_APP_BOOT_TIMEOUT_MS);
 
   afterEach(() => {
     jest.restoreAllMocks();
