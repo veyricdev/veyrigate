@@ -67,7 +67,7 @@ export async function bootFullApp(opts: FullAppOptions): Promise<FullApp> {
     // A boot that throws half-way must not leave the app, its DB or the key dir behind. Close first:
     // in-flight model index builds of the app can re-create a DB dropped while it is still open.
     await started.ctx?.close().catch(() => undefined);
-    if (started.mongoUri && !process.env.TEST_MONGO_URI) {
+    if (started.mongoUri) {
       await dropIntDb(started.mongoUri).catch(() => undefined); // best effort; `err` is what matters
     }
     await rm(keyDir, { recursive: true, force: true }).catch(() => undefined);
@@ -178,7 +178,7 @@ async function startFullApp(
     outbox,
     env,
     close: async () => {
-      if (!process.env.TEST_MONGO_URI) await conn.dropDatabase();
+      await conn.dropDatabase();
       await app.close();
       await rm(keyDir, { recursive: true, force: true });
     },

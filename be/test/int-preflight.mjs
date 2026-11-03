@@ -16,8 +16,9 @@ import Redis from 'ioredis';
  * ~10 minutes before failing with an opaque error. Here we TCP-probe both
  * ports in parallel with a short timeout and throw an actionable message.
  *
- * Attached ONLY via the `--globalSetup` flag in the `test:int` script, so plain
- * `pnpm test` (unit) never runs it. Pure JS (.mjs) to avoid ts-jest transform.
+ * Attached ONLY via `globalSetup` in `jest.int.config.js` (`test:int`) and, through
+ * `vault-preflight.mjs`, in `jest.vault.config.js` (`test:vault`), so plain `pnpm test`
+ * (unit) never runs it. Pure JS (.mjs) to avoid ts-jest transform.
  */
 
 const PROBE_TIMEOUT_MS = 2000;
@@ -79,6 +80,17 @@ function probe({ name, host, port }) {
 }
 
 export default async function intPreflight() {
+  // DEBT-471: specs use TEST_MONGO_URI as-is and drop it; refuse anything but a throwaway vg-int-* DB.
+  const override = process.env.TEST_MONGO_URI;
+  if (override !== undefined) {
+    const m = /^mongodb(?:\+srv)?:\/\/[^/?#]*\/([^?#]*)/.exec(override);
+    const db = m ? decodeURIComponent(m[1]) : '';
+    if (!db.startsWith('vg-int-')) {
+      throw new Error(
+        `TEST_MONGO_URI must name a throwaway "vg-int-*" DB (got "${db}"): int specs drop it`,
+      );
+    }
+  }
   const results = await Promise.all(DEPENDENCIES.map(probe));
   const down = results.filter((r) => !r.reachable);
   if (down.length > 0) {
