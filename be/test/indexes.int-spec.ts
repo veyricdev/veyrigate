@@ -1,6 +1,6 @@
 import mongoose, { type Connection, Types } from 'mongoose';
 import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
-import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
+import { INT_SETUP_TIMEOUT_MS, settled, withDbSuffix } from './int-hooks';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -142,9 +142,7 @@ describe('Consent index migration M3→M4 (DEBT-028)', () => {
   let conn: Connection;
 
   beforeAll(async () => {
-    // Insert a distinct DB-name suffix BEFORE the query string so `?directConnection=true` stays
-    // intact (appending to the whole URI would corrupt the query).
-    const migrationUri = MONGO_URI.replace(/(\/[^/?]+)(\?|$)/, '$1-consent-migration$2');
+    const migrationUri = withDbSuffix(MONGO_URI, 'consent-migration');
     conn = await mongoose
       .createConnection(migrationUri, {
         autoIndex: false,

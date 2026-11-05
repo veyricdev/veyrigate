@@ -14,8 +14,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "test:int": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.int.config.js --runInBand",
-    "test:vault": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.vault.config.js --runInBand --forceExit",
-    "test:sentinel": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.sentinel.config.js --runInBand --forceExit",
+    "test:vault": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.vault.config.js --runInBand",
+    "test:sentinel": "node --experimental-vm-modules node_modules/jest/bin/jest.js --config jest.sentinel.config.js --runInBand",
     "db:sync-indexes": "node --env-file-if-exists=.env dist/database/mongo/sync-indexes.js",
     "db:seed-dev": "node --env-file-if-exists=.env dist/database/seed-dev.js",
     "db:seed": "node --env-file-if-exists=.env dist/database/seed.js"

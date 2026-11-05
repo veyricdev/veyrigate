@@ -15,6 +15,15 @@ export async function settled(setup: Promise<unknown> | undefined): Promise<void
   );
 }
 
+/**
+ * Append `-<suffix>` to the DB name of a Mongo URI, before its query string (so
+ * `?directConnection=true` stays intact). Used for a spec's extra DBs and, with `TEST_MONGO_URI`,
+ * one DB per full app (DEBT-203).
+ */
+export function withDbSuffix(uri: string, suffix: string): string {
+  return uri.replace(/(\/[^/?]+)(\?|$)/, (_m, db: string, q: string) => `${db}-${suffix}${q}`);
+}
+
 /** Drop one test DB; refuses a DB name not starting with `vg-int-`. */
 export async function dropIntDb(uri: string): Promise<void> {
   const conn = mongoose.createConnection(uri, { serverSelectionTimeoutMS: 5000 });

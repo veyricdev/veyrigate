@@ -13,6 +13,7 @@ import {
   ISSUER,
   callback,
   createFakeIdp,
+  leakForms,
   setCookies,
   signIn,
   startLogin,
@@ -45,6 +46,10 @@ const viewerOf = (sid: string) => idp.auth.viewer(req("/", { cookie: `fea_sid=${
 const keyOf = (sid: string) => idp.store.keyFor(sid);
 const rawSetCookie = (res: Response, name: string) =>
   res.headers.getSetCookie().find((c) => c.startsWith(`${name}=`));
+/** No form of any token the fake IdP handed out in `text` (DEBT-453: not an `eyJ`/`rt-`/`at-` prefix). */
+const expectNoIssued = (text: string) => {
+  for (const t of idp.issued) for (const form of leakForms(t)) expect(text).not.toContain(form);
+};
 
 /** A rejected callback: generic page, no session cookie, no detail or token in the body. */
 async function expectRejected(res: Response, sessionsBefore = 0) {
@@ -52,7 +57,8 @@ async function expectRejected(res: Response, sessionsBefore = 0) {
   expect(rawSetCookie(res, "fea_sid")).toBeUndefined();
   expect(rawSetCookie(res, "fea_tx")).toMatch(/Max-Age=0/);
   const body = await res.text();
-  expect(body).not.toMatch(/error_description|eyJ|rt-|at-/);
+  expect(body).not.toMatch(/error_description/);
+  expectNoIssued(body);
   expect(idp.sessionKeys.size).toBe(sessionsBefore);
 }
 
@@ -132,7 +138,8 @@ describe("GET /auth/callback", () => {
     expect(code.get("code_verifier")).toMatch(/^[A-Za-z0-9_-]{43}$/);
     const { viewer } = await viewerOf(sid);
     expect(viewer).toEqual({ sub: "user-1", email: "admin@example.com", roles: ["super_admin"], tenantId: "t1" });
-    expect(JSON.stringify(viewer)).not.toMatch(/eyJ|at-|rt-/);
+    expect(idp.issued.length).toBeGreaterThan(0);
+    expectNoIssued(JSON.stringify(viewer));
   });
 
   it("IdP error: generic page, error_description never echoed, transaction consumed", async () => {

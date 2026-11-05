@@ -71,7 +71,7 @@ jobs:
 
   # Integration suite bảo mật (B7.1): chạy `pnpm -C be test:int` y như local, trên service giống
   # vg-test-* (mongo@27117, redis@6479) + Mailpit (mailer.int-spec). KHÔNG đặt TEST_MONGO_URI /
-  # TEST_REDIS_URL (override làm mọi spec dùng chung 1 DB, DEBT-203); không secret, không .env/keys
+  # TEST_REDIS_URL (chỉ đặt khi chạy MỘT file spec, DEBT-203); không secret, không .env/keys
   # (int-spec không nạp ConfigModule, khoá ký dùng mkdtemp). Mongo single-node: chưa có
   # transaction/change stream, URI test dùng directConnection=true. Khi cần replica set: thay
   # service bằng step `docker run -d -p 27117:27017 mongo:7 --replSet rs0`, rồi

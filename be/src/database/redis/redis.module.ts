@@ -62,22 +62,22 @@ export function standaloneInProductionWarning(
  * `buildRedisOptions` (fail-fast `commandTimeout`, see DEBT-005). Clean shutdown lives in
  * `RedisService`.
  */
+export function createRedisClient(config: ConfigService): IORedis {
+  const logger = new Logger('RedisClient');
+  const database = config.getOrThrow<DatabaseConfig>('database');
+  const warning = standaloneInProductionWarning(config.getOrThrow<AppConfig>('app'), database);
+  if (warning) logger.warn(warning);
+  const options = buildRedisOptions(database);
+  const client = database.redisUrl ? new IORedis(database.redisUrl, options) : new IORedis(options);
+  client.on('error', (err) => logger.error(`Redis error: ${scrubUriCredentials(err.message)}`));
+  client.on('connect', () => logger.log('Redis connected'));
+  return client;
+}
+
 const redisClientProvider: Provider = {
   provide: REDIS_CLIENT,
   inject: [ConfigService],
-  useFactory: (config: ConfigService): IORedis => {
-    const logger = new Logger('RedisClient');
-    const database = config.getOrThrow<DatabaseConfig>('database');
-    const warning = standaloneInProductionWarning(config.getOrThrow<AppConfig>('app'), database);
-    if (warning) logger.warn(warning);
-    const options = buildRedisOptions(database);
-    const client = database.redisUrl
-      ? new IORedis(database.redisUrl, options)
-      : new IORedis(options);
-    client.on('error', (err) => logger.error(`Redis error: ${scrubUriCredentials(err.message)}`));
-    client.on('connect', () => logger.log('Redis connected'));
-    return client;
-  },
+  useFactory: createRedisClient,
 };
 
 @Global()

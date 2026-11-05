@@ -2,9 +2,9 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: — (run 64 vừa đóng). Câu hỏi cho người dùng: Q62.1 (Dependabot, DEBT-466), Q62.2 (Node 22.23.4 trên máy dev, DEBT-465), giữ/xoá image node bản cũ + smoke cũ, duyệt dọn 610 DB `vg-int-*` mồ côi (`drop-int-orphans.mjs --yes`). `TEST_MONGO_URI` giờ phải trỏ DB `vg-int-*` (guard run 64). DEBT-369/371 từ 2026-11-04. Chờ người dùng: **Q58.1/DEBT-214**, A6.3b (DEBT-149/142), DEBT-344, DEBT-405, DEBT-415.
+- **Run hiện tại**: — (run 65 vừa đóng). Câu hỏi cho người dùng: 610 DB `vg-int-*` mồ côi đã biến mất giữa run 64–65 (bạn có chạy `drop-int-orphans.mjs --yes`?); xoá 4 DB `vg-int-vault-v7-*` cũ?; Q62.1 (Dependabot, DEBT-466), Q62.2 (Node 22.23.4 máy dev, DEBT-465), giữ/xoá image node cũ + smoke cũ. `TEST_MONGO_URI` (tên `vg-int-*`) ⇒ mỗi app một DB. DEBT-369/371 đã tới hạn (2026-11-04). Chờ người dùng: **Q58.1/DEBT-214**, A6.3b (DEBT-149/142), DEBT-344, DEBT-405, DEBT-415.
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `64-test-infra-tail` ✅ 4/4 — config jest riêng cho vault/sentinel, guard `TEST_MONGO_URI` `vg-int-*`, một ngữ nghĩa drop; int 1420 ×2 (+0 DB), be 630. Xem `runs/64-test-infra-tail/summary.md`. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev `sso-idp` (index audit run 57).
+- **Run vừa đóng**: `65-test-infra-tail2` ✅ 3/3 — gỡ `--forceExit` vault/sentinel (dọn khi `compile()` ném), `withDbSuffix` cho override, so token đã phát hành thay `eyJ`; int 1420, be 630, fe-admin 1533, vault 31 ×2. Xem `runs/65-test-infra-tail2/summary.md`. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev `sso-idp` (index audit run 57).
 - **Việc tiếp theo**: M7 còn X3 (chờ Q8), X6 release checklist; lane ADMIN còn A6.3b. Debt 🟡 BE mở: xem `backlog.md` (DEBT-119…256, 321, 334, 344, 389, 392).
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
@@ -31,6 +31,7 @@
 | [62](runs/62-node-bump/summary.md) | M7 | Bump Node 22.23.4 (DEBT-379, security) | ✅ smoke BE 11 + fe-admin 16 + unit be 630 / fe-admin 1533 (22.23.4) | `33efeef` |
 | [63](runs/63-int-setup-sweep/summary.md) | M7 | Mẫu setup/teardown int + lọc `test:int` (DEBT-452/454/456/461–463) | ✅ be 630 + int 1420 (+0 DB) | `993c9ea` |
 | [64](runs/64-test-infra-tail/summary.md) | M7 | Đuôi test-infra: config vault/sentinel, guard `TEST_MONGO_URI` (DEBT-470/471/473/474/476) | ✅ be 630 + int 1420 (+0 DB) | `3ee0085` |
+| [65](runs/65-test-infra-tail2/summary.md) | M7 | Đuôi test-infra 2: gỡ `--forceExit` vault/sentinel, DB riêng khi override, so token phát hành (DEBT-475/203/453) | ✅ be 630 + int 1420 + fe-admin 1533 + vault 31 | — |
 
 ## Chặn / cần người quyết định
 

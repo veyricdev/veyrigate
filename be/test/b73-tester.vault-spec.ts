@@ -32,6 +32,7 @@ import {
   seedFlowClient,
   type FullApp,
 } from './full-app';
+import { expectNoIssued, recordIssued } from './issued-tokens';
 import { seedConsent, seedOAuthUser } from './oauth-fixtures';
 
 /**
@@ -385,6 +386,7 @@ describe('run 53 tester: Vault Transit KeyProvider risk tests', () => {
     const proxy = new CuttableProxy();
     await proxy.up();
     const full = await bootVault(k, `http://127.0.0.1:${proxy.port}`);
+    const issued = recordIssued(full.app.get<KeyProvider>(KEY_PROVIDER));
     const OUTAGE = {
       error: 'temporarily_unavailable',
       error_description: 'The service is temporarily unavailable. Try again later.',
@@ -398,7 +400,8 @@ describe('run 53 tester: Vault Transit KeyProvider risk tests', () => {
       expect(res.headers['retry-after']).toBe('5');
       expect(String(res.headers['cache-control'])).toContain('no-store');
       expect(JSON.parse(res.body)).toEqual(OUTAGE);
-      expect(res.body).not.toMatch(/eyJ|access_token|refresh_token|"kty"/);
+      expect(res.body).not.toMatch(/access_token|refresh_token|"kty"/);
+      expectNoIssued(res.body, issued);
     };
     try {
       const client = await seedFlowClient(full);
@@ -471,6 +474,7 @@ describe('run 53 tester: Vault Transit KeyProvider risk tests', () => {
       expect(rotated.statusCode).toBe(200);
       expect(rotated.json()).toMatchObject({ refresh_token: expect.any(String) });
       expect(await reuse()).toBe(0);
+      expect(issued.length).toBeGreaterThan(0);
     } finally {
       await full.close();
       await proxy.down().catch(() => undefined);

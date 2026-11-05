@@ -46,6 +46,7 @@ import { SESSION_COOKIE, SessionCookie } from '../src/modules/sessions/session.c
 import { SessionService } from '../src/modules/sessions/session.service';
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
+import { expectNoIssued, recordIssued } from './issued-tokens';
 import { seedConsent, seedOAuthUser } from './oauth-fixtures';
 
 const MONGO_URI =
@@ -111,6 +112,7 @@ describe('DEBT-388: sign before commit (/token code + refresh grants)', () => {
   let refreshModel: Model<Record<string, unknown>>;
   let signer: TokenSigner;
   let logs: string[];
+  let issued: string[] = [];
   let seq = 0;
 
   async function mkClient(): Promise<string> {
@@ -229,7 +231,8 @@ describe('DEBT-388: sign before commit (/token code + refresh grants)', () => {
   function expectInvalidGrant(res: Res) {
     expect(res.statusCode).toBe(400);
     expect(JSON.parse(res.body).error).toBe('invalid_grant');
-    expect(res.body).not.toMatch(/eyJ|access_token|refresh_token|id_token/);
+    expect(res.body).not.toMatch(/access_token|refresh_token|id_token/);
+    expectNoIssued(res.body, issued);
   }
 
   beforeAll(async () => {
@@ -237,6 +240,7 @@ describe('DEBT-388: sign before commit (/token code + refresh grants)', () => {
     keyDir = await mkdtemp(join(tmpdir(), 'vg-debt388-int-'));
     const provider = new LocalKeyProvider(keyDir);
     await provider.init();
+    issued = recordIssued(provider);
     const moduleRef = await Test.createTestingModule({
       imports: [
         MongooseModule.forRoot(MONGO_URI, {
@@ -311,7 +315,7 @@ describe('DEBT-388: sign before commit (/token code + refresh grants)', () => {
   afterEach(() => {
     jest.restoreAllMocks();
     // A dropped (signed but never returned) token must not reach any log line (I3 exposure).
-    expect(logs.join('\n')).not.toContain('eyJ');
+    expectNoIssued(logs.join('\n'), issued);
   });
 
   afterAll(async () => {
@@ -319,6 +323,7 @@ describe('DEBT-388: sign before commit (/token code + refresh grants)', () => {
     if (app) await app.close();
     if (redis) redis.disconnect();
     if (keyDir) await rm(keyDir, { recursive: true, force: true });
+    expect(issued.length).toBeGreaterThan(0); // not a vacuous pass: something was signed
   });
 
   describe('code grant', () => {
@@ -329,7 +334,8 @@ describe('DEBT-388: sign before commit (/token code + refresh grants)', () => {
 
       const failed = await exchange(clientId, code);
       expectOutage(failed);
-      expect(failed.body).not.toMatch(/eyJ|access_token/);
+      expect(failed.body).not.toMatch(/access_token/);
+      expectNoIssued(failed.body, issued);
       expect(await redis.exists(codeKey(code))).toBe(1);
       const pttlAfter = await redis.pttl(codeKey(code));
       expect(pttlAfter).toBeGreaterThan(0);
@@ -461,7 +467,8 @@ describe('DEBT-388: sign before commit (/token code + refresh grants)', () => {
       jest.spyOn(signer, 'sign').mockRejectedValueOnce(outage());
       const failed = await refreshReq(clientId, rt);
       expectOutage(failed);
-      expect(failed.body).not.toMatch(/eyJ|access_token|refresh_token/);
+      expect(failed.body).not.toMatch(/access_token|refresh_token/);
+      expectNoIssued(failed.body, issued);
       const docs = await familyDocs(userId);
       expect(docs).toHaveLength(1);
       expect(docs[0].revokedAt ?? null).toBeNull();

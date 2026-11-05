@@ -1,10 +1,11 @@
 import { Global, Module, type INestApplicationContext } from '@nestjs/common';
-import { ConfigModule as NestConfigModule } from '@nestjs/config';
+import { ConfigModule as NestConfigModule, ConfigService } from '@nestjs/config';
 import { getConnectionToken } from '@nestjs/mongoose';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test, type TestingModuleBuilder } from '@nestjs/testing';
 import { LoggerModule as PinoLoggerModule } from 'nestjs-pino';
-import type { Connection } from 'mongoose';
+import type IORedis from 'ioredis';
+import mongoose, { type Connection } from 'mongoose';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -19,6 +20,8 @@ import { deriveS256Challenge } from '../src/common/crypto/pkce.util';
 import { buildConfig } from '../src/config/configuration';
 import { validateEnv } from '../src/config/validation.schema';
 import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
+import { REDIS_CLIENT } from '../src/database/redis/redis.constants';
+import { createRedisClient } from '../src/database/redis/redis.module';
 import { ClientCredentialService } from '../src/modules/clients/client-credential.service';
 import { ClientService } from '../src/modules/clients/client.service';
 import { DEFAULT_TENANT_ID } from '../src/modules/identity/tenant.service';
@@ -26,7 +29,7 @@ import { MAILER, type MailMessage } from '../src/modules/mailer/mailer';
 import { adminResourceIdentifier } from '../src/modules/oauth/token/token.service';
 import { ResourceService } from '../src/modules/resources/resource.service';
 import { SESSION_COOKIE } from '../src/modules/sessions/session.cookie';
-import { dropIntDb } from './int-hooks';
+import { dropIntDb, withDbSuffix } from './int-hooks';
 
 /**
  * The REAL app for integration tests (run 38, B7.4): `AppModule` + `configureApp` exactly like
@@ -67,6 +70,13 @@ export async function bootFullApp(opts: FullAppOptions): Promise<FullApp> {
     // A boot that throws half-way must not leave the app, its DB or the key dir behind. Close first:
     // in-flight model index builds of the app can re-create a DB dropped while it is still open.
     await started.ctx?.close().catch(() => undefined);
+    if (!started.ctx) {
+      // Thrown inside `compile()` (e.g. an async `KEY_PROVIDER` factory, DEBT-475): no context owns the
+      // Mongo/Redis connections already opened by then, so close them here or the process never exits.
+      started.redis?.disconnect();
+      const fresh = mongoose.connections.filter((c) => !started.mongoBefore?.has(c));
+      await Promise.all(fresh.map((c) => c.close().catch(() => undefined)));
+    }
     if (started.mongoUri) {
       await dropIntDb(started.mongoUri).catch(() => undefined); // best effort; `err` is what matters
     }
@@ -78,6 +88,8 @@ export async function bootFullApp(opts: FullAppOptions): Promise<FullApp> {
 interface BootProgress {
   mongoUri?: string;
   ctx?: INestApplicationContext;
+  redis?: IORedis;
+  mongoBefore?: Set<Connection>;
 }
 
 async function startFullApp(
@@ -88,9 +100,9 @@ async function startFullApp(
   const env: Record<string, string> = {
     NODE_ENV: 'test',
     ISSUER: FULL_APP_ISSUER,
-    MONGO_URI:
-      process.env.TEST_MONGO_URI ??
-      `mongodb://localhost:27117/vg-int-${opts.name}-${Date.now()}?directConnection=true`,
+    MONGO_URI: process.env.TEST_MONGO_URI
+      ? withDbSuffix(process.env.TEST_MONGO_URI, `${opts.name}-${Date.now()}`)
+      : `mongodb://localhost:27117/vg-int-${opts.name}-${Date.now()}?directConnection=true`,
     REDIS_URL: process.env.TEST_REDIS_URL ?? 'redis://localhost:6479',
     ACCESS_TOKEN_TTL: '900',
     REFRESH_TOKEN_TTL: '2592000',
@@ -147,8 +159,14 @@ async function startFullApp(
     .overrideModule(LoggerModule)
     .useModule(TestLoggerModule)
     .overrideProvider(MAILER)
-    .useValue({ send: async (m: MailMessage) => void outbox.push(m) });
+    .useValue({ send: async (m: MailMessage) => void outbox.push(m) })
+    .overrideProvider(REDIS_CLIENT)
+    .useFactory({
+      factory: (c: ConfigService) => (started.redis = createRedisClient(c)),
+      inject: [ConfigService],
+    });
   if (opts.override) builder = opts.override(builder);
+  started.mongoBefore = new Set(mongoose.connections);
   const moduleRef = await builder.compile();
   started.ctx = moduleRef;
 

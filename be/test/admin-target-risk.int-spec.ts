@@ -48,6 +48,7 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { UiController } from '../src/modules/ui/ui.controller';
+import { withDbSuffix } from './int-hooks';
 
 /**
  * Run 30 retest (tester): variants of the DEBT-172 runtime guard not covered by
@@ -331,7 +332,7 @@ describe('run 30 QA (tester): DEBT-172 runtime guard variants', () => {
 
   it('seed re-point guard: a public client of ANOTHER tenant referencing `admin` (foreign identifier) => seed throws, nothing written', async () => {
     const mongoose = (await import('mongoose')).default;
-    const uri = MONGO_URI.replace('vg-int-admintarget-risk-', 'vg-int-admintarget-risk-seed-');
+    const uri = withDbSuffix(MONGO_URI, 'seed');
     const conn = await mongoose
       .createConnection(uri, { serverSelectionTimeoutMS: 5000, autoIndex: false })
       .asPromise();

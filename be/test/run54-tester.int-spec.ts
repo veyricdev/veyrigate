@@ -46,6 +46,7 @@ import { SESSION_COOKIE, SessionCookie } from '../src/modules/sessions/session.c
 import { SessionService } from '../src/modules/sessions/session.service';
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
+import { expectNoIssued, recordIssued } from './issued-tokens';
 import { seedConsent, seedOAuthUser } from './oauth-fixtures';
 
 const MONGO_URI =
@@ -110,6 +111,7 @@ describe('run 54 tester: DEBT-388 sign-before-commit risk tests', () => {
   let refreshModel: Model<Record<string, unknown>>;
   let signer: TokenSigner;
   let logs: string[];
+  let issued: string[] = [];
   let seq = 0;
 
   async function mkClient(): Promise<string> {
@@ -233,7 +235,8 @@ describe('run 54 tester: DEBT-388 sign-before-commit risk tests', () => {
   function expectInvalidGrant(res: Res) {
     expect(res.statusCode).toBe(400);
     expect(JSON.parse(res.body).error).toBe('invalid_grant');
-    expect(res.body).not.toMatch(/eyJ|access_token|refresh_token|id_token/);
+    expect(res.body).not.toMatch(/access_token|refresh_token|id_token/);
+    expectNoIssued(res.body, issued);
   }
 
   beforeAll(async () => {
@@ -241,6 +244,7 @@ describe('run 54 tester: DEBT-388 sign-before-commit risk tests', () => {
     keyDir = await mkdtemp(join(tmpdir(), 'vg-debt388-int-'));
     const provider = new LocalKeyProvider(keyDir);
     await provider.init();
+    issued = recordIssued(provider);
     const moduleRef = await Test.createTestingModule({
       imports: [
         MongooseModule.forRoot(MONGO_URI, {
@@ -315,20 +319,22 @@ describe('run 54 tester: DEBT-388 sign-before-commit risk tests', () => {
   afterEach(() => {
     jest.restoreAllMocks();
     // A dropped (signed but never returned) token must not reach any log line (I3 exposure).
-    expect(logs.join('\n')).not.toContain('eyJ');
+    expectNoIssued(logs.join('\n'), issued);
   });
 
   afterAll(async () => {
-    // Exposure sink: no audit document (any action, any field) ever carries a JWT.
-    if (auditModel) {
-      const all = await auditModel.find({}).lean();
-      expect(all.length).toBeGreaterThan(0);
-      expect(JSON.stringify(all)).not.toContain('eyJ');
-    }
+    // Exposure sink: no audit document (any action, any field) ever carries a JWT. Asserted after
+    // the cleanup, so a failing check cannot leave the DB and the connections open.
+    const all = auditModel ? await auditModel.find({}).lean() : undefined;
     if (conn) await conn.dropDatabase();
     if (app) await app.close();
     if (redis) redis.disconnect();
     if (keyDir) await rm(keyDir, { recursive: true, force: true });
+    if (all) {
+      expect(all.length).toBeGreaterThan(0);
+      expect(issued.length).toBeGreaterThan(0);
+      expectNoIssued(JSON.stringify(all), issued);
+    }
   });
 
   const until = async (cond: () => Promise<boolean>, what: string) => {
@@ -338,7 +344,10 @@ describe('run 54 tester: DEBT-388 sign-before-commit risk tests', () => {
       await new Promise((r) => setTimeout(r, 5));
     }
   };
-  const noToken = (r: Res) => expect(r.body).not.toMatch(/eyJ|access_token|refresh_token|id_token/);
+  const noToken = (r: Res) => {
+    expect(r.body).not.toMatch(/access_token|refresh_token|id_token/);
+    expectNoIssued(r.body, issued);
+  };
 
   describe('code grant', () => {
     it('T1: code TTL runs out while the request is signing ⇒ invalid_grant, no family, no success audit, no token', async () => {

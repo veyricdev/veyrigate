@@ -72,7 +72,15 @@ export interface FakeIdp {
   nonce: string;
   /** Fake access-token lifetime in seconds. */
   expiresIn: number;
+  /** Every token `sign()`/`issue()` handed out (ID, access, refresh), for leak checks (DEBT-453). */
+  issued: string[];
 }
+
+/** A token as it could leak: plain, its JWT signature alone, base64, base64url (empty parts dropped). */
+export const leakForms = (t: string): string[] =>
+  [t, t.split(".")[2], Buffer.from(t).toString("base64"), Buffer.from(t).toString("base64url")].filter(
+    (f): f is string => !!f,
+  );
 
 /** `appUrl` (default {@link APP_URL}) picks the BFF cookie names/Secure (run 51 https matrix). */
 export async function createFakeIdp(redis: Redis, appUrl = APP_URL): Promise<FakeIdp> {
@@ -82,8 +90,8 @@ export async function createFakeIdp(redis: Redis, appUrl = APP_URL): Promise<Fak
   const jwks = createLocalJWKSet({ keys: [jwk] });
   const clock = { now: Date.now() };
 
-  const fake = {} as FakeIdp;
-  const sign = async (claims: Json): Promise<string> => {
+  const fake = { issued: [] as string[] } as FakeIdp;
+  const signed = async (claims: Json): Promise<string> => {
     const nowSec = Math.floor(clock.now / 1000);
     const payload: JWTPayload = {
       iss: ISSUER,
@@ -103,17 +111,27 @@ export async function createFakeIdp(redis: Redis, appUrl = APP_URL): Promise<Fak
     const key = fake.signWith === "foreign" ? foreignKey.privateKey : idpKey.privateKey;
     return new SignJWT(payload).setProtectedHeader({ alg: "RS256", kid: "k1" }).sign(key);
   };
+  const sign = async (claims: Json): Promise<string> => {
+    const t = await signed(claims);
+    fake.issued.push(t);
+    return t;
+  };
 
-  const issue = async (withNonce: boolean): Promise<Json> => ({
-    access_token: `at-${randomBytes(8).toString("hex")}`,
-    token_type: "Bearer",
-    expires_in: fake.expiresIn,
-    refresh_token: `rt-${randomBytes(8).toString("hex")}`,
-    id_token: await sign({
-      ...(withNonce ? { nonce: fake.nonce, auth_time: Math.floor(clock.now / 1000) } : {}),
-      ...fake.idClaims,
-    }),
-  });
+  const issue = async (withNonce: boolean): Promise<Json> => {
+    const access_token = `at-${randomBytes(8).toString("hex")}`;
+    const refresh_token = `rt-${randomBytes(8).toString("hex")}`;
+    fake.issued.push(access_token, refresh_token);
+    return {
+      access_token,
+      token_type: "Bearer",
+      expires_in: fake.expiresIn,
+      refresh_token,
+      id_token: await sign({
+        ...(withNonce ? { nonce: fake.nonce, auth_time: Math.floor(clock.now / 1000) } : {}),
+        ...fake.idClaims,
+      }),
+    };
+  };
 
   const json = (status: number, body: unknown) =>
     new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
