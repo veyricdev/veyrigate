@@ -27,7 +27,7 @@
 | [68](runs/68-timeouts/summary.md) | M7 | Biên thời gian E2E webServer + int timeout sát (DEBT-464/455) | ✅ be 630 + int 1420 + E2E 36 | `4c8e67a` |
 | [69](runs/69-decided-be/summary.md) | M7 | Thực thi quyết định BE: ≥ 1 super_admin, roles, refresh revoke (DEBT-142/149/415/214) | ✅ be 630 + int 1436 + fe-admin 1533 + E2E 36 | `474ae1d` |
 | [70](runs/70-A6.3b/summary.md) | M7 | A6.3b UI đổi vai trò fe-admin (DEBT-335) | ✅ fe-admin 1562 + E2E 37 | `9763048` |
-| [71](runs/71-audit-pii/summary.md) | M7 | Audit thời hạn lưu + che PII (DEBT-344/498) | ✅ be 664 + int 1459 + fe-admin 1565 + E2E 37 | — |
+| [71](runs/71-audit-pii/summary.md) | M7 | Audit thời hạn lưu + che PII (DEBT-344/498) | ✅ be 664 + int 1459 + fe-admin 1565 + E2E 37 | `03b8312` |
 
 ## Chặn / cần người quyết định
 
