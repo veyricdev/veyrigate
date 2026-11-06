@@ -29,7 +29,7 @@
 | [66](runs/66-happy-dom/summary.md) | M7 | Bump happy-dom 21.0.4 + gỡ ignore audit chết (DEBT-369/371/226) | ✅ fe-admin 1533 + fe-sso-test 269 + audit 0 | `eb75eed` |
 | [67](runs/67-leak-sentinel/summary.md) | M7 | Sentinel env failover + sweep `eyJ` (DEBT-478/477) | ✅ be 630 + int 1420 + vault 31 + fe-admin 1533 + sentinel 3/3 | `56cac7e` |
 | [68](runs/68-timeouts/summary.md) | M7 | Biên thời gian E2E webServer + int timeout sát (DEBT-464/455) | ✅ be 630 + int 1420 + E2E 36 | `4c8e67a` |
-| [69](runs/69-decided-be/summary.md) | M7 | Thực thi quyết định BE: ≥ 1 super_admin, roles, refresh revoke (DEBT-142/149/415/214) | ✅ be 630 + int 1436 + fe-admin 1533 + E2E 36 | — |
+| [69](runs/69-decided-be/summary.md) | M7 | Thực thi quyết định BE: ≥ 1 super_admin, roles, refresh revoke (DEBT-142/149/415/214) | ✅ be 630 + int 1436 + fe-admin 1533 + E2E 36 | `474ae1d` |
 
 ## Chặn / cần người quyết định
 
