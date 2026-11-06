@@ -26,7 +26,7 @@
 | [63](runs/63-int-setup-sweep/summary.md) | M7 | Mẫu setup/teardown int + lọc `test:int` (DEBT-452/454/456/461–463) | ✅ be 630 + int 1420 (+0 DB) | `993c9ea` |
 | [64](runs/64-test-infra-tail/summary.md) | M7 | Đuôi test-infra: config vault/sentinel, guard `TEST_MONGO_URI` (DEBT-470/471/473/474/476) | ✅ be 630 + int 1420 (+0 DB) | `3ee0085` |
 | [65](runs/65-test-infra-tail2/summary.md) | M7 | Đuôi test-infra 2: gỡ `--forceExit` vault/sentinel, DB riêng khi override, so token phát hành (DEBT-475/203/453) | ✅ be 630 + int 1420 + fe-admin 1533 + vault 31 | `654b39a` |
-| [66](runs/66-happy-dom/summary.md) | M7 | Bump happy-dom 21.0.4 + gỡ ignore audit chết (DEBT-369/371/226) | ✅ fe-admin 1533 + fe-sso-test 269 + audit 0 | — |
+| [66](runs/66-happy-dom/summary.md) | M7 | Bump happy-dom 21.0.4 + gỡ ignore audit chết (DEBT-369/371/226) | ✅ fe-admin 1533 + fe-sso-test 269 + audit 0 | `eb75eed` |
 
 ## Chặn / cần người quyết định
 
