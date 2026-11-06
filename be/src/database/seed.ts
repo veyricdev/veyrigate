@@ -2,7 +2,7 @@ import mongoose, { type Connection, type Model, type Types } from 'mongoose';
 import type { ConfigService } from '@nestjs/config';
 import { z } from 'zod';
 import { validateEnv } from '../config/validation.schema';
-import { MODELS } from './mongo/models';
+import { buildModels, MODELS } from './mongo/models';
 import { mongoTarget } from './mongo/sync-indexes';
 import { assertNotProduction, seedDev, upsert } from './seed-dev';
 import { DEFAULT_TENANT_ID } from '../modules/identity/tenant.service';
@@ -270,7 +270,7 @@ async function main(): Promise<void> {
   const connection = await mongoose
     .createConnection(env.MONGO_URI, { autoIndex: false, serverSelectionTimeoutMS: 5000 })
     .asPromise();
-  for (const { name, schema } of MODELS) {
+  for (const { name, schema } of buildModels(env.AUDIT_RETENTION_DAYS)) {
     if (!connection.models[name]) connection.model(name, schema);
   }
   try {

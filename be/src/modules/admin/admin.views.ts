@@ -261,10 +261,14 @@ export class AdminAuditEventViewDto implements AdminAuditView {
   @ApiPropertyOptional({ type: String })
   clientId?: string;
 
-  @ApiPropertyOptional({ type: String })
+  @ApiPropertyOptional({
+    type: String,
+    description:
+      'Full address for super_admin; otherwise network prefix: IPv4 /24, IPv6 /48; absent if unknown.',
+  })
   ip?: string;
 
-  @ApiPropertyOptional({ type: String })
+  @ApiPropertyOptional({ type: String, description: 'super_admin only; absent otherwise.' })
   userAgent?: string;
 
   @ApiPropertyOptional({ type: String })

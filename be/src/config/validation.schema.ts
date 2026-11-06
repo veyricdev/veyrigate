@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { DEFAULT_AUDIT_RETENTION_DAYS } from '../modules/security/audit/audit-log.schema';
 import { parseTrustProxy } from './trust-proxy';
 
 /**
@@ -140,6 +141,24 @@ export const envSchema = z
     // Non-empty so an empty env can never auto-approve by matching an empty stored version.
     CONSENT_POLICY_VERSION: z.string().min(1).default('1'),
     CONSENT_TERMS_VERSION: z.string().min(1).default('1'),
+
+    // Audit retention in days (run 71, DEBT-344, spec §10): TTL on `auditlogs.timestamp`. Unset or
+    // empty => 180. Digits only (no `z.coerce`: it accepts "1e2", " 180", "0x10"), then 30..3650.
+    // Changing it only takes effect after `db:sync-indexes` (prod `autoIndex` is off).
+    AUDIT_RETENTION_DAYS: z.preprocess(
+      (v) => (v === undefined || v === '' ? String(DEFAULT_AUDIT_RETENTION_DAYS) : v),
+      z
+        .string()
+        .regex(/^[0-9]+$/, 'AUDIT_RETENTION_DAYS must be a whole number of days')
+        .transform(Number)
+        .pipe(
+          z
+            .number()
+            .int()
+            .min(30, 'AUDIT_RETENTION_DAYS must be between 30 and 3650')
+            .max(3650, 'AUDIT_RETENTION_DAYS must be between 30 and 3650'),
+        ),
+    ),
 
     // Bearer token for `GET /metrics` (B7.2, Q-37.1). Unset/empty => the route is not registered
     // (404, fail-closed); when set it must be a long random value (>= 32 chars).

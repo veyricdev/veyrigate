@@ -2,7 +2,7 @@ import { Types } from 'mongoose';
 import mongoose, { type Connection, type Model } from 'mongoose';
 import { z } from 'zod';
 import { validateEnv } from '../config/validation.schema';
-import { MODELS } from './mongo/models';
+import { buildModels } from './mongo/models';
 import { DEFAULT_TENANT_ID } from '../modules/identity/tenant.service';
 import { normalizeEmail } from '../modules/identity/user.service';
 import { hashPassword } from '../common/crypto/crypto.util';
@@ -279,7 +279,7 @@ async function main(): Promise<void> {
     .createConnection(env.MONGO_URI, { autoIndex: false, serverSelectionTimeoutMS: 5000 })
     .asPromise();
   // Register schemas so index/validation behave like the running app.
-  for (const { name, schema } of MODELS) {
+  for (const { name, schema } of buildModels(env.AUDIT_RETENTION_DAYS)) {
     if (!connection.models[name]) connection.model(name, schema);
   }
   try {

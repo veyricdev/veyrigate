@@ -30,6 +30,23 @@ index ghép đổi thành `{tenantId: 1, timestamp: -1, _id: -1}`. `db:sync-inde
 thì kết quả vẫn đúng, chỉ chậm hơn. Cursor `after` phát hành trước deploy (`{t, e}`) trả 400
 `invalid_request` — fe-admin hiện nút "First page". Xác minh: `getIndexes()` có key mới, không còn key cũ.
 
+**Run 71 (DEBT-344) — thời hạn lưu audit (TTL).** Index `timestamp_1` của `auditlogs` thành TTL
+`expireAfterSeconds = AUDIT_RETENTION_DAYS × 86400` (mặc định 180 ngày = `15552000`; khoảng 30–3650).
+- `db:sync-indexes` đổi TTL **tại chỗ** bằng `collMod` (không drop/rebuild, không có cửa sổ thiếu index)
+  trước `syncIndexes()`; output phải là `AuditLog: synced` (không có `dropped [timestamp_1]`). `collMod`
+  lỗi ⇒ exit 1, KHÔNG fallback drop/recreate. Quyền: `collMod` thuộc `dbAdmin` (như createIndex/dropIndex).
+- ⚠ **Lần chạy đầu XOÁ VĨNH VIỄN mọi event cũ hơn N ngày — không hoàn tác.** Có nghĩa vụ lưu giữ
+  (pháp lý/hợp đồng) ⇒ **export trước** (vd. `mongoexport --collection auditlogs --query
+  '{"timestamp":{"$lt":{"$date":"<now - N ngày>"}}}'`) và lưu nơi có retention riêng.
+- TTL monitor của Mongo chạy ~60 s/lần và xoá theo lô ⇒ lần đầu trên collection lớn tốn I/O: chạy giờ
+  thấp điểm, theo dõi tải.
+- Xác minh: `db.auditlogs.getIndexes()` có `{ key: { timestamp: 1 }, name: 'timestamp_1',
+  expireAfterSeconds: <N × 86400> }`; index cursor run 57 còn nguyên.
+- **Đổi `AUDIT_RETENTION_DAYS` chỉ có hiệu lực sau khi chạy lại `db:sync-indexes`** (prod `autoIndex:false`;
+  app không tự đổi index). Rút ngắn N ⇒ lại xoá vĩnh viễn phần vượt ngưỡng.
+- Dev `sso-idp`: người dùng tự chạy `pnpm -C be db:sync-indexes` (cũng trước `db:seed`: seed chỉ
+  `createIndexes`, gặp `timestamp_1` cũ không TTL sẽ lỗi IndexOptionsConflict).
+
 ## 2. Di trú index `Consent` M3→M4 (DEBT-028)
 
 **Bối cảnh.** Q1 đổi khoá consent từ `{userId, clientId}` sang

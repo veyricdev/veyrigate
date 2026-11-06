@@ -188,7 +188,7 @@ async function startFullApp(
   await app.getHttpAdapter().getInstance().ready();
 
   const conn = app.get<Connection>(getConnectionToken());
-  await syncAllIndexes(conn);
+  await syncAllIndexes(conn, validateEnv(env).AUDIT_RETENTION_DAYS);
 
   return {
     app,

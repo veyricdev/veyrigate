@@ -60,6 +60,7 @@ function AuditPage() {
   const filters = defined({ action, result, targetType, actorId, targetId, clientId, from, to }) as Filters;
   const params: AuditListParams = { limit: PAGE_SIZE, ...filters, ...(after ? { after } : {}) };
   const query = useAuditEvents(params);
+  const { viewer } = Route.useRouteContext();
   const error = query.error instanceof AdminRequestError ? query.error : null;
   return (
     <section aria-labelledby="audit-title" className="space-y-6">
@@ -94,7 +95,7 @@ function AuditPage() {
       ) : query.data.items.length === 0 ? (
         <p>No audit events.</p>
       ) : (
-        <AuditTable items={query.data.items} />
+        <AuditTable items={query.data.items} superAdmin={viewer.roles.includes("super_admin")} />
       )}
       <nav aria-label="Pagination" className="flex gap-2">
         {after && (
@@ -119,7 +120,7 @@ function AuditPage() {
 const isUserId = (v: string | null | undefined): v is string => UserIdSchema.safeParse(v).success;
 const linkClass = "underline-offset-4 hover:underline";
 
-function AuditTable({ items }: { items: AuditEvent[] }) {
+function AuditTable({ items, superAdmin }: { items: AuditEvent[]; superAdmin: boolean }) {
   const [open, setOpen] = useState<string | null>(null);
   return (
     <div className="overflow-x-auto">
@@ -201,7 +202,7 @@ function AuditTable({ items }: { items: AuditEvent[] }) {
                 </tr>
                 <tr id={id} hidden={!expanded} className="border-b">
                   <td colSpan={7} className="py-2">
-                    {expanded && <Details event={e} id={id} />}
+                    {expanded && <Details event={e} id={id} superAdmin={superAdmin} />}
                   </td>
                 </tr>
               </Fragment>
@@ -226,13 +227,18 @@ function Party({ type, id, children }: { type: string | null | undefined; id: st
 
 const dlClass = "grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1";
 
-/** Fixed fields, then metadata in its own "Metadata" group: a metadata key ("IP") never reads as a fixed field. */
-function Details({ event: e, id }: { event: AuditEvent; id: string }) {
+/**
+ * Fixed fields, then metadata in its own "Metadata" group: a metadata key ("IP") never reads as a fixed field.
+ * Run 71 (DEBT-344): the BE masks for a viewer without `super_admin` (IP = network prefix, no user
+ * agent); the IP is shown exactly as received, and the user agent row says it is hidden, not "—"
+ * (which would read as "not recorded").
+ */
+function Details({ event: e, id, superAdmin }: { event: AuditEvent; id: string; superAdmin: boolean }) {
   const fixed: [string, string][] = [
     ["Event id", e.eventId],
     ["Request id", e.requestId ?? "—"],
     ["IP", e.ip ?? "—"],
-    ["User agent", e.userAgent ?? "—"],
+    ["User agent", superAdmin ? (e.userAgent ?? "—") : "Hidden (super_admin only)"],
     ["Reason", e.reason ?? "—"],
   ];
   const metadata = Object.entries(e.metadata ?? {});

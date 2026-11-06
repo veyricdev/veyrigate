@@ -1884,10 +1884,12 @@
             "type": "string"
           },
           "ip": {
-            "type": "string"
+            "type": "string",
+            "description": "Full address for super_admin; otherwise network prefix: IPv4 /24, IPv6 /48; absent if unknown."
           },
           "userAgent": {
-            "type": "string"
+            "type": "string",
+            "description": "super_admin only; absent otherwise."
           },
           "requestId": {
             "type": "string"

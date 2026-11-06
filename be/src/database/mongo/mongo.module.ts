@@ -1,7 +1,8 @@
 import { Global, Logger, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
-import type { AppConfig, DatabaseConfig } from '../../config/configuration';
+import type { AppConfig, AuditConfig, DatabaseConfig } from '../../config/configuration';
+import { createAuditLogSchema } from '../../modules/security/audit/audit-log.schema';
 import { MODELS } from './models';
 import { MongoService } from './mongo.service';
 import { scrubUriCredentials } from '../../common/logger/error-log';
@@ -41,7 +42,17 @@ import { scrubUriCredentials } from '../../common/logger/error-log';
         };
       },
     }),
-    MongooseModule.forFeature(MODELS),
+    MongooseModule.forFeature(MODELS.filter((m) => m.name !== 'AuditLog')),
+    // Run 71 (DEBT-344): the AuditLog TTL follows AUDIT_RETENTION_DAYS, so dev/test `autoIndex`
+    // builds the same index as `db:sync-indexes` (same factory as `buildModels`).
+    MongooseModule.forFeatureAsync([
+      {
+        name: 'AuditLog',
+        inject: [ConfigService],
+        useFactory: (config: ConfigService) =>
+          createAuditLogSchema(config.getOrThrow<AuditConfig>('audit').retentionDays),
+      },
+    ]),
   ],
   providers: [MongoService],
   exports: [MongoService, MongooseModule],

@@ -349,23 +349,26 @@ describe('admin OpenAPI response schemas (DEBT-290/294)', () => {
   });
 
   it('audit: mapper keys == schema properties, enums, optional fields, $ref (run 48 Task 0)', () => {
-    const view = toAdminAuditEvent({
-      eventId: 'e',
-      timestamp: new Date(),
-      actorType: 'admin',
-      actorId: 'a',
-      tenantId: 't',
-      action: AuditAction.TOKEN_REUSE_DETECTED,
-      targetType: 'user',
-      targetId: 'u',
-      clientId: 'c',
-      ip: '127.0.0.1',
-      userAgent: 'ua',
-      requestId: 'r',
-      result: 'failure',
-      reason: 'x',
-      metadata: { familyId: 'f', count: 1 },
-    });
+    const view = toAdminAuditEvent(
+      {
+        eventId: 'e',
+        timestamp: new Date(),
+        actorType: 'admin',
+        actorId: 'a',
+        tenantId: 't',
+        action: AuditAction.TOKEN_REUSE_DETECTED,
+        targetType: 'user',
+        targetId: 'u',
+        clientId: 'c',
+        ip: '127.0.0.1',
+        userAgent: 'ua',
+        requestId: 'r',
+        result: 'failure',
+        reason: 'x',
+        metadata: { familyId: 'f', count: 1 },
+      },
+      { fullPii: true },
+    );
     expect(keys('AdminAuditEventViewDto')).toEqual(Object.keys(view).sort());
     expect(keys('AuditPageViewDto')).toEqual(['items', 'nextCursor']);
     expect(schema('AuditPageViewDto').properties!.nextCursor).toMatchObject({
@@ -392,6 +395,32 @@ describe('admin OpenAPI response schemas (DEBT-290/294)', () => {
       },
     });
     expect(ref('/admin/audit', 'get', '200')).toBe('#/components/schemas/AuditPageViewDto');
+  });
+
+  it('audit (run 71, DEBT-344): ip/userAgent described per viewer; masked view drops the UA key', () => {
+    const p = (schema('AdminAuditEventViewDto') as Schema).properties as Record<
+      string,
+      Schema & { description?: string }
+    >;
+    expect(p.ip.description).toMatch(/super_admin.*IPv4 \/24, IPv6 \/48.*absent/);
+    expect(p.userAgent.description).toMatch(/super_admin only/);
+    const e = {
+      eventId: 'e',
+      timestamp: new Date(),
+      actorType: 'admin' as const,
+      action: AuditAction.TOKEN_REUSE_DETECTED,
+      ip: '203.0.113.77',
+      userAgent: 'ua-71',
+      result: 'failure' as const,
+    };
+    const masked = toAdminAuditEvent(e, { fullPii: false });
+    expect(masked.ip).toBe('203.0.113.0/24');
+    expect('userAgent' in masked).toBe(false);
+    expect(toAdminAuditEvent(e, { fullPii: true })).toMatchObject({
+      ip: '203.0.113.77',
+      userAgent: 'ua-71',
+    });
+    expect('ip' in toAdminAuditEvent({ ...e, ip: 'garbage' }, { fullPii: false })).toBe(false);
   });
 
   it('keys: controller output keys == schema properties, enums, nullable, $ref (run 49 Task 0)', async () => {

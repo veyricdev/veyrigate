@@ -2,10 +2,10 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: — (run 70 vừa đóng). Quyết định đã chốt (người dùng ủy quyền, 2026-11-06): `plan.md` §12 "Chốt bổ sung". Còn cần người dùng: push (CI replica set chỉ kiểm thật khi push); Node 22.23.4 máy dev (Q62.2); xoá image cũ; xoá 4 DB `vg-int-vault-v7-*`; 610 DB `vg-int-*` biến mất (đã chạy `drop-int-orphans.mjs --yes`?).
+- **Run hiện tại**: — (run 71 vừa đóng). Quyết định đã chốt (người dùng ủy quyền, 2026-11-06): `plan.md` §12 "Chốt bổ sung". Còn cần người dùng: push (CI replica set chỉ kiểm thật khi push); dừng node PID 12064 (:4071); Node 22.23.4 máy dev (Q62.2); xoá image cũ; xoá 4 DB `vg-int-vault-v7-*`; 610 DB `vg-int-*` biến mất (đã chạy `drop-int-orphans.mjs --yes`?).
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `70-A6.3b` ✅ 2/2 — UI đổi vai trò fe-admin (`rolesGate`, xác nhận, thông điệp cố định, step-up) + E2E 403→200; fe-admin 1562, E2E 37. Xem `runs/70-A6.3b/summary.md`. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev `sso-idp` (index run 69 + run 57).
-- **Việc tiếp theo**: run 71 DEBT-344 audit retention/che IP, 72 DEBT-405 + Dependabot (DEBT-466), 73 X3 ma trận cookie (+DEBT-008), rồi sweep 🟡 (BE DEBT-119…256, 321, 334, 389, 392, 487–489; FE 490–494), cuối cùng X6 release checklist.
+- **Run vừa đóng**: `71-audit-pii` ✅ 3/3 — audit TTL `AUDIT_RETENTION_DAYS` (180), che IP/ẩn UA cho non-super_admin; be 664, int 1459, fe-admin 1565, E2E 37. Xem `runs/71-audit-pii/summary.md`. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev `sso-idp` — lần đầu XOÁ VĨNH VIỄN audit cũ hơn 180 ngày (đặt `AUDIT_RETENTION_DAYS` lớn hơn trước nếu muốn giữ); tới lúc đó dev app log `IndexOptionsConflict`, `db:seed-dev` lỗi.
+- **Việc tiếp theo**: run 72 DEBT-405 + Dependabot (DEBT-466), 73 X3 ma trận cookie (+DEBT-008), rồi sweep 🟡 (BE DEBT-119…256, 321, 334, 389, 392, 487–489; FE 490–494), cuối cùng X6 release checklist.
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
 
@@ -16,11 +16,7 @@
 | [01](runs/01-R1-R2/summary.md)–[40](runs/40-B7.5/summary.md) | M0–M7 | BE: R1–R5, B1–B7.5, T1–T7, X1/X2/X4/X5 (xem từng `runs/NN/summary.md`) | ✅ BE 1604 + FE 269 + E2E 21 | `8b75f24`…`27b1a69` |
 | [41](runs/41-A1-A3/summary.md)–[50](runs/50-A6.6/summary.md) | M5 | fe-admin A1–A6.6 (BFF, API layer, clients/resources/users/audit/keys/dashboard) | ✅ fe-admin 1284 + E2E 34 | `9851442`…`b9d8675` |
 | [51](runs/51-A7/summary.md)–[55](runs/55-oauth-sweep/summary.md) | M7 | A7 hardening FE, A9 Dockerfile fe-admin, B7.3 Vault Transit + `be/Dockerfile` + Redis Sentinel, DEBT-388 ký trước commit, sweep OAuth (xem từng `runs/NN/summary.md`) | ✅ be 587 + int 1306 + vault 31 + E2E 35 | `ab83dfd`…`c3ed4f0` |
-| [56](runs/56-admin-race/summary.md) | M7 | Race admin/disable client DEBT-147/153/156/166/209 (+418/419/421/423) | ✅ be 589 + int 1347 + E2E 35 (L6 → run 57) | `b634def` |
-| [57](runs/57-audit-order/summary.md) | M7 | Thứ tự audit lock/unlock + sort/cursor audit (DEBT-420/422/427) | ✅ be 594 + int 1366 + E2E 36 | `2314f54` |
-| [58](runs/58-keys-consent-sweep/summary.md) | M7 | Sweep 🟡 BE: DEBT-151/158/160/238/389 | ✅ be 614 + int 1387 + E2E 36 | `f7ac551` |
-| [59](runs/59-http-edge/summary.md) | M7 | Biên HTTP DEBT-387/442/239/197 (+135/236 đóng chấp nhận) | ✅ be 627 + int 1420 + fe-admin 1455 + E2E 36 | `9c465ee` |
-| [60](runs/60-location-guard/summary.md) | M7 | Chặn Location ra ngoài origin + dọn run 59 (DEBT-444–447/451/460) | ✅ be 630 + int 1420 + fe-admin 1533 + E2E 36 | `ba921e8` |
+| [56](runs/56-admin-race/summary.md)–[60](runs/60-location-guard/summary.md) | M7 | Race admin/disable client, thứ tự audit, sweep 🟡 keys/consent, biên HTTP, chặn Location ngoài origin (xem từng `runs/NN/summary.md`) | ✅ be 630 + int 1420 + fe-admin 1533 + E2E 36 | `b634def`…`ba921e8` |
 | [61](runs/61-test-stability/summary.md) | M7 | Độ ổn định test DEBT-448/450/432/206/096/054 (gỡ `--forceExit`) | ✅ be 630 + int 1420 + fe-admin 1533 + E2E 36 | `910dc62` |
 | [62](runs/62-node-bump/summary.md) | M7 | Bump Node 22.23.4 (DEBT-379, security) | ✅ smoke BE 11 + fe-admin 16 + unit be 630 / fe-admin 1533 (22.23.4) | `33efeef` |
 | [63](runs/63-int-setup-sweep/summary.md) | M7 | Mẫu setup/teardown int + lọc `test:int` (DEBT-452/454/456/461–463) | ✅ be 630 + int 1420 (+0 DB) | `993c9ea` |
@@ -31,6 +27,7 @@
 | [68](runs/68-timeouts/summary.md) | M7 | Biên thời gian E2E webServer + int timeout sát (DEBT-464/455) | ✅ be 630 + int 1420 + E2E 36 | `4c8e67a` |
 | [69](runs/69-decided-be/summary.md) | M7 | Thực thi quyết định BE: ≥ 1 super_admin, roles, refresh revoke (DEBT-142/149/415/214) | ✅ be 630 + int 1436 + fe-admin 1533 + E2E 36 | `474ae1d` |
 | [70](runs/70-A6.3b/summary.md) | M7 | A6.3b UI đổi vai trò fe-admin (DEBT-335) | ✅ fe-admin 1562 + E2E 37 | `9763048` |
+| [71](runs/71-audit-pii/summary.md) | M7 | Audit thời hạn lưu + che PII (DEBT-344/498) | ✅ be 664 + int 1459 + fe-admin 1565 + E2E 37 | — |
 
 ## Chặn / cần người quyết định
 

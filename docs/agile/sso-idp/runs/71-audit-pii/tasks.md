@@ -1,0 +1,46 @@
+# Tasks — run 71 — audit: thời hạn lưu + che dữ liệu cá nhân (M7, lane BE + FE)
+
+> Nguồn: `backlog.md` DEBT-344 (audit lưu `ip` + `userAgent` vô thời hạn, mọi admin tenant đọc được qua fe-admin A6.4) + quyết định đã chốt `plan.md` §12 "Chốt bổ sung 2026-11-06": `AUDIT_RETENTION_DAYS` (mặc định 180 ngày, TTL index), super_admin xem đầy đủ `ip`/`userAgent`; tenant admin thấy IP đã che (IPv4 /24, IPv6 /48) và không thấy `userAgent`; ghi vào spec §10 + runbook. Bối cảnh: run 48 (A6.4 audit UI), run 57 (index/sort/cursor audit), run 69 (vai trò).
+>
+> Tech-lead: xác minh code thật (schema audit, index hiện có — TTL trên trường thời gian nào, tương tác với index sort/cursor run 57; config/validation env; DTO/serializer `GET /admin/audit` theo vai trò viewer; có chỗ khác trả ip/UA không — export, chi tiết event?). Che ở BE (không bao giờ gửi giá trị đầy đủ cho tenant admin), FE chỉ hiển thị; filter theo IP (nếu có) không được thành oracle dò IP đầy đủ. Thay đổi TTL index trên DB có sẵn ⇒ `db:sync-indexes` (người dùng chạy cho dev; E2E/int tự). Runbook/spec cập nhật. Cách chứng minh: int test (tenant_admin vs super_admin, IPv4/IPv6/IPv4-mapped/thiếu ip), TTL index tồn tại đúng `expireAfterSeconds` theo env, validation env; fe-admin test hiển thị; mutation ⇒ RED; int full, unit be, fe-admin, E2E.
+>
+> Ràng buộc: KHÔNG compose up/FLUSH/drop `aegate-*`; không seed/sync DB dev `sso-idp`; KHÔNG `drop-int-orphans.mjs`; không đụng `.github/agents`, `.vscode/mcp.json`, `.mcp.json`, `.claude/`, `be/keys`, `be/.env` (biến env mới chỉ thêm vào `.env.example` + validation có mặc định); `vg-test-*` chỉ `docker start`; mutation: backup NGAY trước khi mutate, restore xong so `git diff`; không kill/Stop-Process/taskkill PID nào (chỉ TaskStop task của mình); không dừng `pnpm dev` người dùng (kiểm cổng :4000/:5173/:3000 trước E2E); không commit.
+
+### [x] Task 1 [BE]: TTL `AUDIT_RETENTION_DAYS` (mặc định 180) + che `ip`/ẩn `userAgent` cho viewer không phải super_admin.
+### [x] Task 2 [FE]: fe-admin audit hiển thị đúng dạng đã che (không suy diễn/giả định giá trị đầy đủ), OpenAPI regenerate.
+### [x] Task 3 [docs]: spec §10 + runbook (retention, che IP, ai xem được gì).
+
+## § Fold tech-lead (BẮT BUỘC — 2026-11-06)
+
+Xác minh code (CodeGraph): đường đọc audit DUY NHẤT là `GET /admin/audit` (`admin-audit.controller.ts` → `AuditService.listForTenant` → `toAdminAuditEvent` allowlist trả nguyên `ip`/`userAgent`, `admin.mappers.ts:198-215`); dashboard fe-admin dùng cùng endpoint; không có export/CSV, không có route chi tiết event, `AuditQueryDto` KHÔNG có filter `ip`/`userAgent` (whitelist ValidationPipe) ⇒ không có oracle hôm nay. Index hiện có `timestamp_1` = `{timestamp: 1}` KHÔNG TTL (`audit-log.schema.ts:25`); index cursor run 57 `{tenantId:1, timestamp:-1, _id:-1}` không bị đụng. Mongo dev/int = 7.x (≥ 5.1 ⇒ `collMod` đổi index thường thành TTL được). Mongoose 9 `syncIndexes` coi khác `expireAfterSeconds` là khác index ⇒ **drop rồi create** (`isIndexEqual` + `cleanIndexes` trước `createIndexes`) — KHÔNG chấp nhận trên prod.
+
+### F1 [BE] env `AUDIT_RETENTION_DAYS`
+- `validation.schema.ts`: tuỳ chọn; unset hoặc `''` ⇒ 180; nếu có thì phải khớp `^[0-9]+$` (KHÔNG `z.coerce` trần: `"1e2"`, `" 180"`, `"180.5"`, `"-1"`, `"0x10"` ⇒ lỗi) rồi số nguyên trong **[30, 3650]**. Lỗi ⇒ boot fail, thông điệp nêu tên biến, không in giá trị env khác.
+- `configuration.ts`: `audit.retentionDays`; `.env.example` thêm dòng có chú thích (mặc định 180, khoảng 30–3650). KHÔNG đụng `be/.env`.
+- Chứng minh: unit validation (unset/''⇒180; 30, 3650 OK; 29, 3651, 0, "1e2", "180.5", "-5", "abc" ⇒ throw).
+
+### F2 [BE] TTL index trên `timestamp` (không thêm field mới)
+- Schema audit thành factory `createAuditLogSchema(retentionDays)` khai báo `{timestamp: 1}, {expireAfterSeconds: retentionDays * 86400}` (thay index thường; tên vẫn `timestamp_1`). `models.ts`: `buildModels(retentionDays)` tạo schema audit MỚI mỗi lần (không mutate schema dùng chung); `MODELS = buildModels(180)` giữ cho test/seed hiện có. `MongoModule`: audit model lấy số ngày từ `ConfigService` (`forFeatureAsync` hoặc tương đương) để `autoIndex` dev/test khớp env; `sync-indexes.ts`, `seed.ts`, `seed-dev.ts` dùng `buildModels(env.AUDIT_RETENTION_DAYS)`. Một nguồn duy nhất, không drift (giữ ý `models.ts`).
+- `syncAllIndexes(connection, retentionDays)`: TRƯỚC `AuditLog.syncIndexes()`, nếu collection đã có index key đúng `{timestamp: 1}` mà `expireAfterSeconds` ≠ mong muốn (kể cả thiếu) ⇒ `db.command({collMod: <collection của model AuditLog>, index: {keyPattern: {timestamp: 1}, expireAfterSeconds: N}})` (đổi tại chỗ, không rebuild, không cửa sổ thiếu index). Sau đó `syncIndexes()` thấy bằng nhau ⇒ `dropped.AuditLog` KHÔNG chứa `timestamp_1`. `collMod` lỗi ⇒ script exit ≠ 0, KHÔNG fallback drop/recreate. Collection chưa có ⇒ để `syncIndexes` tạo.
+- Chứng minh (int, DB riêng `vg-int-*`): (a) tạo trước `timestamp_1` không TTL + vài doc ⇒ `syncAllIndexes(conn, 180)` ⇒ `getIndexes()` có `expireAfterSeconds: 15552000`, `dropped.AuditLog` rỗng, số doc giữ nguyên; (b) chạy lại với 30 ⇒ `2592000`, vẫn không drop; (c) DB trống ⇒ index tạo đúng giá trị; (d) cursor index run 57 còn nguyên. Mutation: bỏ bước `collMod` ⇒ (a) RED (dropped chứa `timestamp_1`). Không cần chờ TTL monitor xoá thật (chạy 60s/lần) — chỉ chứng minh định nghĩa index.
+
+### F3 [BE] che `ip` / ẩn `userAgent` theo viewer (lúc đọc, áp cả dữ liệu cũ)
+- Viewer đầy đủ ⇔ `actor.roles.includes('super_admin')` (`@CurrentAdmin()`, cùng quy tắc `assertSuperAdmin`, membership tenant của token, đọc mỗi request). `toAdminAuditEvent(e, { fullPii })` — tham số BẮT BUỘC (không default) để caller tương lai phải chọn; mặc định an toàn = che.
+- Không phải super_admin: `ip` = `maskIp(e.ip)`; key `userAgent` **vắng mặt** (không `null`, không `''`). super_admin: giữ nguyên giá trị lưu.
+- `maskIp` (hàm thuần, `ipaddr.js` đã có trong deps — không thêm dep): rỗng/whitespace/undefined ⇒ vắng `ip`; IPv4 chỉ nhận dạng 4 phần thập phân (`ipaddr.IPv4.isValidFourPartDecimal`; `"127.1"`, `"0x7f.0.0.1"` ⇒ vắng) ⇒ `a.b.c.0/24`; IPv6 hợp lệ (bỏ zone `%…`) — nếu IPv4-mapped (`::ffff:a.b.c.d` hoặc dạng hex `::ffff:cb00:714d`) ⇒ đổi sang IPv4 rồi `/24`; còn lại giữ 3 hextet đầu ⇒ dạng chuẩn rút gọn `+ '/48'`; mọi thứ khác (CIDR, rác, quá dài) ⇒ vắng. KHÔNG BAO GIỜ trả lại chuỗi gốc khi không parse được.
+- Không thêm filter `ip`/`userAgent`/sort theo ip vào `AuditQueryDto` (ghi chú trong DTO). Nếu sau này cần ⇒ chỉ super_admin.
+- `admin.views.ts`: mô tả OpenAPI cho `ip` ("full address for super_admin; otherwise network prefix: IPv4 /24, IPv6 /48; absent if unknown") và `userAgent` ("super_admin only; absent otherwise").
+- Chứng minh: unit `maskIp` bảng ca: `203.0.113.77`→`203.0.113.0/24`; `::ffff:203.0.113.77`→`203.0.113.0/24`; `::ffff:cb00:714d`→`203.0.113.0/24`; `2001:db8:abcd:12::1`→`2001:db8:abcd::/48`; `fe80::1%eth0`→`fe80::/48`; `::1`→`::/48`; `''`, `'  '`, `undefined`, `127.1`, `0x7f.0.0.1`, `10.0.0.0/8`, `garbage` ⇒ `undefined`. Int `GET /admin/audit` (seed event có ip IPv4, IPv6, IPv4-mapped, thiếu ip, UA có giá trị và UA `''` như federation ghi): tenant_admin ⇒ `ip` đúng prefix, `!('userAgent' in item)`, **chuỗi body JSON không chứa** IP đầy đủ lẫn chuỗi UA đã seed (bắt cả rò qua `metadata`); super_admin ⇒ nguyên giá trị; user có cả hai vai trò ⇒ đầy đủ; giáng super_admin→tenant_admin rồi gọi lại bằng token cũ ⇒ đã che (nếu guard đọc membership live — nếu không thì ghi rõ trong test-report). Mutation: `fullPii` luôn true ⇒ RED; bỏ unmap IPv4-mapped ⇒ RED.
+
+### F4 [FE] fe-admin
+- Regenerate OpenAPI (`schema.d.ts`); zod `AuditEventSchema` giữ `z.string().nullish()` (KHÔNG thêm `.ip()` — sẽ từ chối CIDR).
+- `routes/audit/index.tsx` `Details`: hiển thị `ip` nguyên văn (không parse/ghép/suy diễn); hàng "User agent": viewer không có `super_admin` (vai trò viewer sẵn có, `features/auth/viewer-types.ts`) ⇒ văn bản cố định "Hidden (super_admin only)" thay vì "—" (tránh hiểu nhầm "không ghi nhận"); super_admin ⇒ giá trị hoặc "—".
+- Chứng minh: component test hai viewer với payload đã che/đầy đủ; mutation hiển thị "—" cho tenant_admin ⇒ RED. fe-admin full suite xanh.
+
+### F5 [docs]
+- `spec.md` §10 AuditLog: retention `AUDIT_RETENTION_DAYS` (180, 30–3650, TTL trên `timestamp`), quy tắc che theo viewer; dòng index `AuditLog: index(timestamp) TTL …`.
+- `runbook-deploy.md` §1 mục "Run 71 (DEBT-344)": sync dùng `collMod` (không rebuild); **lần chạy đầu xoá mọi event cũ hơn N ngày — không hoàn tác**: export trước nếu có nghĩa vụ lưu giữ; TTL monitor xoá theo lô (tải I/O) — chạy giờ thấp điểm; quyền `collMod` (đã thuộc `dbAdmin` như create/dropIndex); xác minh `db.auditlogs.getIndexes()`; **đổi `AUDIT_RETENTION_DAYS` chỉ có hiệu lực sau khi chạy lại `db:sync-indexes`** (prod `autoIndex` off); dev `sso-idp`: người dùng tự chạy sync.
+- `runbook-ops.md`: ai thấy gì (super_admin đầy đủ; tenant_admin prefix + không UA), tenant_admin cần IP đầy đủ cho điều tra ⇒ nhờ super_admin; TTL không xoá backup/log — retention của backup và log app theo chính sách riêng.
+
+### Thứ tự / cổng chạy
+F1 → F2 → F3 [BE] (int full + unit be) → F4 [FE] (sau OpenAPI) → F5 [docs]. E2E full một lần cuối (kiểm cổng :4000/:5173/:3000 trước; không dừng `pnpm dev` người dùng). Tuân thủ § Ràng buộc ở trên.

@@ -3,8 +3,10 @@ import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swa
 import { Types } from 'mongoose';
 import { AdminAuthError, AdminAuthErrorFilter } from '../identity/tenant-context/admin-auth.errors';
 import {
+  type AdminActor,
   AdminScope,
   AdminTokenGuard,
+  CurrentAdmin,
   Tenant,
   type TenantContext,
 } from '../identity/tenant-context/tenant-context';
@@ -59,7 +61,11 @@ export class AdminAuditController {
   @ApiOperation({
     description: 'Exact-match filters; `[from, to)`; `after` = previous nextCursor.',
   })
-  async list(@Tenant() ctx: TenantContext, @Query() q: AuditQueryDto) {
+  async list(
+    @Tenant() ctx: TenantContext,
+    @CurrentAdmin() actor: AdminActor,
+    @Query() q: AuditQueryDto,
+  ) {
     const cursor = q.after === undefined ? undefined : decodeAuditCursor(q.after);
     if (cursor === null) throw AdminAuthError.invalidRequest('invalid cursor');
     const from = q.from === undefined ? undefined : new Date(q.from);
@@ -87,7 +93,9 @@ export class AdminAuditController {
       rows,
       limit,
       (r) => encodeAuditCursor({ timestamp: r.timestamp, id: r._id }),
-      toAdminAuditEvent,
+      // Run 71 (DEBT-344): full ip/userAgent for super_admin only (roles of THIS request's token
+      // membership, same rule as `assertSuperAdmin`); everyone else gets the masked view.
+      (r) => toAdminAuditEvent(r, { fullPii: actor.roles.includes('super_admin') }),
     );
   }
 }

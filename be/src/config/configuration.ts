@@ -109,6 +109,11 @@ export interface MetricsConfig {
   token?: string;
 }
 
+/** Audit retention (run 71, DEBT-344): TTL of `auditlogs.timestamp`, in days. */
+export interface AuditConfig {
+  retentionDays: number;
+}
+
 export interface Config {
   app: AppConfig;
   database: DatabaseConfig;
@@ -122,6 +127,7 @@ export interface Config {
   client: ClientConfig;
   consent: ConsentConfig;
   metrics: MetricsConfig;
+  audit: AuditConfig;
 }
 
 /**
@@ -204,6 +210,9 @@ export function buildConfig(env: Env): Config {
     },
     metrics: {
       token: env.METRICS_TOKEN,
+    },
+    audit: {
+      retentionDays: env.AUDIT_RETENTION_DAYS,
     },
   };
 }

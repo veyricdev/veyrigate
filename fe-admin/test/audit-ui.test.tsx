@@ -46,6 +46,7 @@ const EVENT: AuditEvent = {
   metadata: { count: 2 },
 };
 const VIEWER = { sub: ADMIN_ID, email: "admin@example.com", roles: ["tenant_admin"], tenantId: "t1" };
+const SUPER = { ...VIEWER, roles: ["super_admin"] };
 const ok = <T,>(data: T) => ({ ok: true as const, data });
 const page = (items: AuditEvent[], nextCursor: string | null = null) => ok({ items, nextCursor }) as never;
 
@@ -180,6 +181,7 @@ describe("filters", () => {
 
 describe("table", () => {
   it("time as ISO text; IP and user agent only in the details (aria-expanded/controls)", async () => {
+    vi.mocked(getViewer).mockResolvedValue(SUPER);
     renderAt("/audit");
     const [row] = await rows();
     expect(within(row!).getByText(EVENT.timestamp)).toBeTruthy();
@@ -221,6 +223,7 @@ describe("table", () => {
     list.mockResolvedValue(
       page([{ ...EVENT, userAgent: "<script>window.__pwned=1</script>", reason: xss, metadata: { note: xss, url: "javascript:alert(1)" } }]),
     );
+    vi.mocked(getViewer).mockResolvedValue(SUPER);
     renderAt("/audit");
     const [row] = await rows();
     const imgs = document.querySelectorAll("img").length;
@@ -328,5 +331,49 @@ describe("navigation", () => {
     renderAt(`/users/${encodeURIComponent(EMAIL)}`);
     await screen.findByRole("heading", { name: "User" });
     expect(screen.queryByRole("link", { name: "Audit events for this account" })).toBeNull();
+  });
+});
+
+// Run 71 (DEBT-344): the BE masks ip / drops userAgent for a viewer without super_admin; the UI
+// shows the ip exactly as received and says the user agent is hidden (never "—" = "not recorded").
+describe("ip and user agent by viewer", () => {
+  const open = async () => {
+    const [row] = await rows();
+    const details = within(row!).getByRole("button", { name: /^Details for / });
+    fireEvent.click(details);
+    return document.getElementById(details.getAttribute("aria-controls")!)!;
+  };
+  const value = (panel: HTMLElement, label: string) =>
+    within(panel).getByText(label, { selector: "dt" }).nextElementSibling?.textContent;
+  const MASKED = { ...EVENT, ip: "2001:db8:abcd::/48", userAgent: undefined };
+
+  it("tenant_admin: masked ip as received, user agent 'Hidden (super_admin only)'", async () => {
+    list.mockResolvedValue(page([MASKED]));
+    renderAt("/audit");
+    const panel = await open();
+    expect(value(panel, "IP")).toBe("2001:db8:abcd::/48");
+    expect(value(panel, "User agent")).toBe("Hidden (super_admin only)");
+  });
+
+  it("tenant_admin: a user agent the BE should not have sent is still not shown; no ip => '—'", async () => {
+    list.mockResolvedValue(page([{ ...EVENT, ip: null }]));
+    renderAt("/audit");
+    const panel = await open();
+    expect(value(panel, "IP")).toBe("—");
+    expect(value(panel, "User agent")).toBe("Hidden (super_admin only)");
+    expect(within(panel).queryByText(EVENT.userAgent!)).toBeNull();
+  });
+
+  it("super_admin: full ip and user agent; a missing user agent is '—'", async () => {
+    vi.mocked(getViewer).mockResolvedValue(SUPER);
+    list.mockResolvedValue(page([EVENT, { ...EVENT, eventId: "ev-2", userAgent: undefined }]));
+    renderAt("/audit");
+    const [, second] = await rows();
+    const panel = await open();
+    expect(value(panel, "IP")).toBe(EVENT.ip);
+    expect(value(panel, "User agent")).toBe(EVENT.userAgent);
+    const d2 = within(second!).getByRole("button", { name: /^Details for / });
+    fireEvent.click(d2);
+    expect(value(document.getElementById(d2.getAttribute("aria-controls")!)!, "User agent")).toBe("—");
   });
 });

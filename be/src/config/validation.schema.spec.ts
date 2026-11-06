@@ -481,3 +481,32 @@ describe('Redis Sentinel env (run 53c, B7.3)', () => {
     expect(msg).not.toContain('canary-redis-pw-123');
   });
 });
+
+describe('AUDIT_RETENTION_DAYS (run 71, DEBT-344)', () => {
+  const days = (v?: string) =>
+    validateEnv(v === undefined ? BASE : { ...BASE, AUDIT_RETENTION_DAYS: v }).AUDIT_RETENTION_DAYS;
+
+  it('unset or empty ⇒ 180; bounds 30 and 3650 accepted; reaches config.audit', () => {
+    expect(days()).toBe(180);
+    expect(days('')).toBe(180);
+    expect(days('30')).toBe(30);
+    expect(days('3650')).toBe(3650);
+    expect(buildConfig(validateEnv({ ...BASE, AUDIT_RETENTION_DAYS: '45' })).audit).toEqual({
+      retentionDays: 45,
+    });
+  });
+
+  it.each(['29', '3651', '0', '1e2', '180.5', '-5', 'abc', ' 180', '0x10', '99999999999999999999'])(
+    '%j ⇒ boot fails naming the variable, no other env value echoed',
+    (v) => {
+      let msg = '';
+      try {
+        validateEnv({ ...BASE, AUDIT_RETENTION_DAYS: v, CSRF_SECRET: 'canary-csrf-71' });
+      } catch (e) {
+        msg = (e as Error).message;
+      }
+      expect(msg).toMatch(/AUDIT_RETENTION_DAYS/);
+      expect(msg).not.toContain('canary-csrf-71');
+    },
+  );
+});

@@ -16,6 +16,7 @@ import { AdminAuthError } from '../identity/tenant-context/admin-auth.errors';
 import type { Resource } from '../resources/resource.service';
 import type { AuditEvent } from '../security/audit/audit.types';
 import { InvalidResourceError } from '../resources/resource.validator';
+import { maskIp } from './mask-ip';
 
 /**
  * Admin API response projections (B6.3a). ALLOWLIST mappers: every output field is named here —
@@ -194,8 +195,14 @@ export function toAdminConsent(c: Consent & { _id: { toHexString(): string } }):
 
 export type AdminAuditView = Omit<AuditEvent, 'tenantId'>;
 
-/** Audit event (B6.3b): allowlist, no `_id`; metadata was already sanitized at write (B1.7). */
-export function toAdminAuditEvent(e: AuditEvent): AdminAuditView {
+/**
+ * Audit event (B6.3b): allowlist, no `_id`; metadata was already sanitized at write (B1.7).
+ * `fullPii` (run 71, DEBT-344) is REQUIRED so every caller decides: true only for a `super_admin`
+ * viewer. Otherwise `ip` is the network prefix (`maskIp`, absent when unknown/unparseable) and the
+ * `userAgent` key is absent (not null, not '').
+ */
+export function toAdminAuditEvent(e: AuditEvent, opts: { fullPii: boolean }): AdminAuditView {
+  const ip = opts.fullPii ? e.ip : maskIp(e.ip);
   return {
     eventId: e.eventId,
     timestamp: e.timestamp,
@@ -205,8 +212,8 @@ export function toAdminAuditEvent(e: AuditEvent): AdminAuditView {
     targetType: e.targetType,
     targetId: e.targetId,
     clientId: e.clientId,
-    ip: e.ip,
-    userAgent: e.userAgent,
+    ...(ip !== undefined ? { ip } : {}),
+    ...(opts.fullPii ? { userAgent: e.userAgent } : {}),
     requestId: e.requestId,
     result: e.result,
     reason: e.reason,

@@ -229,7 +229,11 @@ export class UpdateUserRolesDto {
   roles!: AdminRole[];
 }
 
-/** `GET /admin/audit` — exact-match filters, `[from, to)` ISO 8601 range, opaque cursor. */
+/**
+ * `GET /admin/audit` — exact-match filters, `[from, to)` ISO 8601 range, opaque cursor.
+ * Run 71 (DEBT-344): deliberately NO `ip`/`userAgent` filter or sort — it would be an oracle for the
+ * full values a tenant_admin only sees masked. If one is ever needed: super_admin only.
+ */
 export class AuditQueryDto extends PageQueryDto {
   @ApiPropertyOptional({ enum: AuditAction })
   @IsOptional()

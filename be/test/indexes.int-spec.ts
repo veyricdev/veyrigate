@@ -49,7 +49,8 @@ const EXPECTED: Record<string, { key: Record<string, number>; unique?: boolean; 
       { key: { expiresAt: 1 }, ttl: 0 },
     ],
     AuditLog: [
-      { key: { timestamp: 1 } },
+      // Run 71 (DEBT-344): TTL = AUDIT_RETENTION_DAYS (default 180 days).
+      { key: { timestamp: 1 }, ttl: 180 * 86400 },
       { key: { actorId: 1 } },
       { key: { clientId: 1 } },
       { key: { action: 1 } },
@@ -217,4 +218,72 @@ describe('Consent index migration M3→M4 (DEBT-028)', () => {
     expect(nonId.some((i) => i.unique)).toBe(false);
     // DEBT-448: 12.5 / 15.6 s in two runs under a 28-thread CPU load (default 20 s) => ~2x.
   }, 35_000);
+});
+
+/**
+ * Run 71 (DEBT-344): the audit TTL lives on the EXISTING `timestamp_1` index. An already-deployed
+ * DB (plain `timestamp_1`, or another TTL) is switched IN PLACE by `collMod` — never dropped and
+ * rebuilt (Mongoose would otherwise drop + create: a window without the index, a full rebuild).
+ */
+describe('AuditLog TTL index (run 71, DEBT-344)', () => {
+  const uri = withDbSuffix(MONGO_URI, 'audit-ttl');
+  const open = () =>
+    mongoose
+      .createConnection(uri, { autoIndex: false, serverSelectionTimeoutMS: 5000 })
+      .asPromise();
+  const auditIndexes = async (c: Connection) =>
+    (await c.db!.collection('auditlogs').indexes()) as (IndexInfo & { name: string })[];
+  const ttlOf = async (c: Connection) =>
+    (await auditIndexes(c)).find((i) => i.name === 'timestamp_1')?.expireAfterSeconds;
+  let conn: Connection;
+
+  beforeEach(async () => {
+    conn = await open();
+  }, 30_000);
+
+  afterEach(async () => {
+    await conn.dropDatabase();
+    await conn.close();
+  });
+
+  it('plain timestamp_1 + data ⇒ 180 days via collMod (nothing dropped, docs kept); then 30 days in place', async () => {
+    const raw = conn.db!.collection('auditlogs');
+    await raw.createIndex({ timestamp: 1 });
+    await raw.createIndex({ tenantId: 1, timestamp: -1, _id: -1 });
+    const now = new Date();
+    await raw.insertMany([1, 2, 3].map((n) => ({ eventId: `e${n}`, timestamp: now })));
+
+    const first = await syncAllIndexes(conn, 180);
+    expect(first.AuditLog).toEqual([]);
+    expect(await ttlOf(conn)).toBe(15552000);
+    expect(await raw.countDocuments()).toBe(3);
+
+    // Another retention needs a model built for it: a fresh connection on the same DB.
+    const again = await open();
+    try {
+      const second = await syncAllIndexes(again, 30);
+      expect(second.AuditLog).toEqual([]);
+      expect(await ttlOf(again)).toBe(2592000);
+      expect(await raw.countDocuments()).toBe(3);
+      // Run 57 cursor index untouched.
+      expect((await auditIndexes(again)).map((i) => i.key)).toContainEqual({
+        tenantId: 1,
+        timestamp: -1,
+        _id: -1,
+      });
+    } finally {
+      await again.close();
+    }
+  }, 60_000);
+
+  it('empty DB ⇒ timestamp_1 created with the requested TTL', async () => {
+    await syncAllIndexes(conn, 30);
+    expect(await ttlOf(conn)).toBe(2592000);
+  }, 60_000);
+
+  it('a model registered with another retention is refused (no drop + rebuild)', async () => {
+    await syncAllIndexes(conn, 180);
+    await expect(syncAllIndexes(conn, 30)).rejects.toThrow(/expireAfterSeconds=15552000/);
+    expect(await ttlOf(conn)).toBe(15552000);
+  }, 60_000);
 });

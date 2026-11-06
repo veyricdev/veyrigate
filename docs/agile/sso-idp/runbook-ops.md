@@ -339,3 +339,15 @@ log app `Redis error: …` (không có mật khẩu/URI đầy đủ).
    failover giữa request): code có thể đã bị tiêu rồi mới timeout ⇒ client thử lại `/token` nhận
    `invalid_grant` ⇒ **bắt đầu lại luồng** (`/authorize`; với RT: đăng nhập lại). Đây là hành vi an toàn,
    không phải lỗi mới.
+
+## 6. Audit: ai thấy IP/User-Agent, thời hạn lưu (run 71, DEBT-344)
+
+- `GET /admin/audit` (và fe-admin Audit/Dashboard): **super_admin** của tenant thấy nguyên `ip` +
+  `userAgent`; **tenant_admin** chỉ thấy tiền tố mạng (IPv4 `/24`, IPv6 `/48`) và không có `userAgent`.
+  Vai trò đọc mỗi request (giáng super_admin ⇒ request kế tiếp đã che). Không có filter theo IP.
+- tenant_admin cần IP đầy đủ cho điều tra (lạm dụng, khoá tài khoản) ⇒ nhờ super_admin tra theo
+  `eventId`/`requestId`; không đọc Mongo tay thay cho quy trình này.
+- Event cũ hơn `AUDIT_RETENTION_DAYS` (mặc định 180 ngày) bị Mongo TTL xoá — không còn trong API lẫn DB.
+  Cần giữ lâu hơn cho một sự cố ⇒ export ngay khi mở sự cố (xem runbook-deploy §1 "Run 71").
+- TTL **không** xoá backup Mongo (§4) và log ứng dụng (pino): retention của backup/log theo chính sách
+  riêng; restore backup cũ mang lại event cũ, TTL sẽ xoá lại sau ≤ ~60 s khi index có mặt.

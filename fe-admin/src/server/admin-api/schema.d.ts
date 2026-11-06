@@ -525,7 +525,9 @@ export interface components {
             targetType?: string;
             targetId?: string;
             clientId?: string;
+            /** @description Full address for super_admin; otherwise network prefix: IPv4 /24, IPv6 /48; absent if unknown. */
             ip?: string;
+            /** @description super_admin only; absent otherwise. */
             userAgent?: string;
             requestId?: string;
             /** @enum {string} */
