@@ -21,3 +21,15 @@ export async function mapDuplicate<R>(entity: string, write: () => Promise<R>): 
     throw err;
   }
 }
+
+/**
+ * DEBT-142: the write would leave a tenant without an active super_admin (membership active,
+ * `super_admin` role, user present and not admin-locked). Thrown inside the guard's transaction,
+ * so nothing is written; the admin layer maps it to 409 with a fixed description.
+ */
+export class LastSuperAdminError extends Error {
+  constructor() {
+    super('at least one active super_admin must remain');
+    this.name = 'LastSuperAdminError';
+  }
+}

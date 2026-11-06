@@ -33,6 +33,7 @@ import { ClientCredentialService } from '../src/modules/clients/client-credentia
 import { ClientService, type Client } from '../src/modules/clients/client.service';
 import { DEFAULT_TENANT_ID } from '../src/modules/identity/tenant.service';
 import { UserTenantService } from '../src/modules/identity/user-tenant.service';
+import { SuperAdminGuard } from '../src/modules/identity/super-admin-guard';
 import { ADMIN_LOCKED_UNTIL, UserService } from '../src/modules/identity/user.service';
 import { KEY_PROVIDER } from '../src/modules/keys/key-provider';
 import { KeyRotationService } from '../src/modules/keys/key-rotation.service';
@@ -258,6 +259,7 @@ describe('Prometheus /metrics + business metrics (B7.2)', () => {
         ClientCorsService,
         UserService,
         UserTenantService,
+        SuperAdminGuard,
         ResourceService,
         SessionService,
         SessionCookie,

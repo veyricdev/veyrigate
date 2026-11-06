@@ -140,8 +140,9 @@ export class RefreshTokenService {
       'clientId' | 'allowedResources' | 'clientType' | 'tokenEndpointAuthMethod' | 'tenantId'
     >,
     request: { scope?: string; resource?: string },
-    /** DEBT-207/216: `resource` is the rotated doc's (never the request body's). */
-    recheck: (userId: string, resource: string) => Promise<string | null>,
+    /** DEBT-207/216: `resource` is the rotated doc's (never the request body's); DEBT-214: `scope`
+     * is the family's grant (never the narrowed request scope). */
+    recheck: (userId: string, resource: string, scope: string[]) => Promise<string | null>,
     audit: AuditCtx = {},
   ): Promise<TokenResponse> {
     const tokenHash = sha256(value);
@@ -260,7 +261,7 @@ export class RefreshTokenService {
   /** DEBT-207: current-state re-check of a refresh after `rotate` (see `issueForRefresh`). */
   private async recheckAfterRotate(
     result: RotationResult,
-    recheck: (userId: string, resource: string) => Promise<string | null>,
+    recheck: (userId: string, resource: string, scope: string[]) => Promise<string | null>,
     audit: AuditCtx,
   ): Promise<void> {
     const refuse = (reason: string) =>
@@ -295,7 +296,7 @@ export class RefreshTokenService {
         );
     let reason: string | null;
     try {
-      reason = await recheck(result.userId, result.resource);
+      reason = await recheck(result.userId, result.resource, result.scope);
     } catch (err) {
       const revoked = await this.revokeFamily(result.familyId, result.clientId, new Date()).then(
         () => true,
@@ -401,8 +402,8 @@ export class RefreshTokenService {
       .exec()) as RefreshDoc | null;
 
     if (!old) {
-      await this.classifyMiss(tokenHash, client.clientId, now, audit);
-      // classifyMiss throws for reuse; reaching here means a plain invalid value.
+      await this.classifyMiss(tokenHash, client, now, audit);
+      // classifyMiss throws for reuse / a lost resource; reaching here means a plain invalid value.
       throw new RefreshRotationError();
     }
 
@@ -467,21 +468,53 @@ export class RefreshTokenService {
    */
   private async classifyMiss(
     tokenHash: string,
-    clientId: string,
+    client: { clientId: string; allowedResources: string[] },
     now: Date,
     audit: AuditCtx,
   ): Promise<void> {
+    const { clientId } = client;
     const doc = (await this.refreshTokens
       .findOne({ tokenHash, clientId })
       .lean()
       .exec()) as RefreshDoc | null;
 
     const isReuse = doc != null && doc.revokedAt != null && doc.replacedBy != null;
-    if (!isReuse) {
-      return; // plain invalid: unknown, expired, revoked-by-/revoke, or wrong resource.
+    if (isReuse) {
+      await this.revokeFamily(doc.familyId, clientId, now, { reuse: true, audit });
+      throw new RefreshRotationError();
     }
-
-    await this.revokeFamily(doc.familyId, clientId, now, { reuse: true, audit });
+    // DEBT-415: an active, unexpired token of this client whose resource the client lost (removed
+    // from `allowedResources`) kills its family, like the post-rotate re-check (DEBT-216): re-adding
+    // the resource must not revive it. Unfiltered identifiers on purpose: an `aud=admin` family on a
+    // non-admin-capable client stays a plain invalid_grant, nothing burned (DEBT-172/174).
+    if (
+      doc == null ||
+      doc.revokedAt != null ||
+      doc.expiresAt <= now ||
+      (await this.resources.identifiersFor(client.allowedResources)).includes(doc.resource)
+    ) {
+      return; // plain invalid: unknown, expired, revoked-by-/revoke.
+    }
+    const refuse = () =>
+      this.audit.record({
+        actorType: 'user',
+        actorId: doc.userId.toHexString(),
+        clientId,
+        action: AuditAction.TOKEN_REFRESHED,
+        result: 'failure',
+        reason: 'resource_not_allowed',
+        ip: audit.ip,
+        userAgent: audit.userAgent,
+        requestId: audit.requestId,
+        metadata: { resource: doc.resource, familyId: doc.familyId },
+      });
+    try {
+      await this.revokeFamily(doc.familyId, clientId, now);
+    } catch (err) {
+      await refuse().catch(() => undefined); // DEBT-067: keep the refusal audit, then fail closed.
+      throw err;
+    }
+    await refuse();
     throw new RefreshRotationError();
   }
 

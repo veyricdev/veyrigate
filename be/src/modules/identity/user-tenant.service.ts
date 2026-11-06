@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { isValidObjectId, type Model, Types } from 'mongoose';
+import { type ClientSession, isValidObjectId, type Model, Types } from 'mongoose';
+import { ADMIN_ROLE_VALUES } from '../admin/admin.dto';
 import { mapDuplicate } from './identity.errors';
 import type { TenantContext } from './tenant-context/tenant-context';
 import { TenantScopedRepository } from './tenant-context/tenant-scoped.repository';
@@ -95,25 +96,30 @@ export class UserTenantService {
    */
   async membershipsOf(
     userId: string,
+    session?: ClientSession,
   ): Promise<Pick<UserTenant, 'tenantId' | 'status' | 'roles'>[]> {
     if (!isValidObjectId(userId)) return [];
     return this.model
       .find({ userId: new Types.ObjectId(userId) }, { tenantId: 1, status: 1, roles: 1 })
+      .session(session ?? null)
       .lean<Pick<UserTenant, 'tenantId' | 'status' | 'roles'>[]>()
       .exec();
   }
 
   /**
-   * Replace the roles of a membership of the token's tenant atomically (B6.3b) and return the
-   * membership BEFORE the write (audit diff), or null when nothing matched. `unlessRole` makes the
-   * write conditional ("target does not hold that role") inside the same filter, so a concurrent
-   * grant cannot slip between a check and the write.
+   * Replace the ADMIN roles (`ADMIN_ROLE_VALUES`) of a membership of the token's tenant atomically
+   * (B6.3b) and return the membership BEFORE the write (audit diff), or null when nothing matched.
+   * DEBT-149: any other role is kept, in order, by the same pipeline write (no read-then-write).
+   * `unlessRole` makes the write conditional ("target does not hold that role") inside the same
+   * filter, so a concurrent grant cannot slip between a check and the write. `session`: run inside
+   * the caller's transaction (DEBT-142).
    */
   replaceRoles(
     ctx: TenantContext,
     userId: string,
     roles: string[],
     unlessRole?: string,
+    session?: ClientSession,
   ): Promise<UserTenant | null> {
     if (!isValidObjectId(userId)) return Promise.resolve(null);
     return this.repo.findOneAndUpdate(
@@ -122,7 +128,24 @@ export class UserTenantService {
         userId: new Types.ObjectId(userId),
         ...(unlessRole !== undefined ? { roles: { $ne: unlessRole } } : {}),
       },
-      { $set: { roles } },
+      [
+        {
+          $set: {
+            roles: {
+              $concatArrays: [
+                {
+                  $filter: {
+                    input: { $ifNull: ['$roles', []] },
+                    cond: { $not: [{ $in: ['$$this', { $literal: ADMIN_ROLE_VALUES }] }] },
+                  },
+                },
+                { $literal: roles },
+              ],
+            },
+          },
+        },
+      ],
+      { session },
     );
   }
 

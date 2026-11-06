@@ -72,22 +72,14 @@ jobs:
   # Integration suite bảo mật (B7.1): chạy `pnpm -C be test:int` y như local, trên service giống
   # vg-test-* (mongo@27117, redis@6479) + Mailpit (mailer.int-spec). KHÔNG đặt TEST_MONGO_URI /
   # TEST_REDIS_URL (chỉ đặt khi chạy MỘT file spec, DEBT-203); không secret, không .env/keys
-  # (int-spec không nạp ConfigModule, khoá ký dùng mkdtemp). Mongo single-node: chưa có
-  # transaction/change stream, URI test dùng directConnection=true. Khi cần replica set: thay
-  # service bằng step `docker run -d -p 27117:27017 mongo:7 --replSet rs0`, rồi
-  # `mongosh --port 27117 --eval 'rs.initiate({_id:"rs0",members:[{_id:0,host:"localhost:27017"}]})'`
-  # và chờ PRIMARY.
+  # (int-spec không nạp ConfigModule, khoá ký dùng mkdtemp). Mongo là replica set một node `rs0`
+  # (run 69, DEBT-142: guard super_admin dùng transaction — như vg-test-mongo/prod), dựng bằng step
+  # "Start Mongo replica set" (service container không truyền được `--replSet`); URI test dùng
+  # directConnection=true.
   int:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     services:
-      mongo:
-        image: mongo:7
-        ports:
-          - 27117:27017
-        options: >-
-          --health-cmd "mongosh --quiet --eval \"db.adminCommand('ping')\""
-          --health-interval 10s --health-timeout 5s --health-retries 5
       redis:
         image: redis:7
         ports:
@@ -127,6 +119,17 @@ jobs:
       - name: Install
         run: pnpm i --frozen-lockfile
 
+      - name: Start Mongo replica set (rs0)
+        run: |
+          docker run -d --name vg-ci-mongo -p 27117:27017 mongo:7 --replSet rs0
+          until docker exec vg-ci-mongo mongosh --quiet --eval 'db.adminCommand("ping").ok' >/dev/null 2>&1; do sleep 1; done
+          docker exec vg-ci-mongo mongosh --quiet --eval 'rs.initiate({_id:"rs0",members:[{_id:0,host:"localhost:27017"}]})'
+          for i in $(seq 1 60); do
+            [ "$(docker exec vg-ci-mongo mongosh --quiet --eval 'db.hello().isWritablePrimary')" = "true" ] && exit 0
+            sleep 1
+          done
+          echo "Mongo rs0 never became PRIMARY" >&2; exit 1
+
       - name: Integration tests (security suite)
         run: pnpm -C be test:int
 
@@ -161,7 +164,8 @@ jobs:
         run: bash be/scripts/sentinel-test-env.sh down
 
   # E2E thật (DEBT-004 / X1): Playwright 1 kịch bản login → /authorize → /token → claims.
-  # Mongo single-node (chưa dùng transaction — DEBT-083) + Redis service. Env BE/FE đều là giá trị
+  # Mongo replica set một node `rs0` (run 69: khoá user bởi super_admin chạy trong transaction của
+  # guard DEBT-142, như aegate-mongo/prod) + Redis service. Env BE/FE đều là giá trị
   # GIẢ không-secret: BE/FE do playwright.config.ts (e2e/config/env.ts) cấp qua webServer.env; chỉ
   # DEV_SEED_* đặt ở job env: (viết thẳng, KHÔNG dùng GitHub secrets). GH Actions tự set CI=true →
   # Playwright bật trace retain-on-failure + forbidOnly.
@@ -172,13 +176,6 @@ jobs:
       DEV_SEED_EMAIL: dev@example.com
       DEV_SEED_PASSWORD: dev-password-123
     services:
-      mongo:
-        image: mongo:7
-        ports:
-          - 27017:27017
-        options: >-
-          --health-cmd "mongosh --quiet --eval \"db.adminCommand('ping')\""
-          --health-interval 10s --health-timeout 5s --health-retries 5
       redis:
         image: redis:7
         ports:
@@ -212,6 +209,17 @@ jobs:
 
       - name: Install Playwright Chromium (+ OS deps)
         run: pnpm -C e2e exec playwright install --with-deps chromium
+
+      - name: Start Mongo replica set (rs0)
+        run: |
+          docker run -d --name vg-ci-mongo -p 27017:27017 mongo:7 --replSet rs0
+          until docker exec vg-ci-mongo mongosh --quiet --eval 'db.adminCommand("ping").ok' >/dev/null 2>&1; do sleep 1; done
+          docker exec vg-ci-mongo mongosh --quiet --eval 'rs.initiate({_id:"rs0",members:[{_id:0,host:"localhost:27017"}]})'
+          for i in $(seq 1 60); do
+            [ "$(docker exec vg-ci-mongo mongosh --quiet --eval 'db.hello().isWritablePrimary')" = "true" ] && exit 0
+            sleep 1
+          done
+          echo "Mongo rs0 never became PRIMARY" >&2; exit 1
 
       - name: Run E2E (Playwright builds/seeds/starts BE + FE)
         run: pnpm -C e2e e2e

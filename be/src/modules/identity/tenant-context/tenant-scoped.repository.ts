@@ -1,4 +1,5 @@
 import type {
+  ClientSession,
   DeleteResult,
   Model,
   ProjectionType,
@@ -53,16 +54,21 @@ export class TenantScopedRepository<T extends { tenantId: string }> {
   /**
    * Atomic update returning the document BEFORE the update (lean), or null when nothing in this
    * tenant matched — lets a caller compute an exact diff (audit) without a read-then-write race.
+   * An array `update` is an update pipeline (built server-side; every stage loses `tenantId`).
    */
   findOneAndUpdate(
     ctx: TenantContext,
     filter: QueryFilter<T>,
-    update: UpdateQuery<T>,
+    update: UpdateQuery<T> | UpdateQuery<T>[],
+    options: { session?: ClientSession } = {},
   ): Promise<T | null> {
+    const pipeline = Array.isArray(update);
     return this.model
-      .findOneAndUpdate(this.scope(ctx, filter), withoutTenantId(update), {
-        returnDocument: 'before',
-      })
+      .findOneAndUpdate(
+        this.scope(ctx, filter),
+        pipeline ? update.map((stage) => withoutTenantId(stage)) : withoutTenantId(update),
+        { returnDocument: 'before', ...(pipeline ? { updatePipeline: true } : {}), ...options },
+      )
       .lean<T>()
       .exec();
   }

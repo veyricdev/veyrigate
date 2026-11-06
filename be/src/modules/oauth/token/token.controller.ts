@@ -444,7 +444,9 @@ export class TokenController {
         // DEBT-207: after rotate, the client (re-read), user and membership must still be valid.
         // DEBT-216: and the family's resource must still be allowed by that re-read client (same
         // predicate and reason as the code grant, DEBT-210).
-        async (userId, resource) => {
+        // DEBT-214: and the current consent must still cover the family's scope at the current
+        // policy/terms versions (same `isCovered` and reason as the code grant, Q35.5).
+        async (userId, resource, scope) => {
           const fresh = await this.clients.findByClientId(client.clientId);
           if (!fresh) return 'client_disabled';
           if (
@@ -453,7 +455,13 @@ export class TokenController {
           ) {
             return 'resource_not_allowed';
           }
-          return this.subjectFailure(userId, fresh.tenantId);
+          const subject = await this.subjectFailure(userId, fresh.tenantId);
+          if (subject) return subject;
+          const consent = await this.consents.find(userId, client.clientId, resource);
+          if (!this.consents.isCovered(consent, scope, this.consents.currentVersions())) {
+            return 'consent_revoked';
+          }
+          return null;
         },
         audit,
       );

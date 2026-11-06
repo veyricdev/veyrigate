@@ -18,7 +18,11 @@ const EXPECTED: Record<string, { key: Record<string, number>; unique?: boolean; 
       { key: { userId: 1 } },
     ],
     Tenant: [{ key: { id: 1 }, unique: true }],
-    UserTenant: [{ key: { userId: 1, tenantId: 1 }, unique: true }],
+    UserTenant: [
+      { key: { userId: 1, tenantId: 1 }, unique: true },
+      // Run 69 (DEBT-142): the super_admin guard's per-tenant lookup inside its transaction.
+      { key: { tenantId: 1, roles: 1 } },
+    ],
     Client: [
       { key: { clientId: 1 }, unique: true },
       // DEBT-020: supports `isOriginRegisteredForAnyClient` (CORS preflight / metadata) lookups.

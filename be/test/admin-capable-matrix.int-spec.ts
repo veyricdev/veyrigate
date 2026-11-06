@@ -37,7 +37,7 @@ import { AuthorizeController } from '../src/modules/oauth/authorize/authorize.co
 import { AuthorizeRequestContextService } from '../src/modules/oauth/authorize/authorize-request-context.service';
 import { AuthorizeService } from '../src/modules/oauth/authorize/authorize.service';
 import { AuthorizationCodeService } from '../src/modules/oauth/code/authorization-code.service';
-import { seedCodeGrant } from './oauth-fixtures';
+import { seedCodeGrant, seedConsent } from './oauth-fixtures';
 import { ConsentService } from '../src/modules/oauth/consent/consent.service';
 import { LogoutService } from '../src/modules/oauth/logout/logout.service';
 import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
@@ -202,8 +202,15 @@ describe('DEBT-174 HTTP matrix: 9 client shapes x 4 aud=admin gates (run 31 QA)'
     return code;
   };
 
-  const mintRefresh = () =>
-    app.get(TokenService).insertRefreshToken({
+  const mintRefresh = async () => {
+    // DEBT-214: a refresh re-checks the current consent; this family is minted directly.
+    await seedConsent(db, {
+      userId,
+      clientId: RP,
+      resource: ADMIN_AUD,
+      scopes: ['openid', 'offline_access', 'admin.read'],
+    });
+    return app.get(TokenService).insertRefreshToken({
       userId,
       clientId: RP,
       scope: ['openid', 'offline_access', 'admin.read'],
@@ -213,6 +220,7 @@ describe('DEBT-174 HTTP matrix: 9 client shapes x 4 aud=admin gates (run 31 QA)'
       issuedAt: new Date(),
       expiresAt: new Date(Date.now() + 3_600_000),
     });
+  };
 
   /** An aud=admin AT minted while the client WAS capable (the issuance gate reads the passed client). */
   const mintAdminAt = async (): Promise<string> => {

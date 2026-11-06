@@ -34,6 +34,7 @@ import {
   normalizeEmail,
 } from '../src/modules/identity/user.service';
 import { UserTenantService } from '../src/modules/identity/user-tenant.service';
+import { SuperAdminGuard } from '../src/modules/identity/super-admin-guard';
 import { KEY_PROVIDER } from '../src/modules/keys/key-provider';
 import { LocalKeyProvider } from '../src/modules/keys/local-key-provider';
 import { TokenSigner } from '../src/modules/keys/token-signer';
@@ -334,6 +335,7 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
         AuthenticationService,
         UserService,
         UserTenantService,
+        SuperAdminGuard,
         LogoutService,
         { provide: MAILER, useValue: { send: async () => undefined } },
         { provide: STEP_UP_CLOCK, useValue: () => Date.now() },
@@ -1194,9 +1196,13 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
         expect(res.statusCode).toBeGreaterThanOrEqual(500);
         expect(res.body).not.toContain('mongo sweep down');
         expect(await revokedAtOf(id)).toBeInstanceOf(Date);
-        // The hole before the fix: the refresh grant does not check consent, the family lives.
+        // The sweep did not run: the family lived on. Since run 69 (DEBT-214) the refresh grant
+        // re-checks consent itself, so its next refresh is refused and kills it anyway.
+        expect(await familyActive(f.demoFamily)).toBe(1);
         const rotated = await refresh(f.demo.refresh_token!);
-        expect(rotated.statusCode).toBe(200);
+        expect(rotated.statusCode).toBe(400);
+        expect(rotated.json().error).toBe('invalid_grant');
+        expect(await familyActive(f.demoFamily)).toBe(0);
         expect(await audits(f.user, 'failure')).toEqual([
           expect.objectContaining({
             reason: 'family_sweep_failed',
@@ -1206,9 +1212,6 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
         expect(await audits(f.user, 'success')).toHaveLength(0);
 
         expect((await del(f.user, id)).statusCode).toBe(204);
-        expect((await refresh(rotated.json().refresh_token as string)).json().error).toBe(
-          'invalid_grant',
-        );
         expect(await familyActive(f.demoFamily)).toBe(0);
         expect(
           await refreshModel.countDocuments({ familyId: f.demoFamily, familyRevokedAt: null }),
@@ -1281,7 +1284,9 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
         expect((await revokedAtOf(strangers))!.getTime()).toBe(stamp.getTime());
         expect(await familyUntouched(f.foreignFamily)).toBe(true);
         expect(await familyActive(strangerFamily)).toBe(1);
-        expect((await refresh(sf.refresh_token!)).statusCode).toBe(200);
+        // Run 69 (DEBT-214): its consent was stamped revoked above, so the refresh grant itself
+        // now refuses it (the 404 DELETEs still changed nothing, checked just above).
+        expect((await refresh(sf.refresh_token!)).json().error).toBe('invalid_grant');
         expect(await audits(f.user)).toHaveLength(0);
       });
     });
@@ -1423,7 +1428,9 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
         expect(await shape(id)).toBe(unknown);
         expect((await revokedAtOf(id))!.getTime()).toBe(stamp.getTime());
         expect(await familyActive(fam)).toBe(1);
-        expect((await refresh(flow.refresh_token!)).statusCode).toBe(200);
+        // Run 69 (DEBT-214): the consent was stamped revoked above, so the refresh grant itself
+        // now refuses it (the tenant-B DELETEs still changed nothing, checked just above).
+        expect((await refresh(flow.refresh_token!)).json().error).toBe('invalid_grant');
         expect(await consentAudits(both)).toHaveLength(0);
       });
 
@@ -2256,6 +2263,236 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
       expect(res.body).not.toContain('audit down');
       expect((await lockedUntilOf(id))?.getTime()).toBe(ADMIN_LOCKED_UNTIL.getTime());
       expect((await userinfo(flow.access_token)).statusCode).toBe(401);
+    });
+  });
+
+  // ------------------------------------------------------------------ run 69 (DEBT-142 / DEBT-149)
+  describe('run 69 — at least one active super_admin remains (DEBT-142); PATCH roles keeps non-admin roles (DEBT-149)', () => {
+    const ROUNDS = 10;
+    const CONFLICT = {
+      error: 'conflict',
+      error_description: 'at least one active super_admin must remain',
+    };
+
+    /** A fresh tenant with its own admin-capable client: the token's tenant is the client's. */
+    async function freshTenant(): Promise<{ tenant: string; clientId: string }> {
+      const tenant = `${RUN}-sg-${++seq}`;
+      const clientId = `${tenant}-c`;
+      await moduleRef.get(ClientService).create({
+        clientId,
+        clientType: 'confidential',
+        tokenEndpointAuthMethod: 'client_secret_basic',
+        grantTypes: ['authorization_code', 'refresh_token'],
+        redirectUris: [REDIRECT],
+        allowedResources: ['admin', 'demo', 'other'],
+        scopes: ADMIN_SCOPE.split(' '),
+        tenantId: tenant,
+      });
+      return { tenant, clientId };
+    }
+
+    /** Two super_admins A/B (+ a non-admin role) of a fresh tenant, each with a live session. */
+    async function superPair() {
+      const { tenant, clientId } = await freshTenant();
+      const a = await mkUser({ [tenant]: ['member', 'super_admin'] }, 'sga');
+      const b = await mkUser({ [tenant]: ['member', 'super_admin'] }, 'sgb');
+      return {
+        tenant,
+        clientId,
+        a,
+        b,
+        at: await tok(a, { client: clientId }),
+        bt: await tok(b, { client: clientId }),
+        sa: (await sessions.create(a, tenant)).id,
+        sb: (await sessions.create(b, tenant)).id,
+      };
+    }
+
+    /** Active super_admins of `tenant`: active membership with the role, user not admin-locked. */
+    async function activeSupers(tenant: string): Promise<string[]> {
+      const rows = await userTenantModel
+        .find({ tenantId: tenant, status: 'active', roles: 'super_admin' })
+        .lean();
+      const out: string[] = [];
+      for (const r of rows) {
+        const until = await lockedUntilOf((r.userId as Types.ObjectId).toHexString());
+        if (until?.getTime() !== ADMIN_LOCKED_UNTIL.getTime()) {
+          out.push((r.userId as Types.ObjectId).toHexString());
+        }
+      }
+      return out;
+    }
+
+    const lastSuperAudits = (targets: string[]) =>
+      auditModel
+        .find({ targetId: { $in: targets }, result: 'failure', reason: 'last_super_admin' })
+        .lean();
+    const demote = (target: string, token: string) =>
+      call('PATCH', `/admin/users/${target}/roles`, token, { roles: [] });
+    const lockUser = (target: string, token: string) =>
+      call('POST', `/admin/users/${target}/lock`, token);
+
+    type Res = Awaited<ReturnType<typeof call>>;
+    /** One winner (2xx), one 409 `conflict`, one survivor, one `last_super_admin` audit. */
+    async function expectOneWinner(
+      p: Awaited<ReturnType<typeof superPair>>,
+      [ra, rb]: [Res, Res],
+      action: [string, string],
+    ): Promise<{ winner: 'a' | 'b' }> {
+      const codes = [ra.statusCode, rb.statusCode].sort();
+      expect(codes).toEqual([200, 409]);
+      const loser = ra.statusCode === 409 ? ra : rb;
+      expect(loser.json()).toEqual(CONFLICT);
+      const winner = ra.statusCode === 200 ? 'a' : 'b';
+      // The survivor is the winning actor; the loser's target (the winner) is untouched.
+      expect(await activeSupers(p.tenant)).toEqual([winner === 'a' ? p.a : p.b]);
+      const winnerId = winner === 'a' ? p.a : p.b;
+      expect(await rolesOf(winnerId, p.tenant)).toEqual(['member', 'super_admin']);
+      expect(await lockedUntilOf(winnerId)).toBeNull();
+      expect(await sessions.get(winner === 'a' ? p.sa : p.sb)).not.toBeNull();
+      const audits = await lastSuperAudits([p.a, p.b]);
+      expect(audits).toHaveLength(1);
+      expect(audits[0]).toMatchObject({
+        actorId: winner === 'a' ? p.b : p.a,
+        targetId: winnerId,
+        targetType: 'user',
+        action: winner === 'a' ? action[1] : action[0],
+      });
+      expect(audits[0].metadata ?? {}).toEqual({});
+      return { winner };
+    }
+
+    it(`(r1) A demotes B ∥ B demotes A, ${ROUNDS} rounds => exactly one wins, one super_admin left`, async () => {
+      for (let i = 0; i < ROUNDS; i++) {
+        const p = await superPair();
+        const res = await Promise.all([demote(p.b, p.at), demote(p.a, p.bt)]);
+        const { winner } = await expectOneWinner(p, res, [
+          'ADMIN_USER_ROLES_CHANGED',
+          'ADMIN_USER_ROLES_CHANGED',
+        ]);
+        // DEBT-149: the demoted one keeps its non-admin role.
+        expect(await rolesOf(winner === 'a' ? p.b : p.a, p.tenant)).toEqual(['member']);
+      }
+    });
+
+    it(`(r2) A locks B ∥ B locks A, ${ROUNDS} rounds => exactly one wins, one super_admin left`, async () => {
+      for (let i = 0; i < ROUNDS; i++) {
+        const p = await superPair();
+        const res = await Promise.all([lockUser(p.b, p.at), lockUser(p.a, p.bt)]);
+        const { winner } = await expectOneWinner(p, res, [
+          'ADMIN_USER_LOCKED',
+          'ADMIN_USER_LOCKED',
+        ]);
+        const loserId = winner === 'a' ? p.b : p.a;
+        expect((await lockedUntilOf(loserId))?.getTime()).toBe(ADMIN_LOCKED_UNTIL.getTime());
+      }
+    });
+
+    it(`(r3) A locks B ∥ B demotes A, ${ROUNDS} rounds => exactly one wins, one super_admin left`, async () => {
+      for (let i = 0; i < ROUNDS; i++) {
+        const p = await superPair();
+        const res = await Promise.all([lockUser(p.b, p.at), demote(p.a, p.bt)]);
+        await expectOneWinner(p, res, ['ADMIN_USER_LOCKED', 'ADMIN_USER_ROLES_CHANGED']);
+      }
+    });
+
+    it('(s1) the target is the only unlocked super_admin of ANOTHER tenant (the other one is admin-locked) => lock 409, nothing changed', async () => {
+      const t2 = await freshTenant();
+      const y = await mkUser({ [TENANT_A]: [], [t2.tenant]: ['super_admin'] }, 'sy');
+      const z = await mkUser({ [t2.tenant]: ['super_admin'] }, 'sz');
+      await userModel.updateOne(
+        { _id: new Types.ObjectId(z) },
+        { $set: { lockedUntil: ADMIN_LOCKED_UNTIL, adminLockLevel: 'super_admin' } },
+      );
+      const sy = (await sessions.create(y, t2.tenant)).id;
+      const res = await lockUser(y, await tok(superA));
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual(CONFLICT);
+      expect(await lockedUntilOf(y)).toBeNull();
+      expect(await sessions.get(sy)).not.toBeNull();
+      expect(await activeSupers(t2.tenant)).toEqual([y]);
+      expect(await lastSuperAudits([y])).toMatchObject([
+        { action: 'ADMIN_USER_LOCKED', actorId: superA, tenantId: TENANT_A },
+      ]);
+      expect(
+        await auditModel.countDocuments({
+          targetId: y,
+          action: 'ADMIN_USER_LOCKED',
+          result: 'success',
+        }),
+      ).toBe(0);
+    });
+
+    it('(s2) control: another active super_admin W in that tenant => lock 200', async () => {
+      const t2 = await freshTenant();
+      const y = await mkUser({ [TENANT_A]: [], [t2.tenant]: ['super_admin'] }, 'sy');
+      const w = await mkUser({ [t2.tenant]: ['super_admin'] }, 'sw');
+      const res = await lockUser(y, await tok(superA));
+      expect(res.statusCode).toBe(200);
+      expect((await lockedUntilOf(y))?.getTime()).toBe(ADMIN_LOCKED_UNTIL.getTime());
+      expect(await activeSupers(t2.tenant)).toEqual([w]);
+    });
+
+    it('(s3) control: A demotes B while A remains => 200 (no false 409)', async () => {
+      const p = await superPair();
+      const res = await demote(p.b, p.at);
+      expect(res.statusCode).toBe(200);
+      expect(await activeSupers(p.tenant)).toEqual([p.a]);
+      expect(await lastSuperAudits([p.a, p.b])).toHaveLength(0);
+    });
+
+    it('DEBT-149: super_admin PATCH keeps non-admin roles; response = DB after; audit diff only on admin roles', async () => {
+      const target = await mkUser({ [TENANT_A]: ['member', 'super_admin'] }, 'r149');
+      const to = await call('PATCH', `/admin/users/${target}/roles`, await tok(superA), {
+        roles: ['tenant_admin'],
+      });
+      expect(to.statusCode).toBe(200);
+      expect(to.json().roles).toEqual(['member', 'tenant_admin']);
+      expect(await rolesOf(target)).toEqual(['member', 'tenant_admin']);
+      expect(
+        await auditModel
+          .findOne({ action: 'ADMIN_USER_ROLES_CHANGED', targetId: target, result: 'success' })
+          .lean(),
+      ).toMatchObject({ metadata: { addedRoles: 'tenant_admin', removedRoles: 'super_admin' } });
+      const none = await call('PATCH', `/admin/users/${target}/roles`, await tok(superA), {
+        roles: [],
+      });
+      expect(none.statusCode).toBe(200);
+      expect(none.json().roles).toEqual(['member']);
+      expect(await rolesOf(target)).toEqual(['member']);
+      const audits = await auditModel
+        .find({ action: 'ADMIN_USER_ROLES_CHANGED', targetId: target })
+        .sort({ _id: 1 })
+        .lean();
+      expect(audits.map((a) => a.metadata)).toEqual([
+        { addedRoles: 'tenant_admin', removedRoles: 'super_admin' },
+        { addedRoles: '', removedRoles: 'tenant_admin' },
+      ]);
+    });
+
+    it('DEBT-149: tenant_admin PATCH on a target with a non-admin role keeps it', async () => {
+      const target = await mkUser({ [TENANT_A]: ['member'] }, 'r149t');
+      const res = await call('PATCH', `/admin/users/${target}/roles`, await tok(tadminA), {
+        roles: ['tenant_admin'],
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().roles).toEqual(['member', 'tenant_admin']);
+      expect(await rolesOf(target)).toEqual(['member', 'tenant_admin']);
+      expect(
+        await auditModel.findOne({ action: 'ADMIN_USER_ROLES_CHANGED', targetId: target }).lean(),
+      ).toMatchObject({ metadata: { addedRoles: 'tenant_admin', removedRoles: '' } });
+    });
+
+    it('fail-closed: a DB fault inside the guard => 5xx, nothing written, no audit', async () => {
+      const p = await superPair();
+      jest
+        .spyOn(moduleRef.get(SuperAdminGuard), 'assertSurvivors')
+        .mockRejectedValueOnce(new Error('mongo down'));
+      const res = await demote(p.b, p.at);
+      expect(res.statusCode).toBeGreaterThanOrEqual(500);
+      expect(res.body).not.toContain('mongo down');
+      expect(await rolesOf(p.b, p.tenant)).toEqual(['member', 'super_admin']);
+      expect(await auditModel.countDocuments({ targetId: p.b })).toBe(0);
     });
   });
 });

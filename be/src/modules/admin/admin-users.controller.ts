@@ -19,6 +19,7 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
+import type { ClientSession } from 'mongoose';
 import type { HttpRequest } from '../../common/http/http.types';
 import { AuthenticationService } from '../authentication/authentication.service';
 import { ClientService } from '../clients/client.service';
@@ -32,6 +33,8 @@ import {
   Tenant,
   type TenantContext,
 } from '../identity/tenant-context/tenant-context';
+import { LastSuperAdminError } from '../identity/identity.errors';
+import { SuperAdminGuard } from '../identity/super-admin-guard';
 import { type UserTenant, UserTenantService } from '../identity/user-tenant.service';
 import { UserService, type UserView } from '../identity/user.service';
 import { ConsentService } from '../oauth/consent/consent.service';
@@ -91,6 +94,7 @@ export class AdminUsersController {
     private readonly clients: ClientService,
     private readonly refreshTokens: RefreshTokenService,
     private readonly consents: ConsentService,
+    private readonly superAdmins: SuperAdminGuard,
   ) {}
 
   @Get()
@@ -156,7 +160,19 @@ export class AdminUsersController {
     if (t.id === ctx.userId) throw AdminAuthError.forbidden();
     await this.assertMayTouchAccount(ctx, actor, t.id);
     const level = actor.roles.includes('super_admin') ? 'super_admin' : 'tenant_admin';
-    const locked = await this.users.adminLock(t.id, level);
+    // DEBT-142: a lock disables the user in EVERY tenant, so a super_admin actor locks inside the
+    // guard: each tenant where the target is an active super_admin must keep another one (409).
+    // A tenant_admin cannot lock an admin at all (`assertMayTouchAccount`), so needs no guard.
+    const locked =
+      level === 'super_admin'
+        ? await this.guarded(req, ctx, AuditAction.ADMIN_USER_LOCKED, t.id, async (s) => {
+            const tenants = (await this.memberships.membershipsOf(t.id, s))
+              .filter((m) => m.status === 'active' && (m.roles ?? []).includes('super_admin'))
+              .map((m) => m.tenantId);
+            if (tenants.length) await this.superAdmins.assertSurvivors(tenants, t.id, s);
+            return this.users.adminLock(t.id, level, new Date(), s);
+          })
+        : await this.users.adminLock(t.id, level);
     if (!locked) throw AdminAuthError.notFound();
     const { user: after, lockMarkAt } = locked;
     // Events after `LOCKED success` in this request never sort before it, even when the mark is
@@ -288,8 +304,9 @@ export class AdminUsersController {
   @ApiOkResponse({ type: AdminUserViewDto })
   @ApiOperation({
     description:
-      'Replaces the admin roles of the membership. Never on yourself; granting/revoking super_admin, ' +
-      'or changing a super_admin, is super_admin-only. Effective on the target’s next request.',
+      'Replaces the admin roles of the membership; any other role is kept. Never on yourself; ' +
+      'granting/revoking super_admin, or changing a super_admin, is super_admin-only. 409 when the ' +
+      'tenant would be left without an active super_admin. Effective on the target’s next request.',
   })
   async setRoles(
     @Tenant() ctx: TenantContext,
@@ -303,17 +320,29 @@ export class AdminUsersController {
     const isSuper = actor.roles.includes('super_admin');
     if (!isSuper && dto.roles.includes('super_admin')) throw AdminAuthError.forbidden();
     // Non-super: "target does not hold super_admin" is part of the atomic filter (no TOCTOU).
-    const before = await this.memberships.replaceRoles(
-      ctx,
-      t.id,
-      dto.roles,
-      isSuper ? undefined : 'super_admin',
-    );
+    // DEBT-142: a super_admin write that may drop super_admin runs inside the guard (409 when the
+    // tenant would be left without an active super_admin).
+    const before =
+      isSuper && !dto.roles.includes('super_admin')
+        ? await this.guarded(req, ctx, AuditAction.ADMIN_USER_ROLES_CHANGED, t.id, async (s) => {
+            const prev = await this.memberships.replaceRoles(ctx, t.id, dto.roles, undefined, s);
+            if (prev?.status === 'active' && (prev.roles ?? []).includes('super_admin')) {
+              await this.superAdmins.assertSurvivors([ctx.tenantId], t.id, s);
+            }
+            return prev;
+          })
+        : await this.memberships.replaceRoles(
+            ctx,
+            t.id,
+            dto.roles,
+            isSuper ? undefined : 'super_admin',
+          );
     if (!before) {
       if (await this.memberships.findMember(ctx, t.id)) throw AdminAuthError.forbidden();
       throw AdminAuthError.notFound();
     }
-    const prev = before.roles ?? [];
+    // DEBT-149: only the admin roles were replaced; any other role is kept (response = DB after).
+    const prev = (before.roles ?? []).filter((r) => ADMIN_ROLES.includes(r));
     const added = dto.roles.filter((r) => !prev.includes(r));
     const removed = prev.filter((r) => !(dto.roles as string[]).includes(r));
     if (added.length || removed.length) {
@@ -326,7 +355,8 @@ export class AdminUsersController {
         metadata: { addedRoles: added.join(','), removedRoles: removed.join(',') },
       });
     }
-    return toAdminUser(t.user, { ...before, roles: dto.roles }, new Date());
+    const kept = (before.roles ?? []).filter((r) => !ADMIN_ROLES.includes(r));
+    return toAdminUser(t.user, { ...before, roles: [...kept, ...dto.roles] }, new Date());
   }
 
   @Get(':id/families')
@@ -475,6 +505,34 @@ export class AdminUsersController {
     const user = await this.users.findById(id);
     if (!user) throw AdminAuthError.notFound();
     return { id, member, user };
+  }
+
+  /**
+   * DEBT-142: run `write` in the super_admin guard's transaction. `LastSuperAdminError` (nothing
+   * written) => audit `<action> failure last_super_admin` + 409 with a fixed description; any
+   * other error (standalone Mongo, DB fault) propagates (5xx, nothing written).
+   */
+  private async guarded<T>(
+    req: HttpRequest,
+    ctx: TenantContext,
+    action: AuditAction,
+    targetId: string,
+    write: (session: ClientSession) => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await this.superAdmins.runGuarded(write);
+    } catch (err) {
+      if (!(err instanceof LastSuperAdminError)) throw err;
+      await this.audit.record({
+        ...adminAuditBase(req, ctx),
+        action,
+        targetType: 'user',
+        targetId,
+        result: 'failure',
+        reason: 'last_super_admin',
+      });
+      throw AdminAuthError.conflict(err.message);
+    }
   }
 
   /**

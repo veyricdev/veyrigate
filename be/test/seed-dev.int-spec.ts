@@ -660,7 +660,7 @@ describe('seed-dev: resourceId mapping works end-to-end on real seed data (Task 
 
   // ----- QA additions (run 24 tester): Task 0 acceptance (c) + replay on real seed data -----
 
-  it('QA (c) wrong-format data: allowedResources holds the URI (not the resourceId) => fail-closed everywhere, refresh doc untouched', async () => {
+  it('QA (c) wrong-format data: allowedResources holds the URI (not the resourceId) => fail-closed everywhere, refresh family revoked (DEBT-415)', async () => {
     const { access, refresh } = await firstTokens();
     const rtModel = app.get<Model<Record<string, unknown>>>(getModelToken('RefreshToken'));
     // Data entered in the WRONG shape: the URI itself instead of resourceId 'demo'. Must never be
@@ -690,10 +690,12 @@ describe('seed-dev: resourceId mapping works end-to-end on real seed data (Task 
       });
       expect(rr.statusCode).toBe(400);
       expect(rr.json().error).toBe('invalid_grant');
-      // Not burned, not family-revoked: the doc is unchanged (same as the (b) negative path).
+      // Run 69 (DEBT-415): the family's resource is not in the client's (mis-shaped) allowlist,
+      // which is the "resource removed" case => the family is revoked (fail-closed, not a revival).
       const doc = await rtModel.findOne({ tokenHash: sha256(refresh) }).lean();
       expect(doc).not.toBeNull();
-      expect(doc?.revokedAt ?? null).toBeNull();
+      expect(doc?.revokedAt).toBeInstanceOf(Date);
+      expect(doc?.familyRevokedAt).toBeInstanceOf(Date);
     } finally {
       await clientModel.updateOne(
         { clientId: 'fe-sso-test' },
@@ -727,8 +729,8 @@ describe('seed-dev: resourceId mapping works end-to-end on real seed data (Task 
       );
     }
 
-    // Restored to the correct resourceId shape => the SAME refresh token works again (proves the
-    // negative above was the mapping, not a burned/broken token).
+    // Restored to the correct resourceId shape => the SAME refresh token stays dead (DEBT-415: a
+    // revoked family is never revived by re-adding the resource).
     const ok = await app.inject({
       method: 'POST',
       url: '/token',
@@ -739,7 +741,8 @@ describe('seed-dev: resourceId mapping works end-to-end on real seed data (Task 
         refresh_token: refresh,
       }),
     });
-    expect(ok.statusCode).toBe(200);
+    expect(ok.statusCode).toBe(400);
+    expect(ok.json().error).toBe('invalid_grant');
   });
 
   it('QA replay: after a successful mapped rotation, replaying the old refresh token => invalid_grant and the successor is revoked (INV-14)', async () => {

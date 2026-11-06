@@ -47,7 +47,7 @@ import { AuthorizeRequestContextService } from '../src/modules/oauth/authorize/a
 import { AuthorizeService } from '../src/modules/oauth/authorize/authorize.service';
 import { AuthorizationCodeService } from '../src/modules/oauth/code/authorization-code.service';
 import { ConsentService } from '../src/modules/oauth/consent/consent.service';
-import { seedCodeGrant } from './oauth-fixtures';
+import { seedCodeGrant, seedConsent } from './oauth-fixtures';
 import { IntrospectController } from '../src/modules/oauth/introspect/introspect.controller';
 import { LogoutService } from '../src/modules/oauth/logout/logout.service';
 import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
@@ -1231,6 +1231,13 @@ describe('Admin API B6.3a (clients, secrets, resources) on real Mongo + Redis', 
     /** A live refresh family inserted directly (plaintext value only known to the test). */
     async function insertRefresh(clientId: string): Promise<string> {
       const value = `rt-${randomUUID()}`;
+      // DEBT-214: a refresh re-checks the current consent; this family is inserted directly.
+      await seedConsent(clientModel.db, {
+        userId: tadminA,
+        clientId,
+        resource: API_AUD,
+        scopes: ['openid', 'api.read'],
+      });
       await refreshModel().create({
         tokenHash: sha256(value),
         familyId: `fam-${randomUUID()}`,

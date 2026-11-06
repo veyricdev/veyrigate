@@ -1,6 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { isValidObjectId, type Model, type QueryFilter, type Types } from 'mongoose';
+import {
+  type ClientSession,
+  isValidObjectId,
+  type Model,
+  type QueryFilter,
+  type Types,
+} from 'mongoose';
 import { hashPassword } from '../../common/crypto/crypto.util';
 import { mapDuplicate } from './identity.errors';
 import { randomUUID } from 'node:crypto';
@@ -313,12 +319,14 @@ export class UserService {
    * Admin lock until an admin unlocks (B6.3b), recording its level, in ONE atomic pipeline write
    * that also bumps the per-user mark (run 57). super_admin always (re)sets level `super_admin`;
    * tenant_admin never lowers a higher-level (or legacy unlevelled) admin lock: the level is kept,
-   * the write (and its mark) still happens. null = no such user.
+   * the write (and its mark) still happens. null = no such user. `session`: run inside the caller's
+   * transaction (DEBT-142 super_admin guard).
    */
   async adminLock(
     sub: string,
     level: AdminLockLevel,
     now = new Date(),
+    session?: ClientSession,
   ): Promise<{ user: UserView; lockMarkAt: Date } | null> {
     if (!isValidObjectId(sub)) return null;
     const keepHigher = {
@@ -342,7 +350,7 @@ export class UserService {
             },
           },
         ],
-        { returnDocument: 'after', updatePipeline: true },
+        { returnDocument: 'after', updatePipeline: true, session },
       )
       .select(PUBLIC_FIELDS)
       .lean<UserDoc>()

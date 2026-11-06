@@ -69,7 +69,7 @@ services:
 volumes: { mongo_data: {}, redis_data: {} }
 ```
 
-Lưu ý: spec chỉ dùng `findOneAndUpdate` điều kiện trên **một document** cho refresh token → **không cần MongoDB replica set/transaction**. Pin version image khi chốt.
+Lưu ý: refresh token vẫn chỉ dùng `findOneAndUpdate` điều kiện trên **một document**. Riêng guard "còn ≥ 1 super_admin active" (run 69, DEBT-142) dùng **transaction** (snapshot + câu touch chung) ⇒ **MongoDB replica set là bắt buộc** (prod, `aegate-mongo`, `vg-test-mongo`, CI `int`/`e2e` đều là RS; standalone ⇒ demote/khoá bởi super_admin trả 5xx, không ghi). Pin version image khi chốt.
 
 ### 1.4 Biến môi trường (`.env.example` mỗi package, không commit secret)
 
@@ -337,6 +337,17 @@ Mục tiêu app này: **kiểm chứng IdP từ phía RP** — vừa là demo, v
   - **`SESSION_IDLE_TTL` = 28800s (8h)**, **`SESSION_ABSOLUTE_TTL` = 2592000s (30 ngày)** — đã dùng từ B2.4, giữ nguyên; ràng buộc `IDLE <= ABSOLUTE` đã enforce trong validation.schema.ts. **Không thuộc phạm vi B4.4** (chỉ ghi lại để chốt trọn Q6).
   - **Grace period rotate client secret = `CLIENT_SECRET_GRACE_TTL` = 604800s (7 ngày)** — đã default trong validation.schema.ts (C2). Lý do: đủ cho một chu kỳ deploy/rollout rotate secret an toàn mà không gián đoạn client. **Không thuộc phạm vi B4.4.**
   - **Lưu ý B4.4**: chỉ `ACCESS_TOKEN_TTL` và `REFRESH_TOKEN_TTL` (khi cấp refresh theo D7) được B4.4 tiêu thụ. ID token TTL **= `ACCESS_TOKEN_TTL`** (OIDC cho phép; tránh thêm config thừa). Không thêm env mới trong B4.4 — tất cả env trên đã tồn tại.
-- [ ] **Q7**: quy ước `identifier` resource ở môi trường thật (domain thật hay URN).
-- [ ] **Q8**: danh sách domain thật của các app để lập ma trận cookie (X3).
-- [ ] **Q9**: tên project/repo (để đặt package name, issuer, tên client mặc định).
+- [x] **Q7**: **ĐÃ CHỐT** (2026-11-06, orchestrator — người dùng ủy quyền tự quyết theo tiêu chí dùng được cho production) — `identifier` resource = **URI tuyệt đối `https://` của API** ở từng môi trường (vd. `https://api.<domain>/`), cấu hình qua seed/admin, không hard-code. Lý do: RFC 8707 yêu cầu URI tuyệt đối; dạng https trùng giá trị API tự kiểm `aud`, dễ vận hành hơn URN. Dev/test giữ giá trị hiện có.
+- [x] **Q8**: **ĐÃ CHỐT** (2026-11-06, orchestrator, ủy quyền) — chưa có domain thật ⇒ X3 kiểm **topology**, không kiểm tên: IdP và app cùng registrable domain (same-site, subdomain khác nhau) + ít nhất 1 app khác site (cross-site), domain dev qua `*.localtest.me`/`*.localhost` + HTTPS cục bộ khi cần `Secure`; domain thật cắm qua env lúc triển khai. DEBT-008 (`__Host-` khi `Secure`) làm cùng X3.
+- [x] **Q9**: **ĐÃ CHỐT** (2026-11-06, orchestrator, ủy quyền) — tên sản phẩm **Veyrigate** (tên repo). Package name nội bộ giữ `sso-idp`/`@sso-idp/*` (không lộ ra người dùng; đổi chỉ gây churn). `ISSUER` là cấu hình theo môi trường triển khai (không có giá trị mặc định production). Tên hiển thị/branding mới (nếu có) dùng "Veyrigate".
+
+### Chốt bổ sung 2026-11-06 (orchestrator — người dùng ủy quyền tự quyết theo tiêu chí dùng được cho production)
+
+- **Q58.1 / DEBT-214** — refresh grant **kiểm consent hiện hành**: nếu consent của (user, client, resource) không còn hoặc `policyVersion`/`termsVersion` thấp hơn bản bắt buộc ⇒ `invalid_grant` + revoke family (client phải chạy lại `/authorize` để đồng ý lại). Lý do: đổi điều khoản phải có đồng ý mới mới hợp lệ về pháp lý; tốn một lần đăng nhập lại là chấp nhận được.
+- **DEBT-149** — `PATCH /admin/users/:id/roles` **chỉ thay các vai trò do admin quản lý** (`tenant_admin`, `super_admin`); vai trò khác đang lưu được giữ nguyên. Lý do: không làm mất dữ liệu ngoài phạm vi API.
+- **DEBT-142** — mọi thao tác giáng/vô hiệu super_admin dùng **cập nhật có điều kiện nguyên tử** bảo đảm còn ≥ 1 super_admin active; vi phạm ⇒ 409. Lý do: không bao giờ được mất quyền quản trị toàn hệ thống.
+- **DEBT-415** — refresh khi resource của family đã bị gỡ khỏi `allowedResources` ⇒ `invalid_grant` **và revoke family** (đồng nhất nhánh race DEBT-216).
+- **DEBT-344** — audit: thời hạn lưu cấu hình `AUDIT_RETENTION_DAYS` (mặc định 180 ngày, TTL index); `ip`/`userAgent` chỉ super_admin xem đầy đủ, tenant admin thấy IP đã che (IPv4 /24, IPv6 /48) và không thấy userAgent. Lý do: tối thiểu hoá dữ liệu cá nhân nhưng vẫn đủ điều tra sự cố.
+- **DEBT-405** — `ops/compose/prod.example.yml`: dịch vụ có `read_only` + `cap_drop: [ALL]` phải chạy non-root với `user:` tường minh và entrypoint không cần quyền root; chứng minh bằng smoke compose cục bộ tên riêng (không đụng `aegate-*`).
+- **Q62.1 / DEBT-466** — bật **Dependabot** (`.github/dependabot.yml`: npm, docker, github-actions; hằng tuần; nhóm minor/patch; `cooldown` ≥ 14 ngày theo quy tắc hiện hành, bản sửa bảo mật không chờ). Có hiệu lực khi người dùng push.
+- **Không tự quyết (cần người dùng)**: push lên remote; cài Node 22.23.4 trên máy dev (Q62.2); xoá image Docker cũ; xoá DB test/dev; sửa `be/.env`.

@@ -38,7 +38,7 @@ import { AuthorizeRequestContextService } from '../src/modules/oauth/authorize/a
 import { AuthorizeService } from '../src/modules/oauth/authorize/authorize.service';
 import { AuthorizationCodeService } from '../src/modules/oauth/code/authorization-code.service';
 import { ConsentService } from '../src/modules/oauth/consent/consent.service';
-import { seedCodeGrant } from './oauth-fixtures';
+import { seedCodeGrant, seedConsent } from './oauth-fixtures';
 import { LogoutService } from '../src/modules/oauth/logout/logout.service';
 import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
 import { TokenController } from '../src/modules/oauth/token/token.controller';
@@ -354,8 +354,15 @@ describe.each(MISFITS)(
 
     it('/token refresh: an aud=admin family of the client => 400 invalid_grant, not burned (control: demo => 200)', async () => {
       const tokens = app.get(TokenService);
-      const mint = (resource: string) =>
-        tokens.insertRefreshToken({
+      const mint = async (resource: string) => {
+        // DEBT-214: a refresh re-checks the current consent; this family is minted directly.
+        await seedConsent(db, {
+          userId,
+          clientId: SPA,
+          resource,
+          scopes: ['openid', 'offline_access', 'admin.read'],
+        });
+        return tokens.insertRefreshToken({
           userId,
           clientId: SPA,
           scope: ['openid', 'offline_access', 'admin.read'],
@@ -365,6 +372,7 @@ describe.each(MISFITS)(
           issuedAt: new Date(),
           expiresAt: new Date(Date.now() + 3_600_000),
         });
+      };
       const refresh = (value: string) =>
         app.inject({
           method: 'POST',

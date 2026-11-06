@@ -2,10 +2,10 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: — (run 68 vừa đóng). Câu hỏi cho người dùng: 610 DB `vg-int-*` mồ côi đã biến mất giữa run 64–65 (bạn có chạy `drop-int-orphans.mjs --yes`?); xoá 4 DB `vg-int-vault-v7-*` cũ?; Q62.1 (Dependabot, DEBT-466), Q62.2 (Node 22.23.4 máy dev, DEBT-465), giữ/xoá image node cũ + smoke cũ. Chờ người dùng: **Q58.1/DEBT-214**, A6.3b (DEBT-149/142), DEBT-344, DEBT-405, DEBT-415.
+- **Run hiện tại**: — (run 69 vừa đóng). Quyết định đã chốt (người dùng ủy quyền, 2026-11-06): `plan.md` §12 "Chốt bổ sung". Còn cần người dùng: push (CI replica set chỉ kiểm thật khi push); Node 22.23.4 máy dev (Q62.2); xoá image cũ; xoá 4 DB `vg-int-vault-v7-*`; 610 DB `vg-int-*` biến mất (đã chạy `drop-int-orphans.mjs --yes`?).
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `68-timeouts` ✅ 2/2 — webServer BE E2E 320 s (đo 102–104 s dưới tải), 3 timeout int nâng theo số đo, 6 điểm đóng chấp nhận; E2E 36, int 1420, be 630. Xem `runs/68-timeouts/summary.md`. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev `sso-idp` (index audit run 57).
-- **Việc tiếp theo**: M7 còn X3 (chờ Q8), X6 release checklist; lane ADMIN còn A6.3b. Debt 🟡 BE mở: xem `backlog.md` (DEBT-119…256, 321, 334, 344, 389, 392).
+- **Run vừa đóng**: `69-decided-be` ✅ 4/4 — luôn ≥ 1 super_admin (guard transaction), PATCH roles giữ vai trò khác, refresh revoke khi resource gỡ / consent cũ; int 1436, be 630, fe-admin 1533, E2E 36. Xem `runs/69-decided-be/summary.md`. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev `sso-idp` (index mới run 69 + run 57).
+- **Việc tiếp theo**: run 70 A6.3b roles UI (fe-admin), 71 DEBT-344 audit retention/che IP, 72 DEBT-405 + Dependabot (DEBT-466), 73 X3 ma trận cookie (+DEBT-008), rồi sweep 🟡 BE (DEBT-119…256, 321, 334, 389, 392, 487–489), cuối cùng X6 release checklist.
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
 
@@ -29,6 +29,7 @@
 | [66](runs/66-happy-dom/summary.md) | M7 | Bump happy-dom 21.0.4 + gỡ ignore audit chết (DEBT-369/371/226) | ✅ fe-admin 1533 + fe-sso-test 269 + audit 0 | `eb75eed` |
 | [67](runs/67-leak-sentinel/summary.md) | M7 | Sentinel env failover + sweep `eyJ` (DEBT-478/477) | ✅ be 630 + int 1420 + vault 31 + fe-admin 1533 + sentinel 3/3 | `56cac7e` |
 | [68](runs/68-timeouts/summary.md) | M7 | Biên thời gian E2E webServer + int timeout sát (DEBT-464/455) | ✅ be 630 + int 1420 + E2E 36 | `4c8e67a` |
+| [69](runs/69-decided-be/summary.md) | M7 | Thực thi quyết định BE: ≥ 1 super_admin, roles, refresh revoke (DEBT-142/149/415/214) | ✅ be 630 + int 1436 + fe-admin 1533 + E2E 36 | — |
 
 ## Chặn / cần người quyết định
 

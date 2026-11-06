@@ -675,23 +675,176 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
     expect(after).toBe(before);
   });
 
-  it('resource removed from client.allowedResources => invalid_grant, doc unchanged, family not revoked', async () => {
+  it('DEBT-415: resource removed from client.allowedResources => invalid_grant, family revoked + audited, no reuse alert; re-adding it does not revive the RT', async () => {
     const rt = await firstRefresh();
+    const doc = await refreshModel
+      .findOne({ tokenHash: sha256(rt) })
+      .lean<Record<string, unknown>>();
+    const familyId = doc!.familyId as string;
     await clientModel.updateOne({ clientId: CLIENT }, { $set: { allowedResources: [] } });
     try {
       const res = await refreshReq(rt);
       expect(res.statusCode).toBe(400);
       expect(res.json().error).toBe('invalid_grant');
-      const doc = await refreshModel
-        .findOne({ tokenHash: sha256(rt) })
-        .lean<Record<string, unknown>>();
-      expect(doc!.revokedAt).toBeFalsy();
+      const family = await refreshModel.find({ familyId }).lean<Record<string, unknown>[]>();
+      expect(family.length).toBeGreaterThan(0);
+      expect(family.every((d) => d.revokedAt != null && d.familyRevokedAt != null)).toBe(true);
+      const refused = await auditModel
+        .find({ action: AuditAction.TOKEN_REFRESHED, 'metadata.familyId': familyId })
+        .lean();
+      expect(refused).toHaveLength(1);
+      expect(refused[0]).toMatchObject({
+        result: 'failure',
+        reason: 'resource_not_allowed',
+        actorType: 'user',
+        actorId: doc!.userId!.toString(),
+        clientId: CLIENT,
+        metadata: { resource: RESOURCE, familyId },
+      });
     } finally {
       await clientModel.updateOne(
         { clientId: CLIENT },
         { $set: { allowedResources: [RESOURCE_ID] } },
       );
     }
+    const again = await refreshReq(rt);
+    expect(again.statusCode).toBe(400);
+    expect(again.json().error).toBe('invalid_grant');
+    expect(
+      await auditModel.countDocuments({
+        action: AuditAction.TOKEN_REUSE_DETECTED,
+        'metadata.familyId': familyId,
+      }),
+    ).toBe(0);
+  });
+
+  it('DEBT-415 control: another client / expired / junk value with the resource removed => nothing revoked', async () => {
+    const own = await firstRefresh();
+    const other = await firstRefresh(CLIENT_B);
+    const expired = await firstRefresh();
+    await refreshModel.updateOne(
+      { tokenHash: sha256(expired) },
+      { $set: { expiresAt: new Date(Date.now() - 1000) } },
+    );
+    await clientModel.updateOne({ clientId: CLIENT }, { $set: { allowedResources: [] } });
+    try {
+      for (const value of [other, expired, 'junk-not-a-token']) {
+        const res = await refreshReq(value);
+        expect(res.statusCode).toBe(400);
+        expect(res.json().error).toBe('invalid_grant');
+      }
+    } finally {
+      await clientModel.updateOne(
+        { clientId: CLIENT },
+        { $set: { allowedResources: [RESOURCE_ID] } },
+      );
+    }
+    for (const value of [other, expired]) {
+      const d = await refreshModel
+        .findOne({ tokenHash: sha256(value) })
+        .lean<Record<string, unknown>>();
+      expect(d!.revokedAt).toBeFalsy();
+      expect(d!.familyRevokedAt).toBeFalsy();
+    }
+    // The untouched own token still refreshes once the resource is back.
+    expect((await refreshReq(own)).statusCode).toBe(200);
+  });
+
+  describe('DEBT-214: refresh re-checks the current consent (same predicate as the code grant)', () => {
+    const consentModel = () => refreshModel.db.model('Consent');
+    const consentKey = (userId: unknown) => ({
+      userId,
+      clientId: CLIENT,
+      resource: RESOURCE,
+    });
+
+    /** Mint a family through the real code flow, apply `drift` to its consent, refresh once. */
+    async function refreshAfter(drift: (key: Record<string, unknown>) => Promise<unknown>) {
+      const rt = await firstRefresh();
+      const doc = await refreshModel
+        .findOne({ tokenHash: sha256(rt) })
+        .lean<Record<string, unknown>>();
+      const familyId = doc!.familyId as string;
+      const key = consentKey(doc!.userId);
+      expect(await consentModel().countDocuments({ ...key, revokedAt: null })).toBe(1);
+      await drift(key);
+      const res = await refreshReq(rt);
+      return { rt, familyId, res };
+    }
+
+    async function expectRefused(
+      rt: string,
+      familyId: string,
+      res: { statusCode: number; json: () => { error?: string } },
+    ) {
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('invalid_grant');
+      const family = await refreshModel.find({ familyId }).lean<Record<string, unknown>[]>();
+      expect(family.every((d) => d.revokedAt != null && d.familyRevokedAt != null)).toBe(true);
+      const refused = await auditModel
+        .find({
+          action: AuditAction.TOKEN_REFRESHED,
+          result: 'failure',
+          'metadata.familyId': familyId,
+        })
+        .lean();
+      expect(refused.map((e) => e.reason)).toEqual(['consent_revoked']);
+      // DEBT-215: an RP retry of the refused value is a plain invalid_grant, never a reuse alert.
+      const retry = await refreshReq(rt);
+      expect(retry.statusCode).toBe(400);
+      expect(retry.json().error).toBe('invalid_grant');
+      expect(
+        await auditModel.countDocuments({
+          action: AuditAction.TOKEN_REUSE_DETECTED,
+          'metadata.familyId': familyId,
+        }),
+      ).toBe(0);
+    }
+
+    it('control: current consent covering the family scope => 200', async () => {
+      const { res } = await refreshAfter(async () => undefined);
+      expect(res.statusCode).toBe(200);
+    });
+
+    it('c1: outdated policyVersion => invalid_grant + family revoked + consent_revoked', async () => {
+      const { rt, familyId, res } = await refreshAfter((k) =>
+        consentModel().updateOne(k, { $set: { policyVersion: '0' } }),
+      );
+      await expectRefused(rt, familyId, res);
+    });
+
+    it('c2: outdated termsVersion => invalid_grant + family revoked + consent_revoked', async () => {
+      const { rt, familyId, res } = await refreshAfter((k) =>
+        consentModel().updateOne(k, { $set: { termsVersion: '0' } }),
+      );
+      await expectRefused(rt, familyId, res);
+    });
+
+    it('c3: consent revokedAt set directly (no admin sweep) => invalid_grant + family revoked', async () => {
+      const { rt, familyId, res } = await refreshAfter((k) =>
+        consentModel().updateOne(k, { $set: { revokedAt: new Date() } }),
+      );
+      await expectRefused(rt, familyId, res);
+    });
+
+    it('c4: consent document deleted => invalid_grant + family revoked', async () => {
+      const { rt, familyId, res } = await refreshAfter((k) => consentModel().deleteOne(k));
+      await expectRefused(rt, familyId, res);
+    });
+
+    it('c5: grantedScopes no longer cover the family scope (even with a narrowed request) => invalid_grant', async () => {
+      const rt = await firstRefresh();
+      const doc = await refreshModel
+        .findOne({ tokenHash: sha256(rt) })
+        .lean<Record<string, unknown>>();
+      const familyId = doc!.familyId as string;
+      await consentModel().updateOne(consentKey(doc!.userId), {
+        $set: { grantedScopes: ['openid'] },
+      });
+      // The request narrows to a still-consented scope: the FAMILY scope is what must be covered.
+      const res = await refreshReq(rt, { scope: 'openid' });
+      await expectRefused(rt, familyId, res);
+    });
   });
 
   it('(Task 0 e) fail-closed: a Mongo error resolving the resource mapping => 5xx, no rotation', async () => {

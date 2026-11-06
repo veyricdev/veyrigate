@@ -7,6 +7,7 @@ import { AuthenticationService } from '../src/modules/authentication/authenticat
 import { ClientCredentialService } from '../src/modules/clients/client-credential.service';
 import { ClientService } from '../src/modules/clients/client.service';
 import { ADMIN_LOCKED_UNTIL, UserService } from '../src/modules/identity/user.service';
+import { SuperAdminGuard } from '../src/modules/identity/super-admin-guard';
 import { DEFAULT_TENANT_ID } from '../src/modules/identity/tenant.service';
 import { KEY_PROVIDER } from '../src/modules/keys/key-provider';
 import { SESSION_COOKIE } from '../src/modules/sessions/session.cookie';
@@ -565,10 +566,12 @@ describe('run 56 tester: admin races + disable/enable over real HTTP', () => {
 
     it('(b) lock written and held BEFORE its audit; super unlock completes; released => DB unlocked, trail ends UNLOCKED, unlock ts == DB mark', async () => {
       const id = await target();
-      const svc = full.app.get(UserService);
-      const real = svc.adminLock.bind(svc);
+      // Run 69 (DEBT-142): a super_admin lock is written inside the guard's transaction, so it is
+      // "written" once `runGuarded` has committed; park there (before the audit).
+      const svc = full.app.get(SuperAdminGuard);
+      const real = svc.runGuarded.bind(svc);
       const b = barrier();
-      jest.spyOn(svc, 'adminLock').mockImplementationOnce(async (...a) => {
+      jest.spyOn(svc, 'runGuarded').mockImplementationOnce(async (...a) => {
         const r = await real(...a);
         b.reach();
         await b.gate;

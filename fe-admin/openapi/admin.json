@@ -660,7 +660,7 @@
     },
     "/admin/users/{id}/roles": {
       "patch": {
-        "description": "Replaces the admin roles of the membership. Never on yourself; granting/revoking super_admin, or changing a super_admin, is super_admin-only. Effective on the target’s next request.",
+        "description": "Replaces the admin roles of the membership; any other role is kept. Never on yourself; granting/revoking super_admin, or changing a super_admin, is super_admin-only. 409 when the tenant would be left without an active super_admin. Effective on the target’s next request.",
         "operationId": "AdminUsersController_setRoles",
         "parameters": [
           {
