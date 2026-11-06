@@ -24,6 +24,10 @@ export const leakForms = (t: string): string[] => [
   Buffer.from(t).toString('base64url'),
 ];
 
+/** Some form of an issued token in `text` (for checks that collect problems instead of throwing). */
+export const hasIssued = (text: string, issued: string[]): boolean =>
+  issued.some((t) => leakForms(t).some((f) => text.includes(f)));
+
 /** No form of any issued token in `text`. */
 export function expectNoIssued(text: string, issued: string[]): void {
   for (const t of issued) for (const form of leakForms(t)) expect(text).not.toContain(form);

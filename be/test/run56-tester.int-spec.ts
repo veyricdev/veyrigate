@@ -8,6 +8,7 @@ import { ClientCredentialService } from '../src/modules/clients/client-credentia
 import { ClientService } from '../src/modules/clients/client.service';
 import { ADMIN_LOCKED_UNTIL, UserService } from '../src/modules/identity/user.service';
 import { DEFAULT_TENANT_ID } from '../src/modules/identity/tenant.service';
+import { KEY_PROVIDER } from '../src/modules/keys/key-provider';
 import { SESSION_COOKIE } from '../src/modules/sessions/session.cookie';
 import { SessionService } from '../src/modules/sessions/session.service';
 import {
@@ -23,6 +24,7 @@ import {
   type InjectResponse,
 } from './full-app';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
+import { expectNoIssued, recordIssued } from './issued-tokens';
 import { seedConsent, seedOAuthUser } from './oauth-fixtures';
 
 /**
@@ -60,6 +62,7 @@ function barrier() {
 
 describe('run 56 tester: admin races + disable/enable over real HTTP', () => {
   let full: FullApp;
+  let issued: string[] = [];
   let redis: IORedis;
   let bff: Auth; // admin-capable BFF (aud=admin tokens)
   let rs: Auth; // resource server allowed to introspect `api`
@@ -86,6 +89,7 @@ describe('run 56 tester: admin races + disable/enable over real HTTP', () => {
         },
       }),
     });
+    issued = recordIssued(full.app.get(KEY_PROVIDER));
     redis = new IORedis(process.env.TEST_REDIS_URL ?? 'redis://localhost:6479', {
       maxRetriesPerRequest: 1,
     });
@@ -703,7 +707,8 @@ describe('run 56 tester: admin races + disable/enable over real HTTP', () => {
     function expectInvalidGrant(res: InjectResponse) {
       expect(res.statusCode).toBe(400);
       expect(res.json().error).toBe('invalid_grant');
-      expect(res.body).not.toMatch(/access_token|eyJ/);
+      expect(res.body).not.toMatch(/access_token/);
+      expectNoIssued(res.body, issued);
     }
 
     /** Every artefact kind for a confidential + a public client of one user. */

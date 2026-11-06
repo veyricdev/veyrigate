@@ -26,6 +26,7 @@ import {
   type InjectResponse,
 } from './full-app';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
+import { hasIssued, recordIssued } from './issued-tokens';
 import { seedConsent } from './oauth-fixtures';
 import { startRedisProxy, type RedisProxy } from './redis-proxy';
 
@@ -53,7 +54,7 @@ import { startRedisProxy, type RedisProxy } from './redis-proxy';
 const SCOPE = 'openid offline_access api.read';
 const ADMIN_SCOPE = 'openid admin.read admin.write';
 const PASSWORD = 'b73c-tester-password-1'; // throwaway int DB user
-const TOKEN_LEAK = /eyJ|access_token|refresh_token|id_token/;
+const TOKEN_LEAK = /access_token|refresh_token|id_token/;
 const POST_LOGOUT = 'https://app.example.com/after-logout';
 
 type Auth = { clientId: string; secret: string };
@@ -61,6 +62,7 @@ type Auth = { clientId: string; secret: string };
 describe('run 53c tester: Redis / key provider down — wider surface, families, logout', () => {
   let proxy: RedisProxy;
   let full: FullApp;
+  let issued: string[] = [];
   let client: Auth;
   let userId = '';
   let email = '';
@@ -70,6 +72,7 @@ describe('run 53c tester: Redis / key provider down — wider surface, families,
   const boot = async (): Promise<void> => {
     proxy = await startRedisProxy();
     full = await bootFullApp({ name: 'b73c-tester', env: { REDIS_URL: proxy.url } });
+    issued = recordIssued(full.app.get<KeyProvider>(KEY_PROVIDER));
     client = await seedFlowClient(full);
     await full.conn
       .model('Client')
@@ -185,7 +188,7 @@ describe('run 53c tester: Redis / key provider down — wider surface, families,
     if (res.headers['set-cookie'] !== undefined)
       p.push(`set-cookie ${String(res.headers['set-cookie']).split('=')[0]}`);
     if (res.headers['location'] !== undefined) p.push('redirect');
-    if (TOKEN_LEAK.test(res.body)) p.push('token in body');
+    if (TOKEN_LEAK.test(res.body) || hasIssued(res.body, issued)) p.push('token in body');
     if (kind === 'json') {
       const body = res.json();
       if (body.error !== 'temporarily_unavailable') p.push(`error ${String(body.error)}`);

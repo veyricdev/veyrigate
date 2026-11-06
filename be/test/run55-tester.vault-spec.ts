@@ -37,6 +37,7 @@ const ADDR = process.env.VAULT_TEST_ADDR!;
 const ROOT = process.env.VAULT_TEST_ROOT_TOKEN!;
 const MOUNT = `vg-r55t-${randomBytes(4).toString('hex')}`;
 const ADMIN_SCOPE = 'openid admin.read admin.write offline_access';
+const JWT = /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\./;
 const OUTAGE = {
   error: 'temporarily_unavailable',
   error_description: 'The service is temporarily unavailable. Try again later.',
@@ -276,7 +277,8 @@ describe('run 55 tester: admin keys API with Vault unavailable (DEBT-410), real 
         .lean<Array<{ result: string; reason?: string }>>();
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({ result: 'failure', reason: 'rotate_failed' });
-      expect(JSON.stringify(events)).not.toMatch(/eyJ|hvs\./);
+      expect(JSON.stringify(events)).not.toMatch(/hvs\./);
+      expect(JSON.stringify(events)).not.toMatch(JWT);
     },
   );
 });

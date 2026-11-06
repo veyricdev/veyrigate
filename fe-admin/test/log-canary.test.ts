@@ -7,7 +7,16 @@ import type { Redis } from "ioredis";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { toPublicError } from "@/server/errors";
 import { connectTestRedis } from "./support/redis";
-import { APP_URL, ISSUER, callback, createFakeIdp, signIn, startLogin, type FakeIdp } from "./support/fake-idp";
+import {
+  APP_URL,
+  ISSUER,
+  callback,
+  createFakeIdp,
+  leakForms,
+  signIn,
+  startLogin,
+  type FakeIdp,
+} from "./support/fake-idp";
 
 let redis: Redis;
 let idp: FakeIdp;
@@ -35,7 +44,11 @@ afterAll(() => redis.disconnect());
 
 function expectCleanLogs(...secrets: string[]) {
   const text = logged.join("\n");
-  for (const s of [CANARY, "eyJ", "Bearer ", ...secrets]) expect(text).not.toContain(s);
+  // The canary JWT (and its header/payload; the signature is too short to match on) is the only token
+  // in the callback case; every token the fake IdP issued, in every leak form, covers the refresh case.
+  const jwtParts = JWT_CANARY.split(".").slice(0, 2);
+  const tokens = [JWT_CANARY, ...jwtParts, ...idp.issued.flatMap(leakForms)];
+  for (const s of [CANARY, "Bearer ", ...tokens, ...secrets]) expect(text).not.toContain(s);
 }
 
 describe.each([400, 500])("token endpoint %i with a canary body", (status) => {
@@ -51,6 +64,7 @@ describe.each([400, 500])("token endpoint %i with a canary body", (status) => {
 
   it("refresh: session ends or 503, nothing of the body, token or cookie in the logs", async () => {
     const { sid } = await signIn(idp);
+    expect(idp.issued.length).toBeGreaterThan(0);
     idp.clock.now += 900_000 - 30_000; // inside the refresh skew
     idp.token = () => ({ status, body });
     // A throw (5xx => 503) goes through the same boundary as in the app, which logs it.

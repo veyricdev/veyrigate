@@ -25,12 +25,16 @@ case "${1:-}" in
     docker run -d --name vg-b73c-redis-a --hostname vg-b73c-redis-a --network "$NET" \
       -p 127.0.0.1:16390:6379 "$IMAGE" redis-server --save '' --appendonly no \
       --replica-announce-ip vg-b73c-redis-a >/dev/null
+    # Fixed /etc/hosts entries for the replica and Sentinel: a STOPPED container drops out of Docker DNS
+    # and the lookup can stall for seconds. Sentinel stalled into TILT mode (run 53c), which freezes the
+    # failover; redis-server resolves synchronously on its main thread, so the replica reconnecting to
+    # the stopped master missed Sentinel's PINGs (~3.3 s > down-after 1 s) => `+sdown slave` =>
+    # `-failover-abort-no-good-slave` (run 67).
+    ip() { docker inspect -f "{{(index .NetworkSettings.Networks \"$NET\").IPAddress}}" "$1"; }
     docker run -d --name vg-b73c-redis-b --hostname vg-b73c-redis-b --network "$NET" \
+      --add-host "vg-b73c-redis-a:$(ip vg-b73c-redis-a)" \
       -p 127.0.0.1:16391:6379 "$IMAGE" redis-server --save '' --appendonly no \
       --replica-announce-ip vg-b73c-redis-b --replicaof vg-b73c-redis-a 6379 >/dev/null
-    # Fixed /etc/hosts entries: a STOPPED container drops out of Docker DNS and the lookup can stall
-    # long enough to put Sentinel into TILT mode (observed run 53c), which freezes the failover.
-    ip() { docker inspect -f "{{(index .NetworkSettings.Networks \"$NET\").IPAddress}}" "$1"; }
     HOSTS=(--add-host "vg-b73c-redis-a:$(ip vg-b73c-redis-a)" --add-host "vg-b73c-redis-b:$(ip vg-b73c-redis-b)")
     # Sentinel rewrites its config file: generate it inside the container (no host file).
     docker run -d --name vg-b73c-sentinel --hostname vg-b73c-sentinel --network "$NET" "${HOSTS[@]}" \

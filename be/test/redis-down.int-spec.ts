@@ -24,6 +24,7 @@ import {
   type InjectResponse,
 } from './full-app';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
+import { hasIssued, recordIssued } from './issued-tokens';
 import { seedConsent } from './oauth-fixtures';
 import { startRedisProxy, type RedisProxy } from './redis-proxy';
 
@@ -40,13 +41,14 @@ import { startRedisProxy, type RedisProxy } from './redis-proxy';
  */
 const SCOPE = 'openid offline_access api.read';
 const PASSWORD = 'redis-down-password-1'; // throwaway int DB user
-const TOKEN_LEAK = /eyJ|access_token|refresh_token|id_token/;
+const TOKEN_LEAK = /access_token|refresh_token|id_token/;
 
 type Auth = { clientId: string; secret: string };
 
 describe('Redis down ⇒ 503 temporarily_unavailable, fail-closed, recovers (run 53c)', () => {
   let proxy: RedisProxy;
   let full: FullApp;
+  let issued: string[] = [];
   let client: Auth;
   let userId = '';
   let email = '';
@@ -86,6 +88,7 @@ describe('Redis down ⇒ 503 temporarily_unavailable, fail-closed, recovers (run
     // (installed before boot: Nest binds the filter methods when it registers them)
     proxy = await startRedisProxy();
     full = await bootFullApp({ name: 'redis-down', env: { REDIS_URL: proxy.url } });
+    issued = recordIssued(full.app.get<KeyProvider>(KEY_PROVIDER));
     client = await seedFlowClient(full);
     email = `redis-down-${randomUUID()}@fixture.test`;
     const users = full.app.get(UserService);
@@ -177,7 +180,7 @@ describe('Redis down ⇒ 503 temporarily_unavailable, fail-closed, recovers (run
     if (!String(res.headers['cache-control']).includes('no-store')) problems.push('no no-store');
     if (String(res.headers['set-cookie'] ?? '').includes(SESSION_COOKIE))
       problems.push('session cookie');
-    if (TOKEN_LEAK.test(res.body)) problems.push('token in body');
+    if (TOKEN_LEAK.test(res.body) || hasIssued(res.body, issued)) problems.push('token in body');
     if (kind === 'json') {
       const body = res.json();
       if (body.error !== 'temporarily_unavailable') problems.push(`error ${String(body.error)}`);

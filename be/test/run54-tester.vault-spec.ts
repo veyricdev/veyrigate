@@ -19,6 +19,7 @@ import {
   type FullApp,
   type InjectResponse,
 } from './full-app';
+import { expectNoIssued, recordIssued } from './issued-tokens';
 import { seedConsent, seedOAuthUser } from './oauth-fixtures';
 
 /**
@@ -59,6 +60,7 @@ describe('run 54 tester: Vault 4xx vs outage classification through /token and /
   let token: string;
   let tokenFile: string;
   let full: FullApp;
+  let issued: string[] = [];
   let client: { clientId: string; secret: string };
   let sessionId: string;
   let fault: Fault = null;
@@ -126,6 +128,7 @@ describe('run 54 tester: Vault 4xx vs outage classification through /token and /
           },
         }),
     });
+    issued = recordIssued(full.app.get(KEY_PROVIDER));
     client = await seedFlowClient(full);
     const userId = await seedOAuthUser(full.conn, { tenantId: DEFAULT_TENANT_ID });
     await seedConsent(full.conn, {
@@ -188,14 +191,16 @@ describe('run 54 tester: Vault 4xx vs outage classification through /token and /
     expect(res.statusCode).toBe(500);
     expect(res.json()).toMatchObject({ error: 'server_error' });
     expect(res.headers['retry-after']).toBeUndefined();
-    expect(res.body).not.toMatch(/eyJ|access_token|refresh_token|"kty"/);
+    expect(res.body).not.toMatch(/access_token|refresh_token|"kty"/);
+    expectNoIssued(res.body, issued);
   }
   function expectOutage(res: InjectResponse) {
     expect(res.statusCode).toBe(503);
     expect(res.headers['retry-after']).toBe('5');
     expect(String(res.headers['cache-control'])).toContain('no-store');
     expect(JSON.parse(res.body)).toEqual(OUTAGE);
-    expect(res.body).not.toMatch(/eyJ|access_token|refresh_token|"kty"/);
+    expect(res.body).not.toMatch(/access_token|refresh_token|"kty"/);
+    expectNoIssued(res.body, issued);
   }
 
   it('V1: /token code + refresh grants — Vault sign 400/403 ⇒ 500, 429/502/503/network ⇒ 503; each time the same code and RT stay usable; 0 reuse', async () => {

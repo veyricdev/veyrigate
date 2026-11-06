@@ -46,6 +46,7 @@ import { SESSION_COOKIE, SessionCookie } from '../src/modules/sessions/session.c
 import { SessionService } from '../src/modules/sessions/session.service';
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
+import { expectNoIssued, recordIssued } from './issued-tokens';
 import { seedConsent, seedOAuthUser } from './oauth-fixtures';
 
 const MONGO_URI =
@@ -58,6 +59,7 @@ const REDIRECT = 'https://app.example.com/callback';
 const RESOURCE = 'https://api.example.com/';
 const SCOPE = 'openid offline_access api.read';
 const TENANT = 'tenant-B';
+let issued: string[] = [];
 const VERIFIER = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
 const CHALLENGE = deriveS256Challenge(VERIFIER);
 
@@ -240,6 +242,7 @@ describe('/token code grant re-check after the family insert (run 35 Task 3)', (
     redis = new IORedis(REDIS_URL, { maxRetriesPerRequest: 1 });
     keyDir = await mkdtemp(join(tmpdir(), 'vg-coderecheck-int-'));
     const provider = new LocalKeyProvider(keyDir);
+    issued = recordIssued(provider);
     await provider.init();
     const moduleRef = await Test.createTestingModule({
       imports: [
@@ -798,7 +801,7 @@ describe('/token code grant re-check after the family insert (run 35 Task 3)', (
     const noTokenIn = (body: string) => {
       expect(body).not.toContain('access_token');
       expect(body).not.toContain('refresh_token');
-      expect(body).not.toContain('eyJ');
+      expectNoIssued(body, issued);
     };
 
     it('DEBT-216 race: resource removed right after rotate => invalid_grant, family revoked, reason resource_not_allowed, retry is not reuse', async () => {
@@ -935,22 +938,27 @@ describe('/token code grant re-check after the family insert (run 35 Task 3)', (
       }
       const a = await firstRefresh();
       afterRotate((_cid, uid) => lockOnly(uid));
+      let n = issued.length;
       const refused = await refreshReq(a.clientId, a.rt);
       expect(refused.statusCode).toBe(400);
+      expect(issued.length).toBeGreaterThan(n); // signed, then dropped (DEBT-388)
 
       const b = await firstRefresh();
       jest
         .spyOn(app.get(UserTenantService), 'isActiveMember')
         .mockRejectedValueOnce(new Error('mongo down'));
+      n = issued.length;
       const failed = await refreshReq(b.clientId, b.rt);
       expect(failed.statusCode).toBe(500);
+      expect(issued.length).toBeGreaterThan(n);
       for (const r of [refused, failed]) {
-        expect(r.body).not.toMatch(/access_token|refresh_token|id_token|eyJ/);
+        expect(r.body).not.toMatch(/access_token|refresh_token|id_token/);
+        expectNoIssued(r.body, issued);
       }
       for (const uid of [a.userId, b.userId]) {
         expect((await refreshedAudits(uid)).filter((e) => e.result === 'success')).toHaveLength(0);
       }
-      expect(logs.join('\n')).not.toContain('eyJ');
+      expectNoIssued(logs.join('\n'), issued);
     });
 
     // DEBT-388: signing happens before rotate now; the pin is "no token returned" (was "not signed").
@@ -958,9 +966,12 @@ describe('/token code grant re-check after the family insert (run 35 Task 3)', (
       const { clientId, userId, rt } = await firstRefresh();
       afterRotate((_cid, uid) => lockOnly(uid));
       jest.spyOn(refresh, 'revokeFamily').mockRejectedValueOnce(new Error('mongo down'));
+      const n = issued.length;
       const res = await refreshReq(clientId, rt);
       expect(res.statusCode).toBe(500);
-      expect(res.body).not.toMatch(/access_token|refresh_token|eyJ/);
+      expect(issued.length).toBeGreaterThan(n); // signed, then dropped (DEBT-388)
+      expect(res.body).not.toMatch(/access_token|refresh_token/);
+      expectNoIssued(res.body, issued);
       const audits = await refreshedAudits(userId);
       expect(audits).toHaveLength(1);
       expect(audits[0]).toMatchObject({ result: 'failure', reason: 'user_locked' });

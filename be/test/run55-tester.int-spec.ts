@@ -7,6 +7,7 @@ import { sha256 } from '../src/common/crypto/crypto.util';
 import { ClientCredentialService } from '../src/modules/clients/client-credential.service';
 import { ClientService } from '../src/modules/clients/client.service';
 import { DEFAULT_TENANT_ID } from '../src/modules/identity/tenant.service';
+import { KEY_PROVIDER } from '../src/modules/keys/key-provider';
 import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
 import { ResourceService } from '../src/modules/resources/resource.service';
 import { SESSION_COOKIE } from '../src/modules/sessions/session.cookie';
@@ -24,6 +25,7 @@ import {
   type InjectResponse,
 } from './full-app';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
+import { expectNoIssued, recordIssued } from './issued-tokens';
 import { seedConsent, seedOAuthUser } from './oauth-fixtures';
 
 /**
@@ -50,6 +52,7 @@ type Tokens = { access_token: string; refresh_token: string };
 
 describe('run 55 tester: OAuth sweep risk tests (DEBT-123/130/177/216) over real HTTP', () => {
   let full: FullApp;
+  let issued: string[] = [];
   let redis: IORedis;
   let rs: Auth; // resource server allowed to introspect `api` + `admin` tokens
   let clientModel: Model<Record<string, unknown>>;
@@ -70,6 +73,7 @@ describe('run 55 tester: OAuth sweep risk tests (DEBT-123/130/177/216) over real
         },
       }),
     });
+    issued = recordIssued(full.app.get(KEY_PROVIDER));
     redis = new IORedis(process.env.TEST_REDIS_URL ?? 'redis://localhost:6479', {
       maxRetriesPerRequest: 1,
     });
@@ -260,7 +264,8 @@ describe('run 55 tester: OAuth sweep risk tests (DEBT-123/130/177/216) over real
       error: 'invalid_grant',
       error_description: 'The provided grant is invalid, expired, or revoked.',
     });
-    expect(res.body).not.toMatch(/access_token|refresh_token|eyJ/);
+    expect(res.body).not.toMatch(/access_token|refresh_token/);
+    expectNoIssued(res.body, issued);
   }
 
   async function superAdmin(): Promise<string> {

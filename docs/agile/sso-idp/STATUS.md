@@ -2,9 +2,9 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: — (run 66 vừa đóng). Câu hỏi cho người dùng: 610 DB `vg-int-*` mồ côi đã biến mất giữa run 64–65 (bạn có chạy `drop-int-orphans.mjs --yes`?); xoá 4 DB `vg-int-vault-v7-*` cũ?; Q62.1 (Dependabot, DEBT-466), Q62.2 (Node 22.23.4 máy dev, DEBT-465), giữ/xoá image node cũ + smoke cũ. Chờ người dùng: **Q58.1/DEBT-214**, A6.3b (DEBT-149/142), DEBT-344, DEBT-405, DEBT-415.
+- **Run hiện tại**: — (run 67 vừa đóng). Câu hỏi cho người dùng: 610 DB `vg-int-*` mồ côi đã biến mất giữa run 64–65 (bạn có chạy `drop-int-orphans.mjs --yes`?); xoá 4 DB `vg-int-vault-v7-*` cũ?; Q62.1 (Dependabot, DEBT-466), Q62.2 (Node 22.23.4 máy dev, DEBT-465), giữ/xoá image node cũ + smoke cũ. Chờ người dùng: **Q58.1/DEBT-214**, A6.3b (DEBT-149/142), DEBT-344, DEBT-405, DEBT-415.
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `66-happy-dom` ✅ 2/2 — happy-dom 21.0.4, gỡ 2 ignore audit (`ignoreGhsas: []`); audit high exit 0, fe-admin 1533, fe-sso-test 269. Xem `runs/66-happy-dom/summary.md`. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev `sso-idp` (index audit run 57).
+- **Run vừa đóng**: `67-leak-sentinel` ✅ 3/3 — sentinel env `--add-host` cho replica (failover ổn định), so token đã phát hành thay `eyJ` ở 7 spec BE + `log-canary` FE; int 1420, be 630, vault 31, fe-admin 1533. Xem `runs/67-leak-sentinel/summary.md`. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev `sso-idp` (index audit run 57).
 - **Việc tiếp theo**: M7 còn X3 (chờ Q8), X6 release checklist; lane ADMIN còn A6.3b. Debt 🟡 BE mở: xem `backlog.md` (DEBT-119…256, 321, 334, 344, 389, 392).
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
@@ -27,6 +27,7 @@
 | [64](runs/64-test-infra-tail/summary.md) | M7 | Đuôi test-infra: config vault/sentinel, guard `TEST_MONGO_URI` (DEBT-470/471/473/474/476) | ✅ be 630 + int 1420 (+0 DB) | `3ee0085` |
 | [65](runs/65-test-infra-tail2/summary.md) | M7 | Đuôi test-infra 2: gỡ `--forceExit` vault/sentinel, DB riêng khi override, so token phát hành (DEBT-475/203/453) | ✅ be 630 + int 1420 + fe-admin 1533 + vault 31 | `654b39a` |
 | [66](runs/66-happy-dom/summary.md) | M7 | Bump happy-dom 21.0.4 + gỡ ignore audit chết (DEBT-369/371/226) | ✅ fe-admin 1533 + fe-sso-test 269 + audit 0 | `eb75eed` |
+| [67](runs/67-leak-sentinel/summary.md) | M7 | Sentinel env failover + sweep `eyJ` (DEBT-478/477) | ✅ be 630 + int 1420 + vault 31 + fe-admin 1533 + sentinel 3/3 | — |
 
 ## Chặn / cần người quyết định
 
