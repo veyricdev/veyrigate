@@ -2,11 +2,11 @@
 #   docker build -f fe-admin/Dockerfile -t <tag> .
 # Ignore rules: fe-admin/Dockerfile.dockerignore (allowlist). No secret is needed to build and none
 # goes into a layer: configuration is the runtime env only (see docs runbook-deploy.md section 7).
-# Base pinned by index digest; refresh with `docker buildx imagetools inspect node:<version>-bookworm-slim`
-# (release >= 14 days old, same version as .nvmrc / engines).
-ARG NODE_IMAGE=node:22.23.4-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da
-
-FROM ${NODE_IMAGE} AS build
+# Base pinned by index digest on both FROM lines (literal: Dependabot does not resolve ARG in FROM),
+# same as be/Dockerfile. Dependabot (.github/dependabot.yml, group node-image) proposes the bump after
+# 14 days; otherwise refresh by hand with `docker buildx imagetools inspect node:<version>-bookworm-slim`.
+# Either way change both FROM lines + .nvmrc / .node-version / engines in the same PR.
+FROM node:22.23.4-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da AS build
 # DEBT-398: fail closed if the build context holds anything secret-looking (an ignore rule was
 # lost). First step, on a read-only bind mount of the context: nothing reaches a layer or the cache.
 # Names only (never contents); src/modules/keys, src/routes/keys are code, so no bare `*/keys/*`.
@@ -29,7 +29,7 @@ RUN pnpm --filter @sso-idp/fe-admin deploy --prod /deploy \
  && cp -a /deploy/package.json /deploy/node_modules /out/ \
  && cp -a fe-admin/dist fe-admin/serve.mjs /out/
 
-FROM ${NODE_IMAGE} AS runtime
+FROM node:22.23.4-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da AS runtime
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=3000
 WORKDIR /app
 # Files owned by root: the runtime user cannot change the app.

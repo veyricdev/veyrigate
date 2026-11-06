@@ -1,0 +1,41 @@
+# Dependabot (run 72, DEBT-466, plan §12). Version updates wait 14 days (cooldown, same rule as manual
+# pins); cooldown never applies to security updates. Limits and manual steps: runbook-deploy §7.
+# - docker: Dependabot has NO security updates for this ecosystem ⇒ an urgent Node/Debian CVE is a manual
+#   bump (security exception). Both Dockerfiles use literal FROM lines (ARG in FROM is not resolved).
+# - npm: pnpm 12 writes pnpm-lock.yaml as 2 YAML documents ⇒ the dependency graph does not see the
+#   packages ⇒ no Dependabot alert / security update for npm (version updates still run, DEBT-500). The
+#   security gate stays CI `pnpm audit --audit-level high` (fail-closed) + manual security exception.
+# - github-actions: security updates work and are not delayed by the cooldown.
+# - A PR that bumps the `node` image must also change .nvmrc / .node-version / engines (by hand, DEBT-502).
+# - Alerts / security updates are enabled in the repository Settings (not in this file).
+version: 2
+updates:
+  - package-ecosystem: npm # pnpm 12 workspace, root pnpm-lock.yaml
+    directory: /
+    schedule: { interval: weekly }
+    cooldown: { default-days: 14 }
+    groups:
+      npm-minor-patch:
+        applies-to: version-updates
+        patterns: ['*']
+        update-types: [minor, patch]
+  - package-ecosystem: docker
+    directories: [/be, /fe-admin]
+    schedule: { interval: weekly }
+    cooldown: { default-days: 14 }
+    ignore:
+      - dependency-name: node
+        update-types: ['version-update:semver-major'] # a Node major is a deliberate migration
+    groups:
+      node-image: # be + fe-admin in one PR: both images always share the digest
+        applies-to: version-updates
+        patterns: [node]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    cooldown: { default-days: 14 }
+    groups:
+      actions-minor-patch:
+        applies-to: version-updates
+        patterns: ['*']
+        update-types: [minor, patch]

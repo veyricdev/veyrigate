@@ -27,9 +27,19 @@
 #   non-root `user:` (the official entrypoints only chown / setcap / gosu / su-exec when started as
 #   root). UIDs below are those of the official images (redis: 999:999; hashicorp/vault alpine:
 #   vault = 100, group vault = 1000) — confirm with `docker image inspect` / the image Dockerfile before
-#   use. Host secret files and bind mounts must be readable by that uid/gid (compose `secrets:` without
-#   Swarm are bind mounts that keep the host owner/mode). THIS EXAMPLE HAS NOT BEEN STARTED: only
-#   `docker compose config` was run (DEBT-405 asks for one trial run on a scratch network).
+#   use (on a containerd image store `docker image inspect` of an index digest shows an empty config:
+#   `docker create` + `docker inspect` the container, or `docker run --rm --entrypoint id <image>`).
+# - Smoke-tested in run 72 with equivalent `docker run` flags (never `compose up`), results:
+#   runbook-deploy §10. Still EXAMPLE ONLY.
+# - Host secret files: compose `secrets:` without Swarm (and the approle bind mount) are bind mounts that
+#   keep the host owner/mode, so the container uid must be able to read them:
+#     chmod 0700 secrets
+#     chown 999:999 secrets/redis_auth.conf secrets/redis_password secrets/sentinel_password
+#     chmod 0400    secrets/redis_auth.conf secrets/redis_password secrets/sentinel_password
+#     chown 100:1000 secrets/approle secrets/approle/role_id secrets/approle/secret_id
+#     chmod 0500     secrets/approle   # bind-mounted directory: uid 100 must enter it
+#     chmod 0400     secrets/approle/role_id secrets/approle/secret_id   # NOT 0440: gid 1000 = the app
+#   (Docker Desktop shows such bind mounts as 0777 root, so check this on the Linux host itself.)
 
 x-redis-image: &redis-image redis:7.4.10-bookworm@sha256:e9b2e45ecd47fbb69b877cf8d045d5cccaaaed52524b6e098b4abe8212994f73
 x-hardening: &hardening
@@ -70,9 +80,8 @@ services:
     image: hashicorp/vault:2.1.2@sha256:c2f666266f383d2cf424d86b8bb8ce7d065562173ffec2b476d762943608bb55
     user: '100:1000' # vault:vault in the official image; group 1000 = the app's group (token sink 0440)
     command: [vault, agent, -config=/vault/config/agent.hcl]
-    environment:
-      SKIP_SETCAP: 'true' # no setcap on the read-only rootfs (agent does not need mlock ⇒ no IPC_LOCK)
-      SKIP_CHOWN: 'true'
+    # Non-root ⇒ the official entrypoint skips chown / setcap / su-exec (SKIP_SETCAP / SKIP_CHOWN would be
+    # ignored, run 72); the agent does not mlock ⇒ no IPC_LOCK.
     volumes:
       - ./vault-agent.hcl:/vault/config/agent.hcl:ro
       - ./secrets/approle:/vault/approle:ro # role_id / secret_id files (NOT committed)
@@ -90,6 +99,10 @@ services:
     hostname: redis-master
     # /run/secrets/redis_auth.conf: `requirepass <pw>` + `masterauth <pw>` (same password as the app's
     # REDIS_PASSWORD). The other settings are not secret and stay visible here.
+    # After a failover Redis logs `CONFIG REWRITE failed: Read-only file system` (intended: rootfs and
+    # config are read-only). The new role lives in memory only: a restarted node comes back with its
+    # command-line role and Sentinel reconfigures it; meanwhile `min-replicas-to-write 1` makes a lone
+    # ex-master answer NOREPLICAS (no divergent writes).
     command:
       - redis-server
       - /run/secrets/redis_auth.conf

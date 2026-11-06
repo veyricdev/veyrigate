@@ -246,11 +246,25 @@ Image có `HEALTHCHECK` (30 s, timeout 3 s, start 15 s, 3 lần).
 **Dừng**: `docker stop` gửi SIGTERM ⇒ srvx đóng graceful tối đa 5 s (`SERVER_SHUTDOWN_TIMEOUT`) rồi
 thoát mã 0. Để `stop -t` ≥ 10 s.
 
-**Cập nhật base image** (`ARG NODE_IMAGE` trong `fe-admin/Dockerfile`, ghim theo digest):
-1. Chọn bản Node phát hành ≥ 14 ngày, trùng `.nvmrc` + `engines` (đổi cả ba cùng lúc, DEBT-379).
+**Cập nhật base image** (2 dòng `FROM node:<version>-bookworm-slim@sha256:<digest> AS build|runtime` literal
+trong `fe-admin/Dockerfile` và `be/Dockerfile`, ghim theo digest — không dùng `ARG` trong `FROM` vì Dependabot
+không đọc, dependabot-core#2057):
+1. Chọn bản Node phát hành ≥ 14 ngày, trùng `.nvmrc` + `.node-version` + `engines` (đổi cùng lúc, DEBT-379).
 2. `docker buildx imagetools inspect node:<version>-bookworm-slim` ⇒ lấy `Digest` (index digest).
-3. Sửa `NODE_IMAGE=node:<version>-bookworm-slim@sha256:<digest>`; không dùng tag trần.
+3. Sửa cả 2 dòng `FROM` của **cả hai** Dockerfile; không dùng tag trần.
 4. Build + `docker-smoke.sh` xanh trước khi merge.
+
+**Dependabot** (`.github/dependabot.yml`, run 72, DEBT-466): hằng tuần, `cooldown.default-days: 14` (version
+update chờ 14 ngày như quy tắc ghim tay), nhóm minor/patch cho npm và github-actions, nhóm `node-image` (be +
+fe-admin một PR), bỏ qua Node major. Giới hạn:
+- `docker`: Dependabot **không có security update** ⇒ CVE Node/Debian khẩn = bump tay theo ngoại lệ bảo mật.
+- `npm`: pnpm 12 ghi `pnpm-lock.yaml` thành 2 YAML document ⇒ dependency graph không thấy phụ thuộc ⇒ **không
+  có alert/security update npm** (version update vẫn chạy, DEBT-500). Chặn bảo mật = CI `pnpm audit
+  --audit-level high` fail-closed + ngoại lệ tay (tiền lệ zod run 51).
+- `github-actions`: security update chạy được, không bị cooldown.
+- PR đổi tag `node` **phải sửa tay cùng PR** `.nvmrc`/`.node-version`/`engines` (Dependabot không làm, DEBT-502).
+- Bật "Dependabot alerts / security updates" trong Settings repo là việc người dùng khi push; hiệu lực kiểm ở
+  Insights → Dependency graph → Dependabot.
 
 ## 8. Vault Transit KeyProvider (production, run 53)
 
@@ -381,8 +395,8 @@ qua biến môi trường hay `docker run -e`. App phải khởi động **sau**
 Redis: `QUIT` chỉ khi đang kết nối, tối đa 1 s, rồi luôn `disconnect()` ⇒ Redis **đang chết** vẫn thoát 0
 trong vài giây (run 53c, DEBT-397; smoke check 8).
 
-**Cập nhật base image**: như §7 (cùng `NODE_IMAGE` digest với `fe-admin/Dockerfile`, đổi cả hai + `.nvmrc`
-+ `engines` cùng lúc, bản ≥ 14 ngày, DEBT-379). Image phụ trợ của smoke (Mongo/Redis/Vault) ghim digest
+**Cập nhật base image**: như §7 (2 dòng `FROM` literal cùng digest với `fe-admin/Dockerfile`, đổi cả hai +
+`.nvmrc` + `.node-version` + `engines` cùng lúc, bản ≥ 14 ngày, DEBT-379; Dependabot nhóm `node-image`). Image phụ trợ của smoke (Mongo/Redis/Vault) ghim digest
 trong `be/scripts/docker-smoke.sh`.
 
 ## 10. Redis Sentinel (production, run 53c)
@@ -390,8 +404,32 @@ trong `be/scripts/docker-smoke.sh`.
 Plan §6.2: production chạy **Redis Sentinel** (self-host, Q5). **Không hỗ trợ Redis Cluster** (Lua/MULTI
 nhiều key khác slot — DEBT-013/073 đóng dạng N/A). Mẫu topology: `ops/compose/prod.example.yml` (1 master
 + 2 replica + 3 sentinel quorum 2, `noeviction`, `min-replicas-to-write 1`, Vault Agent sidecar, không
-publish `/metrics`, mọi service `user:` không root) — **chỉ là file mẫu, không chạy nguyên trạng**; mới qua
-`docker compose config`, **chưa khởi động thử** (DEBT-405).
+publish `/metrics`, mọi service `user:` không root) — **chỉ là file mẫu, không chạy nguyên trạng**.
+
+**Đã smoke run 72 (DEBT-405)** bằng `docker run` cùng cờ (`--read-only --cap-drop ALL --security-opt
+no-new-privileges:true --user …`, tmpfs, secret bind `:ro`, network `--internal`), không `compose up`: PID 1
+của redis master/2 replica/3 sentinel (999:999) và vault-agent (100:1000) đều Uid ≠ 0, `CapEff 0`,
+`NoNewPrivs 1`; `connected_slaves:2`, replica ghi ⇒ `READONLY`; `SENTINEL ckquorum idp` 3 sentinel; stop
+master ⇒ failover ~6 s, master cũ quay lại làm replica; vault-agent ghi sink `0440 100:1000`, app uid 1000
+đọc được, uid khác bị từ chối; Vault không tới được ⇒ không token ⇒ `be` không khởi động (fail-closed).
+
+Lưu ý khi deploy:
+- **Quyền file host** (compose `secrets:` không Swarm và bind mount giữ owner/mode host; Docker Desktop hiện
+  `0777 root` nên phải kiểm trên host Linux): `chmod 0700 secrets`; `chown 999:999` + `chmod 0400`
+  `secrets/redis_auth.conf`, `secrets/redis_password`, `secrets/sentinel_password`; `chown 100:1000` +
+  `chmod 0400` `secrets/approle/role_id`, `secrets/approle/secret_id` (**không** 0440: gid 1000 là nhóm app);
+  **thư mục** `secrets/approle` (bind mount `/vault/approle`) `chown 100:1000` + `chmod 0500` — tạo dưới
+  `umask 077` (`0700 <operator>`) ⇒ uid 100 không vào được ⇒ agent không có token ⇒ `be` không khởi động.
+- **`CONFIG REWRITE failed: Read-only file system`** sau failover là chủ ý (rootfs + config ro): vai trò mới
+  chỉ ở RAM, node khởi động lại về vai trò command line rồi Sentinel cấu hình lại; master cũ đứng một mình
+  trả `NOREPLICAS` (`min-replicas-to-write 1`), không ghi lệch.
+- **Kiểm uid image**: trên containerd image store `docker image inspect <repo>@sha256:<index>` trả config
+  rỗng ⇒ dùng `docker create` + `docker inspect` container, hoặc `docker run --rm --entrypoint id <image>`.
+
+Lặp lại smoke (không script): bản sao `prod.example.yml` + secret giả ⇒ `docker compose config`; tạo network
+`--internal` tên riêng; `docker run` từng dịch vụ cùng cờ + `--network-alias` = hostname; kiểm
+`/proc/1/status` (Uid/CapEff/NoNewPrivs), `redis-cli INFO replication`, `SENTINEL ckquorum idp`; stop master
+⇒ `SENTINEL get-master-addr-by-name idp` đổi; dọn đúng tên container/volume/network (không prune).
 
 **Đánh đổi `min-replicas-to-write`**: `1` ⇒ không replica nào đồng bộ thì Redis trả `NOREPLICAS` và app trả
 **500 `server_error` không `Retry-After`** ở thao tác ghi (login, `/token`, logout) — fail-closed nhưng dừng
