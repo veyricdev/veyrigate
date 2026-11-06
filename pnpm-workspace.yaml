@@ -18,16 +18,7 @@ allowBuilds:
 # `pnpm audit` exceptions (B7.4, run 38). Every entry needs a reason and a re-review date; CI runs
 # `pnpm audit --audit-level high` fail-closed, so anything not listed here blocks the merge.
 auditConfig:
-  ignoreGhsas:
-    # braces <=3.0.3 (high, ReDoS) - no patched release yet. Dev-only (jest -> micromatch); the
-    # globs it parses are written by us in jest/CI config, never user input. Re-review by
-    # 2027-01-18 or as soon as a fix ships / jest drops it (DEBT-226).
-    - GHSA-vfj7-8cjw-p6xm
-    # happy-dom >=17 <=21.0.3 (high, import-alias host code execution) - dev-only (vitest env in
-    # fe-admin/fe-sso-test), tests render only our own components, no untrusted HTML/scripts. Fix
-    # 21.0.4 is 4 days old (2026-10-20). Bump to 21.0.4 and drop this entry on/after 2026-11-04
-    # (DEBT-369).
-    - GHSA-834v-8h66-3h79
+  ignoreGhsas: []
 
 # Release-age pins (run 41, fe-admin A1): transitive deps of @tanstack/react-start 1.168.60 resolved
 # to releases < 14 days old; pin to the newest release <= 2026-10-07 that still satisfies the
@@ -43,5 +34,5 @@ overrides:
   # Run 51 (tech-lead): GHSA-mrhx-c7xc-m3w5 (zod <4.6.6, high, memory DoS on oversized constrained
   # collections; fe-admin BFF validates /_serverFn input with it). Forces transitive copies
   # (@tanstack/*, @t3-oss/env-core, eslint-plugin-react-hooks) onto the fix. Security exception to the
-  # 14-day rule: 4.6.6 released 2026-10-11, 0 deps. Drop on the next zod bump (DEBT-369).
+  # 14-day rule: 4.6.6 released 2026-10-11, 0 deps. Drop on the next zod bump (DEBT-479).
   zod: 4.6.6

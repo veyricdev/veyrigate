@@ -2,9 +2,9 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: — (run 65 vừa đóng). Câu hỏi cho người dùng: 610 DB `vg-int-*` mồ côi đã biến mất giữa run 64–65 (bạn có chạy `drop-int-orphans.mjs --yes`?); xoá 4 DB `vg-int-vault-v7-*` cũ?; Q62.1 (Dependabot, DEBT-466), Q62.2 (Node 22.23.4 máy dev, DEBT-465), giữ/xoá image node cũ + smoke cũ. `TEST_MONGO_URI` (tên `vg-int-*`) ⇒ mỗi app một DB. DEBT-369/371 đã tới hạn (2026-11-04). Chờ người dùng: **Q58.1/DEBT-214**, A6.3b (DEBT-149/142), DEBT-344, DEBT-405, DEBT-415.
+- **Run hiện tại**: — (run 66 vừa đóng). Câu hỏi cho người dùng: 610 DB `vg-int-*` mồ côi đã biến mất giữa run 64–65 (bạn có chạy `drop-int-orphans.mjs --yes`?); xoá 4 DB `vg-int-vault-v7-*` cũ?; Q62.1 (Dependabot, DEBT-466), Q62.2 (Node 22.23.4 máy dev, DEBT-465), giữ/xoá image node cũ + smoke cũ. Chờ người dùng: **Q58.1/DEBT-214**, A6.3b (DEBT-149/142), DEBT-344, DEBT-405, DEBT-415.
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `65-test-infra-tail2` ✅ 3/3 — gỡ `--forceExit` vault/sentinel (dọn khi `compile()` ném), `withDbSuffix` cho override, so token đã phát hành thay `eyJ`; int 1420, be 630, fe-admin 1533, vault 31 ×2. Xem `runs/65-test-infra-tail2/summary.md`. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev `sso-idp` (index audit run 57).
+- **Run vừa đóng**: `66-happy-dom` ✅ 2/2 — happy-dom 21.0.4, gỡ 2 ignore audit (`ignoreGhsas: []`); audit high exit 0, fe-admin 1533, fe-sso-test 269. Xem `runs/66-happy-dom/summary.md`. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev `sso-idp` (index audit run 57).
 - **Việc tiếp theo**: M7 còn X3 (chờ Q8), X6 release checklist; lane ADMIN còn A6.3b. Debt 🟡 BE mở: xem `backlog.md` (DEBT-119…256, 321, 334, 344, 389, 392).
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
@@ -15,13 +15,7 @@
 |---|---|---|---|---|
 | [01](runs/01-R1-R2/summary.md)–[40](runs/40-B7.5/summary.md) | M0–M7 | BE: R1–R5, B1–B7.5, T1–T7, X1/X2/X4/X5 (xem từng `runs/NN/summary.md`) | ✅ BE 1604 + FE 269 + E2E 21 | `8b75f24`…`27b1a69` |
 | [41](runs/41-A1-A3/summary.md)–[50](runs/50-A6.6/summary.md) | M5 | fe-admin A1–A6.6 (BFF, API layer, clients/resources/users/audit/keys/dashboard) | ✅ fe-admin 1284 + E2E 34 | `9851442`…`b9d8675` |
-| [51](runs/51-A7/summary.md) | M7 | A7 Hardening FE (+ DEBT-360/269/366, zod 4.6.6, race đăng xuất) | ✅ fe-admin 1349 + E2E 35 | `ab83dfd` |
-| [52](runs/52-A9/summary.md) | M7 | A9 Dockerfile fe-admin (+ DEBT-370/374/368/362/264) | ✅ fe-admin 1415 + E2E 35 + smoke 13 | `ddf8a8f` |
-| [53](runs/53-B7.3/summary.md) | M7 | B7.3 phần 1 Vault Transit KeyProvider (+ DEBT-071/159) | ✅ be 475 + int 1221 + vault 22 + E2E 35 | `4846002` |
-| [53b](runs/53b-B7.3/summary.md) | M7 | B7.3 phần 2 `be/Dockerfile` (+ DEBT-384/385) | ✅ smoke BE 11 + fe-admin 14 | `d8de15f` |
-| [53c](runs/53c-B7.3/summary.md) | M7 | B7.3 phần 3 Redis Sentinel + 503 (+ DEBT-394/395/397/403–407) | ✅ be 519 + int 1245 + E2E 35 | `fc06673` |
-| [54](runs/54-DEBT388/summary.md) | M7 | DEBT-388 ký trước commit, DEBT-401 503 Vault, DEBT-398 guard build | ✅ be 558 + int 1267 + vault 26 + E2E 35 | `df50826` |
-| [55](runs/55-oauth-sweep/summary.md) | M7 | Sweep OAuth DEBT-123/130/177/216/410 | ✅ be 587 + int 1306 + vault 31 + E2E 35 | `c3ed4f0` |
+| [51](runs/51-A7/summary.md)–[55](runs/55-oauth-sweep/summary.md) | M7 | A7 hardening FE, A9 Dockerfile fe-admin, B7.3 Vault Transit + `be/Dockerfile` + Redis Sentinel, DEBT-388 ký trước commit, sweep OAuth (xem từng `runs/NN/summary.md`) | ✅ be 587 + int 1306 + vault 31 + E2E 35 | `ab83dfd`…`c3ed4f0` |
 | [56](runs/56-admin-race/summary.md) | M7 | Race admin/disable client DEBT-147/153/156/166/209 (+418/419/421/423) | ✅ be 589 + int 1347 + E2E 35 (L6 → run 57) | `b634def` |
 | [57](runs/57-audit-order/summary.md) | M7 | Thứ tự audit lock/unlock + sort/cursor audit (DEBT-420/422/427) | ✅ be 594 + int 1366 + E2E 36 | `2314f54` |
 | [58](runs/58-keys-consent-sweep/summary.md) | M7 | Sweep 🟡 BE: DEBT-151/158/160/238/389 | ✅ be 614 + int 1387 + E2E 36 | `f7ac551` |
@@ -32,6 +26,7 @@
 | [63](runs/63-int-setup-sweep/summary.md) | M7 | Mẫu setup/teardown int + lọc `test:int` (DEBT-452/454/456/461–463) | ✅ be 630 + int 1420 (+0 DB) | `993c9ea` |
 | [64](runs/64-test-infra-tail/summary.md) | M7 | Đuôi test-infra: config vault/sentinel, guard `TEST_MONGO_URI` (DEBT-470/471/473/474/476) | ✅ be 630 + int 1420 (+0 DB) | `3ee0085` |
 | [65](runs/65-test-infra-tail2/summary.md) | M7 | Đuôi test-infra 2: gỡ `--forceExit` vault/sentinel, DB riêng khi override, so token phát hành (DEBT-475/203/453) | ✅ be 630 + int 1420 + fe-admin 1533 + vault 31 | `654b39a` |
+| [66](runs/66-happy-dom/summary.md) | M7 | Bump happy-dom 21.0.4 + gỡ ignore audit chết (DEBT-369/371/226) | ✅ fe-admin 1533 + fe-sso-test 269 + audit 0 | — |
 
 ## Chặn / cần người quyết định
 
