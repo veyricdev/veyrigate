@@ -1928,8 +1928,9 @@ describe('Admin API B6.3a (clients, secrets, resources) on real Mongo + Redis', 
       }
       // Informational: how often the matchedCount=0 branch was hit by the real race.
       console.info(`DEBT-161 race: ${conflicts}/15 disable requests got 409`);
-      // DEBT-448: 12.5 s under a 28-thread CPU load (default 20 s) => ~2x.
-    }, 25_000);
+      // DEBT-448: 12.5 s under a 28-thread CPU load (run 61); run 68: 2.1 s idle, 13.9 s under
+      // load => >= 3x the max under load (DEBT-455).
+    }, 45_000);
   });
   describe('run 56 Task 3 — secret issued while super_admin grants admin self-revokes (DEBT-166)', () => {
     const grant = async (id: string) =>

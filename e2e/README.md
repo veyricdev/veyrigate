@@ -8,8 +8,10 @@ leaking into the DOM, URL, or Web Storage.
 
 `playwright.config.ts` starts and health-gates two servers before the suite:
 
-- **BE (:4000)** — `pnpm -C be build && db:sync-indexes && db:seed-dev && start` (from `dist`, no
-  watch). Ready only when `GET http://127.0.0.1:4000/ready` returns 200 (Mongo + Redis up).
+- **BE (:4000)** — `pnpm -C be build && node be/test/e2e/assert-dist-clean.mjs && db:sync-indexes &&
+  db:seed-dev && seed:e2e-admin && start:e2e` (`start:e2e` = `ts-node test/e2e/e2e-main.ts`, no
+  watch). Ready only when `GET http://127.0.0.1:4000/ready` returns 200 (Mongo + Redis up), within
+  320 s: the chain takes ~69 s idle and ~104 s under a 28-thread CPU load (run 68, DEBT-464).
 - **FE (:5173)** — `pnpm -C fe-sso-test dev` (Vite, strictPort). Ready on `GET /`.
 - **fe-admin (:3000)** — `pnpm -C fe-admin dev` (admin BFF, strictPort), env from `feAdminEnv()`
   (sessions in Redis `/2` under `fea:*`). Ready on `GET /` (redirect to its login route).

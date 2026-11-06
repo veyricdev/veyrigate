@@ -175,8 +175,9 @@ describe('Consent index migration M3→M4 (DEBT-028)', () => {
     expect(
       nonId.some((i) => i.key.userId === 1 && i.key.clientId === 1 && !('resource' in i.key)),
     ).toBe(false);
-    // DEBT-448: 26.0 / 29.6 s in two runs under a 28-thread CPU load (default 20 s) => ~2x.
-  }, 60_000);
+    // DEBT-448: 26.0 / 29.6 s in two runs under a 28-thread CPU load (run 61); run 68: 2.5 s idle,
+    // 33.0 s under load => >= 3x the max under load (DEBT-455).
+  }, 100_000);
 
   it('run 57 (DEBT-422): syncAllIndexes drops the old audit {tenantId,timestamp,eventId} index', async () => {
     const audit = conn.models.AuditLog.collection;

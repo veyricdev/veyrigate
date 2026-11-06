@@ -45,7 +45,9 @@ export default defineConfig({
         "pnpm -C be build && node be/test/e2e/assert-dist-clean.mjs && pnpm -C be db:sync-indexes && pnpm -C be db:seed-dev && pnpm -C be seed:e2e-admin && pnpm -C be start:e2e",
       cwd: repoRoot,
       url: `http://127.0.0.1:${BE_PORT}/ready`,
-      timeout: 120_000,
+      // DEBT-464 (run 68): 68.5 s idle, 104 s under a 28-thread CPU load (build ~34-38 s,
+      // start:e2e ~41 s, seed:e2e-admin ~20 s) => >= 3x the max under load.
+      timeout: 320_000,
       reuseExistingServer: process.env.E2E_REUSE === "1",
       stdout: "pipe",
       stderr: "pipe",

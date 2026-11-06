@@ -279,8 +279,9 @@ describe('db:seed on a never-synced DB (DEBT-176)', () => {
     }
     console.info(`DEBT-176: ${bad.length}/10 rounds with a duplicated document`);
     expect(bad).toEqual([]);
-    // DEBT-448: 24-38 s idle, 328.7 s under a 28-thread CPU load (each round drops the DB) => ~2x.
-  }, 660_000);
+    // DEBT-448: 24-38 s idle, 328.7 s under a 28-thread CPU load (run 61; each round drops the DB);
+    // run 68: 40.1 s idle, 343.2 s under load => >= 3x the max under load (DEBT-455).
+  }, 1_050_000);
 
   it('data already duplicated (no index, 2 users with the same email) => throws before any write, 0 new documents', async () => {
     await a.dropDatabase();
