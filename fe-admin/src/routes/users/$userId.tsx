@@ -7,6 +7,7 @@ import { UserIdSchema } from "@/features/admin-api/inputs";
 import { AdminRequestError } from "@/features/admin-api/types";
 import { UserAccount, accountGate } from "@/features/users/user-account";
 import { UserConsents, UserFamilies } from "@/features/users/user-grants";
+import { UserRoles } from "@/features/users/user-roles";
 
 export const Route = createFileRoute("/users/$userId")({ component: UserPage });
 
@@ -67,6 +68,7 @@ function UserDetail({ userId }: { userId: string }) {
       {query.data !== undefined && (
         <>
           <UserAccount user={query.data} viewer={viewer} path={path} writable={!gone} />
+          <UserRoles user={query.data} viewer={viewer} path={path} writable={!gone} />
           <UserFamilies userId={userId} path={path} self={accountGate(viewer, query.data).self} writable={!gone} />
           <UserConsents userId={userId} path={path} writable={!gone} />
         </>

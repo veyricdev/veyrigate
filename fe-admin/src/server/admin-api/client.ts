@@ -8,6 +8,7 @@ import type {
   ListClientsParams,
   PageParams,
   RotateKeyParams,
+  SetUserRolesParams,
   UpdateResourceParams,
   UserListParams,
   UserPageParams,
@@ -355,6 +356,16 @@ export function createAdminApi(deps: AdminApiDeps) {
     lockUser: (ctx: AdminCallContext, userId: string) => userAction(ctx, userId, "lock"),
     /** Clears the lock and the failed-login counter; restores nothing. */
     unlockUser: (ctx: AdminCallContext, userId: string) => userAction(ctx, userId, "unlock"),
+    /** Replaces the admin roles of the membership (full target set; other roles kept; idempotent). */
+    setUserRoles(ctx: AdminCallContext, userId: string, roles: SetUserRolesParams["roles"]): Promise<AdminUser> {
+      return call(ctx, {
+        method: "PATCH",
+        route: "/admin/users/:id/roles",
+        path: `${userPath(userId)}/roles`,
+        body: { roles },
+        schema: AdminUserSchema,
+      });
+    },
     /** Ends every IdP session and refresh family of the user, in every tenant (`204`, idempotent). */
     revokeUserSessions(ctx: AdminCallContext, userId: string): Promise<void> {
       return call(ctx, {

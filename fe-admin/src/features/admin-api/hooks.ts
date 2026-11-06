@@ -14,6 +14,7 @@ import type {
   RevokeConsentParams,
   RevokeFamilyParams,
   RotateKeyParams,
+  SetUserRolesParams,
   UserListParams,
 } from "./inputs";
 import { adminKeys } from "./keys";
@@ -31,6 +32,7 @@ import {
   revokeUserConsent,
   revokeUserFamily,
   revokeUserSessions,
+  setUserRoles,
   unlockUser,
 } from "./users";
 
@@ -191,6 +193,7 @@ export const useUnlockUser = () => useUserWrite<string, AdminUser>(unlockUser);
 export const useRevokeUserSessions = () => useUserWrite<string, void>(revokeUserSessions);
 export const useRevokeUserFamily = () => useUserWrite<RevokeFamilyParams, void>(revokeUserFamily);
 export const useRevokeUserConsent = () => useUserWrite<RevokeConsentParams, void>(revokeUserConsent);
+export const useSetUserRoles = () => useUserWrite<SetUserRolesParams, AdminUser>(setUserRoles);
 
 /** One page of the tenant's audit events: shared by `useAuditEvents` and the dashboard's `useQueries`. */
 export const auditListQuery = (params: AuditListParams) =>

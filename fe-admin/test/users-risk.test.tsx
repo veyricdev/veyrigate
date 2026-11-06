@@ -41,6 +41,7 @@ vi.mock("@/features/admin-api/users", () => ({
   revokeUserSessions: vi.fn(),
   revokeUserFamily: vi.fn(),
   revokeUserConsent: vi.fn(),
+  setUserRoles: vi.fn(),
 }));
 
 const mocks = {

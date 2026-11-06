@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { adminCall } from "@/server/admin-api/instance";
-import { RevokeConsentInput, RevokeFamilyInput, UserIdSchema, UserListInput, UserPageInput } from "./inputs";
+import { RevokeConsentInput, RevokeFamilyInput, SetUserRolesInput, UserIdSchema, UserListInput, UserPageInput } from "./inputs";
 
 /**
  * Admin API server functions for users (run 47 A6.3): one fixed BE endpoint each, input validated
@@ -52,3 +52,12 @@ export const revokeUserFamily = createServerFn({ method: "POST" })
 export const revokeUserConsent = createServerFn({ method: "POST" })
   .inputValidator(RevokeConsentInput)
   .handler(({ data }) => adminCall((api, ctx) => api.revokeUserConsent(ctx, data.userId, data.consentId)));
+
+/**
+ * The full target set of admin roles (`tenant_admin`/`super_admin`; other roles are kept by the BE).
+ * Idempotent. `forbidden` (opaque): own roles, `super_admin` by a non super admin, or a super admin
+ * target by a non super admin; `conflict`: the tenant would lose its last active super admin.
+ */
+export const setUserRoles = createServerFn({ method: "POST" })
+  .inputValidator(SetUserRolesInput)
+  .handler(({ data }) => adminCall((api, ctx) => api.setUserRoles(ctx, data.userId, data.roles)));

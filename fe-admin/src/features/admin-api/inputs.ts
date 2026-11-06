@@ -125,6 +125,23 @@ export type RevokeFamilyParams = z.infer<typeof RevokeFamilyInput>;
 export const RevokeConsentInput = z.object({ userId: UserIdSchema, consentId: ConsentIdSchema });
 export type RevokeConsentParams = z.infer<typeof RevokeConsentInput>;
 
+export const ADMIN_ROLES = ["tenant_admin", "super_admin"] as const;
+
+/**
+ * `PATCH /admin/users/{id}/roles` (BE `SetUserRolesDto`): the FULL target set of admin roles (not a
+ * delta); the BE keeps every other role (DEBT-149). Unique, at most 2.
+ */
+export const SetUserRolesInput = z
+  .object({
+    userId: UserIdSchema,
+    roles: z
+      .array(z.enum(ADMIN_ROLES))
+      .max(2)
+      .refine((r) => new Set(r).size === r.length, "Duplicate role"),
+  })
+  .strict();
+export type SetUserRolesParams = z.infer<typeof SetUserRolesInput>;
+
 /** BE `AuditAction` (`audit-action.enum.ts`); `test/admin-schema-types.test.ts` fails `typecheck` on drift. */
 export const AUDIT_ACTIONS = [
   "AUTH_LOGIN_SUCCESS",

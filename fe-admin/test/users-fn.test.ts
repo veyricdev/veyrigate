@@ -40,7 +40,8 @@ type Fns = Record<
   | "unlockUser"
   | "revokeUserSessions"
   | "revokeUserFamily"
-  | "revokeUserConsent",
+  | "revokeUserConsent"
+  | "setUserRoles",
   Fn
 >;
 let fns: Fns;
@@ -325,5 +326,51 @@ describe("input validators (before the BE)", () => {
     beFetch.mockResolvedValue(new Response(null, { status: 204 }));
     await fns.revokeUserFamily({ data: { userId: "A".repeat(24), familyId: "F-".repeat(64) } });
     expect(call().url).toBe(`http://idp.test/admin/users/${"A".repeat(24)}/families/${"F-".repeat(64)}/revoke`);
+  });
+});
+
+describe("setUserRoles (run 70 A6.3b)", () => {
+  it("POST server fn => PATCH /admin/users/{id}/roles with {roles}, sent once, view allowlisted", async () => {
+    expect(fns.setUserRoles.method).toBe("POST");
+    for (const roles of [["tenant_admin"], ["tenant_admin", "super_admin"], []]) {
+      beFetch.mockReset();
+      beFetch.mockResolvedValue(json(200, { ...USER, roles: ["auditor", ...roles], passwordHash: "canary" }));
+      expect(await fns.setUserRoles({ data: { userId: ID, roles } })).toEqual({ ok: true, data: { ...USER, roles: ["auditor", ...roles] } });
+      expect(beFetch).toHaveBeenCalledTimes(1);
+      expect(`${call().method} ${call().url}`).toBe(`PATCH http://idp.test/admin/users/${ID}/roles`);
+      expect(JSON.parse(String(call().body))).toEqual({ roles });
+    }
+  });
+
+  it.each([
+    [403, { error: "forbidden" }, "forbidden"],
+    [403, { error: "step_up_required", max_age: 0 }, "step_up_required"],
+    [404, { error: "not_found" }, "not_found"],
+    [409, { error: "conflict", error_description: "last" }, "conflict"],
+    [400, { error: "invalid_request" }, "invalid_request"],
+  ] as const)("%i %j => %s, not uncertain", async (status, body, code) => {
+    beFetch.mockResolvedValueOnce(json(status, body));
+    expect(await fns.setUserRoles({ data: { userId: ID, roles: [] } })).toMatchObject({ ok: false, error: { code } });
+  });
+
+  it("5xx / off-schema 2xx => uncertain, sent once", async () => {
+    for (const res of [json(502, {}), json(200, { id: ID })]) {
+      beFetch.mockReset();
+      beFetch.mockResolvedValue(res);
+      expect(await fns.setUserRoles({ data: { userId: ID, roles: [] } })).toMatchObject({ ok: false, error: { code: "unavailable", uncertain: true } });
+      expect(beFetch).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it.each([
+    ["unknown role", { userId: ID, roles: ["owner"] }],
+    ["duplicate", { userId: ID, roles: ["tenant_admin", "tenant_admin"] }],
+    ["more than 2", { userId: ID, roles: ["tenant_admin", "super_admin", "tenant_admin"] }],
+    ["extra field", { userId: ID, roles: [], tenantId: "t2" }],
+    ["bad user id", { userId: "../x", roles: [] }],
+    ["roles missing", { userId: ID }],
+  ])("%s refused before the BE", async (_, data) => {
+    await expect(fns.setUserRoles({ data })).rejects.toThrow();
+    expect(beFetch).not.toHaveBeenCalled();
   });
 });
