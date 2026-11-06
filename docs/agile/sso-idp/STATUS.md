@@ -27,7 +27,7 @@
 | [64](runs/64-test-infra-tail/summary.md) | M7 | Đuôi test-infra: config vault/sentinel, guard `TEST_MONGO_URI` (DEBT-470/471/473/474/476) | ✅ be 630 + int 1420 (+0 DB) | `3ee0085` |
 | [65](runs/65-test-infra-tail2/summary.md) | M7 | Đuôi test-infra 2: gỡ `--forceExit` vault/sentinel, DB riêng khi override, so token phát hành (DEBT-475/203/453) | ✅ be 630 + int 1420 + fe-admin 1533 + vault 31 | `654b39a` |
 | [66](runs/66-happy-dom/summary.md) | M7 | Bump happy-dom 21.0.4 + gỡ ignore audit chết (DEBT-369/371/226) | ✅ fe-admin 1533 + fe-sso-test 269 + audit 0 | `eb75eed` |
-| [67](runs/67-leak-sentinel/summary.md) | M7 | Sentinel env failover + sweep `eyJ` (DEBT-478/477) | ✅ be 630 + int 1420 + vault 31 + fe-admin 1533 + sentinel 3/3 | — |
+| [67](runs/67-leak-sentinel/summary.md) | M7 | Sentinel env failover + sweep `eyJ` (DEBT-478/477) | ✅ be 630 + int 1420 + vault 31 + fe-admin 1533 + sentinel 3/3 | `56cac7e` |
 
 ## Chặn / cần người quyết định
 

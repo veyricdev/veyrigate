@@ -2,5 +2,6 @@
 
 - **Phạm vi**: T1 DEBT-478 — `be/scripts/sentinel-test-env.sh`: `ip()` định nghĩa một lần, replica `vg-b73c-redis-b` có `--add-host vg-b73c-redis-a:<ip>` (gốc: reconnect master theo tên qua Docker DNS treo ~3,3 s > `down-after-milliseconds 1000` ⇒ `no-good-slave`). T2 DEBT-477 BE — `hasIssued` (`issued-tokens.ts`); 7 spec so token đã phát hành thay `eyJ`, giữ kiểm tên trường; `run55-tester.vault-spec` (không ký gì) dùng regex hình JWT 3 phần; ca DEBT-388 kiểm `issued.length` tăng. T3 DEBT-477 FE — `log-canary.test.ts` so `JWT_CANARY` + header/payload + `idp.issued.flatMap(leakForms)`.
 - **Verify**: sentinel xanh 7/7 (dev) + 3/3 (tester), ghi sau failover 2,4–3,8 s, 0 `no-good-slave`; bỏ add-host ⇒ đỏ 4/4 + 3/3; mutation rò token (raw/chữ ký/base64/base64url) ⇒ RED ở mọi điểm thử, cursor giả `eyJ0IjoxfQ` ⇒ XANH (BE + FE); int 1420/1420 (`vg-int-*` 4 → 4), be 630, vault 31, fe-admin 1533, tsc/lint 0; code production = HEAD.
+- **Commit**: `56cac7e`.
 - **Vòng lặp**: tech-lead=1, BE dev=1, FE dev=1 (song song), senior=1 (PASS, 0 🟡), tester=1 (PASS).
 - **Debt**: đóng DEBT-477/478; không mở mới. Ghi chú tester: regex hình JWT ở `run55-tester.vault-spec` không bắt dạng base64url của JWT (HEAD cũng không) — theo thiết kế fold.
