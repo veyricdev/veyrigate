@@ -27,7 +27,7 @@
 | [72](runs/72-ops-hardening/summary.md) | M7 | Compose prod mẫu non-root + Dependabot (DEBT-405/466/503/504) | ✅ smoke BE 11 + fe-admin 16 + be 664 | `a24a305` |
 | [73](runs/73-X3/summary.md) | M7 | X3 ma trận cookie + `__Host-` (DEBT-008/510) | ✅ X3 39 + E2E 37 + int 1467 + be 675 | `80a3fda` |
 | [74](runs/74-sweep-be1/summary.md) | M7 | Sweep 🟡 BE bảo mật đợt 1 (DEBT-487/488/489/505/514) | ✅ int 1477 + E2E 37 + X3 42 + be 675 | `321e956` |
-| [75](runs/75-resource-scopes/summary.md) | M7 | Thực thi `Resource.scopes` + thu hẹp scope khi refresh (DEBT-321/512/516) | ✅ int 1497 + fe-admin 1567 + E2E 37 + X3 42 + be 679 | HASH75 |
+| [75](runs/75-resource-scopes/summary.md) | M7 | Thực thi `Resource.scopes` + thu hẹp scope khi refresh (DEBT-321/512/516) | ✅ int 1497 + fe-admin 1567 + E2E 37 + X3 42 + be 679 | `8242c8e` |
 
 ## Chặn / cần người quyết định
 
