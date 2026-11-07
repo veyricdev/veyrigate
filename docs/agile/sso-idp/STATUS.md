@@ -28,7 +28,7 @@
 | [73](runs/73-X3/summary.md) | M7 | X3 ma trận cookie + `__Host-` (DEBT-008/510) | ✅ X3 39 + E2E 37 + int 1467 + be 675 | `80a3fda` |
 | [74](runs/74-sweep-be1/summary.md) | M7 | Sweep 🟡 BE bảo mật đợt 1 (DEBT-487/488/489/505/514) | ✅ int 1477 + E2E 37 + X3 42 + be 675 | `321e956` |
 | [75](runs/75-resource-scopes/summary.md) | M7 | Thực thi `Resource.scopes` + thu hẹp scope khi refresh (DEBT-321/512/516) | ✅ int 1497 + fe-admin 1567 + E2E 37 + X3 42 + be 679 | `8242c8e` |
-| [76](runs/76-console-lockout/summary.md) | M7 | Chống tự khoá client console + gộp `ADMIN_ROLES` (DEBT-515/513) | ✅ int 1516 + fe-admin 1567 + E2E 37 + X3 42 + be 684 | HASH76 |
+| [76](runs/76-console-lockout/summary.md) | M7 | Chống tự khoá client console + gộp `ADMIN_ROLES` (DEBT-515/513) | ✅ int 1516 + fe-admin 1567 + E2E 37 + X3 42 + be 684 | `9abe1ea` |
 
 ## Chặn / cần người quyết định
 
