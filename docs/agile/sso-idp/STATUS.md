@@ -29,7 +29,7 @@
 | [70](runs/70-A6.3b/summary.md) | M7 | A6.3b UI đổi vai trò fe-admin (DEBT-335) | ✅ fe-admin 1562 + E2E 37 | `9763048` |
 | [71](runs/71-audit-pii/summary.md) | M7 | Audit thời hạn lưu + che PII (DEBT-344/498) | ✅ be 664 + int 1459 + fe-admin 1565 + E2E 37 | `03b8312` |
 | [72](runs/72-ops-hardening/summary.md) | M7 | Compose prod mẫu non-root + Dependabot (DEBT-405/466/503/504) | ✅ smoke BE 11 + fe-admin 16 + be 664 | `a24a305` |
-| [73](runs/73-X3/summary.md) | M7 | X3 ma trận cookie + `__Host-` (DEBT-008/510) | ✅ X3 39 + E2E 37 + int 1467 + be 675 | — |
+| [73](runs/73-X3/summary.md) | M7 | X3 ma trận cookie + `__Host-` (DEBT-008/510) | ✅ X3 39 + E2E 37 + int 1467 + be 675 | `80a3fda` |
 
 ## Chặn / cần người quyết định
 

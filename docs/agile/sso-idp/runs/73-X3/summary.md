@@ -4,5 +4,6 @@
 - **Kết quả**: Chromium 156/Firefox 157 đúng spec (cross-site `Lax` chỉ top-level GET; POST/fetch/iframe không mang cookie; `prompt=none` iframe cross-site ⇒ `login_required`); WebKit 27.2 Windows không áp `SameSite` (không thay Safari, DEBT-506); cookie tossing `__Host-` có `Domain` bị từ chối trên cả 3; tên cũ ⇒ vô danh.
 - **Verify**: X3 39/39 ×3 (dev ×2, tester ×1, JSON trùng bảng spec từng ô); thăm dò tay (tên cũ ⇒ vô danh, sibling set `__Host-`+`Domain` ⇒ 0 lưu, Set-Cookie BE không `Domain`); be unit 675, int 1467 (`vg-int-*` 4 → 4), E2E mặc định 37/37; mutation fallback tên cũ / thêm `domain` ⇒ RED.
 - **Người dùng duyệt**: tải Firefox 1555 + WebKit 2370 cho Playwright 1.64.0 (2026-11-06).
+- **Commit**: `80a3fda`.
 - **Vòng lặp**: tech-lead=2 (REJECT tiên quyết thiếu trình duyệt → PASS), BE dev=1, FE dev=1 (gián đoạn 2 lần do lỗi mạng/phiên kết thúc, resume), senior=1 (PASS, 3 🟡), tester=1 (PASS).
 - **Debt**: đóng DEBT-008/510; mở DEBT-505 (`idp_fed`/`idp_link` chưa `__Host-`), 506 (WebKit-Windows ≠ Safari), 507, 508 (X3 phải chạy `db:seed-dev` với issuer https), 509 (JSON thiếu ô khi worker restart), 511 (ponytail proxy WS).
