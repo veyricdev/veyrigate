@@ -351,3 +351,52 @@ test("6 cookie tossing from sibling app.alpha (DEBT-008)", async ({ browser }, t
   c.outcome = "rejected/ignored";
   await Promise.all([victim.context.close(), a.context.close(), anon.context.close()]);
 });
+
+test("8 idp_fed tossing from sibling app.alpha before a Google leg (DEBT-505)", async ({ browser }) => {
+  const c = cell("8-fed-tossing", "sibling (same-site)");
+  const rp = X3_RPS.alpha;
+  const FED = "__Host-idp_fed";
+  const TOSS = "x3toss";
+
+  const { context, page } = await fresh(browser);
+  await page.goto(`${rp.origin}/`);
+  await page.evaluate((v) => {
+    document.cookie = `idp_fed=${v}; Domain=alpha.localhost; Path=/auth/; Secure`;
+    document.cookie = `__Host-idp_fed=${v}; Domain=alpha.localhost; Path=/; Secure`;
+  }, TOSS);
+  const tossed = await context.cookies();
+  expect(tossed.filter((k) => k.name === FED), "tossed __Host- rejected").toHaveLength(0);
+  expect(tossed.some((k) => k.name === "idp_fed" && k.domain === ".alpha.localhost"), "legacy toss stored").toBe(true);
+
+  const idp = trackIdp(page);
+  expect(await signInFlow(page, rp)).toBe("login");
+  await page.getByRole("link", { name: "Sign in with Google" }).click();
+  await page.waitForURL((u) => u.hostname === "127.0.0.1" && u.pathname === "/authorize", { waitUntil: "load" });
+  const rand = randomBytes(6).toString("hex");
+  await page.getByLabel("Subject").fill(`x3-g-${rand}`);
+  await page.getByLabel("Email", { exact: true }).fill(`x3-fed-${rand}@example.com`);
+  await page.getByRole("button", { name: "Continue" }).click();
+  const consent = page.locator('form[action="/authorize/consent"]');
+  const claims = page.getByTestId("claims");
+  for (let i = 0; i < 4 && !(await claims.isVisible()); i++) {
+    await expect(consent.or(claims).first()).toBeVisible({ timeout: 30_000 });
+    if (await consent.isVisible()) {
+      await consent.getByRole("button", { name: "Allow" }).click();
+      await consent.waitFor({ state: "detached" });
+    }
+  }
+  await expect(claims, "signed in through the Google leg").toBeVisible();
+
+  const fed = (await context.cookies()).filter((k) => k.name === FED);
+  expect(fed, "one __Host-idp_fed").toHaveLength(1);
+  expect(fed[0].domain, "host-only on the IdP").toBe(X3_IDP_HOST);
+  expect(fed[0].path).toBe("/");
+  expect(fed[0].secure).toBe(true);
+  expect(fed[0].value !== TOSS, "binding is not the tossed value").toBe(true);
+  const cb = (await idp.find("GET", "/auth/google/callback"))[0];
+  c.cookieNames = cb?.names ?? [];
+  expect(c.cookieNames).toContain(FED);
+  expect(c.cookieNames, "tossed idp_fed reached the callback (and was ignored)").toContain("idp_fed");
+  c.outcome = "signed in; tossed ignored";
+  await context.close();
+});

@@ -54,7 +54,8 @@ export class TenantScopedRepository<T extends { tenantId: string }> {
   /**
    * Atomic update returning the document BEFORE the update (lean), or null when nothing in this
    * tenant matched — lets a caller compute an exact diff (audit) without a read-then-write race.
-   * An array `update` is an update pipeline (built server-side; every stage loses `tenantId`).
+   * An array `update` is an update pipeline: the repo appends a final `$set` of the ctx tenant, so any
+   * stage may run but the tenant cannot change (DEBT-487).
    */
   findOneAndUpdate(
     ctx: TenantContext,
@@ -66,7 +67,7 @@ export class TenantScopedRepository<T extends { tenantId: string }> {
     return this.model
       .findOneAndUpdate(
         this.scope(ctx, filter),
-        pipeline ? update.map((stage) => withoutTenantId(stage)) : withoutTenantId(update),
+        pipeline ? [...update, { $set: { tenantId: ctx.tenantId } }] : withoutTenantId(update),
         { returnDocument: 'before', ...(pipeline ? { updatePipeline: true } : {}), ...options },
       )
       .lean<T>()

@@ -485,6 +485,10 @@ Khi `SESSION_COOKIE_SECURE=true` (bắt buộc ở production), tên cookie là 
   ⇒ **sau lần deploy đầu tiên có run 73, mọi người dùng phải đăng nhập lại 1 lần**. Cookie cũ bị bỏ
   qua rồi hết hạn theo Max-Age; session Redis cũ hết theo idle TTL (không tombstone). Báo trước
   cho người dùng/RP.
+- **Federation (DEBT-505, run 74)**: khi `Secure`, cookie `idp_fed`/`idp_link` thành `__Host-idp_fed`/
+  `__Host-idp_link` với `Path=/` (trước là `Path=/auth/`). Leg Google/GitHub đang dở lúc deploy
+  (≤ 10 phút TTL) về callback/link không thấy cookie mới ⇒ trang lỗi cố định `invalid_state` 400;
+  người dùng bấm lại "Sign in with …" là xong. Không cần thao tác vận hành.
 - Dev chạy http phải giữ `SESSION_COOKIE_SECURE=false`. Nếu để `true` trên `http://`, WebKit lưu cookie
   nhưng không gửi ⇒ không đăng nhập được.
 - Reverse proxy/CDN không được viết lại `Set-Cookie` (thêm `Domain`, đổi `Path`): trình duyệt sẽ từ

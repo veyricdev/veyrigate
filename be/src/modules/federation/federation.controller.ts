@@ -20,14 +20,14 @@ import { buildCsp } from '../../common/http/csp';
 import type { HttpReply, HttpRequest } from '../../common/http/http.types';
 import type { SessionConfig } from '../../config/configuration';
 import { RateLimitService } from '../security/rate-limit/rate-limit.service';
-import { SessionCookie } from '../sessions/session.cookie';
+import { hostCookieName, SessionCookie } from '../sessions/session.cookie';
 import { CsrfGuard, CsrfService, formCsrfIdentity } from '../ui/csrf.service';
 import { HtmlExceptionFilter } from '../ui/html-exception.filter';
 import { FederationError, type FederationErrorCode } from './federation.errors';
 import { FED_LINK_TTL_MS, FED_STATE_TTL_MS } from './federation-state.store';
 import { FederationService, type LinkOutcome } from './federation.service';
 
-/** Browser-binding cookie of the provider leg (anti login-CSRF, F5). Scoped to `/auth/`. */
+/** Browser-binding cookie of the provider leg (anti login-CSRF, F5). `Path=/`, `__Host-` when Secure (DEBT-505). */
 export const FED_BINDING_COOKIE = 'idp_fed';
 /** Opaque handle of a pending account link (B5.3, F6). Never in a URL or HTML. */
 export const FED_LINK_COOKIE = 'idp_link';
@@ -82,6 +82,8 @@ const one = (v: unknown): string | undefined => (typeof v === 'string' ? v : und
 export class FederationController {
   private readonly logger = new Logger(FederationController.name);
   private readonly secure: boolean;
+  private readonly bindingCookie: string;
+  private readonly linkCookie: string;
 
   constructor(
     private readonly federation: FederationService,
@@ -91,6 +93,9 @@ export class FederationController {
     config: ConfigService,
   ) {
     this.secure = config.getOrThrow<SessionConfig>('session').cookieSecure;
+    // Hard cut like DEBT-008: when Secure only the `__Host-` names are read, never the old ones.
+    this.bindingCookie = hostCookieName(FED_BINDING_COOKIE, this.secure);
+    this.linkCookie = hostCookieName(FED_LINK_COOKIE, this.secure);
   }
 
   @Get(':provider/start')
@@ -104,13 +109,13 @@ export class FederationController {
     await this.limit(req);
     try {
       // Reuse the binding cookie (not rotated per leg, so two tabs do not break each other).
-      const binding = req.cookies?.[FED_BINDING_COOKIE] || generateToken();
+      const binding = req.cookies?.[this.bindingCookie] || generateToken();
       const location = await this.federation.start(provider, one(requestId), binding);
-      reply.setCookie(FED_BINDING_COOKIE, binding, {
+      reply.setCookie(this.bindingCookie, binding, {
         httpOnly: true,
         secure: this.secure,
         sameSite: 'lax',
-        path: '/auth/',
+        path: '/',
         maxAge: FED_STATE_TTL_MS / 1000,
       });
       return reply.redirect(location, 302);
@@ -137,7 +142,7 @@ export class FederationController {
           error: one(query.error),
           iss: one(query.iss),
         },
-        { binding: req.cookies?.[FED_BINDING_COOKIE], session: this.sessionCookie.read(req) },
+        { binding: req.cookies?.[this.bindingCookie], session: this.sessionCookie.read(req) },
         {
           ip: req.ip,
           userAgent: String(req.headers['user-agent'] ?? ''),
@@ -151,7 +156,7 @@ export class FederationController {
         });
       }
       if (outcome.kind === 'link_required') {
-        reply.setCookie(FED_LINK_COOKIE, outcome.linkToken, this.linkCookieOptions());
+        reply.setCookie(this.linkCookie, outcome.linkToken, this.linkCookieOptions());
         return reply.redirect('/auth/link', 302);
       }
       this.sessionCookie.set(reply, outcome.sessionId);
@@ -172,8 +177,8 @@ export class FederationController {
     await this.limit(req);
     try {
       const page = await this.federation.linkPage(
-        req.cookies?.[FED_LINK_COOKIE],
-        req.cookies?.[FED_BINDING_COOKIE],
+        req.cookies?.[this.linkCookie],
+        req.cookies?.[this.bindingCookie],
       );
       // DEBT-084: the form POSTs, then 302s via `/authorize` to the RP; Chromium applies THIS
       // page's `form-action` to the whole chain, so allow the single already-matched RP origin.
@@ -208,13 +213,13 @@ export class FederationController {
   ): Promise<unknown> {
     reply.header('Cache-Control', 'no-store');
     await this.limit(req);
-    const token = req.cookies?.[FED_LINK_COOKIE];
+    const token = req.cookies?.[this.linkCookie];
     const pending = await this.federation.pendingLink(token);
     if (pending) await this.limit(req, 'login', pending.email);
-    reply.clearCookie(FED_LINK_COOKIE, this.linkCookieOptions());
+    reply.clearCookie(this.linkCookie, this.linkCookieOptions());
     const outcome = await this.federation.completeLink(
       token,
-      req.cookies?.[FED_BINDING_COOKIE],
+      req.cookies?.[this.bindingCookie],
       body.password,
       {
         oldSessionId: this.sessionCookie.read(req),
@@ -251,7 +256,7 @@ export class FederationController {
       httpOnly: true,
       secure: this.secure,
       sameSite: 'lax',
-      path: '/auth/',
+      path: '/',
       maxAge: FED_LINK_TTL_MS / 1000,
     } as const;
   }
@@ -259,7 +264,7 @@ export class FederationController {
   private async limit(req: HttpRequest, name = 'federation', account?: string): Promise<void> {
     const result = await this.rateLimit.hit(
       { name },
-      { ip: req.ip, account, deviceId: req.cookies?.[FED_BINDING_COOKIE] },
+      { ip: req.ip, account, deviceId: req.cookies?.[this.bindingCookie] },
     );
     if (!result.allowed)
       throw new HttpException({ retryAfter: result.retryAfterSec }, HttpStatus.TOO_MANY_REQUESTS);

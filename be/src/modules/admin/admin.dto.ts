@@ -18,6 +18,7 @@ import {
   ValidateIf,
 } from 'class-validator';
 import type { ClientType, GrantType, TokenEndpointAuthMethod } from '../clients/client.service';
+import { ADMIN_ROLE_VALUES, type AdminRole } from '../identity/admin-roles';
 import { AuditAction } from '../security/audit/audit-action.enum';
 
 /**
@@ -216,8 +217,7 @@ export class UserListQueryDto extends PageQueryDto {
   status?: 'active' | 'suspended';
 }
 
-export const ADMIN_ROLE_VALUES = ['tenant_admin', 'super_admin'] as const;
-export type AdminRole = (typeof ADMIN_ROLE_VALUES)[number];
+export { ADMIN_ROLE_VALUES, type AdminRole } from '../identity/admin-roles';
 
 /** `PATCH /admin/users/:id/roles` — replaces the admin roles of the membership wholesale. */
 export class UpdateUserRolesDto {

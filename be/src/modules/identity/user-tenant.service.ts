@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { type ClientSession, isValidObjectId, type Model, Types } from 'mongoose';
-import { ADMIN_ROLE_VALUES } from '../admin/admin.dto';
+import { ADMIN_ROLE_VALUES } from './admin-roles';
 import { mapDuplicate } from './identity.errors';
 import type { TenantContext } from './tenant-context/tenant-context';
 import { TenantScopedRepository } from './tenant-context/tenant-scoped.repository';

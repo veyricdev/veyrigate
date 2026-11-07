@@ -344,7 +344,7 @@ findOneAndUpdate(
 
 #### Ma trận X3 — kết quả đo (run 73, 2026-11-07)
 
-Suite `e2e/x3/cookie-matrix.spec.ts` (`pnpm -C e2e e2e:x3`, chạy 2 lần, kết quả trùng nhau, 39/39 xanh). Topology `*.localhost` sau TLS proxy loopback: IdP `idp.alpha.localhost`; RP **same-site** `app.alpha.localhost`; RP **cross-site** `app.beta.localhost` (PSL coi `localhost` như TLD). Trình duyệt Playwright 1.64.0: Chromium 156.0.8078.4, Firefox 157.0, WebKit 27.2 (Windows). Ô ghi kết quả và việc `__Host-idp_session` có được gửi tới IdP hay không (đo tên cookie, không đo giá trị). Nguồn: `docs/agile/sso-idp/runs/73-X3/x3-matrix.json` (bản chạy 2026-11-07; tạo lại bằng `pnpm -C e2e e2e:x3` → `e2e/test-results/x3-matrix.json`, thư mục này bị xoá ở lượt E2E kế tiếp).
+Suite `e2e/x3/cookie-matrix.spec.ts` (`pnpm -C e2e e2e:x3`, chạy 2 lần, kết quả trùng nhau, 39/39 xanh). Topology `*.localhost` sau TLS proxy loopback: IdP `idp.alpha.localhost`; RP **same-site** `app.alpha.localhost`; RP **cross-site** `app.beta.localhost` (PSL coi `localhost` như TLD). Trình duyệt Playwright 1.64.0: Chromium 156.0.8078.4, Firefox 157.0, WebKit 27.2 (Windows). Ô ghi kết quả và việc `__Host-idp_session` có được gửi tới IdP hay không (đo tên cookie, không đo giá trị). Nguồn: `docs/agile/sso-idp/runs/73-X3/x3-matrix.json` (ca 8: `runs/74-sweep-be1/x3-matrix.json`, run 74 42/42) (bản chạy 2026-11-07; tạo lại bằng `pnpm -C e2e e2e:x3` → `e2e/test-results/x3-matrix.json`, thư mục này bị xoá ở lượt E2E kế tiếp).
 
 | Ca | Topology | Chromium 156 | Firefox 157 | WebKit 27.2 (Windows) |
 | --- | --- | --- | --- | --- |
@@ -361,8 +361,9 @@ Suite `e2e/x3/cookie-matrix.spec.ts` (`pnpm -C e2e e2e:x3`, chạy 2 lần, kế
 | 6 Cookie tossing từ `app.alpha` (`document.cookie`, `Domain=alpha.localhost`) | sibling same-site | ✅ `__Host-…; Domain` bị từ chối; `idp_session=<sid user khác>` đến IdP nhưng bị bỏ qua (danh tính không đổi; context ẩn danh vẫn ra form) | ✅ | ✅ |
 | 7 `prompt=none` trong iframe (best-effort, chỉ ghi nhận) | same-site | `code` | `code` | `code` |
 | | cross-site | `login_required` | `login_required` | `code` |
+| 8 Tossing `idp_fed` từ `app.alpha` rồi đăng nhập Google (mock) (run 74, DEBT-505) | sibling same-site | ✅ `__Host-idp_fed; Domain` bị từ chối; `idp_fed` tossed (`Path=/auth/`) đến callback nhưng bị bỏ qua; đăng nhập xong, `__Host-idp_fed` host-only, giá trị ≠ tossed | ✅ | ✅ |
 
-- **WebKit Windows ≠ Safari** (DEBT-506): bản WebKit Playwright trên Windows không áp `SameSite` (lưu là `None`, gửi ở POST/fetch/iframe cross-site), nên cột WebKit không thay được kiểm trên Safari thật. Kết quả iframe đo trên profile không chặn cookie bên thứ ba, nên lạc quan (DEBT-507). Cookie federation `idp_fed`/`idp_link` chưa có `__Host-` (DEBT-505).
+- **WebKit Windows ≠ Safari** (DEBT-506): bản WebKit Playwright trên Windows không áp `SameSite` (lưu là `None`, gửi ở POST/fetch/iframe cross-site), nên cột WebKit không thay được kiểm trên Safari thật. Kết quả iframe đo trên profile không chặn cookie bên thứ ba, nên lạc quan (DEBT-507). Cookie federation có `__Host-` khi `Secure` (DEBT-505, run 74): `__Host-idp_fed` (binding chống login-CSRF) và `__Host-idp_link` (link đang chờ), `Path=/`, không `Domain`, cắt cứng như phiên (không đọc tên cũ `idp_fed`/`idp_link`).
 - **Quyết định `SameSite`: giữ `Lax`** (không thêm env cấu hình `SameSite`). Lý do theo số đo: (a) `Lax` vẫn cho SSO top-level cross-site (ca 2), là cơ chế chính; `Strict` sẽ làm hỏng ca này vì GET top-level cross-site không mang cookie `Strict` (probe tech-lead run 73). (b) `Lax` chặn cookie ở POST và fetch cross-site trên Chromium/Firefox (ca 4, 5), là một lớp phòng CSRF ngoài `_csrf`. `None` bỏ mất lớp đó và vẫn không cứu được silent SSO qua iframe trên Safari ITP/Firefox TCP. (c) Silent SSO qua iframe cross-site đã `login_required` trên Chromium/Firefox với `Lax` ⇒ RP phải dùng top-level redirect, đúng khuyến nghị ở trên.
 
 ### 9.7 CORS tách khỏi `redirect_uris`

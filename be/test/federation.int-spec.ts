@@ -585,7 +585,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       expect(q).not.toHaveProperty('max_age');
       expect(s.location!.href).not.toContain(requestId);
       const fed = cookieOf(s.res, 'idp_fed')!;
-      expect(fed).toMatchObject({ httpOnly: true, sameSite: 'Lax', path: '/auth/', maxAge: 600 });
+      expect(fed).toMatchObject({ httpOnly: true, sameSite: 'Lax', path: '/', maxAge: 600 });
 
       const sub = `${RUN}-g-new`;
       const g = grant('google', s.location!, { claims: { sub } });
@@ -1391,11 +1391,11 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
     it('(a) happy path: password of THAT account => FI, ACCOUNT_LINKED, resume => code => ID token sub = local user; next social login goes straight in', async () => {
       const local = await localUser();
       const leg = await linkLeg(local.email);
-      // F6: the token lives only in an HttpOnly cookie scoped to /auth/ — never in URL/HTML.
+      // F6: the token lives only in an HttpOnly cookie (Path=/, DEBT-505) — never in URL/HTML.
       expect(leg.linkCookie).toMatchObject({
         httpOnly: true,
         sameSite: 'Lax',
-        path: '/auth/',
+        path: '/',
         maxAge: 600,
       });
       expect(leg.res.headers.location).not.toContain(leg.link);
@@ -1422,7 +1422,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       expect(res.headers.location).toBe(
         `/authorize?request_id=${encodeURIComponent(leg.requestId)}`,
       );
-      expect(cookieOf(res, 'idp_link')).toMatchObject({ value: '', path: '/auth/' });
+      expect(cookieOf(res, 'idp_link')).toMatchObject({ value: '', path: '/' });
       const sid = cookieOf(res, SESSION_COOKIE)!.value;
       const live = (await sessions.get(sid))!;
       expect(live.userId).toBe(local.sub);
@@ -2568,6 +2568,147 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       expect(rp.origin + rp.pathname).toBe(REDIRECT);
       expect(rp.searchParams.get('code')).toBeTruthy();
       expect(rp.searchParams.get('state')).toBe(RP_STATE);
+    });
+  });
+
+  // ------------------------------------------------------------------ DEBT-505 (run 74)
+  describe('DEBT-505: Secure => __Host-idp_fed / __Host-idp_link with Path=/, old names never read', () => {
+    const HOST_FED = '__Host-idp_fed';
+    const HOST_LINK = '__Host-idp_link';
+    const HOST_SESSION = `__Host-${SESSION_COOKIE}`;
+    let secureApp: NestFastifyApplication;
+
+    beforeAll(async () => {
+      // Same services and stores as `app`; only the federation controller + cookies run Secure.
+      const secureCfg = {
+        getOrThrow: (ns: string) =>
+          ns === 'session' ? { cookieSecure: true } : cfg.getOrThrow(ns),
+      } as unknown as ConfigService;
+      const ref = await Test.createTestingModule({
+        controllers: [FederationController],
+        providers: [
+          { provide: FederationService, useValue: moduleRef.get(FederationService) },
+          { provide: RateLimitService, useValue: moduleRef.get(RateLimitService) },
+          { provide: CsrfService, useValue: moduleRef.get(CsrfService) },
+          { provide: ConfigService, useValue: secureCfg },
+          SessionCookie,
+          CsrfGuard,
+          HtmlExceptionFilter,
+        ],
+      }).compile();
+      secureApp = ref.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
+      await secureApp.register(cookie);
+      await secureApp.register(view, {
+        engine: { eta: new Eta({ views: join(process.cwd(), 'src/views'), autoEscape: true }) },
+        root: join(process.cwd(), 'src/views'),
+        layout: 'layout.eta',
+      });
+      secureApp.useGlobalPipes(
+        new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
+      );
+      await secureApp.init();
+      await secureApp.getHttpAdapter().getInstance().ready();
+    });
+
+    afterAll(async () => {
+      if (secureApp) await secureApp.close();
+    });
+
+    async function secureStart(requestId: string) {
+      const res = await secureApp.inject({
+        method: 'GET',
+        url: `/auth/google/start?request_id=${encodeURIComponent(requestId)}`,
+      });
+      expect(res.statusCode).toBe(302);
+      return {
+        res,
+        location: new URL(res.headers.location as string),
+        fed: cookieOf(res, HOST_FED)!.value,
+      };
+    }
+
+    const secureCallback = (query: Record<string, string>, cookies: Record<string, string>) =>
+      secureApp.inject({
+        method: 'GET',
+        url: `/auth/google/callback?${new URLSearchParams(query).toString()}`,
+        cookies,
+      });
+
+    it('(s1) start sets __Host-idp_fed: Path=/, HttpOnly, Secure, SameSite=Lax, no Domain; never idp_fed', async () => {
+      const { requestId } = await rpAuthorize();
+      const s = await secureStart(requestId);
+      expect(cookieOf(s.res, HOST_FED)).toMatchObject({
+        httpOnly: true,
+        secure: true,
+        sameSite: 'Lax',
+        path: '/',
+        maxAge: 600,
+      });
+      expect(cookieOf(s.res, HOST_FED)!.domain).toBeUndefined();
+      expect(cookieOf(s.res, 'idp_fed')).toBeUndefined();
+    });
+
+    it('(s2) callback carrying only the old name idp_fed => 400, state consumed', async () => {
+      const { requestId } = await rpAuthorize();
+      const s = await secureStart(requestId);
+      const g = grant('google', s.location, { claims: { sub: `${RUN}-s2` } });
+      const old = await secureCallback(g, { idp_fed: s.fed });
+      expect(old.statusCode).toBe(400);
+      expect(cookieOf(old, HOST_SESSION)).toBeUndefined();
+      expect(old.headers.location).toBeUndefined();
+      expect((await secureCallback(g, { [HOST_FED]: s.fed })).statusCode).toBe(400);
+      expect(await fiModel.countDocuments({ providerId: `${RUN}-s2` })).toBe(0);
+    });
+
+    it('(s3) right __Host-idp_fed + a tossed idp_fed => 302 signed in (the tossed name is ignored)', async () => {
+      const { requestId } = await rpAuthorize();
+      const s = await secureStart(requestId);
+      const g = grant('google', s.location, { claims: { sub: `${RUN}-s3` } });
+      const res = await secureCallback(g, { [HOST_FED]: s.fed, idp_fed: generateToken() });
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toBe(`/authorize?request_id=${encodeURIComponent(requestId)}`);
+      expect(cookieOf(res, HOST_SESSION)?.value).toBeTruthy();
+      expect(await fiModel.countDocuments({ providerId: `${RUN}-s3` })).toBe(1);
+    });
+
+    it('(s4) link_required => __Host-idp_link Path=/; the old name idp_link => 400; POST clears __Host-idp_link Path=/', async () => {
+      const password = 'local password 123';
+      const email = `${RUN}-s4@example.com`;
+      const local = await users.create({ email, password });
+      await users.verifyEmail(local.sub);
+      await moduleRef.get(UserTenantService).addMembership(local.sub, DEFAULT_TENANT_ID);
+      const { requestId } = await rpAuthorize();
+      const s = await secureStart(requestId);
+      const g = grant('google', s.location, {
+        claims: { sub: `${RUN}-s4`, email, auth_time: Math.floor(Date.now() / 1000) },
+      });
+      const leg = await secureCallback(g, { [HOST_FED]: s.fed });
+      expect(leg.statusCode).toBe(302);
+      expect(leg.headers.location).toBe('/auth/link');
+      const link = cookieOf(leg, HOST_LINK)!;
+      expect(link).toMatchObject({ httpOnly: true, secure: true, sameSite: 'Lax', path: '/' });
+      expect(link.domain).toBeUndefined();
+      expect(cookieOf(leg, 'idp_link')).toBeUndefined();
+
+      const linkPage = (cookies: Record<string, string>) =>
+        secureApp.inject({ method: 'GET', url: '/auth/link', cookies });
+      expect((await linkPage({ idp_link: link.value, [HOST_FED]: s.fed })).statusCode).toBe(400);
+      const page = await linkPage({ [HOST_LINK]: link.value, [HOST_FED]: s.fed });
+      expect(page.statusCode).toBe(200);
+      const csrf = page.body.match(/name="_csrf" value="([^"]+)"/)![1];
+      const res = await secureApp.inject({
+        method: 'POST',
+        url: '/auth/link',
+        cookies: {
+          [HOST_LINK]: link.value,
+          [HOST_FED]: s.fed,
+          '__Host-idp_csrf': cookieOf(page, '__Host-idp_csrf')!.value,
+        },
+        payload: { _csrf: csrf, password },
+      });
+      expect(res.statusCode).toBe(302);
+      expect(cookieOf(res, HOST_LINK)).toMatchObject({ value: '', path: '/' });
+      expect(await fiModel.countDocuments({ providerId: `${RUN}-s4`, userId: local.sub })).toBe(1);
     });
   });
 });

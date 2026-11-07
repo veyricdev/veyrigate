@@ -718,6 +718,53 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
     ).toBe(0);
   });
 
+  it('DEBT-489: DEBT-415 revokeFamily fault => 5xx (fail closed), refusal audited, nothing leaked; retry revokes', async () => {
+    const rt = await firstRefresh();
+    const doc = await refreshModel
+      .findOne({ tokenHash: sha256(rt) })
+      .lean<Record<string, unknown>>();
+    const familyId = doc!.familyId as string;
+    await clientModel.updateOne({ clientId: CLIENT }, { $set: { allowedResources: [] } });
+    const spy = jest
+      .spyOn(refreshSvc, 'revokeFamily')
+      .mockRejectedValueOnce(new Error('r74-revoke-boom'));
+    try {
+      const res = await refreshReq(rt);
+      expect(res.statusCode).toBe(500);
+      expect(res.body).not.toMatch(/r74-revoke-boom|familyId|at .+\.ts/);
+      expect(spy).toHaveBeenCalledTimes(1);
+      const refused = await auditModel
+        .find({ action: AuditAction.TOKEN_REFRESHED, 'metadata.familyId': familyId })
+        .lean();
+      expect(refused).toHaveLength(1);
+      expect(refused[0]).toMatchObject({
+        result: 'failure',
+        reason: 'resource_not_allowed',
+        metadata: { resource: RESOURCE, familyId },
+      });
+      const family = await refreshModel.find({ familyId }).lean<Record<string, unknown>[]>();
+      expect(family.some((d) => d.revokedAt == null)).toBe(true);
+      spy.mockRestore();
+      const retry = await refreshReq(rt);
+      expect(retry.statusCode).toBe(400);
+      expect(retry.json().error).toBe('invalid_grant');
+      const revoked = await refreshModel.find({ familyId }).lean<Record<string, unknown>[]>();
+      expect(revoked.every((d) => d.revokedAt != null && d.familyRevokedAt != null)).toBe(true);
+    } finally {
+      spy.mockRestore();
+      await clientModel.updateOne(
+        { clientId: CLIENT },
+        { $set: { allowedResources: [RESOURCE_ID] } },
+      );
+    }
+    expect(
+      await auditModel.countDocuments({
+        action: AuditAction.TOKEN_REUSE_DETECTED,
+        'metadata.familyId': familyId,
+      }),
+    ).toBe(0);
+  });
+
   it('DEBT-415 control: another client / expired / junk value with the resource removed => nothing revoked', async () => {
     const own = await firstRefresh();
     const other = await firstRefresh(CLIENT_B);

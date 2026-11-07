@@ -203,6 +203,31 @@ describe('Tenant context + tenant-scoped repository (B2.1, INV-24)', () => {
       await model.deleteOne({ userId: uid });
     });
 
+    const newRoot = { userId: '$userId', status: 'active', roles: [] };
+    it.each([
+      ['$unset string', [{ $unset: 'tenantId' }]],
+      ['$replaceWith', [{ $replaceWith: newRoot }]],
+      ['$replaceRoot', [{ $replaceRoot: { newRoot } }]],
+      ['$project', [{ $project: { tenantId: 0 } }]],
+      ['$set other tenant', [{ $set: { tenantId: 'tenant-B' } }]],
+    ])('an update pipeline (%s) cannot drop or change tenantId (DEBT-487)', async (_, pipeline) => {
+      const uid = new Types.ObjectId();
+      const base = { userId: uid, status: 'active', roles: ['r74'], createdAt: new Date() };
+      const { _id } = await model.create({ ...base, tenantId: 'tenant-A' });
+      await model.create({ ...base, tenantId: 'tenant-B' });
+      try {
+        const before = await model.findById(_id).lean();
+        const returned = await repo.findOneAndUpdate(ctxA, { userId: uid }, pipeline as never);
+        expect(returned).toEqual(before);
+        expect((await model.findById(_id).lean())?.tenantId).toBe('tenant-A');
+        expect(await model.findOne({ userId: uid, tenantId: 'tenant-B' }).lean()).toMatchObject({
+          roles: ['r74'],
+        });
+      } finally {
+        await model.deleteMany({ userId: uid });
+      }
+    });
+
     it('rejects a missing context', async () => {
       expect(() => repo.find(undefined as unknown as TenantContext)).toThrow(/TenantContext/);
     });
