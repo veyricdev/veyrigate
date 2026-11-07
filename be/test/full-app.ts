@@ -216,7 +216,11 @@ export const basicAuth = (id: string, secret: string): string =>
 export async function seedFlowClient(full: FullApp): Promise<{ clientId: string; secret: string }> {
   const resources = full.app.get(ResourceService);
   await resources.create({ resourceId: 'api', identifier: FLOW_API_AUD, scopes: ['api.read'] });
-  await resources.create({ resourceId: 'admin', identifier: FLOW_ADMIN_AUD });
+  await resources.create({
+    resourceId: 'admin',
+    identifier: FLOW_ADMIN_AUD,
+    scopes: ['admin.read', 'admin.write'],
+  });
   const clientId = `flow-bff-${randomUUID()}`;
   await full.app.get(ClientService).create({
     clientId,

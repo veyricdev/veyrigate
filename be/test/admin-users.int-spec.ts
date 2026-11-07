@@ -373,7 +373,11 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
     await syncAllIndexes(clientModel.db);
 
     const resources = moduleRef.get(ResourceService);
-    await resources.create({ resourceId: 'admin', identifier: ADMIN_AUD });
+    await resources.create({
+      resourceId: 'admin',
+      identifier: ADMIN_AUD,
+      scopes: ['admin.read', 'admin.write'],
+    });
     await resources.create({ resourceId: 'demo', identifier: DEMO_AUD });
     await resources.create({ resourceId: 'other', identifier: OTHER_AUD });
     const clients = moduleRef.get(ClientService);

@@ -24,7 +24,8 @@ import {
   AuthorizationCodeService,
   type AuthorizationCodeData,
 } from '../code/authorization-code.service';
-import { ResourceService } from '../../resources/resource.service';
+import { ResourceService, type Resource } from '../../resources/resource.service';
+import { grantableScopes } from '../scope-policy';
 import { ConsentService } from '../consent/consent.service';
 import { TokenError } from './token.errors';
 import { TokenService, adminTargetForbidden } from './token.service';
@@ -390,17 +391,22 @@ export class TokenController {
     if (!isRegisteredRedirectUri(fresh.redirectUris, data.redirectUri)) {
       return 'redirect_uri_unregistered';
     }
-    if (
-      data.resource &&
-      (adminTargetForbidden(fresh, data.resource, this.tokens.adminResource) ||
-        (await this.resources.resolveForClient(fresh.allowedResources, data.resource)) === null)
-    ) {
-      return 'resource_not_allowed';
+    let resource: Resource | null = null;
+    if (data.resource) {
+      if (adminTargetForbidden(fresh, data.resource, this.tokens.adminResource)) {
+        return 'resource_not_allowed';
+      }
+      resource = await this.resources.resolveForClient(fresh.allowedResources, data.resource);
+      if (resource === null) return 'resource_not_allowed';
     }
+    // DEBT-321/512: every scope of the code must still be grantable (current Client.scopes ∩
+    // (OIDC ∪ Resource.scopes)); an older consent may still cover a scope the admin removed since.
+    const scopes = data.scope.split(' ').filter(Boolean);
+    const grantable = grantableScopes(fresh.scopes, resource?.scopes);
+    if (!scopes.every((s) => grantable.has(s))) return 'scope_not_allowed';
     const subject = await this.subjectFailure(data.userId, fresh.tenantId);
     if (subject) return subject;
     const consent = await this.consents.find(data.userId, clientId, data.resource);
-    const scopes = data.scope.split(' ').filter(Boolean);
     if (!this.consents.isCovered(consent, scopes, this.consents.currentVersions())) {
       return 'consent_revoked';
     }
@@ -439,6 +445,7 @@ export class TokenController {
           clientType: client.clientType,
           tokenEndpointAuthMethod: client.tokenEndpointAuthMethod,
           tenantId: client.tenantId,
+          scopes: client.scopes,
         },
         { scope: body.get('scope'), resource: body.get('resource') },
         // DEBT-207: after rotate, the client (re-read), user and membership must still be valid.

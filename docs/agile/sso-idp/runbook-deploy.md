@@ -495,3 +495,66 @@ Khi `SESSION_COOKIE_SECURE=true` (bắt buộc ở production), tên cookie là 
   chối cookie `__Host-` ⇒ không ai đăng nhập được.
 - Ma trận trình duyệt (X3): `pnpm -C e2e e2e:x3` (cần `openssl`, cổng 4100/5273/5274/8443 trống,
   không chạy cùng lúc `pnpm -C e2e e2e`). Chi tiết ở `e2e/README.md`; bảng kết quả ở spec §9.6.
+
+## 12. Trước deploy run 75 — `Resource.scopes` được thực thi (DEBT-321/512)
+
+Từ run 75, scope cấp được = `Client.scopes` ∩ (OIDC ∪ `Resource.scopes`) (OIDC = `openid profile email
+offline_access`, chỉ so với client). Hệ quả sau deploy: `/authorize` xin scope ngoài giao ⇒ `invalid_scope`;
+code đang chờ đổi mang scope ngoài giao ⇒ `invalid_grant`; refresh **thu hẹp** family về giao hiện hành
+(lưu vào RT kế nhiệm), hoặc `invalid_grant` + revoke khi (i) giao rỗng, (ii) mất hết scope ngoài OIDC,
+(iii) `offline_access` không còn trong `Client.scopes`. Seed chỉ `$setOnInsert`, nên DB đã sửa tay qua UI
+có thể lệch. **Chạy 3 truy vấn chỉ đọc dưới đây trên DB production TRƯỚC deploy** (thay `ISSUER`; các
+truy vấn chỉ `find`/`aggregate` không `$out`/`$merge`, không ghi gì):
+
+```js
+// mongosh "<MONGO_URI>/<DB>" --quiet --file run75-check.js
+const ISSUER = 'https://id.example.com'; // = env ISSUER của BE
+const OIDC = ['openid', 'profile', 'email', 'offline_access'];
+const ADMIN = new URL('/admin/', ISSUER).href;
+
+// q1: resource `admin` phải có cả admin.read và admin.write (thiếu ⇒ fe-admin bị khoá sau deploy).
+const admin = db.resources.find({ identifier: ADMIN }, { _id: 0, resourceId: 1, scopes: 1 }).toArray();
+printjson({ q1: admin, ok: admin.length > 0 && admin.every((r) => ['admin.read', 'admin.write'].every((s) => (r.scopes || []).includes(s))) });
+
+// q2: theo TỪNG cặp client/resource (DEBT-516): scope ngoài OIDC của client mà resource đó không liệt kê
+// ⇒ `/authorize?resource=<resource>&scope=<scope>` sẽ bị invalid_scope. Không gộp scope các resource: scope
+// chỉ có ở A vẫn hỏng khi xin cho B. Client không có resource nào (hoặc resourceId không tồn tại) không có
+// cặp nào nên không được liệt kê (không thu hẹp gì; resource lạ đã là invalid_target từ trước).
+printjson({ q2: db.clients.aggregate([
+  { $lookup: { from: 'resources', localField: 'allowedResources', foreignField: 'resourceId', as: 'res' } },
+  { $unwind: '$res' },
+  { $project: { _id: 0, clientId: 1, resource: '$res.identifier', lost: { $setDifference: [{ $ifNull: ['$scopes', []] },
+      { $setUnion: [OIDC, { $ifNull: ['$res.scopes', []] }] }] } } },
+  { $match: { 'lost.0': { $exists: true } } },
+]).toArray() });
+
+// q3: RT đang active có scope ngoài giao hiện hành, chia "sẽ thu hẹp" / "sẽ bị revoke" theo (i)–(iii).
+const q3 = { narrow: 0, revoke: 0, samples: [] };
+db.refreshtokens.aggregate([
+  { $match: { revokedAt: null, expiresAt: { $gt: new Date() } } },
+  { $lookup: { from: 'clients', localField: 'clientId', foreignField: 'clientId', as: 'c' } },
+  { $lookup: { from: 'resources', localField: 'resource', foreignField: 'identifier', as: 'r' } },
+  { $project: { _id: 0, clientId: 1, resource: 1, scope: 1,
+      clientScopes: { $ifNull: [{ $first: '$c.scopes' }, []] }, resScopes: { $ifNull: [{ $first: '$r.scopes' }, []] }, hasRes: { $gt: [{ $size: '$r' }, 0] } } },
+]).forEach((t) => {
+  if (!t.hasRes) return; // resource đã mất: rotate/classify xử lý như trước run 75
+  const ok = new Set(t.clientScopes.filter((s) => OIDC.includes(s) || t.resScopes.includes(s)));
+  const kept = t.scope.filter((s) => ok.has(s));
+  if (kept.length === t.scope.length) return;
+  const nonOidc = (a) => a.some((s) => !OIDC.includes(s));
+  const dead = kept.length === 0 || (nonOidc(t.scope) && !nonOidc(kept)) ||
+    (t.scope.includes('offline_access') && !kept.includes('offline_access'));
+  q3[dead ? 'revoke' : 'narrow']++;
+  if (q3.samples.length < 20) q3.samples.push({ clientId: t.clientId, resource: t.resource, dropped: t.scope.filter((s) => !ok.has(s)), dead });
+});
+printjson({ q3 });
+```
+
+Kỳ vọng: `q1.ok: true`, `q2: []`, `q3.narrow = q3.revoke = 0`. Nếu không:
+
+- q1 sai ⇒ thêm `admin.read admin.write` vào resource `admin` (fe-admin trước deploy, hoặc `updateOne` có
+  duyệt) **trước khi** deploy. Sau deploy, BE từ chối PATCH bỏ hai scope này (400 `invalid_request`).
+- q2/q3 khác rỗng ⇒ thêm scope còn thiếu vào resource tương ứng TRƯỚC deploy, hoặc chấp nhận và báo
+  trước cho RP liệt kê (RP xin scope đó sẽ nhận `invalid_scope`; người dùng có family bị revoke phải đăng
+  nhập lại). Thêm lại scope sau deploy **không** khôi phục family đã thu hẹp/revoke — RP cần `/authorize` mới.
+- AT đã phát trước deploy giữ scope cũ tới khi hết hạn (≤ 15').

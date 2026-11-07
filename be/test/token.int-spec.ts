@@ -204,6 +204,7 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
       tokenEndpointAuthMethod: 'none',
       redirectUris: [REDIRECT],
       allowedResources: [RESOURCE_ID],
+      scopes: ['openid', 'profile', 'offline_access'],
       grantTypes: ['authorization_code', 'refresh_token'],
       tenantId: 'tenant-A',
     });
@@ -214,6 +215,7 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
       tokenEndpointAuthMethod: 'none',
       redirectUris: [REDIRECT],
       allowedResources: [RESOURCE_ID],
+      scopes: ['openid', 'profile', 'offline_access'],
       grantTypes: ['refresh_token'],
       tenantId: 'tenant-A',
     });
@@ -224,6 +226,7 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
       tokenEndpointAuthMethod: 'client_secret_basic',
       redirectUris: [REDIRECT],
       allowedResources: [RESOURCE_ID],
+      scopes: ['openid', 'profile', 'offline_access'],
       grantTypes: ['authorization_code'],
       tenantId: 'tenant-A',
     });
@@ -761,7 +764,7 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
       postLogoutRedirectUris: [],
       allowedCorsOrigins: [],
       allowedResources: [RESOURCE_ID],
-      scopes: [],
+      scopes: ['openid', 'profile'],
       tenantId: 'tenant-A',
     });
     const { code } = await mintCode({ clientId: legacyId, scope: 'openid profile' });

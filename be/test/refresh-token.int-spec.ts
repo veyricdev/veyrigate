@@ -384,6 +384,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       redirectUris: [REDIRECT],
       grantTypes: ['authorization_code', 'refresh_token'],
       allowedResources: [RESOURCE_ID],
+      scopes: ['openid', 'profile', 'offline_access'],
       tenantId: 'tenant-A',
     });
     await clientService.create({
@@ -393,6 +394,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       redirectUris: [REDIRECT],
       grantTypes: ['authorization_code', 'refresh_token'],
       allowedResources: [RESOURCE_ID],
+      scopes: ['openid', 'profile', 'offline_access'],
       tenantId: 'tenant-A',
     });
     await clientService.create({
@@ -402,6 +404,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       redirectUris: [REDIRECT],
       grantTypes: ['authorization_code'],
       allowedResources: [RESOURCE_ID],
+      scopes: ['openid', 'profile', 'offline_access'],
       tenantId: 'tenant-A',
     });
   }, 60_000);
@@ -2142,6 +2145,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
           clientType: 'public',
           tokenEndpointAuthMethod: 'none',
           tenantId: 'tenant-A',
+          scopes: ['openid', 'profile', 'offline_access'],
         },
         {},
         async () => null,

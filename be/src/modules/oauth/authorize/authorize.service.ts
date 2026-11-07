@@ -5,7 +5,7 @@ import { AuditAction } from '../../security/audit/audit-action.enum';
 import { AuditService } from '../../security/audit/audit.service';
 import { ClientService, type Client, mintedBeforeDisable } from '../../clients/client.service';
 import { isRegisteredRedirectUri } from '../../clients/redirect-uri.validator';
-import { ResourceService } from '../../resources/resource.service';
+import { ResourceService, type Resource } from '../../resources/resource.service';
 import { InvalidResourceError } from '../../resources/resource.validator';
 import { AuthorizeErrorPage, AuthorizeRedirectError } from './authorize.errors';
 import {
@@ -17,6 +17,7 @@ import { ConsentService } from '../consent/consent.service';
 import { SessionService } from '../../sessions/session.service';
 import { UserTenantService } from '../../identity/user-tenant.service';
 import { adminResourceIdentifier, adminTargetForbidden } from '../token/token.service';
+import { grantableScopes } from '../scope-policy';
 
 /** Raw `/authorize` query parameters (already string-typed by the HTTP layer). */
 export interface AuthorizeParams {
@@ -244,7 +245,18 @@ export class AuthorizeService {
       }
 
       const scope = this.validateScope(params.scope, client);
-      const resource = await this.resolveResource(params.resource, client);
+      const target = await this.resolveResource(params.resource, client);
+      // DEBT-321: then every requested scope must be grantable for that resource right now
+      // (Client.scopes ∩ (OIDC ∪ Resource.scopes)); refused, never silently narrowed.
+      const grantable = grantableScopes(client.scopes, target?.scopes);
+      const notGrantable = scope.split(' ').filter((s) => !grantable.has(s));
+      if (notGrantable.length > 0) {
+        throw new AuthorizeRedirectError(
+          'invalid_scope',
+          `Scope not allowed for this resource: ${notGrantable.join(' ')}`,
+        );
+      }
+      const resource = target?.identifier;
       const maxAge = this.parseMaxAge(params.max_age);
       const prompt = this.parsePrompt(params.prompt);
 
@@ -376,12 +388,12 @@ export class AuthorizeService {
 
     // The client (re-read above) bounds the granted scopes by its *current* scopes so a scope it
     // has since lost is never carried forward. B6.3a: a resource it no longer allows => no code.
-    if (
-      ctx.resource !== undefined &&
-      (adminTargetForbidden(client, ctx.resource, this.adminAud) ||
-        (await this.resources.resolveForClient(client.allowedResources, ctx.resource)) === null)
-    ) {
-      return null;
+    let resource: Resource | undefined;
+    if (ctx.resource !== undefined) {
+      if (adminTargetForbidden(client, ctx.resource, this.adminAud)) return null;
+      resource =
+        (await this.resources.resolveForClient(client.allowedResources, ctx.resource)) ?? undefined;
+      if (!resource) return null;
     }
     // DEBT-116 (MT2): the membership may have been suspended/removed since the screen rendered.
     // Re-check against the re-resolved client's tenant BEFORE any consent write or code.
@@ -402,7 +414,8 @@ export class AuthorizeService {
       ctx.resource,
       requestedScopes,
       versions,
-      client.scopes,
+      // DEBT-321: bounded by the current resource too (a scope it dropped since render is not kept).
+      [...grantableScopes(client.scopes, resource?.scopes)],
     );
     const code = await this.issueCodeFromContext(ctx, session);
     await this.recordConsent(client.clientId, audit, session.userId, 'granted');
@@ -535,7 +548,7 @@ export class AuthorizeService {
   private async resolveResource(
     raw: string | undefined,
     client: Client,
-  ): Promise<string | undefined> {
+  ): Promise<Resource | undefined> {
     if (raw === undefined) return undefined;
     // INV-15 (B7.1): a repeated `resource` query param arrives as an array; Mongoose would cast it
     // to `$in` and bind whichever resource matched first. One grant binds exactly one resource.
@@ -549,7 +562,7 @@ export class AuthorizeService {
       if (!resource || adminTargetForbidden(client, resource.identifier, this.adminAud)) {
         throw new AuthorizeRedirectError('invalid_target', 'Unknown or disallowed resource.');
       }
-      return resource.identifier;
+      return resource;
     } catch (err) {
       if (err instanceof InvalidResourceError) {
         throw new AuthorizeRedirectError('invalid_target', 'Malformed resource parameter.');

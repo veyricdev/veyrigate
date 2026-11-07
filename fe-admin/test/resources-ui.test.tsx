@@ -308,7 +308,7 @@ describe("resource detail", () => {
     expect(screen.queryByLabelText("Resource ID")).toBeNull();
     expect(within(form()).queryAllByRole("textbox")).toHaveLength(1);
     expect(field("Scopes").value).toBe("read write");
-    expect(screen.getByText(/token scopes are bounded by each client's scopes/)).toBeTruthy();
+    expect(screen.getByText(/only gets scopes listed here and on the client/)).toBeTruthy();
 
     type("Scopes", " read\nwrite ");
     submit("Save scopes");
@@ -349,6 +349,29 @@ describe("resource detail", () => {
     type("Scopes", "read");
     submit("Save scopes");
     await waitFor(() => expect(formAlert().textContent).toBe("You do not have permission to do this."));
+  });
+
+  it("hint says the scopes are enforced (run 75)", async () => {
+    renderAt("/resources/demo");
+    await screen.findByLabelText("Scopes");
+    expect(document.getElementById("resource-scopes-hint")?.textContent).toBe(
+      "Separated by spaces or new lines. Enforced: a token for this resource only gets scopes listed here and on the client (standard OIDC scopes excepted). Removing a scope narrows existing sessions at their next refresh.",
+    );
+    expect(field("Scopes").getAttribute("aria-describedby")).toContain("resource-scopes-hint");
+  });
+
+  it("admin resource guard (400 invalid_request) => its description in the form alert, not 'unknown'", async () => {
+    const message = "The admin resource must keep the admin.read and admin.write scopes.";
+    mocks.get.mockResolvedValue(ok({ ...RES, resourceId: "admin", scopes: ["admin.read", "admin.write"] }) as never);
+    mocks.update.mockResolvedValue(fail("invalid_request", message) as never);
+    renderAt("/resources/admin");
+    await screen.findByLabelText("Scopes");
+    type("Scopes", "admin.read");
+    submit("Save scopes");
+    await waitFor(() => expect(formAlert().textContent).toBe(message));
+    expect(screen.queryByText("Currently saved:")).toBeNull();
+    expect(field("Scopes").value).toBe("admin.read");
+    expect(mocks.update).toHaveBeenCalledTimes(1);
   });
 
   it("uncertain update => message, detail re-read (not re-sent)", async () => {

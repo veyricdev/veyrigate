@@ -249,6 +249,7 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
       redirectUris: [REDIRECT],
       grantTypes: ['authorization_code', 'refresh_token'],
       allowedResources: [RESOURCE_ID],
+      scopes: ['openid', 'profile', 'offline_access'],
       tenantId: 'tenant-A',
     });
     appSecret = (await creds.createSecret(APP_CLIENT)).secret;

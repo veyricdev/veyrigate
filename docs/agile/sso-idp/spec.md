@@ -155,12 +155,13 @@ State (session, authorization code, rate limit counter) nằm ở Redis, không 
 
 ## 7. Resource Indicators (RFC 8707)
 
-Vì mục tiêu ban đầu là nhiều app dùng chung một IdP, access token phải chỉ hợp lệ với đúng resource server dự định — không dùng chung một `aud` cho tất cả app. Bốn quy tắc bắt buộc:
+Vì mục tiêu ban đầu là nhiều app dùng chung một IdP, access token phải chỉ hợp lệ với đúng resource server dự định — không dùng chung một `aud` cho tất cả app. Năm quy tắc bắt buộc:
 
 1. **`resource` phải là absolute URI, không có fragment.** Ví dụ hợp lệ: `https://api.game.example.com/`. Không chấp nhận `game-a` hay dạng định danh ngắn.
 2. **Client không được tự khai `resource` tuỳ ý.** Mỗi `Client` có một danh sách `allowedResources[]` đã đăng ký sẵn; khi client xin một `resource` không nằm trong danh sách này, IdP reject ngay ở `/authorize`.
 3. **MVP: một authorization grant chỉ bind với đúng một resource.** `AuthorizeRequestContext` và `AuthorizationCode` phải lưu `resource` đã chọn ngay từ bước `/authorize`; `/token` không được phép đổi sang resource khác với resource đã bind trong code.
-4. **`RefreshToken` phải bind với `scope` và `resource` gốc của grant.** Khi refresh, token mới phát hành phải giữ nguyên `scope`/`resource` — không được dùng để leo thang phạm vi truy cập.
+4. **`RefreshToken` phải bind với `scope` và `resource` gốc của grant; refresh không bao giờ mở rộng scope** (DEBT-512, run 75). `resource` giữ nguyên. Scope phát ra = scope family ∩ `Client.scopes` ∩ (OIDC ∪ `Resource.scopes`) **hiện hành**, tính trước khi ký, và được lưu vào RT kế nhiệm (admin thêm lại scope sau đó KHÔNG làm quyền sống lại; muốn lấy lại phải `/authorize` mới). `scope=` trong body chỉ thu hẹp thêm access token (RFC 6749 §6), không đổi scope family; scope ngoài family hoặc giao rỗng với phần còn lại ⇒ `invalid_scope` (family vẫn sống). Family bị `invalid_grant` + revoke (audit `TOKEN_REFRESHED failure scope_not_allowed`) khi: (i) giao rỗng; (ii) family có scope ngoài OIDC nhưng không còn scope ngoài OIDC nào; (iii) `offline_access` bị gỡ khỏi `Client.scopes`. Family chỉ có scope OIDC (resource `scopes: []`) không bị (ii). AT đã phát giữ nguyên scope tới khi hết hạn (≤ 15'); race admin thu hẹp giữa pre-check và rotate được chấp nhận trong cùng giới hạn đó — lần refresh kế tiếp thu hẹp lại. Consent không đổi khi thu hẹp.
+5. **`Resource.scopes` được thực thi** (DEBT-321, run 75). Scope cấp được = `Client.scopes` ∩ (OIDC ∪ `Resource.scopes`); scope OIDC chuẩn (`openid profile email offline_access`) chỉ so với `Client.scopes`. Áp ở `/authorize` (kể cả resume sau login; scope ngoài giao ⇒ `invalid_scope` redirect, không tạo context/code), chặn trên khi ghi consent, và khi đổi code ở `/token` (scope của code ngoài giao hiện hành ⇒ `invalid_grant`, audit `scope_not_allowed`). Yêu cầu mới thì từ chối, grant sống lâu (refresh) thì thu hẹp. Discovery `scopes_supported` không đổi. Guard: `PATCH /admin/resources/:id` của resource `admin` (`identifier = <issuer>/admin/`) phải giữ cả `admin.read` và `admin.write`, nếu không ⇒ 400 `invalid_request`, DB không đổi (chống tự khoá fe-admin).
 
 ```
 Resource {

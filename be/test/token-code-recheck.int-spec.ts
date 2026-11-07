@@ -830,7 +830,11 @@ describe('/token code grant re-check after the family insert (run 35 Task 3)', (
       const ADMIN_AUD = adminResourceIdentifier(ISSUER);
       const resources = app.get(ResourceService);
       if (!(await resources.findByIdentifier(ADMIN_AUD))) {
-        await resources.create({ resourceId: 'admin', identifier: ADMIN_AUD });
+        await resources.create({
+          resourceId: 'admin',
+          identifier: ADMIN_AUD,
+          scopes: ['admin.read', 'admin.write'],
+        });
       }
       const clientId = `${RUN}-adm${++seq}`;
       await clientModel.create({

@@ -10,6 +10,7 @@ import {
   UseFilters,
   UseGuards,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   ApiBearerAuth,
   ApiCreatedResponse,
@@ -18,6 +19,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import type { HttpRequest } from '../../common/http/http.types';
+import type { AppConfig } from '../../config/configuration';
 import { AdminAuthError, AdminAuthErrorFilter } from '../identity/tenant-context/admin-auth.errors';
 import {
   type AdminActor,
@@ -28,6 +30,7 @@ import {
   Tenant,
   type TenantContext,
 } from '../identity/tenant-context/tenant-context';
+import { adminResourceIdentifier } from '../oauth/token/token.service';
 import { ResourceService } from '../resources/resource.service';
 import { AuditAction } from '../security/audit/audit-action.enum';
 import { AuditService } from '../security/audit/audit.service';
@@ -56,6 +59,7 @@ export class AdminResourcesController {
   constructor(
     private readonly resources: ResourceService,
     private readonly audit: AuditService,
+    private readonly config: ConfigService,
   ) {}
 
   @Get()
@@ -115,7 +119,21 @@ export class AdminResourcesController {
     @Req() req: HttpRequest,
   ) {
     assertSuperAdmin(actor);
-    const res = await this.resources.updateScopes(resourceId, dto.scopes);
+    const current = await this.resources.findByResourceId(resourceId);
+    if (!current) throw AdminAuthError.notFound();
+    // Run 75 (DEBT-321): `Resource.scopes` is enforced, so the `admin` resource losing admin.read
+    // or admin.write would lock every admin console out. Refused like a DTO validation error.
+    if (
+      current.identifier ===
+        adminResourceIdentifier(this.config.getOrThrow<AppConfig>('app').issuer) &&
+      !(dto.scopes.includes('admin.read') && dto.scopes.includes('admin.write'))
+    ) {
+      throw AdminAuthError.invalidRequest(
+        'The admin resource must keep the admin.read and admin.write scopes.',
+      );
+    }
+    // `resourceId` is not unique (DEBT-077): write exactly the document checked above.
+    const res = await this.resources.updateScopes(resourceId, dto.scopes, current.identifier);
     if (!res) throw AdminAuthError.notFound();
     const before = res.before.scopes ?? [];
     await this.audit.record({

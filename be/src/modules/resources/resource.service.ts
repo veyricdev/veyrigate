@@ -73,14 +73,20 @@ export class ResourceService {
   /**
    * Admin PATCH (B6.3a, Q-27.4): only `scopes` may change — `resourceId`/`identifier` are
    * immutable (changing `identifier` would kill every live token's `aud` at once). Returns the
-   * before/after documents, or null when not found.
+   * before/after documents, or null when not found. `identifier` pins the exact document the
+   * caller checked (`resourceId` is not unique, DEBT-077).
    */
   async updateScopes(
     resourceId: string,
     scopes: string[],
+    identifier: string,
   ): Promise<{ before: Resource; after: Resource } | null> {
     const before = await this.resources
-      .findOneAndUpdate({ resourceId }, { $set: { scopes } }, { returnDocument: 'before' })
+      .findOneAndUpdate(
+        { resourceId, identifier },
+        { $set: { scopes } },
+        { returnDocument: 'before' },
+      )
       .lean<Resource>()
       .exec();
     return before ? { before, after: { ...before, scopes } } : null;

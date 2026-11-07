@@ -2,10 +2,10 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: — (run 74 vừa đóng). Quyết định đã chốt (người dùng ủy quyền): `plan.md` §12 "Chốt bổ sung". Còn cần người dùng: push (CI replica set + Dependabot chỉ có hiệu lực khi push; bật Dependabot alerts trong Settings); Node 22.23.4 máy dev (Q62.2); xoá image cũ; xoá 4 DB `vg-int-vault-v7-*`; 610 DB `vg-int-*` biến mất (đã chạy `drop-int-orphans.mjs --yes`?).
+- **Run hiện tại**: (chưa mở) — run 76 sweep 🟡. Quyết định đã chốt (người dùng ủy quyền): `plan.md` §12 "Chốt bổ sung". Còn cần người dùng: push (CI replica set + Dependabot chỉ có hiệu lực khi push; bật Dependabot alerts trong Settings); Node 22.23.4 máy dev (Q62.2); xoá image cũ; xoá 4 DB `vg-int-vault-v7-*`; 610 DB `vg-int-*` biến mất (đã chạy `drop-int-orphans.mjs --yes`?).
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `74-sweep-be1` ✅ 5/5 — khoá `tenantId` trong pipeline update, cookie federation `__Host-`, test fail-closed revoke, X3 ca 8; int 1477, E2E 37, X3 42. Xem `runs/74-sweep-be1/summary.md`. ⚠ Deploy: mọi user đăng nhập lại 1 lần (run 73) + login federation dở ⇒ thử lại. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev — lần đầu sau run 71 XOÁ VĨNH VIỄN audit cũ hơn 180 ngày.
-- **Việc tiếp theo**: run 75 DEBT-321 thực thi `Resource.scopes` (+ chốt DEBT-512), rồi sweep 🟡 (BE DEBT-119…256, 334, 389, 392, 513; FE 490–494; X3 509), cuối cùng X6 release checklist.
+- **Run vừa đóng**: `75-resource-scopes` ✅ 4/4 — thực thi `Resource.scopes` (client ∩ (OIDC ∪ resource)) ở authorize/consent/code/refresh, refresh thu hẹp scope hoặc refuse + revoke, guard resource `admin`; int 1497, fe-admin 1567, E2E 37, X3 42. Xem `runs/75-resource-scopes/summary.md`. ⚠ Deploy: chạy runbook-deploy §12 q1–q3 trước; mọi user đăng nhập lại 1 lần (run 73) + login federation dở ⇒ thử lại. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev — lần đầu sau run 71 XOÁ VĨNH VIỄN audit cũ hơn 180 ngày.
+- **Việc tiếp theo**: sweep 🟡 (BE DEBT-119…256, 334, 389, 392, 513, 515; FE 490–494; X3 509), cuối cùng X6 release checklist.
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
 
@@ -17,11 +17,7 @@
 | [41](runs/41-A1-A3/summary.md)–[50](runs/50-A6.6/summary.md) | M5 | fe-admin A1–A6.6 (BFF, API layer, clients/resources/users/audit/keys/dashboard) | ✅ fe-admin 1284 + E2E 34 | `9851442`…`b9d8675` |
 | [51](runs/51-A7/summary.md)–[55](runs/55-oauth-sweep/summary.md) | M7 | A7 hardening FE, A9 Dockerfile fe-admin, B7.3 Vault Transit + `be/Dockerfile` + Redis Sentinel, DEBT-388 ký trước commit, sweep OAuth (xem từng `runs/NN/summary.md`) | ✅ be 587 + int 1306 + vault 31 + E2E 35 | `ab83dfd`…`c3ed4f0` |
 | [56](runs/56-admin-race/summary.md)–[60](runs/60-location-guard/summary.md) | M7 | Race admin/disable client, thứ tự audit, sweep 🟡 keys/consent, biên HTTP, chặn Location ngoài origin (xem từng `runs/NN/summary.md`) | ✅ be 630 + int 1420 + fe-admin 1533 + E2E 36 | `b634def`…`ba921e8` |
-| [61](runs/61-test-stability/summary.md) | M7 | Độ ổn định test DEBT-448/450/432/206/096/054 (gỡ `--forceExit`) | ✅ be 630 + int 1420 + fe-admin 1533 + E2E 36 | `910dc62` |
-| [62](runs/62-node-bump/summary.md) | M7 | Bump Node 22.23.4 (DEBT-379, security) | ✅ smoke BE 11 + fe-admin 16 + unit be 630 / fe-admin 1533 (22.23.4) | `33efeef` |
-| [63](runs/63-int-setup-sweep/summary.md) | M7 | Mẫu setup/teardown int + lọc `test:int` (DEBT-452/454/456/461–463) | ✅ be 630 + int 1420 (+0 DB) | `993c9ea` |
-| [64](runs/64-test-infra-tail/summary.md) | M7 | Đuôi test-infra: config vault/sentinel, guard `TEST_MONGO_URI` (DEBT-470/471/473/474/476) | ✅ be 630 + int 1420 (+0 DB) | `3ee0085` |
-| [65](runs/65-test-infra-tail2/summary.md) | M7 | Đuôi test-infra 2: gỡ `--forceExit` vault/sentinel, DB riêng khi override, so token phát hành (DEBT-475/203/453) | ✅ be 630 + int 1420 + fe-admin 1533 + vault 31 | `654b39a` |
+| [61](runs/61-test-stability/summary.md)–[65](runs/65-test-infra-tail2/summary.md) | M7 | Ổn định test, bump Node 22.23.4, mẫu hook int, config vault/sentinel, gỡ `--forceExit` (xem từng `runs/NN/summary.md`) | ✅ be 630 + int 1420 + fe-admin 1533 + vault 31 | `910dc62`…`654b39a` |
 | [66](runs/66-happy-dom/summary.md) | M7 | Bump happy-dom 21.0.4 + gỡ ignore audit chết (DEBT-369/371/226) | ✅ fe-admin 1533 + fe-sso-test 269 + audit 0 | `eb75eed` |
 | [67](runs/67-leak-sentinel/summary.md) | M7 | Sentinel env failover + sweep `eyJ` (DEBT-478/477) | ✅ be 630 + int 1420 + vault 31 + fe-admin 1533 + sentinel 3/3 | `56cac7e` |
 | [68](runs/68-timeouts/summary.md) | M7 | Biên thời gian E2E webServer + int timeout sát (DEBT-464/455) | ✅ be 630 + int 1420 + E2E 36 | `4c8e67a` |
@@ -31,6 +27,7 @@
 | [72](runs/72-ops-hardening/summary.md) | M7 | Compose prod mẫu non-root + Dependabot (DEBT-405/466/503/504) | ✅ smoke BE 11 + fe-admin 16 + be 664 | `a24a305` |
 | [73](runs/73-X3/summary.md) | M7 | X3 ma trận cookie + `__Host-` (DEBT-008/510) | ✅ X3 39 + E2E 37 + int 1467 + be 675 | `80a3fda` |
 | [74](runs/74-sweep-be1/summary.md) | M7 | Sweep 🟡 BE bảo mật đợt 1 (DEBT-487/488/489/505/514) | ✅ int 1477 + E2E 37 + X3 42 + be 675 | `321e956` |
+| [75](runs/75-resource-scopes/summary.md) | M7 | Thực thi `Resource.scopes` + thu hẹp scope khi refresh (DEBT-321/512/516) | ✅ int 1497 + fe-admin 1567 + E2E 37 + X3 42 + be 679 | HASH75 |
 
 ## Chặn / cần người quyết định
 

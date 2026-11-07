@@ -205,6 +205,11 @@ describe('run 30 QA (tester): DEBT-172 runtime guard variants', () => {
     jest.spyOn(console, 'log').mockImplementation(() => undefined);
     await seedBootstrap(db, ADMIN, ISSUER, 'test');
     jest.restoreAllMocks();
+    // Run 75 (DEBT-321): the demo control requests the same `openid admin.read`, which must now be
+    // listed on the demo resource to be grantable there.
+    await db
+      .collection('resources')
+      .updateOne({ resourceId: 'demo' }, { $set: { scopes: ['admin.read'] } });
     const user = await db.collection('users').findOne({ email: ADMIN.email });
     userId = (user!._id as Types.ObjectId).toHexString();
     // Legacy state the admin API now refuses (rule A): a public client listing `admin`.

@@ -22,7 +22,7 @@ const FIELDS: Record<FieldName, { label: string; hint: string }> = {
   },
   scopes: {
     label: "Scopes",
-    hint: "Separated by spaces or new lines. Informational: token scopes are bounded by each client's scopes.",
+    hint: "Separated by spaces or new lines. Enforced: a token for this resource only gets scopes listed here and on the client (standard OIDC scopes excepted). Removing a scope narrows existing sessions at their next refresh.",
   },
 };
 const ORDER: FieldName[] = ["resourceId", "identifier", "scopes"];

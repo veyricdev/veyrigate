@@ -8,6 +8,7 @@ import { TokenService, adminTargetForbidden, type TokenResponse } from './token.
 import { TokenError } from './token.errors';
 import { ResourceService } from '../../resources/resource.service';
 import type { Client } from '../../clients/client.service';
+import { grantableScopes, OIDC_SCOPES } from '../scope-policy';
 
 /**
  * A rotation could not produce a successor. The HTTP layer (Task 3) maps this to `invalid_grant`
@@ -117,9 +118,11 @@ export class RefreshTokenService {
    *
    * Scope may only be narrowed — a requested scope outside the original is `invalid_scope` and no
    * rotation happens (INV-13 spirit: a bad request must not burn a valid refresh token). A body
-   * `resource` that differs from the bound resource is `invalid_target`. The minted descendant
-   * keeps the ORIGINAL scope (the family grant never widens or permanently narrows, INV-12); only
-   * the access token carries the narrowed scope. Reuse/concurrency failures surface as
+   * `resource` that differs from the bound resource is `invalid_target`. DEBT-512: the family is
+   * first narrowed to the CURRENT `Client.scopes ∩ (OIDC ∪ Resource.scopes)` (before signing) and
+   * the minted descendant stores that narrowed scope (never widened; re-adding a scope later does
+   * not revive it); a narrower request only shapes the access token (INV-12). A family left with
+   * nothing usable is revoked (`refuseUngrantable`). Reuse/concurrency failures surface as
    * `RefreshRotationError` (mapped to `invalid_grant` by the controller). DEBT-388: signing runs
    * BEFORE the swap, so a signing failure (Vault down ⇒ 503) burns nothing — the same RT retries
    * fine and is never mistaken for reuse. Tokens signed for a request whose swap/re-check then
@@ -137,7 +140,12 @@ export class RefreshTokenService {
     value: string,
     client: Pick<
       Client,
-      'clientId' | 'allowedResources' | 'clientType' | 'tokenEndpointAuthMethod' | 'tenantId'
+      | 'clientId'
+      | 'allowedResources'
+      | 'clientType'
+      | 'tokenEndpointAuthMethod'
+      | 'tenantId'
+      | 'scopes'
     >,
     request: { scope?: string; resource?: string },
     /** DEBT-207/216: `resource` is the rotated doc's (never the request body's); DEBT-214: `scope`
@@ -176,11 +184,25 @@ export class RefreshTokenService {
       .lean()
       .exec()) as RefreshDoc | null;
 
-    let effectiveScope: string[] | undefined;
+    let kept: string[] | undefined;
+    let accessScope: string[] | undefined;
     if (original) {
       if (request.resource !== undefined && request.resource !== original.resource) {
         throw new TokenError('invalid_target');
       }
+      // DEBT-512: narrow the family to what is grantable NOW, before anything is signed (DEBT-388
+      // signs before the swap). `client` is the one just authenticated (current read). A resource
+      // gone since the pre-check is left to rotate/classify (lost resource). Accepted race: an
+      // admin narrowing between here and rotate leaves an AT with the old scope for at most its
+      // TTL (15'), like an AT issued just before the change; the next refresh narrows it.
+      const resource = await this.resources.findByIdentifier(original.resource);
+      const grantable = resource ? grantableScopes(client.scopes, resource.scopes) : undefined;
+      const narrowed = grantable ? original.scope.filter((s) => grantable.has(s)) : original.scope;
+      if (unusableFamily(original.scope, narrowed)) {
+        await this.refuseUngrantable(original, audit);
+      }
+      kept = narrowed;
+      accessScope = narrowed;
       if (request.scope !== undefined) {
         // RFC 6749 §6: a requested scope may only narrow the original grant. Dedupe; an empty
         // scope (e.g. `scope=`) is treated as "no scope parameter" → keep the original grant.
@@ -190,7 +212,10 @@ export class RefreshTokenService {
           if (!requested.every((s) => granted.has(s))) {
             throw new TokenError('invalid_scope');
           }
-          effectiveScope = requested;
+          // DEBT-512: valid for the family but none of it grantable now => nothing to issue (the
+          // family stays alive: no rotate, no revoke).
+          accessScope = requested.filter((s) => narrowed.includes(s));
+          if (accessScope.length === 0) throw new TokenError('invalid_scope');
         }
       }
     }
@@ -198,8 +223,7 @@ export class RefreshTokenService {
     // DEBT-388: sign from the pre-checked doc's immutable fields BEFORE the irreversible swap. A
     // signing error propagates here with nothing written: the RT stays active (no successor, no
     // reuse stamp), so the client's retry succeeds. Access token uses the narrowed scope when the
-    // client asked to narrow; otherwise the full granted scope (the descendant keeps the original).
-    const accessScope = effectiveScope ?? original?.scope;
+    // client asked to narrow; otherwise the (DEBT-512-narrowed) family scope the descendant keeps.
     const signed =
       original && accessScope
         ? await this.tokens.signTokensForRefresh({
@@ -220,6 +244,7 @@ export class RefreshTokenService {
       client,
       { ...audit, tenantId: client.tenantId },
       allowedIdentifiers,
+      kept,
     );
     // Invariant: the swap consumed exactly the doc the tokens were signed for (`tokenHash` is
     // unique). A violation is a bug: kill the family best-effort and fail closed, no token.
@@ -256,6 +281,36 @@ export class RefreshTokenService {
       ...(idToken ? { id_token: idToken } : {}),
       refresh_token: result.newRefreshToken,
     };
+  }
+
+  /**
+   * DEBT-512 (i)–(iii): the family has nothing usable left => revoke it, audit `TOKEN_REFRESHED
+   * failure scope_not_allowed`, opaque invalid_grant. Nothing was rotated, so the doc keeps
+   * `replacedBy: null` and a retry is a plain invalid_grant (no false reuse). A failing revoke still
+   * records the refusal (best effort) and rethrows => 500 (DEBT-067 pattern).
+   */
+  private async refuseUngrantable(original: RefreshDoc, audit: AuditCtx): Promise<never> {
+    const refuse = () =>
+      this.audit.record({
+        actorType: 'user',
+        actorId: original.userId.toHexString(),
+        clientId: original.clientId,
+        action: AuditAction.TOKEN_REFRESHED,
+        result: 'failure',
+        reason: 'scope_not_allowed',
+        ip: audit.ip,
+        userAgent: audit.userAgent,
+        requestId: audit.requestId,
+        metadata: { resource: original.resource, familyId: original.familyId },
+      });
+    try {
+      await this.revokeFamily(original.familyId, original.clientId, new Date());
+    } catch (err) {
+      await refuse().catch(() => undefined);
+      throw err;
+    }
+    await refuse();
+    throw new RefreshRotationError();
   }
 
   /** DEBT-207: current-state re-check of a refresh after `rotate` (see `issueForRefresh`). */
@@ -374,6 +429,9 @@ export class RefreshTokenService {
     /** Identifiers of `client.allowedResources` already resolved by the caller (DEBT-105); resolved
      * here when omitted. The atomic filter below is the same either way. */
     allowedIdentifiers?: string[],
+    /** DEBT-512: the family scope narrowed by the caller's pre-check; the successor stores it.
+     * Defaults to the consumed doc's scope. */
+    successorScope?: string[],
   ): Promise<RotationResult> {
     const tokenHash = sha256(value);
     const now = new Date();
@@ -408,12 +466,13 @@ export class RefreshTokenService {
     }
 
     // Descendant inherits family + the original absolute lifetime (no sliding, Q6) + scope/
-    // resource of the grant (never widened — Task 3 narrows the access token, not the family).
+    // resource of the grant (never widened; DEBT-512 may store a narrowed family scope).
+    const scope = successorScope ?? old.scope;
     const minted = await this.tokens.insertRefreshToken({
       _id: successorId,
       userId: old.userId.toHexString(),
       clientId: old.clientId,
-      scope: old.scope,
+      scope,
       resource: old.resource,
       familyId: old.familyId,
       parentId: old._id,
@@ -450,7 +509,7 @@ export class RefreshTokenService {
       familyId: old.familyId,
       userId: old.userId.toHexString(),
       clientId: old.clientId,
-      scope: old.scope,
+      scope,
       resource: old.resource,
       newRefreshToken: minted.token,
       // Carry the family's session binding out so the minted access token gets `sid` (DEBT-037).
@@ -767,4 +826,18 @@ export class RefreshTokenService {
     }
     return scope;
   }
+}
+
+/**
+ * DEBT-512: a family narrowed to `kept` is unusable when (i) nothing is left, (ii) it held a
+ * non-OIDC (resource) scope and none is left, or (iii) `offline_access` was withdrawn. An OIDC-only
+ * family (e.g. a resource with `scopes: []`) is not caught by (ii).
+ */
+function unusableFamily(original: readonly string[], kept: readonly string[]): boolean {
+  const resourceScope = (s: string) => !OIDC_SCOPES.includes(s);
+  return (
+    kept.length === 0 ||
+    (original.some(resourceScope) && !kept.some(resourceScope)) ||
+    (original.includes('offline_access') && !kept.includes('offline_access'))
+  );
 }

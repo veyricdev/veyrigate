@@ -1,0 +1,8 @@
+# Summary — run 75 thực thi `Resource.scopes` + thu hẹp scope khi refresh (M7, lane BE+FE) — ✅ PASS 4/4 task
+
+- **Phạm vi**: T1 DEBT-321 — `oauth/scope-policy.ts` `grantableScopes` = client ∩ (OIDC ∪ resource), dùng ở `/authorize` (`invalid_scope`, không tạo context/code), chặn trên consent, `recheckCodeGrant` (`scope_not_allowed` ⇒ `invalid_grant` + revoke + audit). T2 DEBT-512 — refresh thu hẹp scope trong pre-check TRƯỚC khi ký, RT kế nhiệm lưu phần giao (thêm lại scope không làm sống lại quyền); refuse `invalid_grant` + revoke family khi giao rỗng / chỉ còn OIDC / client mất `offline_access`. Guard PATCH resource `admin` thiếu `admin.read`/`admin.write` ⇒ 400 `invalid_request`. T3 fe-admin hint "Enforced…" + test lỗi guard. T4 spec §7 quy tắc 4/5, security-matrix R3, runbook-deploy §12 (q1–q3 read-only kiểm trước deploy).
+- **Verify**: unit be 679, int 1497/1497 (+20; `vg-int-*` 4 → 4), fe-admin 1567, E2E 37, X3 42; mutation M1–M9 RED đúng ca; tester thêm t1 (client khác không kích revoke family nạn nhân), t2/t3 (3 refresh song song sau thu hẹp/rỗng không phát scope bị gỡ). q1–q3 chạy read-only trên `sso-idp-e2e` (sạch); DB dev không động.
+- **Commit**: (xem STATUS).
+- **Vòng lặp**: tech-lead=1, BE dev=1, FE dev=1, senior=1 (PASS, 1 🟡), tester=1 (PASS, sửa 🟡).
+- **Debt**: đóng DEBT-321/512/516; mở DEBT-515 (chống tự khoá phía client console fe-admin). "Jest did not exit" khi chạy lẻ vài spec có từ trước run 75 (kiểm trên worktree `5fafa48`), không mở debt.
+- **⚠ Deploy**: chạy runbook-deploy §12 q1–q3 trên DB prod trước khi deploy; client có scope ngoài `Resource.scopes` sẽ nhận `invalid_scope`/bị thu hẹp ở refresh kế tiếp.

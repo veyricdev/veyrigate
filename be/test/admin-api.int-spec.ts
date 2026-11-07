@@ -305,7 +305,11 @@ describe('Admin API B6.3a (clients, secrets, resources) on real Mongo + Redis', 
     await syncAllIndexes(clientModel.db);
 
     const resources = moduleRef.get(ResourceService);
-    await resources.create({ resourceId: 'admin', identifier: ADMIN_AUD });
+    await resources.create({
+      resourceId: 'admin',
+      identifier: ADMIN_AUD,
+      scopes: ['admin.read', 'admin.write'],
+    });
     await resources.create({ resourceId: 'api', identifier: API_AUD, scopes: ['api.read'] });
     const clients = moduleRef.get(ClientService);
     for (const [clientId, tenantId] of [
@@ -1096,6 +1100,50 @@ describe('Admin API B6.3a (clients, secrets, resources) on real Mongo + Redis', 
         (await auditModel.findOne({ action: 'ADMIN_RESOURCE_UPDATED', targetId: rid }).lean())
           ?.metadata,
       ).toEqual({ changedFields: 'scopes', scopesAdded: 1, scopesRemoved: 0 });
+    });
+
+    // Run 75 (DEBT-321): Resource.scopes is enforced, so the `admin` resource losing admin.read or
+    // admin.write would lock fe-admin out for good. Refused like a DTO validation error (400, no
+    // audit), DB untouched.
+    it('(g) PATCH resource admin without admin.read or admin.write => 400 invalid_request, DB unchanged, no audit', async () => {
+      const token = await tok(superA);
+      const before = await resourceModel.findOne({ resourceId: 'admin' }).lean();
+      const audits = () =>
+        auditModel.countDocuments({ action: 'ADMIN_RESOURCE_UPDATED', targetId: 'admin' });
+      const audits0 = await audits();
+      for (const scopes of [['admin.read'], ['admin.write', 'x'], []]) {
+        const res = await call('PATCH', '/admin/resources/admin', token, { scopes });
+        expect({ scopes, status: res.statusCode }).toEqual({ scopes, status: 400 });
+        expect(res.json()).toEqual({
+          error: 'invalid_request',
+          error_description: 'The admin resource must keep the admin.read and admin.write scopes.',
+        });
+      }
+      expect(await resourceModel.findOne({ resourceId: 'admin' }).lean()).toEqual(before);
+      expect(await audits()).toBe(audits0);
+    });
+
+    it('(g2) PATCH resource admin keeping both admin scopes => 200; another resource to [] => 200', async () => {
+      const token = await tok(superA);
+      const keep = ['admin.read', 'admin.write'];
+      const widened = await call('PATCH', '/admin/resources/admin', token, {
+        scopes: [...keep, 'admin.audit'],
+      });
+      expect(widened.statusCode).toBe(200);
+      expect(widened.json().scopes).toEqual([...keep, 'admin.audit']);
+      expect(
+        (await call('PATCH', '/admin/resources/admin', token, { scopes: keep })).statusCode,
+      ).toBe(200);
+      expect((await resourceModel.findOne({ resourceId: 'admin' }).lean())?.scopes).toEqual(keep);
+      const rid = `${RUN}-g2`.toLowerCase();
+      await call('POST', '/admin/resources', token, {
+        resourceId: rid,
+        identifier: 'https://g2.example.com/',
+        scopes: ['g2.read'],
+      });
+      const emptied = await call('PATCH', `/admin/resources/${rid}`, token, { scopes: [] });
+      expect(emptied.statusCode).toBe(200);
+      expect(emptied.json().scopes).toEqual([]);
     });
 
     it('stale auth_time => 403 step_up_required on resource writes', async () => {
