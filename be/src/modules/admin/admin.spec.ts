@@ -22,7 +22,7 @@ import {
 } from './admin.mappers';
 import { adminOnly, isAdminOpenApiEnabled, registerAdminOpenApi } from './admin.openapi';
 import { AdminAuditController } from './admin-audit.controller';
-import { AdminClientsController } from './admin-clients.controller';
+import { AdminClientsController, assertKeepsOwnAccess } from './admin-clients.controller';
 import { AdminKeysController } from './admin-keys.controller';
 import { AdminResourcesController } from './admin-resources.controller';
 import { AdminUsersController } from './admin-users.controller';
@@ -104,6 +104,79 @@ describe('admin mappers (allowlist projection, B6.3a)', () => {
     expect((toAdminError(new DuplicateError('Resource')) as AdminAuthError).status).toBe(409);
     const infra = new Error('mongo down');
     expect(toAdminError(infra)).toBe(infra);
+  });
+});
+
+describe('assertKeepsOwnAccess (run 76, DEBT-515)', () => {
+  const TS = ['openid', 'offline_access', 'admin.read', 'admin.write'];
+  const ids = jest.fn(async () => ['admin']);
+  const conflict = async (p: Promise<void>, text: string) => {
+    const err = (await p.then(
+      () => null,
+      (e: unknown) => e,
+    )) as AdminAuthError;
+    expect(err).toBeInstanceOf(AdminAuthError);
+    expect(err.status).toBe(409);
+    expect(err.body).toEqual({ error: 'conflict', error_description: text });
+  };
+  beforeEach(() => ids.mockClear());
+
+  it('scopes missing one token scope => 409 before any resource lookup', async () => {
+    await conflict(
+      assertKeepsOwnAccess({ scopes: ['openid', 'admin.read'], allowedResources: [] }, TS, ids),
+      'The client issuing this admin token must keep every scope of this token.',
+    );
+    expect(ids).not.toHaveBeenCalled();
+  });
+
+  it('allowedResources without the admin resource => 409', async () => {
+    await conflict(
+      assertKeepsOwnAccess({ allowedResources: ['api'] }, TS, ids),
+      'The client issuing this admin token must keep the admin resource.',
+    );
+  });
+
+  it('grantTypes: no authorization_code, or no refresh_token with offline_access => 409', async () => {
+    const text = 'The client issuing this admin token must keep the grant types it signs in with.';
+    await conflict(assertKeepsOwnAccess({ grantTypes: ['refresh_token'] }, TS, ids), text);
+    await conflict(assertKeepsOwnAccess({ grantTypes: ['authorization_code'] }, TS, ids), text);
+    await expect(
+      assertKeepsOwnAccess({ grantTypes: ['authorization_code'] }, ['admin.write'], ids),
+    ).resolves.toBeUndefined();
+  });
+
+  it('a body keeping everything (or not touching those fields) passes; no lookup without allowedResources', async () => {
+    await expect(
+      assertKeepsOwnAccess(
+        {
+          scopes: [...TS, 'profile'],
+          allowedResources: ['api', 'admin'],
+          grantTypes: ['authorization_code', 'refresh_token'],
+        },
+        TS,
+        ids,
+      ),
+    ).resolves.toBeUndefined();
+    ids.mockClear();
+    await expect(assertKeepsOwnAccess({}, TS, ids)).resolves.toBeUndefined();
+    expect(ids).not.toHaveBeenCalled();
+  });
+
+  it('no admin resource registered => plain Error (5xx, fail closed); lookup error propagates', async () => {
+    const none = await assertKeepsOwnAccess(
+      { allowedResources: ['admin'] },
+      TS,
+      async () => [],
+    ).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(none).toBeInstanceOf(Error);
+    expect(none).not.toBeInstanceOf(AdminAuthError);
+    const down = new Error('mongo down');
+    await expect(
+      assertKeepsOwnAccess({ allowedResources: ['admin'] }, TS, () => Promise.reject(down)),
+    ).rejects.toBe(down);
   });
 });
 

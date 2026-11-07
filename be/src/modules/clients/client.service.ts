@@ -402,7 +402,7 @@ export class ClientService {
   }
 
   /** `resourceId` of the admin API resource (none registered => []). Fails closed without wiring. */
-  private async adminResourceIds(): Promise<string[]> {
+  async adminResourceIds(): Promise<string[]> {
     if (!this.resources || !this.issuer) {
       throw new Error(
         'ClientService: ResourceService and app.issuer are required for admin writes',

@@ -2,10 +2,10 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: (chưa mở) — run 76 sweep 🟡. Quyết định đã chốt (người dùng ủy quyền): `plan.md` §12 "Chốt bổ sung". Còn cần người dùng: push (CI replica set + Dependabot chỉ có hiệu lực khi push; bật Dependabot alerts trong Settings); Node 22.23.4 máy dev (Q62.2); xoá image cũ; xoá 4 DB `vg-int-vault-v7-*`; 610 DB `vg-int-*` biến mất (đã chạy `drop-int-orphans.mjs --yes`?).
+- **Run hiện tại**: (chưa mở) — run 77 sweep 🟡 FE/E2E. Quyết định đã chốt (người dùng ủy quyền): `plan.md` §12 "Chốt bổ sung". Còn cần người dùng: push (CI replica set + Dependabot chỉ có hiệu lực khi push; bật Dependabot alerts trong Settings); Node 22.23.4 máy dev (Q62.2); xoá image cũ; xoá 4 DB `vg-int-vault-v7-*`; 610 DB `vg-int-*` biến mất (đã chạy `drop-int-orphans.mjs --yes`?).
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `75-resource-scopes` ✅ 4/4 — thực thi `Resource.scopes` (client ∩ (OIDC ∪ resource)) ở authorize/consent/code/refresh, refresh thu hẹp scope hoặc refuse + revoke, guard resource `admin`; int 1497, fe-admin 1567, E2E 37, X3 42. Xem `runs/75-resource-scopes/summary.md`. ⚠ Deploy: chạy runbook-deploy §12 q1–q3 trước; mọi user đăng nhập lại 1 lần (run 73) + login federation dở ⇒ thử lại. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev — lần đầu sau run 71 XOÁ VĨNH VIỄN audit cũ hơn 180 ngày.
-- **Việc tiếp theo**: sweep 🟡 (BE DEBT-119…256, 334, 389, 392, 513, 515; FE 490–494; X3 509), cuối cùng X6 release checklist.
+- **Run vừa đóng**: `76-console-lockout` ✅ 3/3 — PATCH client console làm mất quyền vào lại fe-admin ⇒ 409 (scope token, resource `admin`, grant), gộp `ADMIN_ROLES`; int 1516, fe-admin 1567, E2E 37, X3 42. Xem `runs/76-console-lockout/summary.md`. ⚠ Deploy: runbook-deploy §12 q1–q3 trước (run 75); mọi user đăng nhập lại 1 lần (run 73) + login federation dở ⇒ thử lại. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev — lần đầu sau run 71 XOÁ VĨNH VIỄN audit cũ hơn 180 ngày.
+- **Việc tiếp theo**: run 77 sweep 🟡 FE/E2E (DEBT-490–494, 509), rồi BE (DEBT-119…256, 334, 389, 392, 517), cuối cùng X6 release checklist.
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
 
@@ -28,6 +28,7 @@
 | [73](runs/73-X3/summary.md) | M7 | X3 ma trận cookie + `__Host-` (DEBT-008/510) | ✅ X3 39 + E2E 37 + int 1467 + be 675 | `80a3fda` |
 | [74](runs/74-sweep-be1/summary.md) | M7 | Sweep 🟡 BE bảo mật đợt 1 (DEBT-487/488/489/505/514) | ✅ int 1477 + E2E 37 + X3 42 + be 675 | `321e956` |
 | [75](runs/75-resource-scopes/summary.md) | M7 | Thực thi `Resource.scopes` + thu hẹp scope khi refresh (DEBT-321/512/516) | ✅ int 1497 + fe-admin 1567 + E2E 37 + X3 42 + be 679 | `8242c8e` |
+| [76](runs/76-console-lockout/summary.md) | M7 | Chống tự khoá client console + gộp `ADMIN_ROLES` (DEBT-515/513) | ✅ int 1516 + fe-admin 1567 + E2E 37 + X3 42 + be 684 | HASH76 |
 
 ## Chặn / cần người quyết định
 

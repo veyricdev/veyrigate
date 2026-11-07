@@ -351,3 +351,32 @@ log app `Redis error: …` (không có mật khẩu/URI đầy đủ).
   Cần giữ lâu hơn cho một sự cố ⇒ export ngay khi mở sự cố (xem runbook-deploy §1 "Run 71").
 - TTL **không** xoá backup Mongo (§4) và log ứng dụng (pino): retention của backup/log theo chính sách
   riêng; restore backup cũ mang lại event cũ, TTL sẽ xoá lại sau ≤ ~60 s khi index có mặt.
+
+## 7. Console fe-admin bị khoá (run 76, DEBT-515/517)
+
+**Dấu hiệu**: đăng nhập fe-admin lỗi ở `/authorize` (`invalid_scope`, `invalid_target`,
+`redirect_uri` không khớp) hoặc `/token` (`unauthorized_client`, `invalid_client`), hay admin API trả
+`401`/`403 insufficient_scope` cho mọi người dùng console.
+
+- BE đã chặn console tự gỡ scope của token, resource `admin`, `authorization_code`/`refresh_token` hay tự
+  disable (409 `conflict`, spec §7 quy tắc 6). Còn khoá được bằng: xoá redirect URI/post-logout URI của
+  console, `DELETE` đúng secret version BFF đang dùng (DEBT-517), hoặc sửa từ một client admin-capable khác.
+- **Cách 1 (ưu tiên)**: đăng nhập bằng một client admin-capable khác (super_admin) và `PATCH /admin/clients/<console>`
+  trả lại `scopes`, `allowedResources` (có `admin`), `grantTypes`, `redirectUris`, `disabled:false`;
+  secret mất ⇒ `POST /admin/clients/<console>/secrets` rồi cập nhật secret store của BFF. Có audit.
+- **Cách 2 (chỉ khi không còn client admin-capable nào)**: sửa collection `clients` có kiểm soát như
+  §3d (2 người, biên bản ngoài hệ thống, **không sinh audit**), qua `d` đã in `DB:`, chỉ đúng 1 document.
+  Lệnh này đi vòng qua `validateConfig` (định dạng redirect URI, scope, resource): **chép nguyên giá trị** từ
+  cấu hình BFF đang chạy (scope BFF xin, callback URI) hoặc từ document trong bản backup gần nhất (§4),
+  **không gõ tay**; người thứ hai đối chiếu từng mảng trước khi chạy.
+```js
+const r = d.clients.updateOne({ clientId: '<console-client-id>' }, { $set: {
+  scopes: [/* scope BFF xin, vd openid email offline_access admin.read admin.write */],
+  allowedResources: [/* resourceId hiện có + resourceId của resource admin */],
+  grantTypes: ['authorization_code', 'refresh_token'],
+  redirectUris: [/* callback của BFF */], disabledAt: null } });
+if (r.matchedCount !== 1) throw new Error('clients: matchedCount=' + r.matchedCount);
+```
+  Secret mất hết ⇒ không tạo secret bằng tay trong DB; sau khi đăng nhập lại được bằng client khác thì
+  dùng Cách 1 để phát hành secret.
+- **Xác minh**: đăng nhập fe-admin (`prompt=login`) → trang Clients mở được (`GET /admin/clients` `200`).

@@ -33,6 +33,7 @@ import {
   Tenant,
   type TenantContext,
 } from '../identity/tenant-context/tenant-context';
+import { ADMIN_ROLE_VALUES } from '../identity/admin-roles';
 import { LastSuperAdminError } from '../identity/identity.errors';
 import { SuperAdminGuard } from '../identity/super-admin-guard';
 import { type UserTenant, UserTenantService } from '../identity/user-tenant.service';
@@ -43,7 +44,6 @@ import { AuditAction } from '../security/audit/audit-action.enum';
 import { AuditService } from '../security/audit/audit.service';
 import { adminAuditBase } from './admin-audit';
 import {
-  ADMIN_ROLE_VALUES,
   DEFAULT_PAGE_LIMIT,
   PageQueryDto,
   toPage,

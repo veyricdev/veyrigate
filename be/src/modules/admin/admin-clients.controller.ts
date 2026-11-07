@@ -74,6 +74,43 @@ const DIFF_FIELDS = [
 ] as const;
 
 /**
+ * Run 76 (DEBT-515, spec §7 rule 6): a PATCH of the client that issued this admin token must leave
+ * it able to sign in to the console again. Pure on the body + the token scopes + the (immutable)
+ * id of the `admin` resource, so concurrent PATCHes each satisfy it on their own (no DB read of
+ * the client). First failure wins, order scopes -> resources -> grants; fixed texts (no input).
+ */
+export async function assertKeepsOwnAccess(
+  dto: Pick<UpdateClientDto, 'scopes' | 'allowedResources' | 'grantTypes'>,
+  tokenScopes: readonly string[],
+  adminResourceIds: () => Promise<string[]>,
+): Promise<void> {
+  if (dto.scopes !== undefined && !tokenScopes.every((s) => dto.scopes!.includes(s))) {
+    throw AdminAuthError.conflict(
+      'The client issuing this admin token must keep every scope of this token.',
+    );
+  }
+  if (dto.allowedResources !== undefined) {
+    const ids = await adminResourceIds();
+    // A token that passed the admin guard implies an `admin` resource: none => fail closed (5xx).
+    if (ids.length === 0) throw new Error('admin resource missing while an admin token is live');
+    if (!ids.some((id) => dto.allowedResources!.includes(id))) {
+      throw AdminAuthError.conflict(
+        'The client issuing this admin token must keep the admin resource.',
+      );
+    }
+  }
+  if (
+    dto.grantTypes !== undefined &&
+    (!dto.grantTypes.includes('authorization_code') ||
+      (tokenScopes.includes('offline_access') && !dto.grantTypes.includes('refresh_token')))
+  ) {
+    throw AdminAuthError.conflict(
+      'The client issuing this admin token must keep the grant types it signs in with.',
+    );
+  }
+}
+
+/**
  * Admin API — clients + client secrets (B6.3a, spec §9.10/§9.11). Tenant = the admin token's
  * tenant ONLY (Q-27.2): every lookup is `{clientId, tenantId}` in one filter, so another tenant's
  * client is a byte-identical 404 (D-27.c). Every mutation needs `admin.write` + a recent login
@@ -159,6 +196,9 @@ export class AdminClientsController {
     if (dto.disabled === true && clientId === actor.clientId) {
       // Disabling the client that issued this admin token would lock the caller out of the API.
       throw AdminAuthError.conflict('cannot disable the client issuing this admin token');
+    }
+    if (clientId === actor.clientId) {
+      await assertKeepsOwnAccess(dto, actor.scopes, () => this.clients.adminResourceIds());
     }
     const base = {
       ...adminAuditBase(req, ctx),

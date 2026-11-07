@@ -2111,4 +2111,217 @@ describe('Admin API B6.3a (clients, secrets, resources) on real Mongo + Redis', 
       expect(await liveCreds(id)).toBe(0);
     });
   });
+
+  // ------------------------------------------------ run 76 (DEBT-515): console self-lockout guard
+  describe('run 76 — the client issuing the admin token cannot lock itself out (DEBT-515)', () => {
+    const TS = 'openid offline_access admin.read admin.write';
+    const M_SCOPES = 'The client issuing this admin token must keep every scope of this token.';
+    const M_RES = 'The client issuing this admin token must keep the admin resource.';
+    const M_GRANT =
+      'The client issuing this admin token must keep the grant types it signs in with.';
+    let snap: Record<string, unknown>;
+
+    const readA = () => clientModel.findOne({ clientId: BFF_A }).lean<Record<string, unknown>>();
+    const updatedAuditsA = () =>
+      auditModel.countDocuments({ action: 'ADMIN_CLIENT_UPDATED', targetId: BFF_A });
+
+    beforeEach(async () => {
+      snap = (await readA())!;
+    });
+    afterEach(async () => {
+      // Every case must leave BFF_A as the other suites expect it (also when a mutation lets a
+      // locking PATCH through).
+      await clientModel.replaceOne({ clientId: BFF_A }, snap);
+    });
+
+    /** PATCH BFF_A with a body that locks it out => 409 + fixed text, DB and audit unchanged. */
+    async function expectLocked(body: Record<string, unknown>, message: string, as = superA) {
+      const audits = await updatedAuditsA();
+      const res = await call(
+        'PATCH',
+        `/admin/clients/${BFF_A}`,
+        await tok(as, { scope: TS }),
+        body,
+      );
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toEqual({ error: 'conflict', error_description: message });
+      expect(await readA()).toEqual(snap);
+      expect(await updatedAuditsA()).toBe(audits);
+    }
+
+    const patchA = async (body: Record<string, unknown>, scope = TS) =>
+      call('PATCH', `/admin/clients/${BFF_A}`, await tok(superA, { scope }), body);
+
+    it('(s1) dropping admin.write from its scopes => 409', async () => {
+      await expectLocked({ scopes: ['openid', 'offline_access', 'admin.read'] }, M_SCOPES);
+    });
+
+    it('(s2) dropping openid (an OIDC scope of the token) => 409', async () => {
+      await expectLocked({ scopes: ['offline_access', 'admin.read', 'admin.write'] }, M_SCOPES);
+    });
+
+    it('(s3) dropping offline_access => 409', async () => {
+      await expectLocked({ scopes: ['openid', 'admin.read', 'admin.write'] }, M_SCOPES);
+    });
+
+    it('(r1) allowedResources without admin => 409, no credential of BFF_A revoked', async () => {
+      await expectLocked({ allowedResources: ['api'] }, M_RES);
+      expect(
+        await credentialModel.countDocuments({ clientId: BFF_A, revokedAt: { $ne: null } }),
+      ).toBe(0);
+    });
+
+    it('(r2) allowedResources: [] => 409', async () => {
+      await expectLocked({ allowedResources: [] }, M_RES);
+    });
+
+    it('(g1) grantTypes without authorization_code => 409', async () => {
+      await expectLocked({ grantTypes: ['refresh_token'] }, M_GRANT);
+    });
+
+    it('(g2) token has offline_access, grantTypes without refresh_token => 409', async () => {
+      await expectLocked({ grantTypes: ['authorization_code'] }, M_GRANT);
+    });
+
+    it('(g3) token WITHOUT offline_access, grantTypes [authorization_code] => 200', async () => {
+      const res = await patchA(
+        { grantTypes: ['authorization_code'] },
+        'openid admin.read admin.write',
+      );
+      expect(res.statusCode).toBe(200);
+      expect((await readA())?.grantTypes).toEqual(['authorization_code']);
+    });
+
+    it('(c1) adding a scope / dropping a scope not in the token => 200', async () => {
+      const add = await patchA({
+        scopes: ['openid', 'offline_access', 'admin.read', 'admin.write', 'profile'],
+      });
+      expect(add.statusCode).toBe(200);
+      const drop = await patchA({
+        scopes: ['openid', 'offline_access', 'admin.read', 'admin.write'],
+      });
+      expect(drop.statusCode).toBe(200);
+      expect((await readA())?.scopes).toEqual([
+        'openid',
+        'offline_access',
+        'admin.read',
+        'admin.write',
+      ]);
+    });
+
+    it('(c2) allowedResources keeping admin => 200', async () => {
+      const res = await patchA({ allowedResources: ['api', 'admin'] });
+      expect(res.statusCode).toBe(200);
+      expect((await readA())?.allowedResources).toEqual(['api', 'admin']);
+    });
+
+    it('(c3) redirectUris / allowedCorsOrigins of its own client => 200', async () => {
+      const res = await patchA({
+        redirectUris: [REDIRECT, 'https://rp.example.com/2'],
+        allowedCorsOrigins: ['https://spa.example.com'],
+      });
+      expect(res.statusCode).toBe(200);
+      expect((await readA())?.redirectUris).toEqual([REDIRECT, 'https://rp.example.com/2']);
+    });
+
+    it('(c4) super_admin via BFF_A strips another admin-capable client => 200', async () => {
+      const other = await mkClient(
+        confidential({
+          allowedResources: ['admin', 'api'],
+          scopes: ['openid', 'offline_access', 'admin.read', 'admin.write'],
+          grantTypes: ['authorization_code', 'refresh_token'],
+        }),
+        superA,
+      );
+      const res = await call('PATCH', `/admin/clients/${other}`, await tok(superA, { scope: TS }), {
+        scopes: ['openid'],
+        allowedResources: ['api'],
+        grantTypes: ['refresh_token'],
+      });
+      expect(res.statusCode).toBe(200);
+      expect(await clientModel.findOne({ clientId: other }).lean()).toMatchObject({
+        scopes: ['openid'],
+        allowedResources: ['api'],
+        grantTypes: ['refresh_token'],
+      });
+    });
+
+    it('(t1) tenant_admin via BFF_A: locking body => 409 (before the 403), harmless body => 403', async () => {
+      await expectLocked({ scopes: ['openid'] }, M_SCOPES, tadminA);
+      const res = await call(
+        'PATCH',
+        `/admin/clients/${BFF_A}`,
+        await tok(tadminA, { scope: TS }),
+        {
+          allowedCorsOrigins: ['https://spa.example.com'],
+        },
+      );
+      expect(res.statusCode).toBe(403);
+      expect(await readA()).toEqual(snap);
+    });
+
+    // Regression, not a DB-concurrency proof: the guard reads only the body and the token, so the
+    // outcome cannot depend on the order in which the two PATCHes reach Mongo.
+    it('(race) a valid and a locking PATCH at once => 200 + 409, the token scopes survive', async () => {
+      const t = await tok(superA, { scope: TS });
+      const [ok, locked] = await Promise.all([
+        call('PATCH', `/admin/clients/${BFF_A}`, t, {
+          scopes: ['openid', 'offline_access', 'admin.read', 'admin.write', 'profile'],
+        }),
+        call('PATCH', `/admin/clients/${BFF_A}`, t, {
+          scopes: ['openid', 'offline_access', 'admin.read'],
+        }),
+      ]);
+      expect([ok.statusCode, locked.statusCode]).toEqual([200, 409]);
+      const scopes = (await readA())?.scopes as string[];
+      expect(scopes).toEqual(expect.arrayContaining(TS.split(' ')));
+    });
+
+    // ---------------------------------------------------------------- tester run 76: extra risks
+    it('(x1) token issued by BFF_B (tenant B) PATCHing BFF_A with a locking body => 404, BFF_A unchanged', async () => {
+      const t = await tok(tadminB, { client: BFF_B, scope: TS });
+      for (const body of [{ scopes: ['openid'] }, { allowedResources: [] }, { disabled: true }]) {
+        const res = await call('PATCH', `/admin/clients/${BFF_A}`, t, body);
+        expect(res.statusCode).toBe(404);
+        expect(res.json()).toEqual({ error: 'not_found' });
+      }
+      expect(await readA()).toEqual(snap);
+    });
+
+    it('(x2) keeping exactly the token scopes (reordered) / allowedResources [admin] / both grants => 200', async () => {
+      const res = await patchA({
+        scopes: ['admin.write', 'admin.read', 'offline_access', 'openid'],
+        allowedResources: ['admin'],
+        grantTypes: ['refresh_token', 'authorization_code'],
+      });
+      expect(res.statusCode).toBe(200);
+      expect(await readA()).toMatchObject({
+        scopes: ['admin.write', 'admin.read', 'offline_access', 'openid'],
+        allowedResources: ['admin'],
+        grantTypes: ['refresh_token', 'authorization_code'],
+      });
+    });
+
+    it('(x3) scope compared case-sensitively: ADMIN.WRITE does not stand in for admin.write => 409', async () => {
+      await expectLocked(
+        { scopes: ['openid', 'offline_access', 'admin.read', 'ADMIN.WRITE'] },
+        M_SCOPES,
+      );
+    });
+
+    it('(x4) locking field mixed with harmless fields => 409, nothing of the harmless part is written', async () => {
+      await expectLocked(
+        { allowedCorsOrigins: ['https://spa.example.com'], allowedResources: ['api'] },
+        M_RES,
+      );
+    });
+
+    it('(x5) several violations at once => the first rule (scopes) wins, fixed text', async () => {
+      await expectLocked(
+        { scopes: ['openid'], allowedResources: [], grantTypes: ['refresh_token'] },
+        M_SCOPES,
+      );
+      await expectLocked({ allowedResources: [], grantTypes: ['refresh_token'] }, M_RES);
+    });
+  });
 });
