@@ -218,6 +218,52 @@ describe('seed-e2e-admin (run 39 Task 0) on real Mongo', () => {
     });
   });
 
+  describe('X3 clients (run 73, E2E_X3=1)', () => {
+    const x3Ids = ['x3-alpha', 'x3-beta'];
+    const clients = () => connection.model('Client');
+    const x3Docs = () =>
+      clients()
+        .find({ clientId: { $in: x3Ids } })
+        .sort({ clientId: 1 })
+        .lean()
+        .exec();
+
+    it('off by default: no x3-* client is written', async () => {
+      await run();
+      expect(await x3Docs()).toHaveLength(0);
+    });
+
+    it('on: upserts two public PKCE clients bound to their https origin, no credential', async () => {
+      await seedE2eAdmin(connection, ADMIN, ISSUER, 'test', SECRET, undefined, true);
+      const docs = (await x3Docs()) as unknown as Record<string, unknown>[];
+      expect(docs.map((d) => d.clientId)).toEqual(x3Ids);
+      for (const [d, origin] of [
+        [docs[0], 'https://app.alpha.localhost:8443'],
+        [docs[1], 'https://app.beta.localhost:8443'],
+      ] as const) {
+        expect(d).toMatchObject({
+          clientType: 'public',
+          tokenEndpointAuthMethod: 'none',
+          redirectUris: [`${origin}/callback`],
+          postLogoutRedirectUris: [`${origin}/`],
+          allowedCorsOrigins: [origin],
+          allowedResources: ['demo', 'other'],
+          tenantId: DEFAULT_TENANT_ID,
+        });
+      }
+      expect(await creds.countDocuments({ clientId: { $in: x3Ids } }).exec()).toBe(0);
+    });
+
+    it('on, run 2: idempotent (still one document per client)', async () => {
+      await seedE2eAdmin(connection, ADMIN, ISSUER, 'test', SECRET, undefined, true);
+      expect(
+        await clients()
+          .countDocuments({ clientId: { $in: x3Ids } })
+          .exec(),
+      ).toBe(2);
+    });
+  });
+
   it('refuses NODE_ENV other than test before any write', async () => {
     const n = await credCount();
     await expect(seedE2eAdmin(connection, ADMIN, ISSUER, 'development', SECRET)).rejects.toThrow(

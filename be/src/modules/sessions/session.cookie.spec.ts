@@ -45,39 +45,67 @@ describe('SessionCookie (B2.3, INV-16, C8)', () => {
   const inject = (url: string, headers: Record<string, string> = {}) =>
     app.getHttpAdapter().getInstance().inject({ method: 'GET', url, headers });
 
-  it('sets idp_session with HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=absolute; no Domain', async () => {
+  it('Secure => sets __Host-idp_session with HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=absolute; no Domain (DEBT-008)', async () => {
     app = await makeApp(true);
     const header = String((await inject('/set')).headers['set-cookie']);
-    expect(header).toMatch(/^idp_session=opaque-random-id;/);
+    expect(header).toMatch(/^__Host-idp_session=opaque-random-id;/);
     expect(header).toMatch(/; HttpOnly/);
     expect(header).toMatch(/; Secure/);
     expect(header).toMatch(/; SameSite=Lax/);
-    expect(header).toMatch(/; Path=\//);
+    expect(header).toMatch(/; Path=\/(;|$)/);
     expect(header).toMatch(/; Max-Age=2592000/);
     expect(header).not.toMatch(/Domain=/i);
   });
 
-  it('omits Secure only when the dev flag is false', async () => {
+  it('dev flag false => legacy name idp_session without Secure (http dev/E2E)', async () => {
     app = await makeApp(false);
     const header = String((await inject('/set')).headers['set-cookie']);
+    expect(header).toMatch(/^idp_session=opaque-random-id;/);
     expect(header).not.toMatch(/Secure/);
+    expect(header).not.toMatch(/__Host-/);
     expect(header).toMatch(/HttpOnly/);
+    expect(header).not.toMatch(/Domain=/i);
   });
 
-  it('clear uses the same attributes and expires the cookie', async () => {
+  it('clear uses the same name + attributes and expires the cookie', async () => {
     app = await makeApp(true);
     const header = String((await inject('/clear')).headers['set-cookie']);
-    expect(header).toMatch(/^idp_session=;/);
+    expect(header).toMatch(/^__Host-idp_session=;/);
     expect(header).toMatch(/Max-Age=0/);
     expect(header).toMatch(/HttpOnly; .*Secure|Secure; .*HttpOnly/);
     expect(header).toMatch(/SameSite=Lax/);
     expect(header).toMatch(/Path=\//);
+    expect(header).not.toMatch(/Domain=/i);
   });
 
   it('reads the cookie value; missing/empty → undefined', async () => {
     app = await makeApp(true);
-    expect((await inject('/read', { cookie: 'idp_session=abc' })).json()).toEqual({ id: 'abc' });
+    expect((await inject('/read', { cookie: '__Host-idp_session=abc' })).json()).toEqual({
+      id: 'abc',
+    });
     expect((await inject('/read')).json()).toEqual({ id: null });
-    expect((await inject('/read', { cookie: 'idp_session=' })).json()).toEqual({ id: null });
+    expect((await inject('/read', { cookie: '__Host-idp_session=' })).json()).toEqual({ id: null });
+  });
+
+  it('Secure => the legacy idp_session cookie is ignored, never a fallback (hard cut, tossing)', async () => {
+    app = await makeApp(true);
+    expect((await inject('/read', { cookie: 'idp_session=abc' })).json()).toEqual({ id: null });
+    // Both present (a sibling subdomain tossed the legacy name): only the __Host- one counts.
+    expect(
+      (await inject('/read', { cookie: 'idp_session=tossed; __Host-idp_session=real' })).json(),
+    ).toEqual({ id: 'real' });
+  });
+
+  it('non-Secure => reads only idp_session (the __Host- name belongs to Secure mode)', async () => {
+    app = await makeApp(false);
+    expect((await inject('/read', { cookie: 'idp_session=abc' })).json()).toEqual({ id: 'abc' });
+    expect((await inject('/read', { cookie: '__Host-idp_session=abc' })).json()).toEqual({
+      id: null,
+    });
+  });
+
+  it('exposes the name derived from the one flag', () => {
+    expect(new SessionCookie(makeConfig(true)).name).toBe('__Host-idp_session');
+    expect(new SessionCookie(makeConfig(false)).name).toBe('idp_session');
   });
 });

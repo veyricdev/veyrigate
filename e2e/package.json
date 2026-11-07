@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "e2e": "playwright test",
+    "e2e:x3": "playwright test -c playwright.x3.config.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

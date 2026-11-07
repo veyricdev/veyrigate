@@ -6,3 +6,5 @@ blob-report/
 .env
 # DEBT-091: E2E-only RSA keyset (never the dev keyset in be/keys); must not be committed.
 .keys/
+# X3 (run 73): self-signed TLS cert/key generated at run time; never committed.
+.x3-tls/

@@ -1,0 +1,419 @@
+{
+  "chromium": {
+    "version": "156.0.8078.4",
+    "date": "2026-11-07",
+    "cells": [
+      {
+        "case": "1-login",
+        "topology": "same-site",
+        "storedSameSite": "Lax",
+        "cookieNames": [
+          "__Host-idp_csrf"
+        ],
+        "outcome": "claims",
+        "browser": "chromium",
+        "status": "passed"
+      },
+      {
+        "case": "2-sso",
+        "topology": "same-site",
+        "cookieNames": [
+          "__Host-idp_csrf",
+          "__Host-idp_session"
+        ],
+        "outcome": "claims",
+        "browser": "chromium",
+        "status": "passed"
+      },
+      {
+        "case": "3-logout",
+        "topology": "same-site",
+        "cookieNames": [
+          "__Host-idp_csrf",
+          "__Host-idp_session"
+        ],
+        "outcome": "logged-out",
+        "browser": "chromium",
+        "status": "passed"
+      },
+      {
+        "case": "4-post",
+        "topology": "same-site",
+        "cookieNames": [
+          "__Host-idp_csrf",
+          "__Host-idp_session"
+        ],
+        "outcome": "HTTP 403",
+        "browser": "chromium",
+        "status": "passed"
+      },
+      {
+        "case": "5-fetch",
+        "topology": "same-site",
+        "cookieNames": [
+          "__Host-idp_csrf",
+          "__Host-idp_session"
+        ],
+        "outcome": "bearer 200",
+        "browser": "chromium",
+        "status": "passed"
+      },
+      {
+        "case": "7-iframe",
+        "topology": "same-site",
+        "outcome": "code",
+        "browser": "chromium",
+        "status": "passed"
+      },
+      {
+        "case": "1-login",
+        "topology": "cross-site",
+        "storedSameSite": "Lax",
+        "cookieNames": [
+          "__Host-idp_csrf"
+        ],
+        "outcome": "claims",
+        "browser": "chromium",
+        "status": "passed"
+      },
+      {
+        "case": "2-sso",
+        "topology": "cross-site",
+        "cookieNames": [
+          "__Host-idp_csrf",
+          "__Host-idp_session"
+        ],
+        "outcome": "claims",
+        "browser": "chromium",
+        "status": "passed"
+      },
+      {
+        "case": "3-logout",
+        "topology": "cross-site",
+        "cookieNames": [
+          "__Host-idp_csrf",
+          "__Host-idp_session"
+        ],
+        "outcome": "logged-out",
+        "browser": "chromium",
+        "status": "passed"
+      },
+      {
+        "case": "4-post",
+        "topology": "cross-site",
+        "cookieNames": [],
+        "outcome": "HTTP 403",
+        "browser": "chromium",
+        "status": "passed"
+      },
+      {
+        "case": "5-fetch",
+        "topology": "cross-site",
+        "cookieNames": [],
+        "outcome": "bearer 200",
+        "browser": "chromium",
+        "status": "passed"
+      },
+      {
+        "case": "7-iframe",
+        "topology": "cross-site",
+        "outcome": "login_required",
+        "browser": "chromium",
+        "status": "passed"
+      },
+      {
+        "case": "6-tossing",
+        "topology": "sibling (same-site)",
+        "storedSameSite": "Lax",
+        "cookieNames": [
+          "__Host-idp_csrf",
+          "__Host-idp_session",
+          "idp_session"
+        ],
+        "outcome": "rejected/ignored",
+        "browser": "chromium",
+        "status": "passed"
+      }
+    ]
+  },
+  "firefox": {
+    "version": "157.0",
+    "date": "2026-11-07",
+    "cells": [
+      {
+        "case": "1-login",
+        "topology": "same-site",
+        "storedSameSite": "Lax",
+        "cookieNames": [
+          "__Host-idp_csrf"
+        ],
+        "outcome": "claims",
+        "browser": "firefox",
+        "status": "passed"
+      },
+      {
+        "case": "2-sso",
+        "topology": "same-site",
+        "cookieNames": [
+          "__Host-idp_csrf",
+          "__Host-idp_session"
+        ],
+        "outcome": "claims",
+        "browser": "firefox",
+        "status": "passed"
+      },
+      {
+        "case": "3-logout",
+        "topology": "same-site",
+        "cookieNames": [
+          "__Host-idp_csrf",
+          "__Host-idp_session"
+        ],
+        "outcome": "logged-out",
+        "browser": "firefox",
+        "status": "passed"
+      },
+      {
+        "case": "4-post",
+        "topology": "same-site",
+        "cookieNames": [
+          "__Host-idp_csrf",
+          "__Host-idp_session"
+        ],
+        "outcome": "HTTP 403",
+        "browser": "firefox",
+        "status": "passed"
+      },
+      {
+        "case": "5-fetch",
+        "topology": "same-site",
+        "cookieNames": [
+          "__Host-idp_csrf",
+          "__Host-idp_session"
+        ],
+        "outcome": "bearer 200",
+        "browser": "firefox",
+        "status": "passed"
+      },
+      {
+        "case": "7-iframe",
+        "topology": "same-site",
+        "outcome": "code",
+        "browser": "firefox",
+        "status": "passed"
+      },
+      {
+        "case": "1-login",
+        "topology": "cross-site",
+        "storedSameSite": "Lax",
+        "cookieNames": [
+          "__Host-idp_csrf"
+        ],
+        "outcome": "claims",
+        "browser": "firefox",
+        "status": "passed"
+      },
+      {
+        "case": "2-sso",
+        "topology": "cross-site",
+        "cookieNames": [
+          "__Host-idp_csrf",
+          "__Host-idp_session"
+        ],
+        "outcome": "claims",
+        "browser": "firefox",
+        "status": "passed"
+      },
+      {
+        "case": "3-logout",
+        "topology": "cross-site",
+        "cookieNames": [
+          "__Host-idp_csrf",
+          "__Host-idp_session"
+        ],
+        "outcome": "logged-out",
+        "browser": "firefox",
+        "status": "passed"
+      },
+      {
+        "case": "4-post",
+        "topology": "cross-site",
+        "cookieNames": [],
+        "outcome": "HTTP 403",
+        "browser": "firefox",
+        "status": "passed"
+      },
+      {
+        "case": "5-fetch",
+        "topology": "cross-site",
+        "cookieNames": [],
+        "outcome": "bearer 200",
+        "browser": "firefox",
+        "status": "passed"
+      },
+      {
+        "case": "7-iframe",
+        "topology": "cross-site",
+        "outcome": "login_required",
+        "browser": "firefox",
+        "status": "passed"
+      },
+      {
+        "case": "6-tossing",
+        "topology": "sibling (same-site)",
+        "storedSameSite": "Lax",
+        "cookieNames": [
+          "__Host-idp_csrf",
+          "__Host-idp_session",
+          "idp_session"
+        ],
+        "outcome": "rejected/ignored",
+        "browser": "firefox",
+        "status": "passed"
+      }
+    ]
+  },
+  "webkit": {
+    "version": "27.2",
+    "date": "2026-11-07",
+    "cells": [
+      {
+        "case": "1-login",
+        "topology": "same-site",
+        "storedSameSite": "None",
+        "cookieNames": [
+          "__Host-idp_csrf"
+        ],
+        "outcome": "claims",
+        "browser": "webkit",
+        "status": "passed"
+      },
+      {
+        "case": "2-sso",
+        "topology": "same-site",
+        "cookieNames": [
+          "__Host-idp_csrf",
+          "__Host-idp_session"
+        ],
+        "outcome": "claims",
+        "browser": "webkit",
+        "status": "passed"
+      },
+      {
+        "case": "3-logout",
+        "topology": "same-site",
+        "cookieNames": [
+          "__Host-idp_csrf",
+          "__Host-idp_session"
+        ],
+        "outcome": "logged-out",
+        "browser": "webkit",
+        "status": "passed"
+      },
+      {
+        "case": "4-post",
+        "topology": "same-site",
+        "cookieNames": [
+          "__Host-idp_csrf",
+          "__Host-idp_session"
+        ],
+        "outcome": "HTTP 403",
+        "browser": "webkit",
+        "status": "passed"
+      },
+      {
+        "case": "5-fetch",
+        "topology": "same-site",
+        "cookieNames": [
+          "__Host-idp_csrf",
+          "__Host-idp_session"
+        ],
+        "outcome": "bearer 200",
+        "browser": "webkit",
+        "status": "passed"
+      },
+      {
+        "case": "7-iframe",
+        "topology": "same-site",
+        "outcome": "code",
+        "browser": "webkit",
+        "status": "passed"
+      },
+      {
+        "case": "1-login",
+        "topology": "cross-site",
+        "storedSameSite": "None",
+        "cookieNames": [
+          "__Host-idp_csrf"
+        ],
+        "outcome": "claims",
+        "browser": "webkit",
+        "status": "passed"
+      },
+      {
+        "case": "2-sso",
+        "topology": "cross-site",
+        "cookieNames": [
+          "__Host-idp_csrf",
+          "__Host-idp_session"
+        ],
+        "outcome": "claims",
+        "browser": "webkit",
+        "status": "passed"
+      },
+      {
+        "case": "3-logout",
+        "topology": "cross-site",
+        "cookieNames": [
+          "__Host-idp_csrf",
+          "__Host-idp_session"
+        ],
+        "outcome": "logged-out",
+        "browser": "webkit",
+        "status": "passed"
+      },
+      {
+        "case": "4-post",
+        "topology": "cross-site",
+        "cookieNames": [
+          "__Host-idp_csrf",
+          "__Host-idp_session"
+        ],
+        "outcome": "HTTP 403",
+        "browser": "webkit",
+        "status": "passed"
+      },
+      {
+        "case": "5-fetch",
+        "topology": "cross-site",
+        "cookieNames": [
+          "__Host-idp_csrf",
+          "__Host-idp_session"
+        ],
+        "outcome": "bearer 200",
+        "browser": "webkit",
+        "status": "passed"
+      },
+      {
+        "case": "7-iframe",
+        "topology": "cross-site",
+        "outcome": "code",
+        "browser": "webkit",
+        "status": "passed"
+      },
+      {
+        "case": "6-tossing",
+        "topology": "sibling (same-site)",
+        "storedSameSite": "None",
+        "cookieNames": [
+          "__Host-idp_csrf",
+          "__Host-idp_session",
+          "idp_session"
+        ],
+        "outcome": "rejected/ignored",
+        "browser": "webkit",
+        "status": "passed"
+      }
+    ]
+  }
+}

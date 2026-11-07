@@ -4,13 +4,15 @@ import { createHmac } from 'node:crypto';
 import { constantTimeEqual, generateToken } from '../../common/crypto/crypto.util';
 import type { HttpReply, HttpRequest } from '../../common/http/http.types';
 import type { SecurityConfig } from '../../config/configuration';
-import { SessionCookie } from '../sessions/session.cookie';
+import { hostCookieName, SessionCookie } from '../sessions/session.cookie';
 
 export const ANON_COOKIE = 'idp_csrf';
+/** Name of the anonymous CSRF cookie: `__Host-idp_csrf` when Secure (DEBT-008), else `idp_csrf`. */
+export const csrfCookieName = (secure: boolean): string => hostCookieName(ANON_COOKIE, secure);
 
 /**
  * CSRF identity of an HTML form page (shared by `/login`-style pages and `/auth/link`): the session
- * cookie when present, else the anonymous `idp_csrf` cookie, minted on `reply` when missing.
+ * cookie when present, else the anonymous CSRF cookie (`csrfCookieName`), minted on `reply` when missing.
  * `CsrfGuard` verifies the posted token against the same identity.
  */
 export function formCsrfIdentity(
@@ -20,10 +22,11 @@ export function formCsrfIdentity(
   secure: boolean,
 ): string {
   if (session) return session;
-  let anon = req.cookies?.[ANON_COOKIE];
+  const name = csrfCookieName(secure);
+  let anon = req.cookies?.[name];
   if (!anon) {
     anon = generateToken();
-    reply.setCookie(ANON_COOKIE, anon, { httpOnly: true, sameSite: 'lax', secure, path: '/' });
+    reply.setCookie(name, anon, { httpOnly: true, sameSite: 'lax', secure, path: '/' });
   }
   return anon;
 }
@@ -57,7 +60,9 @@ export class CsrfGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     const request = context.switchToHttp().getRequest<CsrfRequest>();
     const body = request.body;
-    const identity = this.sessionCookie.read(request) || request.cookies?.[ANON_COOKIE];
+    const identity =
+      this.sessionCookie.read(request) ||
+      request.cookies?.[csrfCookieName(this.sessionCookie.secure)];
     if (!identity || typeof body?._csrf !== 'string' || !this.csrf.verify(identity, body._csrf)) {
       throw new ForbiddenException('Invalid form submission.');
     }

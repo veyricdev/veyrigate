@@ -474,3 +474,20 @@ mạng nội bộ (`internal: true`).
 **Test**: `bash be/scripts/sentinel-test-env.sh up && pnpm -C be test:sentinel; bash be/scripts/sentinel-test-env.sh down`
 (container `vg-b73c-redis-a`@16390, `vg-b73c-redis-b`@16391, `vg-b73c-sentinel`@26390, mạng `vg-b73c-net`;
 thiếu ⇒ fail kèm lệnh, không skip; chạy `up` lại trước mỗi lần test vì test failover đổi master).
+
+## 11. Cookie phiên `__Host-` (DEBT-008, run 73) — đăng nhập lại 1 lần sau deploy
+
+Khi `SESSION_COOKIE_SECURE=true` (bắt buộc ở production), tên cookie là `__Host-idp_session` và
+`__Host-idp_csrf` (`Secure; HttpOnly; SameSite=Lax; Path=/`, **không** `Domain`). Ở dev/E2E http
+(`SESSION_COOKIE_SECURE=false`) tên vẫn là `idp_session`/`idp_csrf`. Không có env mới, tên suy ra từ cờ này.
+
+- **Cắt cứng**: BE không đọc tên cũ `idp_session` khi `Secure`, và cũng không chủ động xoá cookie cũ.
+  ⇒ **sau lần deploy đầu tiên có run 73, mọi người dùng phải đăng nhập lại 1 lần**. Cookie cũ bị bỏ
+  qua rồi hết hạn theo Max-Age; session Redis cũ hết theo idle TTL (không tombstone). Báo trước
+  cho người dùng/RP.
+- Dev chạy http phải giữ `SESSION_COOKIE_SECURE=false`. Nếu để `true` trên `http://`, WebKit lưu cookie
+  nhưng không gửi ⇒ không đăng nhập được.
+- Reverse proxy/CDN không được viết lại `Set-Cookie` (thêm `Domain`, đổi `Path`): trình duyệt sẽ từ
+  chối cookie `__Host-` ⇒ không ai đăng nhập được.
+- Ma trận trình duyệt (X3): `pnpm -C e2e e2e:x3` (cần `openssl`, cổng 4100/5273/5274/8443 trống,
+  không chạy cùng lúc `pnpm -C e2e e2e`). Chi tiết ở `e2e/README.md`; bảng kết quả ở spec §9.6.

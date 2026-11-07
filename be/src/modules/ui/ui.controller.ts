@@ -24,7 +24,7 @@ import { normalizeEmail } from '../identity/user.service';
 import { AuditAction } from '../security/audit/audit-action.enum';
 import { AuditService } from '../security/audit/audit.service';
 import { RateLimitService } from '../security/rate-limit/rate-limit.service';
-import { SESSION_COOKIE, SessionCookie } from '../sessions/session.cookie';
+import { SessionCookie } from '../sessions/session.cookie';
 import { SessionService } from '../sessions/session.service';
 import { RefreshTokenService } from '../oauth/token/refresh-token.service';
 import { LogoutService, type LogoutParams } from '../oauth/logout/logout.service';
@@ -34,7 +34,7 @@ import {
   FEDERATION_PROVIDERS,
   type FederationProviders,
 } from '../federation/providers';
-import { ANON_COOKIE, CsrfGuard, CsrfService, formCsrfIdentity } from './csrf.service';
+import { CsrfGuard, CsrfService, csrfCookieName, formCsrfIdentity } from './csrf.service';
 import { HtmlExceptionFilter } from './html-exception.filter';
 import { requestIdFromReturnTo, safeReturnTo } from './return-to';
 
@@ -465,7 +465,7 @@ export class UiController {
     if (!id) return false;
     if (await this.sessions.get(id)) return true;
     this.sessionCookie.clear(reply);
-    delete req.cookies?.[SESSION_COOKIE];
+    delete req.cookies?.[this.sessionCookie.name];
     return false;
   }
   private identity(req: UiRequest, reply: UiReply): string {
@@ -474,7 +474,7 @@ export class UiController {
   private async limit(name: string, req: UiRequest, account?: string) {
     const result = await this.rateLimit.hit(
       { name },
-      { ip: req.ip, account, deviceId: req.cookies?.[ANON_COOKIE] },
+      { ip: req.ip, account, deviceId: req.cookies?.[csrfCookieName(this.secure)] },
     );
     if (!result.allowed)
       throw new HttpException({ retryAfter: result.retryAfterSec }, HttpStatus.TOO_MANY_REQUESTS);

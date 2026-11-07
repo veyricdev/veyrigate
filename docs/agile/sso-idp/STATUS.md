@@ -2,10 +2,10 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: — (run 72 vừa đóng). Quyết định đã chốt (người dùng ủy quyền, 2026-11-06): `plan.md` §12 "Chốt bổ sung". Còn cần người dùng: push (CI replica set + Dependabot chỉ có hiệu lực khi push; bật Dependabot alerts trong Settings); dừng node PID 12064 (:4071); Node 22.23.4 máy dev (Q62.2); xoá image cũ; xoá 4 DB `vg-int-vault-v7-*`; 610 DB `vg-int-*` biến mất (đã chạy `drop-int-orphans.mjs --yes`?).
+- **Run hiện tại**: — (run 73 vừa đóng). Quyết định đã chốt (người dùng ủy quyền, 2026-11-06): `plan.md` §12 "Chốt bổ sung". Còn cần người dùng: push (CI replica set + Dependabot chỉ có hiệu lực khi push; bật Dependabot alerts trong Settings); Node 22.23.4 máy dev (Q62.2); xoá image cũ; xoá 4 DB `vg-int-vault-v7-*`; 610 DB `vg-int-*` biến mất (đã chạy `drop-int-orphans.mjs --yes`?).
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `72-ops-hardening` ✅ 2/2 — compose prod mẫu đã smoke non-root (redis/sentinel/vault-agent), quyền secret trong runbook §10, Dockerfile `FROM` literal + `.github/dependabot.yml`; smoke BE 11 + fe-admin 16, be 664. Xem `runs/72-ops-hardening/summary.md`. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev `sso-idp` — lần đầu sau run 71 XOÁ VĨNH VIỄN audit cũ hơn 180 ngày.
-- **Việc tiếp theo**: run 73 X3 ma trận cookie (+DEBT-008), rồi sweep 🟡 (BE DEBT-119…256, 321, 334, 389, 392, 487–489; FE 490–494), cuối cùng X6 release checklist.
+- **Run vừa đóng**: `73-X3` ✅ 3/3 — cookie `__Host-` khi Secure (DEBT-008), ma trận X3 3 trình duyệt × same/cross-site (`pnpm -C e2e e2e:x3`), giữ `SameSite=Lax`; X3 39, E2E 37, int 1467, be 675. Xem `runs/73-X3/summary.md`. ⚠ Deploy: mọi user đăng nhập lại 1 lần. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev — lần đầu sau run 71 XOÁ VĨNH VIỄN audit cũ hơn 180 ngày.
+- **Việc tiếp theo**: sweep 🟡 (BE DEBT-119…256, 321, 334, 389, 392, 487–489; FE 490–494; X3 505/509), cuối cùng X6 release checklist.
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
 
@@ -29,6 +29,7 @@
 | [70](runs/70-A6.3b/summary.md) | M7 | A6.3b UI đổi vai trò fe-admin (DEBT-335) | ✅ fe-admin 1562 + E2E 37 | `9763048` |
 | [71](runs/71-audit-pii/summary.md) | M7 | Audit thời hạn lưu + che PII (DEBT-344/498) | ✅ be 664 + int 1459 + fe-admin 1565 + E2E 37 | `03b8312` |
 | [72](runs/72-ops-hardening/summary.md) | M7 | Compose prod mẫu non-root + Dependabot (DEBT-405/466/503/504) | ✅ smoke BE 11 + fe-admin 16 + be 664 | `a24a305` |
+| [73](runs/73-X3/summary.md) | M7 | X3 ma trận cookie + `__Host-` (DEBT-008/510) | ✅ X3 39 + E2E 37 + int 1467 + be 675 | — |
 
 ## Chặn / cần người quyết định
 

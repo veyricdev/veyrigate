@@ -78,6 +78,45 @@ pnpm e2e
 Set `E2E_REUSE=1` to reuse BE/FE servers you already started yourself (then their env wins, not
 `config/env.ts`).
 
+## X3 — cookie topology × browser matrix (`e2e:x3`, run 73)
+
+A separate config (`playwright.x3.config.ts`, specs in `x3/`) so the default `e2e` run stays at its
+size and speed. It checks the IdP session cookie (`__Host-idp_session`, `Secure`) across Chromium,
+Firefox and WebKit, with one RP on the same site as the IdP and one on a different site:
+
+| Name | Role | Upstream (http, loopback) |
+| --- | --- | --- |
+| `https://idp.alpha.localhost:8443` | IdP (`ISSUER`) | BE `127.0.0.1:4100` (`SESSION_COOKIE_SECURE=true`, `E2E_X3=1`) |
+| `https://app.alpha.localhost:8443` | RP `x3-alpha`, same-site | fe-sso-test Vite `127.0.0.1:5273` |
+| `https://app.beta.localhost:8443` | RP `x3-beta`, cross-site | fe-sso-test Vite `127.0.0.1:5274` |
+
+- `*.localhost` resolves to loopback in all three browsers: no `hosts` change, no proxy flag.
+- `x3/tls-proxy.mjs` (Node built-ins only) listens on **127.0.0.1:8443 only** and routes by `Host`.
+  At start it generates a self-signed cert with **`openssl`** into `e2e/.x3-tls/` (git-ignored,
+  2 days). The cert is never installed anywhere; browsers use `ignoreHTTPSErrors`. If `openssl` is
+  missing (it ships with Git Bash) the proxy fails fast.
+- Browsers: `pnpm -C e2e exec playwright install chromium firefox webkit` (revisions must match
+  `@playwright/test`).
+- Ports 4100/5273/5274/8443 must be free. **Never run it at the same time as `pnpm -C e2e e2e`**:
+  both use the `sso-idp-e2e` DB and seed, and X3 re-points the `demo`/`other` resource identifiers to
+  its https issuer (the default suite re-seeds them on its next run).
+- Cases (× same-site/cross-site × 3 browsers): interactive login, SSO on a second RP, RP-initiated
+  logout + cookie replay, cross-site POST without `_csrf`, Bearer fetch + credentialed fetch, cookie
+  tossing from the sibling `app.alpha` (DEBT-008), `prompt=none` in an iframe (best-effort: result in
+  the `x3-silent` annotation only, never fails).
+- Cookie measurement: browser request headers for navigations/POST; for the credentialed fetch the
+  proxy answers `https://idp.alpha.localhost:8443/__x3_echo` with the cookie **names** it received
+  (a CORS-failed request exposes no `cookie` header to Playwright in Chromium/WebKit).
+- Output: `test-results/x3-matrix.json` (cookie **names**, outcomes and browser versions only — never
+  values or URLs with `code`). `trace`, video and screenshots are off.
+- WebKit on Windows does not apply `SameSite` (DEBT-506), so its cells are recorded rather than
+  asserted. It is not a stand-in for Safari.
+
+```bash
+pnpm -C e2e e2e:x3                      # all three browsers
+pnpm -C e2e e2e:x3 --project chromium   # one browser
+```
+
 ## Manual demo (no Playwright)
 
 ```bash

@@ -1,4 +1,4 @@
-import { assertE2eSeedTarget, readE2eUserConfig } from './seed-e2e-admin';
+import { assertE2eSeedTarget, buildX3Clients, readE2eUserConfig } from './seed-e2e-admin';
 
 // Test-only values (never a real credential).
 const SECRET = 'e2e-unit-fe-admin-secret-0123456789abcdef';
@@ -92,5 +92,19 @@ describe('readE2eUserConfig (run 47 Task 0)', () => {
     }
     expect(message).toMatch(/E2E_USER_EMAIL must differ from ADMIN_SEED_EMAIL and DEV_SEED_EMAIL/);
     expect(message).not.toContain(PASSWORD);
+  });
+});
+
+describe('buildX3Clients (run 73)', () => {
+  it('two public clients, one per X3 origin (same-site alpha, cross-site beta)', () => {
+    const [alpha, beta] = buildX3Clients();
+    expect(alpha.clientId).toBe('x3-alpha');
+    expect(alpha.redirectUris).toEqual(['https://app.alpha.localhost:8443/callback']);
+    expect(beta.clientId).toBe('x3-beta');
+    expect(beta.allowedCorsOrigins).toEqual(['https://app.beta.localhost:8443']);
+    for (const c of [alpha, beta]) {
+      expect(c.clientType).toBe('public');
+      expect(c.tokenEndpointAuthMethod).toBe('none');
+    }
   });
 });

@@ -12,5 +12,5 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true
   },
-  "include": ["playwright.config.ts", "tests/**/*.ts", "config/**/*.ts"]
+  "include": ["playwright.config.ts", "playwright.x3.config.ts", "tests/**/*.ts", "x3/**/*.ts", "config/**/*.ts"]
 }

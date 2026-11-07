@@ -116,7 +116,7 @@ describe('Tenant context + tenant-scoped repository (B2.1, INV-24)', () => {
         method,
         url,
         headers: {
-          ...(sessionId ? { cookie: `idp_session=${sessionId}` } : {}),
+          ...(sessionId ? { cookie: `__Host-idp_session=${sessionId}` } : {}),
           'x-tenant-id': 'tenant-B',
         },
         payload: payload as Record<string, unknown> | undefined,

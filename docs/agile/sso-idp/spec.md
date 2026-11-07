@@ -337,10 +337,33 @@ findOneAndUpdate(
 
 ### 9.6 Session security & cookie topology
 
-- Cookie: `Set-Cookie: idp_session=<opaque random>; HttpOnly; Secure; SameSite=Lax` — không dùng JWT làm session cookie, không chứa userId/email dạng plaintext trong giá trị cookie.
+- Cookie: `Set-Cookie: __Host-idp_session=<opaque random>; HttpOnly; Secure; SameSite=Lax; Path=/` (không bao giờ `Domain`) — không dùng JWT làm session cookie, không chứa userId/email dạng plaintext trong giá trị cookie. Prefix `__Host-` (DEBT-008, run 73) áp khi `SESSION_COOKIE_SECURE=true` (bắt buộc production); dev/E2E http (`false`) dùng tên `idp_session` không `Secure`. Identity CSRF form login theo cùng quy tắc: `__Host-idp_csrf`. Cắt cứng: khi `Secure`, tên cũ bị bỏ qua (không fallback) ⇒ mọi người dùng đăng nhập lại 1 lần sau deploy (runbook-deploy §11).
 - **Session fixation protection**: cấp session ID hoàn toàn mới ngay sau khi đăng nhập thành công, không tái sử dụng session ID đã có từ trước khi login (kể cả session ID của trạng thái anonymous).
 - Idle timeout (ví dụ 8 giờ) và absolute timeout (ví dụ 30 ngày) — điều chỉnh theo yêu cầu sản phẩm thực tế.
 - **`SameSite` không đồng nghĩa với "same-origin".** Vì IdP dùng chung cho nhiều domain con khác nhau (`app-a.example.com`, `game-b.example.com` → `id.example.com`), và trình duyệt hiện đại (Safari ITP, Chrome dần hạn chế third-party cookie) khiến silent SSO qua iframe (`prompt=none`) không đáng tin cậy trên mọi trình duyệt, cần lập **cookie topology test matrix** trước khi launch, bao gồm: interactive login (top-level redirect — phải hoạt động ổn định trên mọi domain topology), `prompt=none` qua iframe (test riêng, coi là "best-effort" chứ không phải cơ chế chính), logout, request qua fetch/XHR, và test trên cả Safari/Firefox/Chrome vì hành vi cookie khác nhau đáng kể giữa các trình duyệt. Khuyến nghị ưu tiên top-level redirect flow làm cơ chế chính, không thiết kế phụ thuộc vào iframe silent-auth.
+
+#### Ma trận X3 — kết quả đo (run 73, 2026-11-07)
+
+Suite `e2e/x3/cookie-matrix.spec.ts` (`pnpm -C e2e e2e:x3`, chạy 2 lần, kết quả trùng nhau, 39/39 xanh). Topology `*.localhost` sau TLS proxy loopback: IdP `idp.alpha.localhost`; RP **same-site** `app.alpha.localhost`; RP **cross-site** `app.beta.localhost` (PSL coi `localhost` như TLD). Trình duyệt Playwright 1.64.0: Chromium 156.0.8078.4, Firefox 157.0, WebKit 27.2 (Windows). Ô ghi kết quả và việc `__Host-idp_session` có được gửi tới IdP hay không (đo tên cookie, không đo giá trị). Nguồn: `docs/agile/sso-idp/runs/73-X3/x3-matrix.json` (bản chạy 2026-11-07; tạo lại bằng `pnpm -C e2e e2e:x3` → `e2e/test-results/x3-matrix.json`, thư mục này bị xoá ở lượt E2E kế tiếp).
+
+| Ca | Topology | Chromium 156 | Firefox 157 | WebKit 27.2 (Windows) |
+| --- | --- | --- | --- | --- |
+| 1 Đăng nhập tương tác (top-level → form → consent → callback) | same-site | ✅ đăng nhập; cookie lưu `Secure; HttpOnly; Lax; Path=/`, host-only | ✅ như Chromium | ✅ đăng nhập; cookie lưu `SameSite=None` (không áp SameSite) |
+| | cross-site | ✅ như same-site | ✅ | ✅ (lưu `None`) |
+| 2 SSO trên RP thứ hai (GET top-level `/authorize`) | same-site | ✅ không hiện form, session gửi | ✅ session gửi | ✅ session gửi |
+| | cross-site | ✅ không hiện form, session gửi (Lax theo top-level GET) | ✅ session gửi | ✅ session gửi |
+| 3 Logout RP-initiated + replay cookie cũ | same-site | ✅ cookie xoá, `/authorize` ⇒ form; replay ⇒ ẩn danh | ✅ | ✅ |
+| | cross-site | ✅ | ✅ | ✅ |
+| 4 POST từ trang RP tới `/logout` không `_csrf` | same-site | 403, session gửi, session sống | 403, session gửi, sống | 403, session gửi, sống |
+| | cross-site | 403, **session không gửi**, sống | 403, **không gửi**, sống | 403, session **gửi** (không áp SameSite), sống |
+| 5 fetch: Bearer `/userinfo` + `/demo/me` qua CORS; fetch `credentials:'include'` | same-site | 200/200; credentialed: session gửi | 200/200; gửi | 200/200; gửi |
+| | cross-site | 200/200; credentialed: **không gửi** | 200/200; **không gửi** | 200/200; **gửi** |
+| 6 Cookie tossing từ `app.alpha` (`document.cookie`, `Domain=alpha.localhost`) | sibling same-site | ✅ `__Host-…; Domain` bị từ chối; `idp_session=<sid user khác>` đến IdP nhưng bị bỏ qua (danh tính không đổi; context ẩn danh vẫn ra form) | ✅ | ✅ |
+| 7 `prompt=none` trong iframe (best-effort, chỉ ghi nhận) | same-site | `code` | `code` | `code` |
+| | cross-site | `login_required` | `login_required` | `code` |
+
+- **WebKit Windows ≠ Safari** (DEBT-506): bản WebKit Playwright trên Windows không áp `SameSite` (lưu là `None`, gửi ở POST/fetch/iframe cross-site), nên cột WebKit không thay được kiểm trên Safari thật. Kết quả iframe đo trên profile không chặn cookie bên thứ ba, nên lạc quan (DEBT-507). Cookie federation `idp_fed`/`idp_link` chưa có `__Host-` (DEBT-505).
+- **Quyết định `SameSite`: giữ `Lax`** (không thêm env cấu hình `SameSite`). Lý do theo số đo: (a) `Lax` vẫn cho SSO top-level cross-site (ca 2), là cơ chế chính; `Strict` sẽ làm hỏng ca này vì GET top-level cross-site không mang cookie `Strict` (probe tech-lead run 73). (b) `Lax` chặn cookie ở POST và fetch cross-site trên Chromium/Firefox (ca 4, 5), là một lớp phòng CSRF ngoài `_csrf`. `None` bỏ mất lớp đó và vẫn không cứu được silent SSO qua iframe trên Safari ITP/Firefox TCP. (c) Silent SSO qua iframe cross-site đã `login_required` trên Chromium/Firefox với `Lax` ⇒ RP phải dùng top-level redirect, đúng khuyến nghị ở trên.
 
 ### 9.7 CORS tách khỏi `redirect_uris`
 

@@ -2,7 +2,9 @@ import mongoose, { type Connection, type Model, type Types } from 'mongoose';
 import { verifyPassword, hashPassword } from '../../src/common/crypto/crypto.util';
 import { validateEnv } from '../../src/config/validation.schema';
 import { MODELS } from '../../src/database/mongo/models';
-import { upsert } from '../../src/database/seed-dev';
+import { buildSeedDevTargets, upsert } from '../../src/database/seed-dev';
+import type { Client } from '../../src/modules/clients/client.service';
+import { validateRedirectUriList } from '../../src/modules/clients/redirect-uri.validator';
 import {
   buildFeAdminClient,
   readAdminSeedConfig,
@@ -33,6 +35,8 @@ import type { ConfigService } from '@nestjs/config';
  *   4. (run 47, Q-47.3) when `E2E_USER_EMAIL`/`E2E_USER_PASSWORD` are set, a separate non-admin
  *      target user (lock/revoke specs) is converged: verified, password, no lock, an active
  *      membership of the default tenant with NO role. Never the admin nor the dev user.
+ *   5. (run 73, X3) when `E2E_X3=1`, two public clients `x3-alpha`/`x3-beta` (fe-sso-test shape)
+ *      bound to the X3 https origins (same-site / cross-site RP of the cookie topology suite).
  * Nothing secret is written to stdout/stderr.
  */
 
@@ -99,6 +103,22 @@ export function readE2eUserConfig(
   return { email, password };
 }
 
+/** X3 RPs (run 73): fe-sso-test's public PKCE shape on `app.alpha.localhost` / `app.beta.localhost`. */
+export function buildX3Clients(): Omit<Client, 'frontchannelLogoutUri'>[] {
+  // The template's resource ids are issuer-independent; only the client part is reused.
+  const template = buildSeedDevTargets('http://localhost').client;
+  return (['alpha', 'beta'] as const).map((label) => {
+    const origin = `https://app.${label}.localhost:8443`;
+    return {
+      ...template,
+      clientId: `x3-${label}`,
+      redirectUris: [`${origin}/callback`],
+      postLogoutRedirectUris: [`${origin}/`],
+      allowedCorsOrigins: [origin],
+    };
+  });
+}
+
 export async function seedE2eAdmin(
   connection: Connection,
   cfg: AdminSeedConfig,
@@ -106,6 +126,7 @@ export async function seedE2eAdmin(
   nodeEnv: string | undefined,
   feAdminSecret: string,
   e2eUser?: E2eUserConfig,
+  x3 = false,
 ): Promise<void> {
   // Second guard before any write (a caller may reach this without `assertE2eSeedTarget`).
   if (nodeEnv !== 'test') throw new Error('seed-e2e-admin: only NODE_ENV=test');
@@ -145,6 +166,22 @@ export async function seedE2eAdmin(
   await resetAdminUser(connection, cfg);
   if (e2eUser) await seedE2eUser(connection, e2eUser);
   else console.log('seed-e2e-admin: E2E user skipped (E2E_USER_EMAIL/E2E_USER_PASSWORD unset)');
+  if (x3) await seedX3Clients(connection);
+}
+
+async function seedX3Clients(connection: Connection): Promise<void> {
+  const clientModel =
+    (connection.models.Client as Model<Client> | undefined) ?? connection.model<Client>('Client');
+  for (const client of buildX3Clients()) {
+    validateRedirectUriList(client.redirectUris, { allowHttpLocalhost: false });
+    validateRedirectUriList(client.postLogoutRedirectUris, { allowHttpLocalhost: false });
+    await upsert(() =>
+      clientModel
+        .updateOne({ clientId: client.clientId }, { $set: client }, { upsert: true })
+        .exec(),
+    );
+    console.log(`seed-e2e-admin: upserted client ${client.clientId}`);
+  }
 }
 
 /** True when `hash` verifies `password`; a corrupt/foreign hash throws => "needs reset". */
@@ -266,7 +303,15 @@ async function main(): Promise<void> {
     if (!connection.models[name]) connection.model(name, schema);
   }
   try {
-    await seedE2eAdmin(connection, admin, env.ISSUER, process.env.NODE_ENV, feAdminSecret, e2eUser);
+    await seedE2eAdmin(
+      connection,
+      admin,
+      env.ISSUER,
+      process.env.NODE_ENV,
+      feAdminSecret,
+      e2eUser,
+      process.env.E2E_X3 === '1',
+    );
   } finally {
     await connection.close();
   }
