@@ -3,6 +3,7 @@ import mongoose, { type Connection, type Model } from 'mongoose';
 import { z } from 'zod';
 import { validateEnv } from '../config/validation.schema';
 import { buildModels } from './mongo/models';
+import { cliErrorText, isDryRun, mongoTarget } from './mongo/sync-indexes';
 import { DEFAULT_TENANT_ID } from '../modules/identity/tenant.service';
 import { normalizeEmail } from '../modules/identity/user.service';
 import { hashPassword } from '../common/crypto/crypto.util';
@@ -266,6 +267,7 @@ export async function upsert(run: () => Promise<unknown>): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  const dryRun = isDryRun(process.argv);
   // Fail-closed BEFORE any DB connection: this tool must never touch a production database.
   assertNotProduction(process.env.NODE_ENV);
 
@@ -274,6 +276,11 @@ async function main(): Promise<void> {
   // fails fast (naming the variable) without touching the database. DEV_SEED_* is NOT part of the
   // app `envSchema` — it is read here only.
   const devUser = readDevSeedUserConfig(process.env, env.ADMIN_SEED_EMAIL);
+  console.log(mongoTarget(env.MONGO_URI));
+  if (dryRun) {
+    console.log('dry-run: no connection made');
+    return;
+  }
 
   const connection = await mongoose
     .createConnection(env.MONGO_URI, { autoIndex: false, serverSelectionTimeoutMS: 5000 })
@@ -292,8 +299,8 @@ async function main(): Promise<void> {
 
 // `require` is undefined when imported under ESM (Jest); the built CLI is CJS.
 if (typeof require !== 'undefined' && require.main === module) {
-  main().catch((err: Error) => {
-    console.error(`seed-dev failed: ${err.message}`);
+  main().catch((err: unknown) => {
+    console.error(`seed-dev failed: ${cliErrorText(err, process.env.MONGO_URI)}`);
     process.exit(1);
   });
 }

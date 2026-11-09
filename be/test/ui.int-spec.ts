@@ -43,6 +43,14 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
     forgotPassword: jest.fn(async () => undefined),
     verifyEmail: jest.fn(async () => undefined),
     resetPassword: jest.fn(async () => undefined),
+    // DEBT-150: the real 3-step revoke (all steps run, first error wins) over the mocks below.
+    revokeAllUserCredentials: jest.fn((userId: string, now: Date) =>
+      AuthenticationService.prototype.revokeAllUserCredentials.call(
+        { refreshTokens, sessions },
+        userId,
+        now,
+      ),
+    ),
   };
   const sessions = {
     get: jest.fn<SessionService['get']>(async () => null),
@@ -1043,6 +1051,48 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
         result: 'success',
         metadata: { scope: 'all', count: 5 },
       });
+    });
+
+    it('DEBT-150: ?scope=all family revoke fails ⇒ every session still revoked + sweep runs, then 5xx, no success audit, no cookie clear', async () => {
+      sessions.get.mockResolvedValue(liveSession);
+      sessions.revokeAllForUser.mockResolvedValue(2);
+      refreshTokens.revokeAllForUser.mockRejectedValueOnce(new Error('boom')).mockResolvedValue(1);
+
+      const failed = await app.inject({
+        method: 'POST',
+        url: '/logout?scope=all',
+        headers: { cookie: 'idp_session=session-a' },
+        payload: { _csrf: csrfFor('session-a') },
+      });
+
+      expect(failed.statusCode).toBeGreaterThanOrEqual(500);
+      expect(failed.headers.location).toBeUndefined();
+      expect(sessionSetCookie(failed.headers['set-cookie'])).toBeUndefined();
+      expect(failed.body).not.toContain('boom');
+      // The other browser's session is revoked (MARK + tombstone) despite the first fault.
+      expect(sessions.revokeAllForUser).toHaveBeenCalledWith('user-1');
+      // Pre-revoke (failed) + SWEEP: the families are revoked by the sweep.
+      expect(refreshTokens.revokeAllForUser).toHaveBeenCalledTimes(2);
+      expect(audit.record).not.toHaveBeenCalled();
+    });
+
+    it('DEBT-150: ?scope=all session revoke fails ⇒ families revoked (pre-revoke + sweep), then 5xx, no success audit, no cookie clear', async () => {
+      sessions.get.mockResolvedValue(liveSession);
+      sessions.revokeAllForUser.mockRejectedValueOnce(new Error('redis down'));
+      refreshTokens.revokeAllForUser.mockResolvedValue(1);
+
+      const failed = await app.inject({
+        method: 'POST',
+        url: '/logout?scope=all',
+        headers: { cookie: 'idp_session=session-a' },
+        payload: { _csrf: csrfFor('session-a') },
+      });
+
+      expect(failed.statusCode).toBeGreaterThanOrEqual(500);
+      expect(failed.headers.location).toBeUndefined();
+      expect(sessionSetCookie(failed.headers['set-cookie'])).toBeUndefined();
+      expect(refreshTokens.revokeAllForUser).toHaveBeenCalledTimes(2);
+      expect(audit.record).not.toHaveBeenCalled();
     });
 
     it('fail-closed ordering: refreshTokens.revokeForSession throws → 5xx, session alive, no clear/audit; retry → 302', async () => {

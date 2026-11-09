@@ -454,7 +454,7 @@ export class RefreshTokenService {
           resource: { $in: identifiers },
         },
         { $set: { revokedAt: now, replacedBy: successorId } },
-        { new: false },
+        { returnDocument: 'before' },
       )
       .lean()
       .exec()) as RefreshDoc | null;

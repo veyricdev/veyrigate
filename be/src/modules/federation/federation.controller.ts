@@ -111,13 +111,7 @@ export class FederationController {
       // Reuse the binding cookie (not rotated per leg, so two tabs do not break each other).
       const binding = req.cookies?.[this.bindingCookie] || generateToken();
       const location = await this.federation.start(provider, one(requestId), binding);
-      reply.setCookie(this.bindingCookie, binding, {
-        httpOnly: true,
-        secure: this.secure,
-        sameSite: 'lax',
-        path: '/',
-        maxAge: FED_STATE_TTL_MS / 1000,
-      });
+      reply.setCookie(this.bindingCookie, binding, this.bindingCookieOptions(FED_STATE_TTL_MS));
       return reply.redirect(location, 302);
     } catch (err) {
       return this.fail(reply, err);
@@ -156,7 +150,17 @@ export class FederationController {
         });
       }
       if (outcome.kind === 'link_required') {
-        reply.setCookie(this.linkCookie, outcome.linkToken, this.linkCookieOptions());
+        // DEBT-198: the pending link outlives the leg's state, so extend the binding (the SAME value
+        // the service just matched against the state; never a new one) to the link TTL.
+        const binding = req.cookies?.[this.bindingCookie];
+        if (binding) {
+          reply.setCookie(this.bindingCookie, binding, this.bindingCookieOptions(FED_LINK_TTL_MS));
+        }
+        reply.setCookie(
+          this.linkCookie,
+          outcome.linkToken,
+          this.bindingCookieOptions(FED_LINK_TTL_MS),
+        );
         return reply.redirect('/auth/link', 302);
       }
       this.sessionCookie.set(reply, outcome.sessionId);
@@ -216,7 +220,7 @@ export class FederationController {
     const token = req.cookies?.[this.linkCookie];
     const pending = await this.federation.pendingLink(token);
     if (pending) await this.limit(req, 'login', pending.email);
-    reply.clearCookie(this.linkCookie, this.linkCookieOptions());
+    reply.clearCookie(this.linkCookie, this.bindingCookieOptions(FED_LINK_TTL_MS));
     const outcome = await this.federation.completeLink(
       token,
       req.cookies?.[this.bindingCookie],
@@ -251,13 +255,13 @@ export class FederationController {
     });
   }
 
-  private linkCookieOptions() {
+  private bindingCookieOptions(maxAgeMs: number) {
     return {
       httpOnly: true,
       secure: this.secure,
       sameSite: 'lax',
       path: '/',
-      maxAge: FED_LINK_TTL_MS / 1000,
+      maxAge: maxAgeMs / 1000,
     } as const;
   }
 

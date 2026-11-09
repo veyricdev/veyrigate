@@ -369,6 +369,9 @@ export class AdminUsersController {
     @Query() q: PageQueryDto,
   ) {
     const t = await this.mustFind(ctx, rawId);
+    if (q.after !== undefined && !FAMILY_ID.test(q.after)) {
+      throw AdminAuthError.invalidRequest('invalid cursor');
+    }
     const limit = q.limit ?? DEFAULT_PAGE_LIMIT;
     const clientIds = await this.clients.tenantClientIds(
       ctx,

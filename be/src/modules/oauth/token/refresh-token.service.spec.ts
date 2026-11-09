@@ -87,3 +87,32 @@ describe('RefreshTokenService revoke-scope guard (negative, no DB)', () => {
     expect(calls[0][1]).toEqual({ $set: { familyRevokedAt: now } });
   });
 });
+
+/**
+ * DEBT-139: the rotation swap must ask Mongoose for the document BEFORE the update with
+ * `returnDocument: 'before'` (the deprecated `new: false` warns on Mongoose 9 and may be dropped).
+ * Semantics (old = pre-update doc, reuse detection) stay covered by `refresh-token.int-spec.ts`.
+ */
+describe('RefreshTokenService.rotate swap options (DEBT-139, no DB)', () => {
+  it("calls findOneAndUpdate with { returnDocument: 'before' }", async () => {
+    const stop = new Error('stop after swap');
+    const exec = jest.fn(async () => {
+      throw stop;
+    });
+    const findOneAndUpdate = jest.fn(() => ({ lean: () => ({ exec }) }));
+    const model = { findOneAndUpdate } as unknown as Model<Record<string, unknown>>;
+    const svc = new RefreshTokenService(
+      model,
+      {} as unknown as TokenService,
+      {} as unknown as AuditService,
+      {} as unknown as ResourceService,
+    );
+
+    await expect(
+      svc.rotate('value', { clientId: 'c1', allowedResources: [] }, {}, ['https://api/']),
+    ).rejects.toBe(stop);
+    expect(findOneAndUpdate).toHaveBeenCalledTimes(1);
+    const args = findOneAndUpdate.mock.calls[0] as unknown[];
+    expect(args[2]).toEqual({ returnDocument: 'before' });
+  });
+});

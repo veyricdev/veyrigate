@@ -3,7 +3,7 @@ import type { ConfigService } from '@nestjs/config';
 import { z } from 'zod';
 import { validateEnv } from '../config/validation.schema';
 import { buildModels, MODELS } from './mongo/models';
-import { mongoTarget } from './mongo/sync-indexes';
+import { cliErrorText, isDryRun, mongoTarget } from './mongo/sync-indexes';
 import { assertNotProduction, seedDev, upsert } from './seed-dev';
 import { DEFAULT_TENANT_ID } from '../modules/identity/tenant.service';
 import { normalizeEmail } from '../modules/identity/user.service';
@@ -261,11 +261,16 @@ export async function seedBootstrap(
 }
 
 async function main(): Promise<void> {
+  const dryRun = isDryRun(process.argv);
   // Fail-closed BEFORE any DB connection.
   assertNotProduction(process.env.NODE_ENV);
   const env = validateEnv(process.env);
   const admin = readAdminSeedConfig(process.env);
   console.log(mongoTarget(env.MONGO_URI));
+  if (dryRun) {
+    console.log('dry-run: no connection made');
+    return;
+  }
 
   const connection = await mongoose
     .createConnection(env.MONGO_URI, { autoIndex: false, serverSelectionTimeoutMS: 5000 })
@@ -291,8 +296,8 @@ async function main(): Promise<void> {
 
 // `require` is undefined when imported under ESM (Jest); the built CLI is CJS.
 if (typeof require !== 'undefined' && require.main === module) {
-  main().catch((err: Error) => {
-    console.error(`seed failed: ${err.message}`);
+  main().catch((err: unknown) => {
+    console.error(`seed failed: ${cliErrorText(err, process.env.MONGO_URI)}`);
     process.exit(1);
   });
 }

@@ -1,4 +1,5 @@
 import cookie from '@fastify/cookie';
+import { jest } from '@jest/globals';
 import { ConfigService } from '@nestjs/config';
 import { MongooseModule, getModelToken } from '@nestjs/mongoose';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -482,5 +483,157 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
         expect(tok.json().error).toBe('invalid_grant');
       }
     }
+  });
+
+  // Run 78 tester (DEBT-150): POST /logout?scope=all against REAL Redis sessions + REAL Mongo
+  // families (ui.int-spec covers the controller with mocked stores). Each case uses its own user.
+  describe('run 78 tester: logout scope=all with real stores (DEBT-150)', () => {
+    const newUser = async (tag: string) => {
+      const u = await userModel.create({ email: `${RUN}-${tag}-${Date.now()}@example.com` });
+      return (u._id as Types.ObjectId).toHexString();
+    };
+    /** A browser session + a code-grant family (offline_access) bound to it, for user `uid`. */
+    const browser = async (uid: string) => {
+      const { id, session } = await sessions.create(uid, 'tenant-A');
+      const { code } = await createCode({
+        clientId: APP_CLIENT,
+        redirectUri: REDIRECT,
+        codeChallenge: CHALLENGE,
+        resource: RESOURCE,
+        scope: 'openid profile offline_access',
+        userId: uid,
+        authTime: session.authTime,
+        sessionRef: session.ref,
+      } as never);
+      const res = await token(
+        form({
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: REDIRECT,
+          client_id: APP_CLIENT,
+          code_verifier: VERIFIER,
+        }),
+        { authorization: basic(APP_CLIENT, appSecret) },
+      );
+      expect(res.statusCode).toBe(200);
+      return {
+        id,
+        ref: session.ref,
+        access: res.json().access_token as string,
+        refresh: res.json().refresh_token as string,
+      };
+    };
+    const logoutAll = (id: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/logout?scope=all',
+        headers: { cookie: `${SESSION_COOKIE}=${id}` },
+        payload: { _csrf: csrf.token(id) },
+      });
+    const refreshModel = () =>
+      app.get<Model<Record<string, unknown>>>(getModelToken('RefreshToken'));
+    const auditModel = () => app.get<Model<Record<string, unknown>>>(getModelToken('AuditLog'));
+    const liveFamilies = (uid: string) =>
+      refreshModel().countDocuments({ userId: new Types.ObjectId(uid), revokedAt: null });
+    const successAudits = (uid: string, action: string) =>
+      auditModel().find({ actorId: uid, action, result: 'success' }).lean();
+    const setCookies = (res: { headers: Record<string, unknown> }) =>
+      ([] as string[]).concat((res.headers['set-cookie'] as string[] | string | undefined) ?? []);
+    const rotate = (rt: string) =>
+      token(form({ grant_type: 'refresh_token', refresh_token: rt }), {
+        authorization: basic(APP_CLIENT, appSecret),
+      });
+
+    it('2 real browsers: logout from A ⇒ 302; A and B sessions dead + tombstoned, 0 live family, B refresh/AT dead, audits count 2; another user untouched; replay is a no-op', async () => {
+      const uid = await newUser('all-ok');
+      const other = await newUser('all-other');
+      const a = await browser(uid);
+      const b = await browser(uid);
+      const o = await browser(other);
+      expect(await liveFamilies(uid)).toBe(2);
+
+      const res = await logoutAll(a.id);
+      expect(res.statusCode).toBe(302);
+      expect(setCookies(res).some((c) => c.startsWith(`${SESSION_COOKIE}=;`))).toBe(true);
+
+      expect(await sessions.get(a.id)).toBeNull();
+      expect(await sessions.get(b.id)).toBeNull();
+      expect(await sessions.isEnded(b.ref)).toBe(true);
+      expect(await liveFamilies(uid)).toBe(0);
+      expect((await rotate(b.refresh)).json().error).toBe('invalid_grant');
+      expect((await introspect(b.access)).json()).toEqual({ active: false });
+
+      const sr = await successAudits(uid, 'SESSION_REVOKED');
+      expect(sr.map((d) => d.metadata)).toEqual([{ scope: 'all', count: 2 }]);
+      const tr = await successAudits(uid, 'TOKEN_REVOKED');
+      expect(tr.map((d) => d.metadata)).toEqual([{ scope: 'all', count: 2 }]);
+
+      // Negative actor: the other user's session + family are untouched.
+      expect(await sessions.get(o.id)).not.toBeNull();
+      expect(await liveFamilies(other)).toBe(1);
+      expect((await introspect(o.access)).json().active).toBe(true);
+
+      // Replay with the dead cookie: no-session branch, still 302 + clear, no second success audit.
+      const again = await logoutAll(a.id);
+      expect(again.statusCode).toBe(302);
+      expect(await successAudits(uid, 'SESSION_REVOKED')).toHaveLength(1);
+    });
+
+    it('Mongo fault on the first family revoke ⇒ 5xx; B (other browser) STILL killed in real Redis, sweep revokes every family; no success audit, no cookie clear; retry ⇒ 302', async () => {
+      const uid = await newUser('all-mongo-fault');
+      const a = await browser(uid);
+      const b = await browser(uid);
+      const spy = jest
+        .spyOn(app.get(RefreshTokenService), 'revokeAllForUser')
+        .mockRejectedValueOnce(new Error('MongoServerSelectionError boom'));
+      let res;
+      try {
+        res = await logoutAll(a.id);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(res.statusCode).toBeGreaterThanOrEqual(500);
+      expect(res.headers.location).toBeUndefined();
+      expect(res.body).not.toContain('boom');
+      expect(setCookies(res).some((c) => c.startsWith(`${SESSION_COOKIE}=`))).toBe(false);
+      expect(await sessions.get(a.id)).toBeNull();
+      expect(await sessions.get(b.id)).toBeNull();
+      expect(await sessions.isEnded(b.ref)).toBe(true);
+      expect(await liveFamilies(uid)).toBe(0);
+      expect((await rotate(b.refresh)).json().error).toBe('invalid_grant');
+      expect(await successAudits(uid, 'SESSION_REVOKED')).toHaveLength(0);
+
+      const retry = await logoutAll(a.id);
+      expect(retry.statusCode).toBe(302);
+      expect(setCookies(retry).some((c) => c.startsWith(`${SESSION_COOKIE}=;`))).toBe(true);
+    });
+
+    it('Redis fault on the session revoke ⇒ 5xx; families revoked anyway (pre-revoke + sweep); retry ⇒ 302 and both sessions dead, one success audit', async () => {
+      const uid = await newUser('all-redis-fault');
+      const a = await browser(uid);
+      const b = await browser(uid);
+      const spy = jest
+        .spyOn(sessions, 'revokeAllForUser')
+        .mockRejectedValueOnce(new Error('Connection is closed. redis://u:pw@h'));
+      let res;
+      try {
+        res = await logoutAll(a.id);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(res.statusCode).toBeGreaterThanOrEqual(500);
+      expect(res.body).not.toContain('pw@h');
+      expect(setCookies(res).some((c) => c.startsWith(`${SESSION_COOKIE}=`))).toBe(false);
+      expect(await liveFamilies(uid)).toBe(0);
+      expect(await successAudits(uid, 'SESSION_REVOKED')).toHaveLength(0);
+      // Sessions survived the injected fault (fail-closed: the user was NOT told logout succeeded).
+      expect(await sessions.get(b.id)).not.toBeNull();
+
+      const retry = await logoutAll(a.id);
+      expect(retry.statusCode).toBe(302);
+      expect(await sessions.get(a.id)).toBeNull();
+      expect(await sessions.get(b.id)).toBeNull();
+      expect(await successAudits(uid, 'SESSION_REVOKED')).toHaveLength(1);
+    });
   });
 });

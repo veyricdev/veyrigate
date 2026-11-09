@@ -351,28 +351,22 @@ export class UiController {
     // Order (tech-lead fold): revoke token -> revoke session -> audit -> clear cookie -> redirect.
     // A fault at any step throws (5xx via HtmlExceptionFilter) and never presents success; every
     // revoke is idempotent so a retry is safe.
-    let tokenCount = global
-      ? await this.refreshTokens.revokeAllForUser(session.userId, now)
-      : await this.refreshTokens.revokeForSession(session.userId, session.ref, now);
-
+    let tokenCount: number;
     let sessionCount = 1;
     if (global) {
-      sessionCount = await this.sessions.revokeAllForUser(session.userId);
+      // DEBT-150: the shared revoke (family -> sessions MARK -> SWEEP, all inside the service) runs
+      // every step even if one fails, then rethrows the first error (5xx, no success audit/cookie clear).
+      ({ tokenCount, sessionCount } = await this.auth.revokeAllUserCredentials(
+        session.userId,
+        now,
+      ));
     } else {
+      tokenCount = await this.refreshTokens.revokeForSession(session.userId, session.ref, now);
       await this.sessions.revoke(id!);
+      // SWEEP (DEBT-051, §15 inv. 29): revoke again AFTER the MARK, catching a family a racing
+      // `/token` exchange inserted meanwhile; its count is added so the audit reflects it. Idempotent.
+      tokenCount += await this.refreshTokens.revokeForSession(session.userId, session.ref, now);
     }
-
-    // SWEEP (DEBT-051, §15 inv. 29): revoke the families a second time AFTER the session is gone +
-    // tombstoned. A `/token` code exchange racing this logout either inserted its family before the
-    // first revoke (caught there) or after it — in which case it ran after the MARK above and its
-    // own post-insert re-check already revoked it, OR it lands here and this sweep catches it. Net:
-    // no refresh family survives bound to an actively-terminated session. Idempotent.
-    // The sweep may be the ONLY revoke that catches a family inserted by a `/token` exchange that
-    // raced between the first revoke and the session MARK (so the first revoke returned 0). Add its
-    // count so the TOKEN_REVOKED audit below reflects everything revoked (fold 🟡: cộng dồn).
-    tokenCount += global
-      ? await this.refreshTokens.revokeAllForUser(session.userId, now)
-      : await this.refreshTokens.revokeForSession(session.userId, session.ref, now);
 
     await this.audit.record({
       actorType: 'user',

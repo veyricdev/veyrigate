@@ -953,6 +953,41 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
       expect(seen).toEqual([f.demoFamily, f.otherFamily].sort());
     });
 
+    it('GET families: a cursor that is not a familyId => 400 invalid cursor, no list call; other tenant still 404 (DEBT-155)', async () => {
+      const token = await tok(tadminA);
+      const user = await mkUser({ [TENANT_A]: [] });
+      const onlyB = await mkUser({ [TENANT_B]: [] });
+      const list = jest.spyOn(moduleRef.get(RefreshTokenService), 'listFamilies');
+      try {
+        for (const bad of ['{"$gt":""}', 'a_b', 'a'.repeat(129)]) {
+          const res = await call(
+            'GET',
+            `/admin/users/${user}/families?after=${encodeURIComponent(bad)}`,
+            token,
+          );
+          expect([bad, res.statusCode]).toEqual([bad, 400]);
+          expect(res.json()).toEqual({
+            error: 'invalid_request',
+            error_description: 'invalid cursor',
+          });
+          expect(res.body).not.toContain('$gt');
+        }
+        expect(list).not.toHaveBeenCalled();
+        // Tenant check first: a user outside the token tenant is 404 even with a bad cursor.
+        const foreign = await call('GET', `/admin/users/${onlyB}/families?after=a_b`, token);
+        expect(foreign.statusCode).toBe(404);
+        // A valid-looking cursor still pages (128 chars is the upper bound).
+        const ok = await call(
+          'GET',
+          `/admin/users/${user}/families?after=${'a'.repeat(128)}`,
+          token,
+        );
+        expect(ok.statusCode).toBe(200);
+      } finally {
+        list.mockRestore();
+      }
+    });
+
     it('revoke family => old AND rotated refresh invalid_grant; other family lives; audit TOKEN_REVOKED once', async () => {
       const f = await fixture();
       const rotated = await refresh(f.demo.refresh_token!);
@@ -1791,13 +1826,13 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
       expect((await call('GET', `/admin/users/${f}/consents?after=zzz`, token)).statusCode).toBe(
         400,
       );
-      // families cursor is compared as a plain string: an operator-looking value is inert (200, no 5xx).
+      // families cursor must be a familyId (DEBT-155): an operator-looking value => 400, no 5xx.
       const fam = await call(
         'GET',
         `/admin/users/${f}/families?after=${encodeURIComponent('{"$gt":""}')}`,
         token,
       );
-      expect(fam.statusCode).toBe(200);
+      expect(fam.statusCode).toBe(400);
     });
 
     it('audit cursor: negative / oversized / non-object / legacy `{t,e}` / malformed `i` payloads => 400 (T2c)', async () => {

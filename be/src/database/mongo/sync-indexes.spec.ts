@@ -1,4 +1,4 @@
-import { mongoTarget } from './sync-indexes';
+import { cliErrorText, isDryRun, mongoTarget } from './sync-indexes';
 
 /** F5 (run 40): the CLIs print the database they are about to write, never its credentials. */
 describe('mongoTarget (run 40 F5)', () => {
@@ -86,4 +86,47 @@ describe('mongoTarget (run 40 F5)', () => {
   it('never echoes an unparseable value (it may be a secret pasted in the wrong variable)', () => {
     expect(mongoTarget('p4ssw0rd-not-a-uri')).toBe('target: (unparseable MONGO_URI)');
   });
+});
+
+describe('cliErrorText (DEBT-254)', () => {
+  it('scrubs the userinfo of a URI the driver echoes in its message', () => {
+    const text = cliErrorText(new Error('bad mongodb://u:s3cret@h:1/db'));
+    expect(text).not.toContain('s3cret');
+    expect(text).toContain('h:1/db');
+  });
+
+  it('replaces the literal MONGO_URI first (an unencoded `/ ? #` password defeats the regex)', () => {
+    const uri = 'mongodb://u:p/ss?x#@h/db';
+    const text = cliErrorText(new Error(`connect ${uri} failed`), uri);
+    expect(text).toBe('connect [MONGO_URI] failed');
+    expect(text).not.toContain('p/ss');
+  });
+
+  it('a non-Error throw => fixed text (nothing echoed)', () => {
+    expect(cliErrorText('mongodb://u:s3cret@h/db')).toBe('non-Error thrown');
+    expect(cliErrorText(undefined, 'mongodb://u:s3cret@h/db')).toBe('non-Error thrown');
+  });
+
+  it('keeps a message without a URI as is', () => {
+    expect(cliErrorText(new Error('collMod failed'), 'mongodb://h/db')).toBe('collMod failed');
+    expect(cliErrorText(new Error('collMod failed'), '')).toBe('collMod failed');
+  });
+});
+
+describe('isDryRun (DEBT-256, DEBT-522)', () => {
+  it('is true only for the exact --dry-run flag (pnpm `--` separator allowed)', () => {
+    expect(isDryRun(['node', 'x', '--dry-run'])).toBe(true);
+    expect(isDryRun(['node', 'x', '--', '--dry-run'])).toBe(true);
+    expect(isDryRun(['node', 'x'])).toBe(false);
+    expect(isDryRun(['node', 'x', '--'])).toBe(false);
+  });
+
+  it.each([['--dry-run=true'], ['--dryrun'], ['--dry_run'], ['-n'], ['--dry'], ['DRY-RUN']])(
+    'rejects the unknown argument %s with a fixed message (fail-closed, never echoed)',
+    (arg) => {
+      expect(() => isDryRun(['node', 'x', '--', arg])).toThrow(
+        new Error('unknown argument (allowed: --dry-run)'),
+      );
+    },
+  );
 });

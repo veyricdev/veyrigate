@@ -21,7 +21,37 @@ export function errorForLog(err: unknown): string {
   return [head, ...frames].join('\n');
 }
 
-/** Drop `user:password@` from every URI in `text` (Mongo/Redis connection errors). */
+/**
+ * Drop `user:password@` from every URI in `text` (Mongo/Redis connection errors): the userinfo runs
+ * to the LAST `@` of the authority, so a decoded password holding `@` goes too (DEBT-523). Then the
+ * value of any `key=value` whose key looks secret (pass/pwd/secret/token/key/cred/auth, e.g.
+ * `tlsCertificateKeyFilePassword`, `authMechanismProperties`) is masked; over-masking is the safe side.
+ * It runs on the app event loop, so the text is first cut to SCRUB_MAX_CHARS and every regex only
+ * starts a match at the beginning of a run (lookbehind): no super-linear backtracking (DEBT-525).
+ */
 export function scrubUriCredentials(text: string): string {
-  return text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@]*@/gi, '$1[redacted]@');
+  return scrubKeyValues(
+    truncateForScrub(text).replace(
+      /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi,
+      '$1[redacted]@',
+    ),
+  );
+}
+
+const SCRUB_MAX_CHARS = 2048;
+const SECRET_KEY = /pass|pwd|secret|token|key|cred|auth/i;
+
+/** Cut a long text, dropping the last (possibly half) token so a URI cut before its `@` cannot leak. */
+function truncateForScrub(text: string): string {
+  if (text.length <= SCRUB_MAX_CHARS) return text;
+  const cut = text.slice(0, SCRUB_MAX_CHARS);
+  const lastSpace = Math.max(cut.lastIndexOf(' '), cut.lastIndexOf('\n'), cut.lastIndexOf('\t'));
+  return `${cut.slice(0, lastSpace + 1)}[truncated]`;
+}
+
+/** Mask `key=value` when the key looks secret; a non-secret value is searched again (`a=password=x`). */
+function scrubKeyValues(text: string): string {
+  return text.replace(/(?<![\w.-])([\w.-]+)=([^\s&#;]*)/g, (_m, key: string, value: string) =>
+    SECRET_KEY.test(key) ? `${key}=[redacted]` : `${key}=${scrubKeyValues(value)}`,
+  );
 }

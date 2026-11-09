@@ -1,4 +1,5 @@
 import mongoose, { type Connection, type Model } from 'mongoose';
+import { scrubUriCredentials } from '../../common/logger/error-log';
 import { validateEnv } from '../../config/validation.schema';
 import { DEFAULT_AUDIT_RETENTION_DAYS } from '../../modules/security/audit/audit-log.schema';
 import { buildModels } from './models';
@@ -83,14 +84,41 @@ export function mongoTarget(uri: string): string {
   return `target: ${m[1]}/${m[2] || 'test (default)'}`;
 }
 
+/**
+ * DEBT-254: the stderr text of a failed DB CLI. The driver may echo `MONGO_URI` in its message; the
+ * literal `uri` is replaced first (an unencoded `/ ? #` in the password defeats the userinfo regex),
+ * then any other `user:password@` is scrubbed. A non-Error throw prints nothing of it.
+ */
+export function cliErrorText(err: unknown, uri?: string): string {
+  if (!(err instanceof Error)) return 'non-Error thrown';
+  const message = uri ? err.message.split(uri).join('[MONGO_URI]') : err.message;
+  return scrubUriCredentials(message);
+}
+
+/**
+ * DEBT-256: `--dry-run` = print the target, then exit 0 BEFORE any connection. DEBT-522: any other
+ * argument (a typo like `--dry-run=true` or `-n`) throws, so the CLI exits 1 without connecting
+ * instead of writing for real; the argument is not echoed. `--` is pnpm's separator.
+ */
+export function isDryRun(argv: readonly string[]): boolean {
+  const args = argv.slice(2).filter((a) => a !== '--');
+  if (args.some((a) => a !== '--dry-run')) throw new Error('unknown argument (allowed: --dry-run)');
+  return args.length > 0;
+}
+
 const HOST = String.raw`(?:[A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?`;
 const HOST_LIST = new RegExp(`^${HOST}(?:,${HOST})*$`);
 /** Characters MongoDB forbids in a db name, plus `@` and `#`. */
 const DB_NAME = /^[^/\\. "$*<>:|?@#\0]*$/;
 
 async function main(): Promise<void> {
+  const dryRun = isDryRun(process.argv);
   const env = validateEnv(process.env);
   console.log(mongoTarget(env.MONGO_URI));
+  if (dryRun) {
+    console.log('dry-run: no connection made');
+    return;
+  }
   const connection = await mongoose
     .createConnection(env.MONGO_URI, { autoIndex: false, serverSelectionTimeoutMS: 5000 })
     .asPromise();
@@ -106,8 +134,8 @@ async function main(): Promise<void> {
 
 // `require` is undefined when imported under ESM (Jest); the built CLI is CJS.
 if (typeof require !== 'undefined' && require.main === module) {
-  main().catch((err: Error) => {
-    console.error(`Index sync failed: ${err.message}`);
+  main().catch((err: unknown) => {
+    console.error(`Index sync failed: ${cliErrorText(err, process.env.MONGO_URI)}`);
     process.exit(1);
   });
 }

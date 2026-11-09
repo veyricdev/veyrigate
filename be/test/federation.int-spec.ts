@@ -36,7 +36,10 @@ import { ClientCredentialService } from '../src/modules/clients/client-credentia
 import { ClientService } from '../src/modules/clients/client.service';
 import { FederationController } from '../src/modules/federation/federation.controller';
 import { FederationService } from '../src/modules/federation/federation.service';
-import { FederationStateStore } from '../src/modules/federation/federation-state.store';
+import {
+  FED_LINK_TTL_MS,
+  FederationStateStore,
+} from '../src/modules/federation/federation-state.store';
 import {
   buildFederationProviders,
   FEDERATION_PROVIDERS,
@@ -597,6 +600,8 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       expect(cb.statusCode).toBe(302);
       expect(cb.headers['cache-control']).toBe('no-store');
       expect(cb.headers.location).toBe(`/authorize?request_id=${encodeURIComponent(requestId)}`);
+      // DEBT-198: only link_required re-sets the binding; a sign-in never touches it.
+      expect(cookieOf(cb, 'idp_fed')).toBeUndefined();
       const sessionId = cookieOf(cb, SESSION_COOKIE)!.value;
       expect(sessionId).not.toBe(oldSession.id);
       // Session fixation: the pre-login session id is gone.
@@ -1010,15 +1015,75 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       const email = `${RUN}-taken@example.com`;
       const local = await users.create({ email, password: 'some local password' });
       const sub = `${RUN}-taken`;
-      const { res } = await socialLogin('google', (await rpAuthorize()).requestId, {
+      const { res, fed } = await socialLogin('google', (await rpAuthorize()).requestId, {
         claims: { sub, email },
       });
       expect(res.statusCode).toBe(302);
       expect(res.headers.location).toBe('/auth/link');
+      // DEBT-198: the binding is re-set (same value) to live as long as the pending link.
+      expect(cookieOf(res, 'idp_fed')).toMatchObject({
+        value: fed,
+        httpOnly: true,
+        sameSite: 'Lax',
+        path: '/',
+        maxAge: FED_LINK_TTL_MS / 1000,
+      });
       expect(cookieOf(res, SESSION_COOKIE)).toBeUndefined();
       expect(await userModel.countDocuments({ email })).toBe(1);
       expect(await fiModel.countDocuments({ providerId: sub })).toBe(0);
       expect(await fiModel.countDocuments({ userId: local.sub })).toBe(0);
+    });
+
+    // Run 78 tester (DEBT-198): the binding is only ever re-set on a callback whose state was
+    // consumed AND matched the binding; replay / foreign / missing binding never (re)plants it.
+    describe('run 78 tester: idp_fed re-set only after a matched, fresh state', () => {
+      const linkClaims = async (tag: string) => {
+        const email = `${RUN}-r78-${tag}@example.com`;
+        await users.create({ email, password: 'some local password' });
+        return { sub: `${RUN}-r78-${tag}`, email };
+      };
+      const noFedCookies = (res: Res) => {
+        expect(cookieOf(res, 'idp_fed')).toBeUndefined();
+        expect(cookieOf(res, 'idp_link')).toBeUndefined();
+        expect(cookieOf(res, SESSION_COOKIE)).toBeUndefined();
+        expect(res.headers.location).not.toBe('/auth/link');
+      };
+
+      it('replay of the link_required callback (state already consumed) ⇒ error, binding NOT re-set, no new pending link', async () => {
+        const claims = await linkClaims('replay');
+        const s = await start('google', (await rpAuthorize()).requestId);
+        const g = grant('google', s.location!, { claims });
+        const first = await callback('google', g, { idp_fed: s.fed! });
+        expect(first.headers.location).toBe('/auth/link');
+        expect(cookieOf(first, 'idp_fed')?.value).toBe(s.fed);
+        // The binding value never leaks to the URL / body.
+        expect(String(first.headers.location)).not.toContain(s.fed!);
+        expect(first.body).not.toContain(s.fed!);
+
+        const replay = await callback('google', g, { idp_fed: s.fed! });
+        expect(replay.statusCode).toBeGreaterThanOrEqual(400);
+        noFedCookies(replay);
+      });
+
+      it('foreign binding cookie (login-CSRF: attacker cookie in the victim browser) ⇒ error, the attacker value is NOT re-set/extended', async () => {
+        const claims = await linkClaims('foreign');
+        const s = await start('google', (await rpAuthorize()).requestId);
+        const g = grant('google', s.location!, { claims });
+        const attacker = generateToken();
+        const res = await callback('google', g, { idp_fed: attacker });
+        expect(res.statusCode).toBeGreaterThanOrEqual(400);
+        noFedCookies(res);
+        expect(res.body).not.toContain(attacker);
+      });
+
+      it('no binding cookie at all ⇒ error, nothing set', async () => {
+        const claims = await linkClaims('none');
+        const s = await start('google', (await rpAuthorize()).requestId);
+        const g = grant('google', s.location!, { claims });
+        const res = await callback('google', g);
+        expect(res.statusCode).toBeGreaterThanOrEqual(400);
+        noFedCookies(res);
+      });
     });
 
     it.each([
@@ -2689,6 +2754,14 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       expect(link).toMatchObject({ httpOnly: true, secure: true, sameSite: 'Lax', path: '/' });
       expect(link.domain).toBeUndefined();
       expect(cookieOf(leg, 'idp_link')).toBeUndefined();
+      // DEBT-198: the binding is extended under its __Host- name (same value), never as idp_fed.
+      expect(cookieOf(leg, HOST_FED)).toMatchObject({
+        value: s.fed,
+        secure: true,
+        path: '/',
+        maxAge: FED_LINK_TTL_MS / 1000,
+      });
+      expect(cookieOf(leg, 'idp_fed')).toBeUndefined();
 
       const linkPage = (cookies: Record<string, string>) =>
         secureApp.inject({ method: 'GET', url: '/auth/link', cookies });
