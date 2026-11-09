@@ -2,10 +2,10 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: (chưa mở) — run 79 sweep 🟡 BE đợt 3. Quyết định đã chốt (người dùng ủy quyền): `plan.md` §12 "Chốt bổ sung". Còn cần người dùng: push (CI replica set + Dependabot chỉ có hiệu lực khi push; bật Dependabot alerts trong Settings); Node 22.23.4 máy dev (Q62.2); xoá image cũ; xoá 4 DB `vg-int-vault-v7-*`; 610 DB `vg-int-*` biến mất (đã chạy `drop-int-orphans.mjs --yes`?).
+- **Run hiện tại**: (chưa mở) — run 80 sweep 🟡 BE đợt 4. Quyết định đã chốt (người dùng ủy quyền): `plan.md` §12 "Chốt bổ sung". Còn cần người dùng: push (CI replica set + Dependabot chỉ có hiệu lực khi push; bật Dependabot alerts trong Settings); Node 22.23.4 máy dev (Q62.2); xoá image cũ; xoá 4 DB `vg-int-vault-v7-*`; 610 DB `vg-int-*` biến mất (đã chạy `drop-int-orphans.mjs --yes`?).
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `78-sweep-be2` ✅ 6/6 — refresh rotate `returnDocument`, cursor families 400, logout `scope=all` thu hồi đủ (lỗi ⇒ 5xx), cookie `idp_fed` khi `link_required`, CLI che URI + `--dry-run` + runbook cổng `yes`, scrub hết ReDoS; be 708, int 1552, fe-admin 1570, E2E 38, X3 42. Xem `runs/78-sweep-be2/summary.md`. ⚠ Deploy: runbook-deploy §12 q1–q3 trước (run 75); mọi user đăng nhập lại 1 lần (run 73) + login federation dở ⇒ thử lại. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev — lần đầu sau run 71 XOÁ VĨNH VIỄN audit cũ hơn 180 ngày (chạy `-- --dry-run` trước, runbook-ops §0).
-- **Việc tiếp theo**: sweep 🟡 BE (DEBT-120, 121, 129, 134, 168, 179, 182, 188, 192, 193, 334, 389, 392, 517, 521, …), cuối cùng X6 release checklist.
+- **Run vừa đóng**: `79-sweep-be3` ✅ 6/6 — audit failure logout global, admin-capable 1 định nghĩa, seed giữ lỗi gốc index, boot check Mongo transaction, provisioning federated trong 1 transaction (hết user mồ côi + race 302); be 715, int 1563, fe-admin 1570, E2E 38, X3 42. Xem `runs/79-sweep-be3/summary.md`. ⚠ Deploy: production cần Mongo replica set/mongos (không thì BE không boot, run 79); runbook-deploy §12 q1–q3 trước (run 75); mọi user đăng nhập lại 1 lần (run 73) + login federation dở ⇒ thử lại. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev — lần đầu sau run 71 XOÁ VĨNH VIỄN audit cũ hơn 180 ngày (chạy `-- --dry-run` trước, runbook-ops §0).
+- **Việc tiếp theo**: sweep 🟡 BE (DEBT-120, 121, 134, 192, 193, 526, 529, 530, 334, 389, 392, 517, …), FE/E2E DEBT-527; cuối cùng X6 release checklist (gồm mục DEBT-129 rotate lại khi 5xx).
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
 
@@ -27,6 +27,7 @@
 | [76](runs/76-console-lockout/summary.md) | M7 | Chống tự khoá client console + gộp `ADMIN_ROLES` (DEBT-515/513) | ✅ int 1516 + fe-admin 1567 + E2E 37 + X3 42 + be 684 | `9abe1ea` |
 | [77](runs/77-sweep-fe1/summary.md) | M7 | Sweep 🟡 FE/E2E đợt 1 (DEBT-490–494, 509, 518–520) | ✅ fe-admin 1570 + E2E 38 + X3 42 | `4a33d7f` |
 | [78](runs/78-sweep-be2/summary.md) | M7 | Sweep 🟡 BE đợt 2 (DEBT-139/150/155/198/254/256/257/522–525) | ✅ int 1552 + fe-admin 1570 + E2E 38 + X3 42 + be 708 | `691aa7d` |
+| [79](runs/79-sweep-be3/summary.md) | M7 | Sweep 🟡 BE đợt 3 (DEBT-119/168/179/180/182/188/483/521/528) | ✅ int 1563 + fe-admin 1570 + E2E 38 + X3 42 + be 715 | `7b69671` |
 
 ## Chặn / cần người quyết định
 
