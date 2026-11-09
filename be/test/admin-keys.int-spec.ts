@@ -389,6 +389,20 @@ describe('Admin API B6.3c (keys + tenants) on real Mongo + Redis', () => {
       expect(await jwksKids()).toEqual(before);
     });
 
+    it('DEBT-325: tenant_admin with a stale auth_time => 403 forbidden (not step_up_required), JWKS unchanged', async () => {
+      const before = await jwksKids();
+      const t = await tok(tadminA, { authAgoMs: 6 * MIN });
+      const list = await call('GET', '/admin/keys', t);
+      expect(list.statusCode).toBe(403);
+      expect(list.json()).toEqual({ error: 'forbidden' });
+      for (const mode of ['normal', 'emergency']) {
+        const res = await call('POST', '/admin/keys/rotate', t, { mode });
+        expect(res.statusCode).toBe(403);
+        expect(res.json()).toEqual({ error: 'forbidden' });
+      }
+      expect(await jwksKids()).toEqual(before);
+    });
+
     it('stale auth_time => 403 step_up_required, JWKS unchanged', async () => {
       const before = await jwksKids();
       const res = await call(

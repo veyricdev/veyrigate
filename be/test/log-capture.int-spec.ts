@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { Writable } from 'node:stream';
 import { MongoService } from '../src/database/mongo/mongo.service';
 import { ClientAuthenticationService } from '../src/modules/clients/client-authentication.service';
+import { AuthenticationService } from '../src/modules/authentication/authentication.service';
 import { ClientService } from '../src/modules/clients/client.service';
 import { DEFAULT_TENANT_ID } from '../src/modules/identity/tenant.service';
 import { SESSION_COOKIE } from '../src/modules/sessions/session.cookie';
@@ -237,6 +238,20 @@ describe('application logs never carry secrets (B7.4)', () => {
       ).statusCode,
     ).toBe(500);
 
+    // DEBT-237: a UI 500 (HtmlExceptionFilter) is logged too — name/frames only, never the text.
+    const loginPage = await full.app.inject({ method: 'GET', url: '/login' });
+    const loginAnon = cookieOf(loginPage, 'idp_csrf') ?? anon;
+    jest.spyOn(full.app.get(AuthenticationService), 'login').mockRejectedValueOnce(dupKey());
+    expect(
+      (
+        await form(
+          '/login',
+          { idp_csrf: loginAnon },
+          { _csrf: csrfOf(loginPage.body) ?? csrf, email: EMAIL, password: PASSWORD },
+        )
+      ).statusCode,
+    ).toBe(500);
+
     const uriError = () =>
       new Error(`connect failed for mongodb://sso-app:${URI_PASSWORD}@db.internal:27017/sso`);
     jest.spyOn(full.app.get(MongoService), 'ping').mockRejectedValueOnce(uriError());
@@ -271,7 +286,10 @@ describe('application logs never carry secrets (B7.4)', () => {
     ).toBe(true);
     // pino-http logs a 5xx as 'request errored' (not 'completed').
     expect(entries.some((e) => e.req?.url === '/token' && e.res?.statusCode === 500)).toBe(true);
-    expect(lines.filter((l) => l.includes('MongoServerError')).length).toBeGreaterThanOrEqual(3);
+    expect(lines.filter((l) => l.includes('MongoServerError')).length).toBeGreaterThanOrEqual(4);
+    expect(
+      lines.some((l) => l.includes('HtmlExceptionFilter') && l.includes('MongoServerError')),
+    ).toBe(true);
     expect(lines.some((l) => l.includes('readiness check failed'))).toBe(true);
     expect(lines.some((l) => l.includes('Mongo error'))).toBe(true);
   });

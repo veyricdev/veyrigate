@@ -128,7 +128,7 @@ describe("create: exact body at the boundaries", () => {
   it.each([
     ["Identifier", "identifier 2049 chars", { identifier: `https://a/${"x".repeat(2039)}` }, /at most 2048/],
     ["Identifier", "fragment", { identifier: "https://a/#frag" }, /fragment/],
-    ["Identifier", "trailing NBSP", { identifier: "https://a/ " }, /leading\/trailing spaces/],
+    ["Identifier", "trailing NBSP", { identifier: "https://a/ " }, /spaces or control characters/],
     ["Identifier", "relative", { identifier: "api.example.com" }, /absolute URI/],
     ["Resource ID", "resourceId 65 chars", { resourceId: "a".repeat(65) }, /1–64 characters/],
     ["Resource ID", "resourceId starting with '-'", { resourceId: "-a" }, /1–64 characters/],

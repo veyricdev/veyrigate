@@ -16,7 +16,7 @@ import {
   SignJWT,
   type JWK,
 } from 'jose';
-import type { Model } from 'mongoose';
+import mongoose, { type Model } from 'mongoose';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -2087,6 +2087,43 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
         }
       },
     );
+
+    it('DEBT-530: COMMIT failing (not labelled transient) => original error propagates, nothing provisioned (FI inside the transaction too)', async () => {
+      const sub = `${RUN}-tx-commit`;
+      const s = await start('google', (await rpAuthorize()).requestId);
+      const g = grant('google', s.location!, { claims: { sub } });
+      const commit = jest
+        .spyOn(mongoose.mongo.ClientSession.prototype, 'commitTransaction')
+        // A driver error WITHOUT labels (a plain Error breaks withTransaction's `hasErrorLabel`):
+        // not transient, not unknown-commit-result => withTransaction gives up and rethrows it.
+        .mockRejectedValueOnce(
+          new mongoose.mongo.MongoServerError({ message: 'ORIGINAL-commit-failure' }),
+        );
+      const created = jest.spyOn(UserService.prototype, 'create');
+      const totals = async () => ({
+        users: await userModel.countDocuments({}),
+        memberships: await utModel.countDocuments({}),
+        identities: await fiModel.countDocuments({}),
+      });
+      const before = await totals();
+      try {
+        await expect(
+          moduleRef.get(FederationService).callback('google', g, { binding: s.fed }, {}),
+        ).rejects.toThrow('ORIGINAL-commit-failure');
+        // Guard against a false green: the driver really went through the public commit method.
+        expect(commit).toHaveBeenCalled();
+        expect(created).toHaveBeenCalledTimes(1);
+        const { sub: userId } = (await created.mock.results[0].value) as { sub: string };
+        expect(await userModel.countDocuments({ email: `${sub}@example.com` })).toBe(0);
+        expect(await userModel.countDocuments({ _id: userId })).toBe(0);
+        expect(await utModel.countDocuments({ userId })).toBe(0);
+        expect(await fiModel.countDocuments({ providerId: sub })).toBe(0);
+        expect(await totals()).toEqual(before);
+      } finally {
+        commit.mockRestore();
+        created.mockRestore();
+      }
+    });
 
     it('F16: an 8 MB streamed token body => 502 and the IdP stops reading early (socket closed)', async () => {
       let written = 0;

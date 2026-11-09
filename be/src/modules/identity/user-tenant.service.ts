@@ -42,12 +42,6 @@ export class UserTenantService {
     return doc.toObject();
   }
 
-  /** Internal only (no route, never request input): delete one membership. */
-  async deleteMembership(userId: string, tenantId: string): Promise<void> {
-    if (!isValidObjectId(userId)) return;
-    await this.model.deleteOne({ userId: new Types.ObjectId(userId), tenantId }).exec();
-  }
-
   async isActiveMember(userId: string, tenantId: string): Promise<boolean> {
     if (!isValidObjectId(userId)) return false;
     const found = await this.model.exists({ userId, tenantId, status: 'active' }).exec();

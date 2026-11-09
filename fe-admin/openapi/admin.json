@@ -1563,7 +1563,7 @@
           "identifier": {
             "type": "string",
             "maxLength": 2048,
-            "description": "Absolute URI without fragment (the `aud`)."
+            "description": "Absolute https, http or urn URI without fragment, whitespace or control characters (the `aud`)."
           },
           "scopes": {
             "maxItems": 50,

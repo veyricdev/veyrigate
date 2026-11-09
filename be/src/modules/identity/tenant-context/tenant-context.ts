@@ -118,6 +118,14 @@ const ADMIN_SCOPE_KEY = 'adminScope';
 export const AdminScope = (scope: 'admin.read' | 'admin.write') =>
   SetMetadata(ADMIN_SCOPE_KEY, scope);
 
+const SUPER_ADMIN_KEY = 'superAdminOnly';
+
+/**
+ * Route reserved to `super_admin` (global resources, signing keys). Checked by `AdminTokenGuard`, so
+ * it always runs before the method-level `StepUpGuard` (DEBT-325); handlers still `assertSuperAdmin`.
+ */
+export const SuperAdminOnly = () => SetMetadata(SUPER_ADMIN_KEY, true);
+
 /**
  * Admin API guard (B6.1, spec §9.10/§9.11, INV-24): bearer access token for the `admin` resource
  * ONLY (never the session cookie, D2). Order (fail-closed, opaque errors):
@@ -127,7 +135,9 @@ export const AdminScope = (scope: 'admin.read' | 'admin.write') =>
  *  6. route scope in token scope => else 403 `insufficient_scope`;
  *  7. tenant = `tenantId` of the issuing client (server-side lookup, NEVER request input) + an ACTIVE
  *     `UserTenant` membership holding an admin role => else 403 `forbidden` (member vs role not told
- *     apart).
+ *     apart);
+ *  8. `@SuperAdminOnly()` route => the admin roles must include `super_admin`, else 403 `forbidden`
+ *     (before any step-up demand, DEBT-325).
  * A Mongo/Redis fault at any step propagates (5xx), never a 401/403/200.
  * Mints the `TenantContext` (`@Tenant()`) and the admin principal (`@AdminRoles()`).
  */
@@ -201,6 +211,15 @@ export class AdminTokenGuard implements CanActivate {
     const roles = (await this.memberships.activeRoles(claims.sub, tenantId)) ?? [];
     const adminRoles = roles.filter((r) => ADMIN_ROLES.includes(r));
     if (adminRoles.length === 0) throw AdminAuthError.forbidden();
+    if (
+      this.reflector.getAllAndOverride<boolean>(SUPER_ADMIN_KEY, [
+        context.getHandler(),
+        context.getClass(),
+      ]) &&
+      !adminRoles.includes('super_admin')
+    ) {
+      throw AdminAuthError.forbidden();
+    }
 
     req[TENANT_CTX] = Object.freeze({
       tenantId,

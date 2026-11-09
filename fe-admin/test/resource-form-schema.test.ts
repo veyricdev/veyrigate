@@ -14,13 +14,12 @@ const NEW = { resourceId: "demo", identifier: "https://api.example.com/", scopes
 const issues = (r: { success: boolean; error?: { issues: { message: string }[] } }) =>
   r.success ? [] : r.error!.issues.map((i) => i.message);
 
-describe("identifier (BE: ≤ 2048, new URL, empty hash; FE: + no leading/trailing space)", () => {
+describe("identifier (BE write path: ≤ 2048, no space/control/format char, new URL, empty hash, https/http/urn)", () => {
   it.each([
     "https://api.example.com/",
     "urn:example:api",
     "https://a/#", // empty fragment: hash === "" (same as the BE)
     "http://localhost:4100/",
-    "javascript:alert(1)", // the BE accepts any scheme: rendered as text only
     "https://*.example.com/",
     `https://a/${"x".repeat(2038)}`, // 2048
   ])("passes %j", (v) => {
@@ -30,9 +29,12 @@ describe("identifier (BE: ≤ 2048, new URL, empty hash; FE: + no leading/traili
 
   it.each([
     ["", "Required"],
-    [" https://a/", "Remove leading/trailing spaces"],
-    ["https://a/ ", "Remove leading/trailing spaces"],
-    ["https://a/\n", "Remove leading/trailing spaces"],
+    [" https://a/", "Must not contain spaces or control characters"],
+    ["https://a/ ", "Must not contain spaces or control characters"],
+    ["https://a/\n", "Must not contain spaces or control characters"],
+    ["https://a/b c", "Must not contain spaces or control characters"],
+    ["javascript:alert(1)", "Must use https, http or urn"],
+    ["mailto:a@example.com", "Must use https, http or urn"],
     ["api.example.com", "Must be an absolute URI"],
     ["/relative", "Must be an absolute URI"],
     ["https://a/#x", "Must not contain a fragment"],

@@ -1036,6 +1036,37 @@ describe('Admin API B6.3a (clients, secrets, resources) on real Mongo + Redis', 
       ]);
     });
 
+    it('DEBT-325: tenant_admin with a stale auth_time POST/PATCH => 403 forbidden (not step_up_required), DB unchanged', async () => {
+      const token = await tok(tadminA, { authAgoMs: 6 * MIN });
+      const count = await resourceModel.countDocuments();
+      const post = await call('POST', '/admin/resources', token, {
+        resourceId: `${RUN}-ta-stale`,
+        identifier: 'https://ta-stale.example.com/',
+      });
+      expect(post.statusCode).toBe(403);
+      expect(post.json()).toEqual({ error: 'forbidden' });
+      const patch = await call('PATCH', '/admin/resources/api', token, { scopes: ['x'] });
+      expect(patch.statusCode).toBe(403);
+      expect(patch.json()).toEqual({ error: 'forbidden' });
+      expect(await resourceModel.countDocuments()).toBe(count);
+      expect((await resourceModel.findOne({ resourceId: 'api' }).lean())?.scopes).toEqual([
+        'api.read',
+      ]);
+      // Reads stay open to any admin (no step-up on GET).
+      expect((await call('GET', '/admin/resources?limit=100', token)).statusCode).toBe(200);
+    });
+
+    it('DEBT-325: super_admin with a stale auth_time POST/PATCH => still step_up_required', async () => {
+      const token = await tok(superA, { authAgoMs: 6 * MIN });
+      const post = await call('POST', '/admin/resources', token, {
+        resourceId: `${RUN}-sa-stale`,
+        identifier: 'https://sa-stale.example.com/',
+      });
+      expect(post.json()).toMatchObject({ error: 'step_up_required' });
+      const patch = await call('PATCH', '/admin/resources/api', token, { scopes: ['api.read'] });
+      expect(patch.json()).toMatchObject({ error: 'step_up_required' });
+    });
+
     it('super_admin: create, validation 400, duplicates 409, PATCH scopes only, audit', async () => {
       const token = await tok(superA);
       const rid = `${RUN}-r1`.toLowerCase();
@@ -1058,10 +1089,37 @@ describe('Admin API B6.3a (clients, secrets, resources) on real Mongo + Redis', 
         { resourceId: 'Bad Id', identifier: 'https://bad.example.com/' },
         { resourceId: `${rid}-c`, identifier: 'https://c.example.com/', scopes: ['a b'] },
         { resourceId: `${rid}-d`, identifier: 'https://d.example.com/', tenantId: TENANT_A },
+        // DEBT-324/329: whitespace / control / format characters anywhere, scheme outside
+        // https/http/urn. 400 invalid_request, the message never echoes the value.
+        ...[
+          ' https://a/',
+          'https://a/ ',
+          '\u0000https://a/',
+          'https://a/b\tc',
+          'https://a/b c',
+          'https://a/\u200b',
+          'https://a/\u202e',
+          'javascript:alert(1)',
+          'data:text/html,x',
+          'file:///etc/passwd',
+          'a:',
+        ].map((identifier, i) => ({ resourceId: `${rid}-bad${i}`, identifier })),
       ]) {
         const res = await call('POST', '/admin/resources', token, body);
         expect({ body, status: res.statusCode }).toEqual({ body, status: 400 });
+        if (String(body.identifier).startsWith('javascript:')) {
+          expect(res.json()).toMatchObject({ error: 'invalid_request' });
+          expect(res.body).not.toContain('alert(1)');
+        }
       }
+      for (const identifier of ['HTTPS://A-R1/', 'http://localhost:3000/r1/', 'urn:example:r1']) {
+        const ok = await call('POST', '/admin/resources', token, {
+          resourceId: `${rid}-ok${identifier.length}`,
+          identifier,
+        });
+        expect({ identifier, status: ok.statusCode }).toEqual({ identifier, status: 201 });
+      }
+      await resourceModel.deleteMany({ resourceId: { $regex: `^${rid}-ok` } });
       const dupIdentifier = await call('POST', '/admin/resources', token, {
         resourceId: `${rid}-e`,
         identifier: 'https://r1.example.com/',

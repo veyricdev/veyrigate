@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import type { Model } from 'mongoose';
 import { DuplicateError, mapDuplicate } from '../identity/identity.errors';
-import { validateResourceFormat } from './resource.validator';
+import { validateResourceFormat, validateResourceIdentifier } from './resource.validator';
 
 export interface Resource {
   resourceId: string;
@@ -25,7 +25,7 @@ export class ResourceService {
   constructor(@InjectModel('Resource') private readonly resources: Model<Resource>) {}
 
   async create(input: CreateResourceInput): Promise<Resource> {
-    validateResourceFormat(input.identifier);
+    validateResourceIdentifier(input.identifier);
     const doc = await mapDuplicate('Resource', () =>
       this.resources.create({
         resourceId: input.resourceId,
@@ -41,7 +41,7 @@ export class ResourceService {
    * refused by a pre-check (race accepted: super_admin only); `identifier` by its unique index.
    */
   async createUnique(input: CreateResourceInput): Promise<Resource> {
-    validateResourceFormat(input.identifier);
+    validateResourceIdentifier(input.identifier);
     if (await this.resources.exists({ resourceId: input.resourceId })) {
       throw new DuplicateError('Resource');
     }

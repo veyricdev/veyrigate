@@ -335,6 +335,28 @@ describe('run 30 QA (tester): DEBT-172 runtime guard variants', () => {
     }
   });
 
+  it('DEBT-531: seedBootstrap with an ISSUER of a foreign scheme (admin identifier file:///admin/) => throws before any write, message never echoes it', async () => {
+    const mongoose = (await import('mongoose')).default;
+    const conn = await mongoose
+      .createConnection(withDbSuffix(MONGO_URI, 'seed-scheme'), {
+        serverSelectionTimeoutMS: 5000,
+        autoIndex: false,
+      })
+      .asPromise();
+    try {
+      const err = await seedBootstrap(conn, ADMIN, 'file:///secret-x', 'test').then(
+        () => undefined,
+        (e: unknown) => e as Error,
+      );
+      expect(err?.name).toBe('InvalidResourceError');
+      expect(err?.message).not.toContain('secret-x');
+      expect(await conn.db!.listCollections().toArray()).toEqual([]);
+    } finally {
+      await conn.dropDatabase();
+      await conn.close();
+    }
+  });
+
   it('seed re-point guard: a public client of ANOTHER tenant referencing `admin` (foreign identifier) => seed throws, nothing written', async () => {
     const mongoose = (await import('mongoose')).default;
     const uri = withDbSuffix(MONGO_URI, 'seed');

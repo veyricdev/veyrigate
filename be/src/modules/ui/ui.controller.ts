@@ -19,7 +19,7 @@ import { ConfigService } from '@nestjs/config';
 import { buildCsp, safeCspOrigin } from '../../common/http/csp';
 import type { HttpReply, HttpRequest } from '../../common/http/http.types';
 import type { AppConfig, SessionConfig } from '../../config/configuration';
-import { AuthenticationService } from '../authentication/authentication.service';
+import { AuthenticationService, type RevokeStep } from '../authentication/authentication.service';
 import { normalizeEmail } from '../identity/user.service';
 import { AuditAction } from '../security/audit/audit-action.enum';
 import { AuditService } from '../security/audit/audit.service';
@@ -374,11 +374,32 @@ export class UiController {
           }),
       ));
     } else {
-      tokenCount = await this.refreshTokens.revokeForSession(session.userId, session.ref, now);
-      await this.sessions.revoke(id!);
-      // SWEEP (DEBT-051, §15 inv. 29): revoke again AFTER the MARK, catching a family a racing
-      // `/token` exchange inserted meanwhile; its count is added so the audit reflects it. Idempotent.
-      tokenCount += await this.refreshTokens.revokeForSession(session.userId, session.ref, now);
+      // DEBT-526: stop at the first fault (a token fault leaves the session alive, so a retry redoes
+      // every step) and audit it with failedStep only; an audit fault never masks the original error.
+      let step: RevokeStep = 'pre_revoke';
+      try {
+        tokenCount = await this.refreshTokens.revokeForSession(session.userId, session.ref, now);
+        step = 'sessions';
+        await this.sessions.revoke(id!);
+        // SWEEP (DEBT-051, §15 inv. 29): revoke again AFTER the MARK, catching a family a racing
+        // `/token` exchange inserted meanwhile; its count is added so the audit reflects it. Idempotent.
+        step = 'sweep';
+        tokenCount += await this.refreshTokens.revokeForSession(session.userId, session.ref, now);
+      } catch (err) {
+        await this.audit
+          .record({
+            actorType: 'user',
+            actorId: session.userId,
+            action: AuditAction.SESSION_REVOKED,
+            targetType: 'session',
+            targetId: session.ref,
+            result: 'failure',
+            reason: 'revoke_failed',
+            metadata: { scope: 'session', failedStep: step },
+          })
+          .catch(() => undefined);
+        throw err;
+      }
     }
 
     await this.audit.record({

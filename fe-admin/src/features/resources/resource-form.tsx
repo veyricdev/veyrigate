@@ -18,7 +18,7 @@ const FIELDS: Record<FieldName, { label: string; hint: string }> = {
   },
   identifier: {
     label: "Identifier",
-    hint: "Absolute URI without a fragment, e.g. https://api.example.com/ — the token audience. Cannot be changed later.",
+    hint: "Absolute https, http or urn URI without spaces or a fragment, e.g. https://api.example.com/ — the token audience. Cannot be changed later.",
   },
   scopes: {
     label: "Scopes",

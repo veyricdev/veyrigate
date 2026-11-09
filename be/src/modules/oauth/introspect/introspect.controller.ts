@@ -25,6 +25,7 @@ import { adminResourceIdentifier } from '../token/token.service';
 import { errorForLog } from '../../../common/logger/error-log';
 import {
   DEPENDENCY_RETRY_AFTER_SEC,
+  DEPENDENCY_UNAVAILABLE_DESCRIPTION,
   isDependencyUnavailable,
   KeyProviderUnavailableError,
 } from '../../../common/errors/dependency-unavailable';
@@ -277,7 +278,10 @@ export class IntrospectController {
       return reply
         .status(HttpStatus.SERVICE_UNAVAILABLE)
         .header('Retry-After', String(DEPENDENCY_RETRY_AFTER_SEC))
-        .send({ error: 'temporarily_unavailable' });
+        .send({
+          error: 'temporarily_unavailable',
+          error_description: DEPENDENCY_UNAVAILABLE_DESCRIPTION,
+        });
     }
     const error =
       err instanceof IntrospectError

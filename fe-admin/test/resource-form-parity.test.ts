@@ -2,8 +2,9 @@
 // Run 46 tester: FE vs BE parity of the resource rules. The `be` column was MEASURED (not assumed)
 // by running the real BE validators on this corpus: `validateSync(plainToInstance(CreateResourceDto /
 // UpdateResourceDto, body), { whitelist: true, forbidNonWhitelisted: true })` then
-// `validateResourceFormat(identifier)` (be/src/modules/admin/admin.dto.ts,
-// be/src/modules/resources/resource.validator.ts). If either side changes, re-measure.
+// `validateResourceIdentifier(identifier)` (be/src/modules/admin/admin.dto.ts,
+// be/src/modules/resources/resource.validator.ts). Run 80: re-measured by the identifier corpus of
+// be/src/modules/resources/resource.validator.spec.ts. If either side changes, re-measure.
 // Invariant: the form NEVER accepts what the BE refuses; every divergence is FE-stricter and listed.
 import { describe, expect, it } from "vitest";
 import { EditResourceSchema, NewResourceSchema, identifierProblem } from "@/features/resources/resource-form-schema";
@@ -17,18 +18,15 @@ const IDENTIFIERS: [string, boolean, boolean][] = [
   ["https://api.example.com/", true, true],
   ["urn:example:api", true, true],
   ["urn:", true, true],
-  ["a:", true, true],
+  ["http://localhost:3000/demo/", true, true],
   ["https://a/#", true, true], // empty fragment => hash === ""
   ["https://a/?#", true, true],
   ["https://a/%23", true, true],
+  ["https://a/%20", true, true],
   ["https://a/#x", false, false],
-  ["javascript:alert(1)", true, true],
-  ["data:text/html,<b>x</b>", true, true],
-  ["file:///etc/passwd", true, true],
   ["https://[::1]/", true, true],
-  ["https://ä.example/", true, true],
+  ["https://\u00e4.example/", true, true],
   ["HTTPS://A/", true, true],
-  ["https://a/ b", true, true],
   ["https:", false, false],
   ["https://", false, false],
   ["http://a b/", false, false],
@@ -36,21 +34,29 @@ const IDENTIFIERS: [string, boolean, boolean][] = [
   ["/relative", false, false],
   ["", false, false],
   [" ", false, false],
-  // FE-stricter (approved trim rule, DEBT-324): `new URL` drops them, the BE stores the raw string.
-  [" https://a/", true, false],
-  ["https://a/ ", true, false],
-  ["\thttps://a/", true, false],
-  ["https://a/\t", true, false],
-  ["https://a/ ", true, false],
-  ["https://a/﻿", true, false],
-  ["https://a/ ", true, false],
-  // Same gap on both sides (DEBT-329): `new URL` strips C0 controls at the ends and tab/LF anywhere,
-  // `trim()` does not cover U+0000 and nothing checks inside => raw stored != parsed URL.
-  ["\u0000https://a/", true, true],
-  ["https://a/\u0000", true, true],
-  ["https://a/b\tc", true, true],
-  ["https://a/b\nc", true, true],
-  ["https://a/​", true, true],
+  // Scheme outside https/http/urn (DEBT-324).
+  ["a:", false, false],
+  ["javascript:alert(1)", false, false],
+  ["data:text/html,<b>x</b>", false, false],
+  ["file:///etc/passwd", false, false],
+  ["mailto:a@example.com", false, false],
+  // Whitespace / control / format characters ANYWHERE (\p{Cc}\p{Cf}\p{Z}, DEBT-324/329): `new URL`
+  // drops or encodes them, so the stored raw string would never match the `aud`.
+  [" https://a/", false, false],
+  ["https://a/ ", false, false],
+  ["https://a/ b", false, false],
+  ["\thttps://a/", false, false],
+  ["https://a/\t", false, false],
+  ["https://a/\u00a0", false, false],
+  ["https://a/\ufeff", false, false],
+  ["https://a/\u2028", false, false],
+  ["\u0000https://a/", false, false],
+  ["https://a/\u0000", false, false],
+  ["https://a/b\tc", false, false],
+  ["https://a/b\nc", false, false],
+  ["https://a/\u007f", false, false],
+  ["https://a/\u200b", false, false],
+  ["https://a/\u202e", false, false],
   // Length: BE counts code points, FE counts UTF-16 units (FE-stricter for astral characters only).
   [`https://a/${x(2038)}`, true, true], // 2048
   [`https://a/${x(2039)}`, false, false], // 2049

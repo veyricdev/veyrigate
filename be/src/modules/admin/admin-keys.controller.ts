@@ -8,6 +8,7 @@ import {
   AdminTokenGuard,
   CurrentAdmin,
   RequireRecentAuth,
+  SuperAdminOnly,
   Tenant,
   type TenantContext,
 } from '../identity/tenant-context/tenant-context';
@@ -33,6 +34,7 @@ export class AdminKeysController {
 
   @Get()
   @AdminScope('admin.read')
+  @SuperAdminOnly()
   @ApiOperation({ description: 'super_admin only. Keys currently in JWKS (active + retiring).' })
   @ApiOkResponse({ type: KeyListViewDto })
   async list(
@@ -51,6 +53,7 @@ export class AdminKeysController {
 
   @Post('rotate')
   @AdminScope('admin.write')
+  @SuperAdminOnly()
   @RequireRecentAuth(5)
   @HttpCode(200)
   @ApiOperation({

@@ -16,6 +16,7 @@ import {
   AdminTokenGuard,
   RequireRecentAuth,
   STEP_UP_CLOCK,
+  SuperAdminOnly,
   Tenant,
   type TenantContext,
 } from './tenant-context';
@@ -35,6 +36,14 @@ class ProbeController {
   stepUp(@Tenant() ctx: TenantContext) {
     return { tenantId: ctx.tenantId };
   }
+
+  @Get('super')
+  @AdminScope('admin.read')
+  @SuperAdminOnly()
+  @RequireRecentAuth(5)
+  superOnly(@Tenant() ctx: TenantContext) {
+    return { tenantId: ctx.tenantId };
+  }
 }
 
 /**
@@ -45,6 +54,7 @@ describe('StepUpGuard (B6.2) behind AdminTokenGuard (unit, stubbed collaborators
   let app: NestFastifyApplication;
   let claims: Record<string, unknown>;
   let nowMs = NOW_SEC * 1000;
+  let roles = ['tenant_admin'];
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
@@ -64,7 +74,7 @@ describe('StepUpGuard (B6.2) behind AdminTokenGuard (unit, stubbed collaborators
         },
         { provide: ResourceService, useValue: { identifiersFor: async () => [ADMIN_AUD] } },
         { provide: SessionService, useValue: { isEnded: async () => false } },
-        { provide: UserTenantService, useValue: { activeRoles: async () => ['tenant_admin'] } },
+        { provide: UserTenantService, useValue: { activeRoles: async () => roles } },
         { provide: getModelToken('User'), useValue: { exists: async () => ({ _id: SUB }) } },
         { provide: ConfigService, useValue: { getOrThrow: () => ({ issuer: ISSUER }) } },
         { provide: STEP_UP_CLOCK, useValue: () => nowMs },
@@ -77,7 +87,7 @@ describe('StepUpGuard (B6.2) behind AdminTokenGuard (unit, stubbed collaborators
 
   afterAll(() => app.close());
 
-  const call = async (authTime: unknown, now = NOW_SEC * 1000) => {
+  const call = async (authTime: unknown, now = NOW_SEC * 1000, url = '/t/step-up') => {
     nowMs = now;
     claims = {
       sub: SUB,
@@ -87,7 +97,7 @@ describe('StepUpGuard (B6.2) behind AdminTokenGuard (unit, stubbed collaborators
       sid: 'a'.repeat(64),
       ...(authTime !== undefined ? { auth_time: authTime } : {}),
     };
-    return app.inject({ method: 'GET', url: '/t/step-up', headers: { authorization: 'Bearer x' } });
+    return app.inject({ method: 'GET', url, headers: { authorization: 'Bearer x' } });
   };
 
   it('auth_time = now => 200', async () => {
@@ -138,5 +148,34 @@ describe('StepUpGuard (B6.2) behind AdminTokenGuard (unit, stubbed collaborators
       headers: { authorization: 'Bearer x' },
     });
     expect(res.statusCode).toBe(401);
+  });
+
+  describe('DEBT-325: @SuperAdminOnly() is checked in AdminTokenGuard, before StepUpGuard', () => {
+    afterEach(() => {
+      roles = ['tenant_admin'];
+    });
+
+    it('tenant_admin with a stale auth_time => 403 forbidden (never step_up_required)', async () => {
+      const res = await call(NOW_SEC - 301, NOW_SEC * 1000, '/t/super');
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toEqual({ error: 'forbidden' });
+    });
+
+    it('tenant_admin with a fresh auth_time => 403 forbidden', async () => {
+      const res = await call(NOW_SEC, NOW_SEC * 1000, '/t/super');
+      expect(res.json()).toEqual({ error: 'forbidden' });
+    });
+
+    it('super_admin: fresh => 200; stale => step_up_required', async () => {
+      roles = ['super_admin'];
+      expect((await call(NOW_SEC, NOW_SEC * 1000, '/t/super')).statusCode).toBe(200);
+      const stale = await call(NOW_SEC - 301, NOW_SEC * 1000, '/t/super');
+      expect(stale.json()).toEqual({ error: 'step_up_required', max_age: 0 });
+    });
+
+    it('a route without the metadata keeps its order (tenant_admin stale => step_up_required)', async () => {
+      const res = await call(NOW_SEC - 301);
+      expect(res.json().error).toBe('step_up_required');
+    });
   });
 });

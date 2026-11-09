@@ -10,7 +10,7 @@ import { hashPassword } from '../common/crypto/crypto.util';
 import type { Client } from '../modules/clients/client.service';
 import type { Resource } from '../modules/resources/resource.service';
 import { validateRedirectUriList } from '../modules/clients/redirect-uri.validator';
-import { validateResourceFormat } from '../modules/resources/resource.validator';
+import { validateResourceIdentifier } from '../modules/resources/resource.validator';
 
 /**
  * Dev-only provisioning CLI (Task 4, interim for B6.4; DEBT-077).
@@ -96,7 +96,7 @@ export async function seedDev(
   validateRedirectUriList(client.redirectUris, { allowHttpLocalhost: true });
   validateRedirectUriList(client.postLogoutRedirectUris, { allowHttpLocalhost: true });
   for (const resource of resources) {
-    validateResourceFormat(resource.identifier);
+    validateResourceIdentifier(resource.identifier);
   }
 
   const clientModel: Model<Client> = connection.models.Client ?? connection.model<Client>('Client');

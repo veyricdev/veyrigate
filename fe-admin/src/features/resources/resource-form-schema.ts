@@ -8,22 +8,29 @@ import {
 
 /**
  * Resource form rules (run 46 A6.2): a mirror of the BE (`CreateResourceDto` / `UpdateResourceDto`
- * in `be/src/modules/admin/admin.dto.ts`, `validateResourceFormat` in
- * `be/src/modules/resources/resource.validator.ts`). Stricter than the BE only for leading/trailing
- * spaces in `identifier` (DEBT-324) and duplicate scopes. The BE stays the enforcement point.
+ * in `be/src/modules/admin/admin.dto.ts`, `validateResourceIdentifier` in
+ * `be/src/modules/resources/resource.validator.ts`). Same `identifier` rule as the BE write path
+ * (`validateResourceIdentifier`, DEBT-324/329); stricter only for UTF-16 length and duplicate scopes.
+ * The BE stays the enforcement point.
  */
 
 /** Text kept for a step-up draft (50 scopes of 256 + separators fit). */
 const TEXT_MAX = 16_000;
 
+/** Control (Cc), format (Cf: ZWSP, BOM, bidi) and separator (Z) characters - the BE rule (DEBT-324/329). */
+const FORBIDDEN_CHARS = /[\p{Cc}\p{Cf}\p{Z}]/u;
+const ALLOWED_SCHEMES = new Set(["https:", "http:", "urn:"]);
+
 /** Why the BE would refuse `v` as a resource `identifier` (the `aud`), checked in this order. */
 export function identifierProblem(v: string): string | null {
   if (v === "") return "Required";
   if (v.length > RESOURCE_IDENTIFIER_MAX_LEN) return `Must be at most ${RESOURCE_IDENTIFIER_MAX_LEN} characters`;
-  // `new URL` ignores them but the BE stores the raw string: the `aud` would never match.
-  if (v !== v.trim()) return "Remove leading/trailing spaces";
+  // `new URL` drops or encodes them but the BE stores the raw string: the `aud` would never match.
+  if (FORBIDDEN_CHARS.test(v)) return "Must not contain spaces or control characters";
   if (!URL.canParse(v)) return "Must be an absolute URI";
-  if (new URL(v).hash !== "") return "Must not contain a fragment";
+  const url = new URL(v);
+  if (url.hash !== "") return "Must not contain a fragment";
+  if (!ALLOWED_SCHEMES.has(url.protocol)) return "Must use https, http or urn";
   return null;
 }
 

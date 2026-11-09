@@ -27,6 +27,7 @@ import {
   AdminTokenGuard,
   CurrentAdmin,
   RequireRecentAuth,
+  SuperAdminOnly,
   Tenant,
   type TenantContext,
 } from '../identity/tenant-context/tenant-context';
@@ -82,6 +83,7 @@ export class AdminResourcesController {
 
   @Post()
   @AdminScope('admin.write')
+  @SuperAdminOnly()
   @RequireRecentAuth(5)
   @ApiOperation({ description: 'super_admin only. resourceId and identifier are immutable.' })
   @ApiCreatedResponse({ type: AdminResourceViewDto })
@@ -108,6 +110,7 @@ export class AdminResourcesController {
 
   @Patch(':resourceId')
   @AdminScope('admin.write')
+  @SuperAdminOnly()
   @RequireRecentAuth(5)
   @ApiOperation({ description: 'super_admin only. Only `scopes` can change.' })
   @ApiOkResponse({ type: AdminResourceViewDto })

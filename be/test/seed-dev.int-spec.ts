@@ -200,6 +200,24 @@ describe('seed-dev (Task 4, B6.4 interim) on real Mongo', () => {
     expect(await resourceModel.countDocuments({}).exec()).toBe(0);
   });
 
+  it('DEBT-531: an ISSUER yielding a whitespace/control character or a foreign scheme is refused BEFORE any write (message never echoes it)', async () => {
+    for (const issuer of [
+      'http://localhost:4000\t',
+      'http://localhost:4000 ',
+      'javascript:secret-x',
+    ]) {
+      const err = await seedDev(connection, issuer, 'test').then(
+        () => undefined,
+        (e: unknown) => e as Error,
+      );
+      expect(err?.name).toBe('InvalidResourceError');
+      expect(err?.message).not.toContain('secret-x');
+      expect(err?.message).not.toContain('localhost');
+    }
+    expect(await clientModel.countDocuments({}).exec()).toBe(0);
+    expect(await resourceModel.countDocuments({}).exec()).toBe(0);
+  });
+
   it('buildSeedDevTargets derives the resource identifier from the issuer without a double slash', () => {
     const demoOf = (issuer: string): string =>
       buildSeedDevTargets(issuer).resources.find((r) => r.resourceId === 'demo')!.identifier;

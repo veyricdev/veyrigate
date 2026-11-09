@@ -185,9 +185,10 @@ describe('Redis down ⇒ 503 temporarily_unavailable, fail-closed, recovers (run
       const body = res.json();
       if (body.error !== 'temporarily_unavailable') problems.push(`error ${String(body.error)}`);
       if ('active' in body) problems.push('active present');
-      // DEBT-401: `/token` says "outage", not the client-auth rate-limit sentence.
+      // DEBT-401: `/token` says "outage", not the client-auth rate-limit sentence; DEBT-411:
+      // `/introspect` carries the same sentence.
       if (
-        name.startsWith('POST /token') &&
+        (name.startsWith('POST /token') || name === 'POST /introspect') &&
         body.error_description !== 'The service is temporarily unavailable. Try again later.'
       ) {
         problems.push(`error_description ${String(body.error_description)}`);

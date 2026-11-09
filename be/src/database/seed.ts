@@ -15,7 +15,7 @@ import {
 } from '../modules/clients/client-credential.service';
 import type { Resource } from '../modules/resources/resource.service';
 import { validateRedirectUriList } from '../modules/clients/redirect-uri.validator';
-import { validateResourceFormat } from '../modules/resources/resource.validator';
+import { validateResourceIdentifier } from '../modules/resources/resource.validator';
 import { adminResourceIdentifier } from '../modules/oauth/token/token.service';
 
 /**
@@ -104,7 +104,7 @@ export async function seedBootstrap(
   const adminIdentifier = adminResourceIdentifier(issuer);
   validateRedirectUriList(feAdmin.redirectUris, { allowHttpLocalhost: true });
   validateRedirectUriList(feAdmin.postLogoutRedirectUris, { allowHttpLocalhost: true });
-  validateResourceFormat(adminIdentifier);
+  validateResourceIdentifier(adminIdentifier);
   const email = normalizeEmail(cfg.email);
 
   const tenantModel = model<unknown>(connection, 'Tenant');

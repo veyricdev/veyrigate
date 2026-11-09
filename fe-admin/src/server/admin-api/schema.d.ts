@@ -451,7 +451,7 @@ export interface components {
         };
         CreateResourceDto: {
             resourceId: string;
-            /** @description Absolute URI without fragment (the `aud`). */
+            /** @description Absolute https, http or urn URI without fragment, whitespace or control characters (the `aud`). */
             identifier: string;
             scopes?: string[];
         };

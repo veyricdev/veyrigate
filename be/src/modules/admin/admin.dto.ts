@@ -176,7 +176,11 @@ export class CreateResourceDto {
   @Matches(RESOURCE_ID)
   resourceId!: string;
 
-  @ApiProperty({ maxLength: MAX_LEN, description: 'Absolute URI without fragment (the `aud`).' })
+  @ApiProperty({
+    maxLength: MAX_LEN,
+    description:
+      'Absolute https, http or urn URI without fragment, whitespace or control characters (the `aud`).',
+  })
   @IsString()
   @MaxLength(MAX_LEN)
   identifier!: string;

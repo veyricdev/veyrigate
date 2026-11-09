@@ -1,5 +1,13 @@
-import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus } from '@nestjs/common';
+import {
+  ArgumentsHost,
+  Catch,
+  ExceptionFilter,
+  HttpException,
+  HttpStatus,
+  Logger,
+} from '@nestjs/common';
 import { clientErrorStatus } from '../../common/filters/oauth-exception.filter';
+import { errorForLog } from '../../common/logger/error-log';
 import {
   DEPENDENCY_RETRY_AFTER_SEC,
   isDependencyUnavailable,
@@ -12,6 +20,8 @@ interface Reply {
 }
 @Catch()
 export class HtmlExceptionFilter implements ExceptionFilter {
+  private readonly logger = new Logger(HtmlExceptionFilter.name);
+
   catch(exception: unknown, host: ArgumentsHost): void {
     const reply = host.switchToHttp().getResponse<Reply>();
     // Dependency outage (Redis / key provider, run 53c): 503 + Retry-After, never a session/redirect.
@@ -22,6 +32,9 @@ export class HtmlExceptionFilter implements ExceptionFilter {
         : unavailable
           ? HttpStatus.SERVICE_UNAVAILABLE
           : (clientErrorStatus(exception) ?? HttpStatus.INTERNAL_SERVER_ERROR);
+    // DEBT-237: a 5xx is logged (name/code/frames only, never the message: it may echo input);
+    // a 4xx is not, so client input cannot fill the log.
+    if (status >= 500) this.logger.error(errorForLog(exception));
     const response = exception instanceof HttpException ? exception.getResponse() : undefined;
     const retryAfter =
       typeof response === 'object' && response && 'retryAfter' in response

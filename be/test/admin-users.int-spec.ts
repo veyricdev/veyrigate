@@ -896,7 +896,7 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
       const demo = await realFlow(user);
       const other = await realFlow(user, { resource: OTHER_AUD, sessionId: demo.sessionId });
       const foreign = await realFlow(user, { clientId: CLIENT_B, sessionId: demo.sessionId });
-      await moduleRef.get(UserTenantService).deleteMembership(user, TENANT_B);
+      await userTenantModel.deleteOne({ userId: new Types.ObjectId(user), tenantId: TENANT_B });
       const familyOf = async (clientId: string, resource: string) =>
         (await refreshModel
           .findOne({ userId: new Types.ObjectId(user), clientId, resource })

@@ -690,5 +690,92 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
         expect(await successAudits(uid, 'SESSION_REVOKED')).toHaveLength(0);
       },
     );
+
+    // Run 80 tester (DEBT-526): logout scope=session with real Redis + Mongo, a fault at each step.
+    const logoutOne = (id: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/logout',
+        headers: { cookie: `${SESSION_COOKIE}=${id}` },
+        payload: { _csrf: csrf.token(id) },
+      });
+    it.each(['pre_revoke', 'sessions', 'sweep'] as const)(
+      'DEBT-526: scope=session fault at %s => 5xx, exactly one persisted failure audit {scope:session, failedStep} with no secret; other browser untouched; retry => 302 and the session family is dead',
+      async (failedStep) => {
+        const uid = await newUser(`one-audit-${failedStep}`);
+        const a = await browser(uid);
+        const b = await browser(uid);
+        const leak = 'mongodb://u:r80-S3CRET@h boom';
+        const rts = app.get(RefreshTokenService);
+        const real = rts.revokeForSession.bind(rts);
+        const spy =
+          failedStep === 'pre_revoke'
+            ? jest.spyOn(rts, 'revokeForSession').mockRejectedValueOnce(new Error(leak))
+            : failedStep === 'sessions'
+              ? jest.spyOn(sessions, 'revoke').mockRejectedValueOnce(new Error(leak))
+              : jest
+                  .spyOn(rts, 'revokeForSession')
+                  .mockImplementationOnce(real)
+                  .mockRejectedValueOnce(new Error(leak));
+        let res;
+        try {
+          res = await logoutOne(a.id);
+        } finally {
+          spy.mockRestore();
+        }
+        expect(res.statusCode).toBeGreaterThanOrEqual(500);
+        expect(res.headers.location).toBeUndefined();
+        expect(res.body).not.toContain('r80-S3CRET');
+        expect(res.body).not.toContain('boom');
+        expect(setCookies(res).some((c) => c.startsWith(`${SESSION_COOKIE}=`))).toBe(false);
+        const failures = await auditModel()
+          .find({ actorId: uid, action: 'SESSION_REVOKED', result: 'failure' })
+          .lean();
+        expect(failures).toHaveLength(1);
+        expect(failures[0]).toMatchObject({
+          reason: 'revoke_failed',
+          targetType: 'session',
+          targetId: a.ref,
+          metadata: { scope: 'session', failedStep },
+        });
+        expect(Object.keys(failures[0].metadata as object).sort()).toEqual(['failedStep', 'scope']);
+        const stored = JSON.stringify(failures[0]);
+        for (const secret of [
+          a.id,
+          b.id,
+          csrf.token(a.id),
+          a.access,
+          a.refresh,
+          b.refresh,
+          'r80-S3CRET',
+          'boom',
+        ]) {
+          expect(stored).not.toContain(secret);
+        }
+        expect(await successAudits(uid, 'SESSION_REVOKED')).toHaveLength(0);
+        // The session survives a fault before the MARK (fail-closed: user not told logout succeeded).
+        expect((await sessions.get(a.id)) !== null).toBe(failedStep !== 'sweep');
+        // scope=session never touches the other browser.
+        expect(await sessions.get(b.id)).not.toBeNull();
+
+        const retry = await logoutOne(a.id);
+        expect(retry.statusCode).toBe(302);
+        expect(await sessions.get(a.id)).toBeNull();
+        expect((await rotate(a.refresh)).json().error).toBe('invalid_grant');
+        expect(await liveFamilies(uid)).toBe(1); // only B's family is left
+        expect((await rotate(b.refresh)).statusCode).toBe(200);
+        // Still exactly one failure audit; the retry adds a success only when a session was live.
+        expect(
+          await auditModel().countDocuments({
+            actorId: uid,
+            action: 'SESSION_REVOKED',
+            result: 'failure',
+          }),
+        ).toBe(1);
+        expect(await successAudits(uid, 'SESSION_REVOKED')).toHaveLength(
+          failedStep === 'sweep' ? 0 : 1,
+        );
+      },
+    );
   });
 });

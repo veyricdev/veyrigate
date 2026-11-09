@@ -853,11 +853,20 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
         expect(sessions.revoke).not.toHaveBeenCalled();
         expect(audit.record).not.toHaveBeenCalled();
       }
-      if (failure === 'token') {
-        expect(sessions.revoke).not.toHaveBeenCalled();
-        expect(audit.record).not.toHaveBeenCalled();
+      if (failure === 'token') expect(sessions.revoke).not.toHaveBeenCalled();
+      // DEBT-526: a revoke fault writes exactly one failure audit, never a success one.
+      if (failure === 'token' || failure === 'revoke') {
+        expect(audit.record).toHaveBeenCalledTimes(1);
+        expect(audit.record).toHaveBeenCalledWith(
+          expect.objectContaining({
+            result: 'failure',
+            metadata: {
+              scope: 'session',
+              failedStep: failure === 'token' ? 'pre_revoke' : 'sessions',
+            },
+          }),
+        );
       }
-      if (failure === 'revoke') expect(audit.record).not.toHaveBeenCalled();
     },
   );
 
@@ -1167,7 +1176,18 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
       expect(failed.body).not.toContain('loggedOut=1');
       expect(live).toBe(true); // session still alive — token revoke ran first and failed
       expect(sessions.revoke).not.toHaveBeenCalled();
-      expect(audit.record).not.toHaveBeenCalled();
+      // DEBT-526: the partial failure is audited (failedStep only — no error text/token).
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record).toHaveBeenCalledWith({
+        actorType: 'user',
+        actorId: 'user-1',
+        action: AuditAction.SESSION_REVOKED,
+        targetType: 'session',
+        targetId: 'session-ref',
+        result: 'failure',
+        reason: 'revoke_failed',
+        metadata: { scope: 'session', failedStep: 'pre_revoke' },
+      });
 
       // Retry: the once-rejection is spent, so the whole sequence completes idempotently.
       const retry = await app.inject(req);
@@ -1200,13 +1220,80 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
       expect(failed.headers.location).toBeUndefined();
       expect(sessionSetCookie(failed.headers['set-cookie'])).toBeUndefined();
       expect(failed.body).not.toContain('loggedOut=1');
-      expect(audit.record).not.toHaveBeenCalled(); // audit is strictly after session revoke
+      // DEBT-526: failure audit only — the success audit is strictly after session revoke.
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record).toHaveBeenCalledWith({
+        actorType: 'user',
+        actorId: 'user-1',
+        action: AuditAction.SESSION_REVOKED,
+        targetType: 'session',
+        targetId: 'session-ref',
+        result: 'failure',
+        reason: 'revoke_failed',
+        metadata: { scope: 'session', failedStep: 'sessions' },
+      });
 
       const retry = await app.inject(req);
       expect(retry.statusCode).toBe(302);
       expect(retry.headers.location).toBe('/login?loggedOut=1');
       expect(sessionSetCookie(retry.headers['set-cookie'])).toContain('Max-Age=0');
       expect(live).toBe(false);
+    });
+
+    it('DEBT-526: the SWEEP revokeForSession throws → 5xx, one failure audit failedStep sweep, no success audit/cookie clear', async () => {
+      sessions.get.mockResolvedValue(liveSession);
+      refreshTokens.revokeForSession
+        .mockResolvedValueOnce(0)
+        .mockRejectedValueOnce(new Error('sweep boom'));
+
+      const failed = await app.inject({
+        method: 'POST',
+        url: '/logout',
+        headers: { cookie: 'idp_session=session-a' },
+        payload: { _csrf: csrfFor('session-a') },
+      });
+
+      expect(failed.statusCode).toBeGreaterThanOrEqual(500);
+      expect(failed.headers.location).toBeUndefined();
+      expect(sessionSetCookie(failed.headers['set-cookie'])).toBeUndefined();
+      expect(failed.body).not.toContain('sweep boom');
+      expect(sessions.revoke).toHaveBeenCalledTimes(1);
+      expect(audit.record).not.toHaveBeenCalledWith(expect.objectContaining({ result: 'success' }));
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record).toHaveBeenCalledWith({
+        actorType: 'user',
+        actorId: 'user-1',
+        action: AuditAction.SESSION_REVOKED,
+        targetType: 'session',
+        targetId: 'session-ref',
+        result: 'failure',
+        reason: 'revoke_failed',
+        metadata: { scope: 'session', failedStep: 'sweep' },
+      });
+    });
+
+    it('DEBT-526: the failure audit itself throws → still 5xx, body leaks neither the revoke nor the audit error', async () => {
+      sessions.get.mockResolvedValue(liveSession);
+      // A Redis timeout maps to 503 + Retry-After while a plain audit Error would be a 500: the
+      // status proves the ORIGINAL error is the one rethrown (the audit fault is swallowed).
+      refreshTokens.revokeForSession.mockRejectedValueOnce(new Error('Command timed out'));
+      audit.record.mockRejectedValueOnce(new Error('audit down'));
+
+      const failed = await app.inject({
+        method: 'POST',
+        url: '/logout',
+        headers: { cookie: 'idp_session=session-a' },
+        payload: { _csrf: csrfFor('session-a') },
+      });
+
+      expect(failed.statusCode).toBe(503);
+      expect(failed.headers['retry-after']).toBeDefined();
+      expect(failed.body).not.toContain('Command timed out');
+      expect(failed.headers.location).toBeUndefined();
+      expect(sessionSetCookie(failed.headers['set-cookie'])).toBeUndefined();
+      expect(failed.body).not.toContain('audit down');
+      expect(sessions.revoke).not.toHaveBeenCalled();
+      expect(audit.record).toHaveBeenCalledTimes(1);
     });
 
     it('fail-OPEN after revoke: a fault resolving the redirect / iframes still logs the user out (default redirect)', async () => {

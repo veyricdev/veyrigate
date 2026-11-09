@@ -168,7 +168,7 @@ describe("new resource", () => {
     await waitFor(() => expect(field("Resource ID").getAttribute("aria-invalid")).toBe("true"));
     expect(document.activeElement).toBe(field("Resource ID"));
     expect(describedErrors(field("Resource ID"))).toMatch(/lowercase/);
-    expect(describedErrors(field("Identifier"))).toBe("Remove leading/trailing spaces");
+    expect(describedErrors(field("Identifier"))).toBe("Must not contain spaces or control characters");
     expect(describedErrors(field("Scopes"))).toBe('"read" is listed twice');
     expect(field("Identifier").getAttribute("aria-describedby")).toContain("resource-identifier-hint");
     expect(mocks.create).not.toHaveBeenCalled();
@@ -176,7 +176,8 @@ describe("new resource", () => {
 
   it.each([
     ["https://api.example.com/#frag", "Must not contain a fragment"],
-    ["https://api.example.com/ ", "Remove leading/trailing spaces"],
+    ["https://api.example.com/ ", "Must not contain spaces or control characters"],
+    ["javascript:alert(1)", "Must use https, http or urn"],
     ["api.example.com", "Must be an absolute URI"],
   ])("identifier %j blocked: %s", async (identifier, message) => {
     renderAt("/resources/new");
