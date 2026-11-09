@@ -231,6 +231,32 @@ describe("outcomes", () => {
     await waitFor(() => expect(within(roles()).getByRole("status").textContent).toBe("This user no longer exists in this tenant."));
   });
 
+  it("not_found then the re-read is not_found too: the form is gone (writable=false), the notice stays", async () => {
+    await openDetail();
+    const reads = vi.mocked(getUser).mock.calls.length;
+    vi.mocked(getUser).mockResolvedValue(fail("not_found") as never);
+    setRoles.mockResolvedValue(fail("not_found") as never);
+    fireEvent.click(box(/^tenant admin$/i));
+    await save();
+    await noDialog();
+    await waitFor(() => expect(within(roles()).queryByRole("checkbox")).toBeNull());
+    expect(saveButton()).toBeNull();
+    expect(within(roles()).getByRole("status").textContent).toBe("This user no longer exists in this tenant.");
+    expect(vi.mocked(getUser).mock.calls.length).toBeGreaterThan(reads);
+  });
+
+  it("a throw that is not an AdminRequestError (BFF/network) => dialog closes, ROLES_UNCERTAIN, sent once", async () => {
+    setRoles.mockRejectedValue(new Error("boom-xyz"));
+    await openDetail();
+    fireEvent.click(box(/^tenant admin$/i));
+    await save();
+    await noDialog();
+    await waitFor(() => expect(within(roles()).getByRole("status").textContent).toBe(ROLES_UNCERTAIN));
+    await act(() => new Promise((r) => setTimeout(r, 30)));
+    expect(setRoles).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).not.toContain("boom-xyz");
+  });
+
   it("step_up_required => StepUpAlert in the dialog, no stored intent", async () => {
     setRoles.mockResolvedValue(fail("step_up_required") as never);
     await openDetail();

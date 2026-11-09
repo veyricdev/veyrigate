@@ -47,7 +47,6 @@ const AUTH_TIME_SKEW_SEC = 30;
 
 const random = () => randomBytes(32).toString("base64url");
 const s256 = (v: string) => createHash("sha256").update(v).digest("base64url");
-export const ADMIN_ROLES = ["super_admin", "tenant_admin"];
 
 export interface ViewerResult {
   viewer: Viewer | null;

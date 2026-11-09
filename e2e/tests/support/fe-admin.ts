@@ -4,12 +4,12 @@ import { ADMIN_SEED_EMAIL, ADMIN_SEED_PASSWORD, BE_PORT, FE_ADMIN_PORT, FE_ADMIN
 export const isIdp = (url: URL) => url.port === String(BE_PORT);
 export const isAdminApp = (url: URL) => url.port === String(FE_ADMIN_PORT);
 
-/** On the IdP login page: sign the E2E admin in (and approve consent) until back on fe-admin. */
-export async function signInAsAdmin(page: Page): Promise<void> {
+/** On the IdP login page: sign the E2E admin (or `account`) in (and approve consent) until back on fe-admin. */
+export async function signInAsAdmin(page: Page, account = ADMIN_SEED_EMAIL, password = ADMIN_SEED_PASSWORD): Promise<void> {
   await page.waitForURL((url) => isIdp(url) && url.pathname === "/login", { waitUntil: "load" });
   const form = page.locator('form[action="/login"]');
-  await form.getByLabel("Email").fill(ADMIN_SEED_EMAIL);
-  await form.getByLabel("Password").fill(ADMIN_SEED_PASSWORD);
+  await form.getByLabel("Email").fill(account);
+  await form.getByLabel("Password").fill(password);
   await form.getByRole("button", { name: "Sign in" }).click();
   const consent = page.locator('form[action="/authorize/consent"]');
   const email = page.getByTestId("viewer-email");

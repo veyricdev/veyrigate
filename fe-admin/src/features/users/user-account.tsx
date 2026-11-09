@@ -4,6 +4,7 @@ import { useLockUser, useRevokeUserSessions, useUnlockUser } from "@/features/ad
 import { adminKeys } from "@/features/admin-api/keys";
 import { signInAgain } from "@/features/admin-api/query-client";
 import { AdminRequestError } from "@/features/admin-api/types";
+import { ADMIN_ROLES } from "@/features/admin-api/inputs";
 import type { Viewer } from "@/features/auth/viewer-types";
 import type { AdminUser } from "@/server/admin-api/schemas";
 
@@ -20,8 +21,6 @@ export function lockStatus(user: Pick<AdminUser, "locked" | "lockedUntil">): str
   return `Temporarily locked after failed sign-ins until ${user.lockedUntil}`;
 }
 
-const ADMIN_ROLES = ["tenant_admin", "super_admin"];
-
 /**
  * UX gate (the BE decides): `self` = the viewer's own account (no Lock); `protectedTarget` = a
  * tenant_admin looking at an admin account (the BE refuses lock/unlock/revoke-all: 403).
@@ -29,13 +28,16 @@ const ADMIN_ROLES = ["tenant_admin", "super_admin"];
 export function accountGate(viewer: Viewer, user: AdminUser) {
   return {
     self: user.id.toLowerCase() === viewer.sub.toLowerCase(),
-    protectedTarget: !viewer.roles.includes("super_admin") && user.roles.some((r) => ADMIN_ROLES.includes(r)),
+    protectedTarget: !viewer.roles.includes("super_admin") && ADMIN_ROLES.some((r) => user.roles.includes(r)),
   };
 }
 
+export const USER_GONE = "This user no longer exists in this tenant.";
+
 const BY_CODE = {
   forbidden: "Only a super admin can change this account: it holds an admin role or belongs to another tenant.",
-  not_found: "This user no longer exists in this tenant.",
+  not_found: USER_GONE,
+  conflict: "Not locked: the tenant must keep at least one active super admin.",
 };
 
 export const LOCK_UNCERTAIN =

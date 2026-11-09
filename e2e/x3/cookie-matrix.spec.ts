@@ -44,7 +44,9 @@ test.afterAll(async ({ browser }, testInfo) => {
   } catch {
     // first project of this run (Playwright empties test-results/ at start)
   }
-  all[testInfo.project.name] = { version: browser.version(), date: new Date().toISOString().slice(0, 10), cells };
+  // A failed test restarts the worker: this hook runs again for the same project, so append (DEBT-509).
+  const prev = (all[testInfo.project.name] as { cells?: unknown[] } | undefined)?.cells ?? [];
+  all[testInfo.project.name] = { version: browser.version(), date: new Date().toISOString().slice(0, 10), cells: [...prev, ...cells] };
   writeFileSync(file, JSON.stringify(all, null, 2));
 });
 

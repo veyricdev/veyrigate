@@ -390,6 +390,21 @@ describe("lock / unlock", () => {
     expect(mocks.get.mock.calls.length).toBe(reads);
   });
 
+  it("lock conflict (last super admin): fixed message in the dialog, the BE description never in the DOM", async () => {
+    user = { ...USER, roles: ["super_admin"] };
+    mocks.lock.mockResolvedValue(fail("conflict") as never);
+    await openDetail();
+    const reads = mocks.get.mock.calls.length;
+    const d = await confirmIn(button("Lock"), "Lock account");
+    expect((await within(d).findByRole("alert")).textContent).toBe(
+      "Not locked: the tenant must keep at least one active super admin.",
+    );
+    expect(document.body.textContent).not.toContain("msg conflict");
+    await settle();
+    expect(mocks.lock).toHaveBeenCalledTimes(1);
+    expect(mocks.get.mock.calls.length).toBe(reads);
+  });
+
   it("unlock uncertain: dialog closed, check-before-retry message, sent once", async () => {
     user = { ...USER, locked: true, lockedUntil: ADMIN_LOCK };
     mocks.unlock.mockResolvedValue(fail("unavailable", true) as never);

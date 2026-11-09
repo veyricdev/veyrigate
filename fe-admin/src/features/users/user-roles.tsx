@@ -5,6 +5,7 @@ import { useSetUserRoles } from "@/features/admin-api/hooks";
 import { ADMIN_ROLES, type SetUserRolesParams } from "@/features/admin-api/inputs";
 import { adminKeys } from "@/features/admin-api/keys";
 import { AdminRequestError } from "@/features/admin-api/types";
+import { USER_GONE } from "@/features/users/user-account";
 import type { Viewer } from "@/features/auth/viewer-types";
 import type { AdminUser } from "@/server/admin-api/schemas";
 
@@ -36,7 +37,6 @@ const BY_CODE = {
   conflict: "Not changed: the tenant must keep at least one active super admin.",
   invalid_request: "The roles were rejected. Reload the page and try again.",
 };
-const NOT_FOUND = "This user no longer exists in this tenant.";
 export const ROLES_DONE = "Roles updated. They apply on the user's next request.";
 export const ROLES_UNCERTAIN =
   "The roles may not have been changed. The current roles are shown below; check them before trying again.";
@@ -97,7 +97,7 @@ function RolesForm({
   const target = ADMIN_ROLES.filter((r) => draft.includes(r));
   const grant = target.filter((r) => !current.includes(r));
   const remove = current.filter((r) => !target.includes(r));
-  const shown = showSuper ? ADMIN_ROLES : ADMIN_ROLES.filter((r) => r !== "super_admin");
+  const shown = showSuper ? ADMIN_ROLES : (["tenant_admin"] as const);
   const names = (roles: AdminRole[]) => roles.map((r) => ROLE_INFO[r].label).join(", ");
 
   async function save(): Promise<ActionOutcome> {
@@ -109,7 +109,7 @@ function RolesForm({
       if (!(err instanceof AdminRequestError) || err.uncertain) return { done: ROLES_UNCERTAIN };
       if (err.code !== "not_found") return outcomeOf(err, ROLES_UNCERTAIN, BY_CODE);
       void queryClient.invalidateQueries({ queryKey: adminKeys.users.all });
-      return { done: NOT_FOUND };
+      return { done: USER_GONE };
     }
   }
 
