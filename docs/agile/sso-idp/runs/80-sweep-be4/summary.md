@@ -1,0 +1,7 @@
+# Summary — run 80 sweep 🟡 BE đợt 4 (M7, lane BE + FE nhỏ) — ✅ PASS 5/5 task (+1 debt senior sửa trong run)
+
+- **Phạm vi**: T1 DEBT-526 — logout `scope=session` lỗi một phần ghi audit `SESSION_REVOKED` failure `{scope, failedStep}`, vẫn dừng ở lỗi đầu, audit lỗi bị nuốt để giữ lỗi gốc. T2 DEBT-237/411 — `HtmlExceptionFilter` log `errorForLog` khi ≥ 500 (không message); `/introspect` 503 có `error_description` cố định. T4 DEBT-325 — `@SuperAdminOnly()` kiểm trong `AdminTokenGuard` trước `StepUpGuard` (keys list/rotate, resources create/update) ⇒ tenant_admin 403 ngay. T3 DEBT-324/329 — `validateResourceIdentifier` ở điểm ghi (cấm `\p{Cc}\p{Cf}\p{Z}`, scheme https/http/urn), FE `identifierProblem` cùng quy tắc. T5 DEBT-530/529 — test lỗi commit transaction federation, xoá `deleteMembership`. Sau senior: DEBT-531 seed/seed-dev dùng `validateResourceIdentifier`; mô tả OpenAPI `identifier`.
+- **Verify**: be 794, int FULL 1611/1611 (`vg-int-*` 4→4), fe-admin 1578, E2E 38, X3 42. Tester +40 ca int: ma trận 4 route × vai trò × `auth_time` (403 tenant_admin giống nhau từng byte), 22 identifier xấu / 6 hợp lệ qua API, resource cũ vẫn PATCH + `/authorize` được, 500 HTML thật không lộ secret, logout session lỗi từng bước với Redis/Mongo thật; snapshot OpenAPI sửa tay khớp document BE sinh ra.
+- **Commit**: `756a1d1`.
+- **Vòng lặp**: tech-lead=1, BE dev=1 (+1 sửa 🟡 senior), senior=1 (PASS), tester=1 (PASS).
+- **Debt**: đóng DEBT-237/324/325/329/411/526/529/530/531; mở DEBT-532 (nhánh format trên đường ghi resource còn echo giá trị trong 400).

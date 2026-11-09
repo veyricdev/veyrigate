@@ -2,10 +2,10 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: (chưa mở) — run 80 sweep 🟡 BE đợt 4. Quyết định đã chốt (người dùng ủy quyền): `plan.md` §12 "Chốt bổ sung". Còn cần người dùng: push (CI replica set + Dependabot chỉ có hiệu lực khi push; bật Dependabot alerts trong Settings); Node 22.23.4 máy dev (Q62.2); xoá image cũ; xoá 4 DB `vg-int-vault-v7-*`; 610 DB `vg-int-*` biến mất (đã chạy `drop-int-orphans.mjs --yes`?).
+- **Run hiện tại**: (chưa mở) — run 81. Quyết định đã chốt (người dùng ủy quyền): `plan.md` §12 "Chốt bổ sung". Còn cần người dùng: push (CI replica set + Dependabot chỉ có hiệu lực khi push; bật Dependabot alerts trong Settings); Node 22.23.4 máy dev (Q62.2); xoá image cũ; xoá 4 DB `vg-int-vault-v7-*`; 610 DB `vg-int-*` biến mất (đã chạy `drop-int-orphans.mjs --yes`?); tiến trình jest treo PID 23008 (run 79 tester).
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `79-sweep-be3` ✅ 6/6 — audit failure logout global, admin-capable 1 định nghĩa, seed giữ lỗi gốc index, boot check Mongo transaction, provisioning federated trong 1 transaction (hết user mồ côi + race 302); be 715, int 1563, fe-admin 1570, E2E 38, X3 42. Xem `runs/79-sweep-be3/summary.md`. ⚠ Deploy: production cần Mongo replica set/mongos (không thì BE không boot, run 79); runbook-deploy §12 q1–q3 trước (run 75); mọi user đăng nhập lại 1 lần (run 73) + login federation dở ⇒ thử lại. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev — lần đầu sau run 71 XOÁ VĨNH VIỄN audit cũ hơn 180 ngày (chạy `-- --dry-run` trước, runbook-ops §0).
-- **Việc tiếp theo**: sweep 🟡 BE (DEBT-120, 121, 134, 192, 193, 526, 529, 530, 334, 389, 392, 517, …), FE/E2E DEBT-527; cuối cùng X6 release checklist (gồm mục DEBT-129 rotate lại khi 5xx).
+- **Run vừa đóng**: `80-sweep-be4` ✅ 5/5 — audit failure logout session, log 500 HTML, `/introspect` 503 đồng nhất, super_admin kiểm trước step-up, identifier resource cấm ký tự điều khiển/scheme lạ (BE + FE + seed); be 794, int 1611, fe-admin 1578, E2E 38, X3 42. Xem `runs/80-sweep-be4/summary.md`. ⚠ Deploy: production cần Mongo replica set/mongos (run 79); runbook-deploy §12 q1–q3 trước (run 75); mọi user đăng nhập lại 1 lần (run 73) + login federation dở ⇒ thử lại. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev — lần đầu sau run 71 XOÁ VĨNH VIỄN audit cũ hơn 180 ngày (chạy `-- --dry-run` trước, runbook-ops §0).
+- **Việc tiếp theo**: sweep 🟡 BE còn lại (DEBT-120, 121, 134, 192, 193, 323, 413, 517, 532, …), FE/E2E DEBT-527; cuối cùng X6 release checklist (DEBT-129 rotate lại khi 5xx, DEBT-157/349/393 cache JWKS).
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
 
@@ -19,15 +19,12 @@
 | [56](runs/56-admin-race/summary.md)–[60](runs/60-location-guard/summary.md) | M7 | Race admin/disable client, thứ tự audit, sweep 🟡 keys/consent, biên HTTP, chặn Location ngoài origin (xem từng `runs/NN/summary.md`) | ✅ be 630 + int 1420 + fe-admin 1533 + E2E 36 | `b634def`…`ba921e8` |
 | [61](runs/61-test-stability/summary.md)–[65](runs/65-test-infra-tail2/summary.md) | M7 | Ổn định test, bump Node 22.23.4, mẫu hook int, config vault/sentinel, gỡ `--forceExit` (xem từng `runs/NN/summary.md`) | ✅ be 630 + int 1420 + fe-admin 1533 + vault 31 | `910dc62`…`654b39a` |
 | [66](runs/66-happy-dom/summary.md)–[70](runs/70-A6.3b/summary.md) | M7 | Bump happy-dom, sentinel failover + sweep `eyJ`, biên thời gian test, thực thi quyết định BE (≥ 1 super_admin, roles, refresh revoke), A6.3b UI đổi vai trò (xem từng `runs/NN/summary.md`) | ✅ be 630 + int 1436 + fe-admin 1562 + E2E 37 | `eb75eed`…`9763048` |
-| [71](runs/71-audit-pii/summary.md) | M7 | Audit thời hạn lưu + che PII (DEBT-344/498) | ✅ be 664 + int 1459 + fe-admin 1565 + E2E 37 | `03b8312` |
-| [72](runs/72-ops-hardening/summary.md) | M7 | Compose prod mẫu non-root + Dependabot (DEBT-405/466/503/504) | ✅ smoke BE 11 + fe-admin 16 + be 664 | `a24a305` |
-| [73](runs/73-X3/summary.md) | M7 | X3 ma trận cookie + `__Host-` (DEBT-008/510) | ✅ X3 39 + E2E 37 + int 1467 + be 675 | `80a3fda` |
-| [74](runs/74-sweep-be1/summary.md) | M7 | Sweep 🟡 BE bảo mật đợt 1 (DEBT-487/488/489/505/514) | ✅ int 1477 + E2E 37 + X3 42 + be 675 | `321e956` |
-| [75](runs/75-resource-scopes/summary.md) | M7 | Thực thi `Resource.scopes` + thu hẹp scope khi refresh (DEBT-321/512/516) | ✅ int 1497 + fe-admin 1567 + E2E 37 + X3 42 + be 679 | `8242c8e` |
+| [71](runs/71-audit-pii/summary.md)–[75](runs/75-resource-scopes/summary.md) | M7 | Audit retention + che PII, compose prod non-root + Dependabot, X3 ma trận cookie, sweep 🟡 BE bảo mật 1, thực thi `Resource.scopes` (xem từng `runs/NN/summary.md`) | ✅ be 679 + int 1497 + fe-admin 1567 + E2E 37 + X3 42 | `03b8312`…`8242c8e` |
 | [76](runs/76-console-lockout/summary.md) | M7 | Chống tự khoá client console + gộp `ADMIN_ROLES` (DEBT-515/513) | ✅ int 1516 + fe-admin 1567 + E2E 37 + X3 42 + be 684 | `9abe1ea` |
 | [77](runs/77-sweep-fe1/summary.md) | M7 | Sweep 🟡 FE/E2E đợt 1 (DEBT-490–494, 509, 518–520) | ✅ fe-admin 1570 + E2E 38 + X3 42 | `4a33d7f` |
 | [78](runs/78-sweep-be2/summary.md) | M7 | Sweep 🟡 BE đợt 2 (DEBT-139/150/155/198/254/256/257/522–525) | ✅ int 1552 + fe-admin 1570 + E2E 38 + X3 42 + be 708 | `691aa7d` |
 | [79](runs/79-sweep-be3/summary.md) | M7 | Sweep 🟡 BE đợt 3 (DEBT-119/168/179/180/182/188/483/521/528) | ✅ int 1563 + fe-admin 1570 + E2E 38 + X3 42 + be 715 | `7b69671` |
+| [80](runs/80-sweep-be4/summary.md) | M7 | Sweep 🟡 BE đợt 4 (DEBT-237/324/325/329/411/526/529–531) | ✅ int 1611 + fe-admin 1578 + E2E 38 + X3 42 + be 794 | `756a1d1` |
 
 ## Chặn / cần người quyết định
 
