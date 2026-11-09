@@ -69,7 +69,7 @@ export class LocalKeyProvider implements KeyProvider {
   private async warnOrphanPems(entries: KeyEntry[]): Promise<void> {
     let files: string[];
     try {
-      files = await readdir(this.dir);
+      files = await this.listDir(this.dir);
     } catch {
       this.logger.warn('Could not list the key directory to check for orphan private keys');
       return;
@@ -258,5 +258,10 @@ export class LocalKeyProvider implements KeyProvider {
    */
   protected atomicRename(tmpPath: string, finalPath: string): Promise<void> {
     return rename(tmpPath, finalPath);
+  }
+
+  /** List `dir`; isolated (like `atomicRename`) so the DEBT-163 `readdir`-failure branch is testable. */
+  protected listDir(dir: string): Promise<string[]> {
+    return readdir(dir);
   }
 }

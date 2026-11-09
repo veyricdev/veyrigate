@@ -44,12 +44,18 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
     verifyEmail: jest.fn(async () => undefined),
     resetPassword: jest.fn(async () => undefined),
     // DEBT-150: the real 3-step revoke (all steps run, first error wins) over the mocks below.
-    revokeAllUserCredentials: jest.fn((userId: string, now: Date) =>
-      AuthenticationService.prototype.revokeAllUserCredentials.call(
-        { refreshTokens, sessions },
-        userId,
-        now,
-      ),
+    revokeAllUserCredentials: jest.fn(
+      (
+        userId: string,
+        now: Date,
+        onFailure?: Parameters<AuthenticationService['revokeAllUserCredentials']>[2],
+      ) =>
+        AuthenticationService.prototype.revokeAllUserCredentials.call(
+          { refreshTokens, sessions },
+          userId,
+          now,
+          onFailure,
+        ),
     ),
   };
   const sessions = {
@@ -1073,7 +1079,41 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
       expect(sessions.revokeAllForUser).toHaveBeenCalledWith('user-1');
       // Pre-revoke (failed) + SWEEP: the families are revoked by the sweep.
       expect(refreshTokens.revokeAllForUser).toHaveBeenCalledTimes(2);
-      expect(audit.record).not.toHaveBeenCalled();
+      // DEBT-521: exactly one failure audit naming the failed step, never a success audit.
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record).toHaveBeenCalledWith({
+        actorType: 'user',
+        actorId: 'user-1',
+        action: AuditAction.SESSION_REVOKED,
+        targetType: 'session',
+        targetId: 'session-ref',
+        result: 'failure',
+        reason: 'revoke_failed',
+        metadata: { scope: 'all', failedStep: 'pre_revoke' },
+      });
+    });
+
+    it('DEBT-521: ?scope=all family revoke fails AND the failure audit throws ⇒ still 5xx, no error text leaks, sessions + sweep ran', async () => {
+      sessions.get.mockResolvedValue(liveSession);
+      sessions.revokeAllForUser.mockResolvedValue(2);
+      refreshTokens.revokeAllForUser.mockRejectedValueOnce(new Error('boom')).mockResolvedValue(1);
+      audit.record.mockRejectedValueOnce(new Error('audit down'));
+
+      const failed = await app.inject({
+        method: 'POST',
+        url: '/logout?scope=all',
+        headers: { cookie: 'idp_session=session-a' },
+        payload: { _csrf: csrfFor('session-a') },
+      });
+
+      expect(failed.statusCode).toBeGreaterThanOrEqual(500);
+      expect(failed.headers.location).toBeUndefined();
+      expect(sessionSetCookie(failed.headers['set-cookie'])).toBeUndefined();
+      expect(failed.body).not.toContain('boom');
+      expect(failed.body).not.toContain('audit down');
+      expect(sessions.revokeAllForUser).toHaveBeenCalledWith('user-1');
+      expect(refreshTokens.revokeAllForUser).toHaveBeenCalledTimes(2);
+      expect(audit.record).not.toHaveBeenCalledWith(expect.objectContaining({ result: 'success' }));
     });
 
     it('DEBT-150: ?scope=all session revoke fails ⇒ families revoked (pre-revoke + sweep), then 5xx, no success audit, no cookie clear', async () => {
@@ -1092,7 +1132,17 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
       expect(failed.headers.location).toBeUndefined();
       expect(sessionSetCookie(failed.headers['set-cookie'])).toBeUndefined();
       expect(refreshTokens.revokeAllForUser).toHaveBeenCalledTimes(2);
-      expect(audit.record).not.toHaveBeenCalled();
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record).toHaveBeenCalledWith({
+        actorType: 'user',
+        actorId: 'user-1',
+        action: AuditAction.SESSION_REVOKED,
+        targetType: 'session',
+        targetId: 'session-ref',
+        result: 'failure',
+        reason: 'revoke_failed',
+        metadata: { scope: 'all', failedStep: 'sessions' },
+      });
     });
 
     it('fail-closed ordering: refreshTokens.revokeForSession throws → 5xx, session alive, no clear/audit; retry → 302', async () => {

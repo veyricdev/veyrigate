@@ -17,7 +17,7 @@ import {
   seedDevUser,
   readDevSeedUserConfig,
   buildSeedDevTargets,
-  assertNotProduction,
+  assertDevOrTestEnv,
   type DevSeedUserConfig,
 } from '../src/database/seed-dev';
 import { AuthenticationService } from '../src/modules/authentication/authentication.service';
@@ -186,14 +186,14 @@ describe('seed-dev (Task 4, B6.4 interim) on real Mongo', () => {
     expect(await resourceModel.countDocuments({}).exec()).toBe(0);
 
     // Non-production environments are still allowed (and the direct guard stays consistent).
-    expect(() => assertNotProduction('production')).toThrow(/production/);
-    expect(() => assertNotProduction('development')).not.toThrow();
-    expect(() => assertNotProduction('test')).not.toThrow();
+    expect(() => assertDevOrTestEnv('production')).toThrow(/production/);
+    expect(() => assertDevOrTestEnv('development')).not.toThrow();
+    expect(() => assertDevOrTestEnv('test')).not.toThrow();
   });
 
   it('DEBT-098: NODE_ENV unset / empty / unknown is refused (allowlist development|test) and writes NOTHING', async () => {
     for (const nodeEnv of [undefined, '', 'staging', 'Production']) {
-      expect(() => assertNotProduction(nodeEnv)).toThrow(/NODE_ENV/);
+      expect(() => assertDevOrTestEnv(nodeEnv)).toThrow(/NODE_ENV/);
       await expect(seedDev(connection, ISSUER, nodeEnv)).rejects.toThrow(/NODE_ENV/);
     }
     expect(await clientModel.countDocuments({}).exec()).toBe(0);

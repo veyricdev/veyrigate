@@ -29,15 +29,20 @@ export class UserTenantService {
     this.repo = new TenantScopedRepository(model);
   }
 
-  /** Duplicate (userId, tenantId) → DuplicateError. */
-  async addMembership(userId: string, tenantId: string, roles: string[] = []): Promise<UserTenant> {
-    const doc = await mapDuplicate('UserTenant', () =>
-      this.model.create({ userId: new Types.ObjectId(userId), tenantId, roles }),
+  /** Duplicate (userId, tenantId) → DuplicateError. `session`: inside the caller's transaction. */
+  async addMembership(
+    userId: string,
+    tenantId: string,
+    roles: string[] = [],
+    session?: ClientSession,
+  ): Promise<UserTenant> {
+    const [doc] = await mapDuplicate('UserTenant', () =>
+      this.model.create([{ userId: new Types.ObjectId(userId), tenantId, roles }], { session }),
     );
     return doc.toObject();
   }
 
-  /** Internal compensation only (B5.2): undo a membership THIS request just created. */
+  /** Internal only (no route, never request input): delete one membership. */
   async deleteMembership(userId: string, tenantId: string): Promise<void> {
     if (!isValidObjectId(userId)) return;
     await this.model.deleteOne({ userId: new Types.ObjectId(userId), tenantId }).exec();

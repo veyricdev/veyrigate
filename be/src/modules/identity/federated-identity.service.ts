@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { type Model, Types } from 'mongoose';
+import { type ClientSession, type Model, Types } from 'mongoose';
 import { mapDuplicate } from './identity.errors';
 
 export interface FederatedIdentity {
@@ -32,16 +32,24 @@ export class FederatedIdentityService {
     await this.identities.updateOne({ provider, providerId }, { $set: { lastLoginAt: at } }).exec();
   }
 
-  /** Link an external identity to an existing user. Duplicate provider+providerId → DuplicateError. */
-  async link(input: {
-    userId: string;
-    provider: string;
-    providerId: string;
-    email?: string;
-    emailVerified?: boolean;
-  }): Promise<FederatedIdentity> {
-    const doc = await mapDuplicate('FederatedIdentity', () =>
-      this.identities.create({ ...input, userId: new Types.ObjectId(input.userId) }),
+  /**
+   * Link an external identity to an existing user. Duplicate provider+providerId → DuplicateError.
+   * `session`: inside the caller's transaction (federated provisioning, DEBT-182).
+   */
+  async link(
+    input: {
+      userId: string;
+      provider: string;
+      providerId: string;
+      email?: string;
+      emailVerified?: boolean;
+    },
+    session?: ClientSession,
+  ): Promise<FederatedIdentity> {
+    const [doc] = await mapDuplicate('FederatedIdentity', () =>
+      this.identities.create([{ ...input, userId: new Types.ObjectId(input.userId) }], {
+        session,
+      }),
     );
     return doc.toObject();
   }

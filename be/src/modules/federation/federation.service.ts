@@ -1,5 +1,7 @@
 import { Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectConnection } from '@nestjs/mongoose';
+import type { Connection } from 'mongoose';
 import { constantTimeEqual, generateToken, sha256 } from '../../common/crypto/crypto.util';
 import { deriveS256Challenge } from '../../common/crypto/pkce.util';
 import { safeCspOrigin } from '../../common/http/csp';
@@ -94,6 +96,7 @@ export class FederationService {
     private readonly audit: AuditService,
     private readonly auth: AuthenticationService,
     config: ConfigService,
+    @InjectConnection() private readonly connection: Connection,
   ) {
     this.issuer = config.getOrThrow<AppConfig>('app').issuer;
   }
@@ -336,7 +339,7 @@ export class FederationService {
    * Map a verified external identity to a local user (F7). Lookup strictly by
    * `(provider, providerId)`; never auto-link on email (INV-22): a verified email of an existing
    * account answers `link: true` (B5.3: the password must be proven first). Provisioning is ordered
-   * User -> membership -> FederatedIdentity with compensation (no Mongo transactions here).
+   * User + membership + FederatedIdentity in ONE transaction (DEBT-182): all three or none.
    */
   private async resolveUser(
     provider: ProviderName,
@@ -370,35 +373,43 @@ export class FederationService {
 
     let userId: string;
     try {
-      userId = (await this.users.create({ email, emailVerifiedAt: new Date() })).sub;
+      userId = await this.provision(provider, identity.providerId, email);
     } catch (err) {
       if (!(err instanceof DuplicateError)) throw err;
-      // Same email created concurrently (a parallel callback for this identity, or a register).
-      return this.afterLostRace(provider, identity, audit);
-    }
-    try {
-      await this.memberships.addMembership(userId, DEFAULT_TENANT_ID);
-      await this.identities.link({
-        userId,
-        provider,
-        providerId: identity.providerId,
-        email,
-        emailVerified: true,
-      });
-    } catch (err) {
-      // Undo what THIS request created so no orphan user survives (F7), then defer to the winner.
-      // DEBT-190 (F15): both undo steps always run and never mask the original error.
-      const undo = await Promise.allSettled([
-        this.memberships.deleteMembership(userId, DEFAULT_TENANT_ID),
-        this.users.deleteById(userId),
-      ]);
-      if (undo.some((r) => r.status === 'rejected')) {
-        this.logger.error('federation provisioning compensation failed');
-      }
-      if (!(err instanceof DuplicateError)) throw err;
+      // Same email or identity committed concurrently (a parallel callback for this identity, or
+      // a register): the transaction aborted, nothing of ours exists; defer to the winner.
       return this.afterLostRace(provider, identity, audit);
     }
     return { userId, newUser: true };
+  }
+
+  /**
+   * DEBT-182: the three inserts in one transaction (no orphan user, F7). The callback may be re-run
+   * by the driver on a transient error (write conflict), so it only touches the DB through
+   * `session`; a `DuplicateError` (E11000) is not transient => abort, rethrown to the caller.
+   */
+  private async provision(
+    provider: ProviderName,
+    providerId: string,
+    email: string,
+  ): Promise<string> {
+    const session = await this.connection.startSession();
+    try {
+      return await session.withTransaction(
+        async () => {
+          const { sub } = await this.users.create({ email, emailVerifiedAt: new Date() }, session);
+          await this.memberships.addMembership(sub, DEFAULT_TENANT_ID, [], session);
+          await this.identities.link(
+            { userId: sub, provider, providerId, email, emailVerified: true },
+            session,
+          );
+          return sub;
+        },
+        { writeConcern: { w: 'majority' }, maxCommitTimeMS: 5000 },
+      );
+    } finally {
+      await session.endSession();
+    }
   }
 
   /** After a lost provisioning race: sign in the winner's user, or ask to retry (nothing linked). */

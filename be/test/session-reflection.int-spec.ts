@@ -635,5 +635,60 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
       expect(await sessions.get(b.id)).toBeNull();
       expect(await successAudits(uid, 'SESSION_REVOKED')).toHaveLength(1);
     });
+
+    // Run 79 tester (DEBT-521): the failure audit as PERSISTED in real Mongo carries only
+    // scope + failedStep — no session id, csrf, access/refresh token or driver error text.
+    it.each([
+      ['pre_revoke', 'family'],
+      ['sessions', 'session'],
+    ] as const)(
+      'DEBT-521: fault at %s ⇒ one persisted failure audit, metadata {scope, failedStep} only, no secret/token/error text',
+      async (failedStep, where) => {
+        const uid = await newUser(`all-audit-${failedStep}`);
+        const a = await browser(uid);
+        const b = await browser(uid);
+        const leak = 'mongodb://u:r79-S3CRET@h boom';
+        const spy =
+          where === 'family'
+            ? jest
+                .spyOn(app.get(RefreshTokenService), 'revokeAllForUser')
+                .mockRejectedValueOnce(new Error(leak))
+            : jest.spyOn(sessions, 'revokeAllForUser').mockRejectedValueOnce(new Error(leak));
+        let res;
+        try {
+          res = await logoutAll(a.id);
+        } finally {
+          spy.mockRestore();
+        }
+        expect(res.statusCode).toBeGreaterThanOrEqual(500);
+        expect(res.body).not.toContain('r79-S3CRET');
+        const failures = await auditModel()
+          .find({ actorId: uid, action: 'SESSION_REVOKED', result: 'failure' })
+          .lean();
+        expect(failures).toHaveLength(1);
+        expect(failures[0]).toMatchObject({
+          reason: 'revoke_failed',
+          targetType: 'session',
+          targetId: a.ref,
+          metadata: { scope: 'all', failedStep },
+        });
+        expect(Object.keys(failures[0].metadata as object).sort()).toEqual(['failedStep', 'scope']);
+        const stored = JSON.stringify(failures[0]);
+        for (const secret of [
+          a.id,
+          b.id,
+          csrf.token(a.id),
+          a.access,
+          a.refresh,
+          b.access,
+          b.refresh,
+          'r79-S3CRET',
+          'boom',
+        ]) {
+          expect(stored).not.toContain(secret);
+        }
+        expect(await successAudits(uid, 'SESSION_REVOKED')).toHaveLength(0);
+      },
+    );
   });
 });

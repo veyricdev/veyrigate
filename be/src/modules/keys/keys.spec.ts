@@ -780,6 +780,28 @@ describe('Keys (B1.9, INV-19)', () => {
       expect(await readdir(dir)).toContain('orphan.pem');
     });
 
+    it('DEBT-168: listing the key dir fails => init still resolves with one active key, exactly one WARN without the path', async () => {
+      const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      const fresh = await mkdtemp(join(tmpdir(), 'vg-keys-listdir-'));
+      try {
+        const p = new LocalKeyProvider(fresh);
+        jest
+          .spyOn(p as unknown as { listDir: () => Promise<string[]> }, 'listDir')
+          .mockRejectedValueOnce(new Error('EACCES'));
+        await expect(p.init()).resolves.toBeUndefined();
+        const state = JSON.parse(await readFile(join(fresh, 'keys.json'), 'utf8')) as {
+          status: string;
+        }[];
+        expect(state.filter((e) => e.status === 'active')).toHaveLength(1);
+        expect(warn).toHaveBeenCalledTimes(1);
+        const msg = String(warn.mock.calls[0][0]);
+        expect(msg).toBe('Could not list the key directory to check for orphan private keys');
+        expect(msg).not.toContain(fresh);
+      } finally {
+        await rm(fresh, { recursive: true, force: true });
+      }
+    });
+
     it('no orphan (fresh dir, and after rotations) => no WARN', async () => {
       await provider.rotate('normal', 60);
       await provider.rotate('emergency', 60);

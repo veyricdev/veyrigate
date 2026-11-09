@@ -356,9 +356,22 @@ export class UiController {
     if (global) {
       // DEBT-150: the shared revoke (family -> sessions MARK -> SWEEP, all inside the service) runs
       // every step even if one fails, then rethrows the first error (5xx, no success audit/cookie clear).
+      // DEBT-521: a partial failure is audited (failedStep only — no error text/token); the
+      // service swallows an audit fault and rethrows the original error.
       ({ tokenCount, sessionCount } = await this.auth.revokeAllUserCredentials(
         session.userId,
         now,
+        (failedStep) =>
+          this.audit.record({
+            actorType: 'user',
+            actorId: session.userId,
+            action: AuditAction.SESSION_REVOKED,
+            targetType: 'session',
+            targetId: session.ref,
+            result: 'failure',
+            reason: 'revoke_failed',
+            metadata: { scope: 'all', failedStep },
+          }),
       ));
     } else {
       tokenCount = await this.refreshTokens.revokeForSession(session.userId, session.ref, now);

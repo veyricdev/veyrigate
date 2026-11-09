@@ -1135,19 +1135,14 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
         winner,
       );
       expect(await utModel.countDocuments({ userId: fis[0].userId })).toBe(1);
+      // DEBT-182/188: User + membership + FI commit together, so the loser always finds the
+      // winner's identity and signs in to it (no 503 "retry", no pending /auth/link).
       for (const res of results) {
-        if (res.statusCode === 302 && res.headers.location !== '/auth/link') {
-          const live = await sessions.get(cookieOf(res, SESSION_COOKIE)!.value);
-          expect(live?.userId).toBe(winner);
-        } else {
-          // Loser: "please retry" (503), or — while the winner's user exists but is not linked
-          // yet — a pending link (302 /auth/link, B5.3). Either way nothing is linked or created.
-          if (res.statusCode === 302) expect(res.headers.location).toBe('/auth/link');
-          else expect(res.statusCode).toBe(503);
-          expect(cookieOf(res, SESSION_COOKIE)).toBeUndefined();
-        }
+        expect(res.statusCode).toBe(302);
+        expect(res.headers.location).not.toBe('/auth/link');
+        const live = await sessions.get(cookieOf(res, SESSION_COOKIE)!.value);
+        expect(live?.userId).toBe(winner);
       }
-      expect(results.some((r) => cookieOf(r, SESSION_COOKIE) !== undefined)).toBe(true);
     }
 
     it('race: 2 parallel callbacks of the same identity x10 => exactly 1 User, 1 FI, 1 membership', async () => {
@@ -1165,6 +1160,71 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
         await expectSingleAccount(sub, emails, await race(sub, emails));
       }
     }, 60_000);
+
+    // Run 79 tester (DEBT-182): a race where one leg fails mid-transaction (a non-duplicate error on
+    // the membership or the FI insert). Invariant: no orphan anywhere — the collection totals grow
+    // by exactly one complete account (or none), every FI/membership points at a live user, and a
+    // failing leg answers 5xx with no session.
+    it.each([
+      ['addMembership', UserTenantService.prototype],
+      ['link', FederatedIdentityService.prototype],
+    ] as const)(
+      'race x8 with a mid-transaction %s failure on one leg (same + differing emails) => no orphan User/UserTenant/FI',
+      async (method, proto) => {
+        for (let i = 0; i < 8; i++) {
+          const sub = `${RUN}-racefault-${method}-${i}`;
+          const emails: [string, string] =
+            i % 2 === 0
+              ? [`${sub}@example.com`, `${sub}@example.com`]
+              : [`${sub}-a@example.com`, `${sub}-b@example.com`];
+          const before = {
+            users: await userModel.countDocuments({}),
+            memberships: await utModel.countDocuments({}),
+            identities: await fiModel.countDocuments({}),
+          };
+          const spy = jest
+            .spyOn(proto as unknown as Record<string, () => Promise<unknown>>, method)
+            .mockRejectedValueOnce(new Error(`RACE-${method}-failure`));
+          let results: Res[];
+          try {
+            results = await race(sub, emails);
+          } finally {
+            spy.mockRestore();
+          }
+          const fis = await fiModel.find({ provider: 'google', providerId: sub }).lean();
+          expect(fis).toHaveLength(1); // the healthy leg always provisions
+          const grown = fis.length;
+          expect(await userModel.countDocuments({})).toBe(before.users + grown);
+          expect(await utModel.countDocuments({})).toBe(before.memberships + grown);
+          expect(await fiModel.countDocuments({})).toBe(before.identities + grown);
+          expect(await userModel.countDocuments({ email: { $in: emails } })).toBe(grown);
+          if (grown === 1) {
+            const winner = String(fis[0].userId);
+            expect(await userModel.countDocuments({ _id: fis[0].userId })).toBe(1);
+            expect(
+              await utModel.countDocuments({ userId: fis[0].userId, tenantId: DEFAULT_TENANT_ID }),
+            ).toBe(1);
+            for (const res of results) {
+              if (res.statusCode === 302) {
+                expect(res.headers.location).not.toBe('/auth/link');
+                const live = await sessions.get(cookieOf(res, SESSION_COOKIE)!.value);
+                expect(live?.userId).toBe(winner);
+              } else {
+                expect(res.statusCode).toBeGreaterThanOrEqual(500);
+                expect(cookieOf(res, SESSION_COOKIE)).toBeUndefined();
+                expect(res.body).not.toContain(`RACE-${method}-failure`);
+              }
+            }
+          }
+          // Exactly one leg consumed the injected failure ⇒ at least one 5xx without a session.
+          expect(results.some((r) => r.statusCode >= 500)).toBe(true);
+          for (const res of results.filter((r) => r.statusCode >= 500)) {
+            expect(cookieOf(res, SESSION_COOKIE)).toBeUndefined();
+          }
+        }
+      },
+      90_000,
+    );
   });
 
   describe('re-authentication (F8)', () => {
@@ -1989,32 +2049,41 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
 
   // ------------------------------------------------------------------ run 33 T4' (DEBT-190a, DEBT-191)
   describe('provisioning compensation + provider fetch limits (F15, F16)', () => {
-    it.each(['deleteById', 'deleteMembership'] as const)(
-      'F15: %s failing during compensation never masks the original error; both undo steps run',
-      async (method) => {
-        const sub = `${RUN}-comp-${method}`;
+    it.each([
+      ['link', FederatedIdentityService.prototype],
+      ['addMembership', UserTenantService.prototype],
+    ] as const)(
+      'DEBT-182: %s failing (not a duplicate) => original error propagates, nothing provisioned (one transaction)',
+      async (method, proto) => {
+        const sub = `${RUN}-tx-${method}`;
         const s = await start('google', (await rpAuthorize()).requestId);
         const g = grant('google', s.location!, { claims: { sub } });
         jest
-          .spyOn(FederatedIdentityService.prototype, 'link')
-          .mockRejectedValueOnce(new Error('ORIGINAL-link-failure'));
-        const delUser = jest.spyOn(UserService.prototype, 'deleteById');
-        const delMember = jest.spyOn(UserTenantService.prototype, 'deleteMembership');
-        const failing = new Error('COMPENSATION-failure');
-        if (method === 'deleteById') delUser.mockRejectedValueOnce(failing);
-        else delMember.mockRejectedValueOnce(failing);
-        await expect(
-          moduleRef.get(FederationService).callback('google', g, { binding: s.fed }, {}),
-        ).rejects.toThrow('ORIGINAL-link-failure');
-        expect(delUser).toHaveBeenCalledTimes(1);
-        expect(delMember).toHaveBeenCalledTimes(1);
-        expect(await fiModel.countDocuments({ providerId: sub })).toBe(0);
-        // The step that did NOT fail really ran.
-        const user = await userModel.findOne({ email: `${sub}@example.com` }).lean();
-        if (method === 'deleteById') {
-          expect(await utModel.countDocuments({ userId: user!._id })).toBe(0);
-        } else {
-          expect(user).toBeNull();
+          .spyOn(proto as unknown as Record<string, () => Promise<unknown>>, method)
+          .mockRejectedValueOnce(new Error(`ORIGINAL-${method}-failure`));
+        // DEBT-528 (run 79 tester): read the id of the user created INSIDE the aborted transaction
+        // (pass-through spy) so the membership count targets it, plus whole-collection totals.
+        const created = jest.spyOn(UserService.prototype, 'create');
+        const totals = async () => ({
+          users: await userModel.countDocuments({}),
+          memberships: await utModel.countDocuments({}),
+          identities: await fiModel.countDocuments({}),
+        });
+        const before = await totals();
+        try {
+          await expect(
+            moduleRef.get(FederationService).callback('google', g, { binding: s.fed }, {}),
+          ).rejects.toThrow(`ORIGINAL-${method}-failure`);
+          expect(created).toHaveBeenCalledTimes(1);
+          const { sub: userId } = (await created.mock.results[0].value) as { sub: string };
+          const email = `${sub}@example.com`;
+          expect(await userModel.countDocuments({ email })).toBe(0);
+          expect(await userModel.countDocuments({ _id: userId })).toBe(0);
+          expect(await fiModel.countDocuments({ providerId: sub })).toBe(0);
+          expect(await utModel.countDocuments({ userId })).toBe(0);
+          expect(await totals()).toEqual(before);
+        } finally {
+          created.mockRestore();
         }
       },
     );

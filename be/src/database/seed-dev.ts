@@ -89,7 +89,7 @@ export async function seedDev(
 ): Promise<void> {
   // Fail-closed BEFORE any write: this dev tool must never mutate a production database, even if a
   // caller reaches `seedDev` without having guarded first.
-  assertNotProduction(nodeEnv);
+  assertDevOrTestEnv(nodeEnv);
 
   const { client, resources } = buildSeedDevTargets(issuer);
 
@@ -127,7 +127,7 @@ export async function seedDev(
  * never write a production database by a forgotten variable. Called by the CLI BEFORE any DB
  * connection is opened, and again by `seedDev`/`seedDevUser` before any write.
  */
-export function assertNotProduction(nodeEnv: string | undefined): void {
+export function assertDevOrTestEnv(nodeEnv: string | undefined): void {
   if (nodeEnv !== 'development' && nodeEnv !== 'test') {
     throw new Error(
       `seed-dev: refusing to run with NODE_ENV=${nodeEnv || '(unset)'} (only development|test; never production)`,
@@ -193,7 +193,7 @@ export function readDevSeedUserConfig(
  *
  * Idempotent: keyed by the normalized email (unique index) for the user and by `(userId, tenantId)`
  * for the membership, so running twice converges to one user + one membership. Fail-closed on
- * environment: `assertNotProduction` runs BEFORE any write. The password is hashed with Argon2id
+ * environment: `assertDevOrTestEnv` runs BEFORE any write. The password is hashed with Argon2id
  * (same as `UserService`) and never logged.
  *
  * NOTE (dev-only): if the email already exists (e.g. registered by hand), this OVERWRITES its
@@ -206,7 +206,7 @@ export async function seedDevUser(
   now: Date = new Date(),
 ): Promise<void> {
   // Fail-closed BEFORE any write: this dev tool must never mutate a production database.
-  assertNotProduction(nodeEnv);
+  assertDevOrTestEnv(nodeEnv);
 
   const email = normalizeEmail(config.email);
   // Privilege split: never seed a dev user over the admin seed account (B6.4 grants admin roles by
@@ -269,7 +269,7 @@ export async function upsert(run: () => Promise<unknown>): Promise<void> {
 async function main(): Promise<void> {
   const dryRun = isDryRun(process.argv);
   // Fail-closed BEFORE any DB connection: this tool must never touch a production database.
-  assertNotProduction(process.env.NODE_ENV);
+  assertDevOrTestEnv(process.env.NODE_ENV);
 
   const env = validateEnv(process.env);
   // Read dev-user config BEFORE opening a DB connection, so a missing/invalid DEV_SEED_* variable

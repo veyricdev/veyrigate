@@ -1936,6 +1936,41 @@ describe('Admin API B6.3a (clients, secrets, resources) on real Mongo + Redis', 
       ]);
     });
 
+    it('DEBT-179: drifted {confidential, none} record (DB edit) + super_admin grants admin => 400, record + secret untouched, no success audit (control: {confidential, client_secret_basic} => 200)', async () => {
+      const sp = await tok(superA);
+      const id = await mkClient(confidential());
+      const created = await call('POST', `/admin/clients/${id}/secrets`, sp);
+      expect(created.statusCode).toBe(201);
+      await clientModel.updateOne({ clientId: id }, { $set: { tokenEndpointAuthMethod: 'none' } });
+      const before = JSON.stringify(await clientModel.findOne({ clientId: id }).lean());
+      const auditsBefore = await auditModel.countDocuments({
+        action: 'ADMIN_CLIENT_UPDATED',
+        targetId: id,
+        result: 'success',
+      });
+
+      const res = await call('PATCH', `/admin/clients/${id}`, sp, {
+        allowedResources: ['api', 'admin'],
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('invalid_request');
+      expect(JSON.stringify(await clientModel.findOne({ clientId: id }).lean())).toBe(before);
+      expect(await credentialModel.countDocuments({ clientId: id, revokedAt: null })).toBe(1);
+      expect(
+        await auditModel.countDocuments({
+          action: 'ADMIN_CLIENT_UPDATED',
+          targetId: id,
+          result: 'success',
+        }),
+      ).toBe(auditsBefore);
+
+      const control = await mkClient(confidential());
+      const ok = await call('PATCH', `/admin/clients/${control}`, sp, {
+        allowedResources: ['api', 'admin'],
+      });
+      expect(ok.statusCode).toBe(200);
+    });
+
     it('DEBT-161: concurrent disable+disable => same disabledAt everywhere; disable+enable => only 200/409, response never contradicts the stamp', async () => {
       const sp = await tok(superA);
       for (let i = 0; i < 10; i++) {

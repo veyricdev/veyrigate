@@ -296,6 +296,28 @@ describe('db:seed on a never-synced DB (DEBT-176)', () => {
     expect(c).toEqual({ ...Object.fromEntries(COLLECTIONS.map((n) => [n, 0])), users: 2 });
   });
 
+  it('DEBT-180: a non-duplicate createIndexes failure (NotWritablePrimary) keeps the original as cause, names the code, no dedupe advice, 0 new documents', async () => {
+    await a.dropDatabase();
+    const original = Object.assign(new Error('not primary'), {
+      code: 10107,
+      codeName: 'NotWritablePrimary',
+    });
+    const spy = jest.spyOn(mongoose.Model, 'createIndexes').mockRejectedValueOnce(original);
+    let err: unknown;
+    try {
+      err = await seedBootstrap(a, ADMIN, ISSUER, 'test').catch((e: Error) => e);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/seed: ensuring the \w+ indexes failed/);
+    expect((err as Error).message).toContain('NotWritablePrimary');
+    expect((err as Error).message).toContain('nothing was written');
+    expect((err as Error).message).not.toMatch(/remove duplicated|db:sync-indexes/);
+    expect((err as Error).cause).toBe(original);
+    expect(await counts()).toEqual(Object.fromEntries(COLLECTIONS.map((n) => [n, 0])));
+  });
+
   // Run 31 QA (DEBT-178): deterministic guard of "the seed ensures the indexes itself". The race
   // test above is RED 0/10 without `createIndexes` (in-process timing); this one is RED 100%.
   it('DEBT-178: after seedBootstrap on a never-synced DB (autoIndex:false), EVERY schema index of EVERY model exists, unique ones unique', async () => {

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { validateEnv } from '../config/validation.schema';
 import { buildModels, MODELS } from './mongo/models';
 import { cliErrorText, isDryRun, mongoTarget } from './mongo/sync-indexes';
-import { assertNotProduction, seedDev, upsert } from './seed-dev';
+import { assertDevOrTestEnv, seedDev, upsert } from './seed-dev';
 import { DEFAULT_TENANT_ID } from '../modules/identity/tenant.service';
 import { normalizeEmail } from '../modules/identity/user.service';
 import { hashPassword } from '../common/crypto/crypto.util';
@@ -19,7 +19,7 @@ import { validateResourceFormat } from '../modules/resources/resource.validator'
 import { adminResourceIdentifier } from '../modules/oauth/token/token.service';
 
 /**
- * Bootstrap seed CLI (B6.4, run 30): `pnpm db:seed`. Dev/test only (`assertNotProduction`
+ * Bootstrap seed CLI (B6.4, run 30): `pnpm db:seed`. Dev/test only (`assertDevOrTestEnv`
  * allowlist, before connecting AND before any write) — production is not supported yet (DEBT-164).
  *
  * Seeds, idempotently (upserts keyed by stable keys; a re-run converges, never duplicates):
@@ -98,7 +98,7 @@ export async function seedBootstrap(
   now: Date = new Date(),
 ): Promise<{ feAdminSecret?: string }> {
   // Fail-closed BEFORE any write (the CLI also refuses before connecting).
-  assertNotProduction(nodeEnv);
+  assertDevOrTestEnv(nodeEnv);
 
   const feAdmin = buildFeAdminClient();
   const adminIdentifier = adminResourceIdentifier(issuer);
@@ -123,12 +123,23 @@ export async function seedBootstrap(
       await m.createIndexes();
     } catch (err) {
       // Only the model + error code: an E11000 message would echo the duplicated value (PII).
-      const code =
-        (err as { code?: unknown; codeName?: unknown }).codeName ??
-        (err as { code?: unknown }).code;
+      const { code: rawCode, codeName } = err as { code?: unknown; codeName?: unknown };
+      const code = codeName ?? rawCode;
+      // DEBT-180: the dedupe advice only for a duplicate / conflicting index; any other failure
+      // (not primary, auth, network...) keeps the original as `cause` (the CLI prints `message`).
+      if (
+        rawCode === 11000 ||
+        codeName === 'IndexOptionsConflict' ||
+        codeName === 'IndexKeySpecsConflict'
+      ) {
+        throw new Error(
+          `seed: ensuring the ${name} indexes failed (${String(code)}) — remove ` +
+            'duplicated documents / run `pnpm db:sync-indexes` first; nothing was written',
+        );
+      }
       throw new Error(
-        `seed: ensuring the ${name} indexes failed (${String(code ?? 'error')}) — remove ` +
-          'duplicated documents / run `pnpm db:sync-indexes` first; nothing was written',
+        `seed: ensuring the ${name} indexes failed (${String(code ?? 'error')}) — nothing was written`,
+        { cause: err },
       );
     }
   }
@@ -263,7 +274,7 @@ export async function seedBootstrap(
 async function main(): Promise<void> {
   const dryRun = isDryRun(process.argv);
   // Fail-closed BEFORE any DB connection.
-  assertNotProduction(process.env.NODE_ENV);
+  assertDevOrTestEnv(process.env.NODE_ENV);
   const env = validateEnv(process.env);
   const admin = readAdminSeedConfig(process.env);
   console.log(mongoTarget(env.MONGO_URI));

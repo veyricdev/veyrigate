@@ -7,7 +7,7 @@ import type { AppConfig } from '../../config/configuration';
 import { mapDuplicate } from '../identity/identity.errors';
 import type { TenantContext } from '../identity/tenant-context/tenant-context';
 import { TenantScopedRepository } from '../identity/tenant-context/tenant-scoped.repository';
-import { adminResourceIdentifier } from '../oauth/token/token.service';
+import { adminResourceIdentifier, isAdminCapableClient } from '../oauth/token/token.service';
 import { ResourceService } from '../resources/resource.service';
 import { ClientCredentialService } from './client-credential.service';
 import { validateRedirectUriFormat, validateRedirectUriList } from './redirect-uri.validator';
@@ -247,7 +247,10 @@ export class ClientService {
     actor: ClientWriteActor,
   ): Promise<Client> {
     const grantsAdmin = await this.assertAllowedResources(input.allowedResources ?? [], actor);
-    if (grantsAdmin) assertAdminCapableType(input.clientType);
+    // DEBT-179: the same definition every runtime gate uses (type AND a secret auth method).
+    if (grantsAdmin && !isAdminCapableClient(input)) {
+      throw new InvalidClientConfigError('the admin resource requires a confidential client');
+    }
     return this.create({ ...input, clientId: randomUUID(), tenantId: ctx.tenantId });
   }
 
@@ -308,7 +311,10 @@ export class ClientService {
     if (grantsAdmin) {
       const current = await this.getForTenant(ctx, clientId);
       if (!current) return null;
-      assertAdminCapableType(current.clientType);
+      // DEBT-137 rule A / DEBT-179: a drifted {confidential, none} record has no secret either.
+      if (!isAdminCapableClient(current)) {
+        throw new InvalidClientConfigError('the admin resource requires a confidential client');
+      }
       const adminIds = await this.adminResourceIds();
       adminGranted = !(current.allowedResources ?? []).some((id) => adminIds.includes(id));
       if (adminGranted) secretsRevoked = await this.revokeAllSecrets(clientId);
@@ -470,13 +476,6 @@ const PATCHABLE_ARRAYS = [
   'allowedResources',
   'scopes',
 ] as const;
-
-/** DEBT-137 rule A: a public client has no secret to revoke, so it can never get `admin`. */
-function assertAdminCapableType(type: ClientType): void {
-  if (type !== 'confidential') {
-    throw new InvalidClientConfigError('the admin resource requires a confidential client');
-  }
-}
 
 function isSuperAdmin(actor: ClientWriteActor): boolean {
   return actor.roles.includes('super_admin');
