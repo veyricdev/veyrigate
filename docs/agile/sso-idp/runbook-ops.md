@@ -20,11 +20,24 @@
 - Truy vấn Mongo tay: `mongosh "<MONGO_URI>"` (URI đọc từ secret store; không dán vào ticket).
   Collection mặc định: `auditlogs`, `refreshtokens`, `users`, `usertenants`, `clients`,
   `clientcredentials`, `consents`, `resources`, `tenants`.
-- **Kiểm đích Mongo TRƯỚC mọi CLI ghi** (`db:seed`, `db:sync-indexes`): CLI in `target: <host>/<db>` rồi
-  kết nối và ghi **ngay trong vài ms** ⇒ không kịp Ctrl-C (diễn tập run 40). Chạy kiểm khô (không kết nối)
-  trong `be/` (sau `pnpm --filter be build` — lệnh đọc `./dist`) với ĐÚNG các biến sẽ dùng, khớp mới chạy lệnh thật:
-  `MONGO_URI='<uri>' node --env-file-if-exists=.env -e "console.log(require('./dist/database/mongo/sync-indexes.js').mongoTarget(process.env.MONGO_URI))"`
-  (gõ sai tên biến ⇒ in đích của `be/.env`, vd. `target: localhost:27017/sso-idp` ⇒ DỪNG).
+- **Kiểm đích Mongo TRƯỚC mọi CLI ghi** (`db:seed`, `db:seed-dev`, `db:sync-indexes`): không cờ, CLI in
+  `target: <host>/<db>` rồi kết nối và ghi **ngay trong vài ms** ⇒ không kịp Ctrl-C (diễn tập run 40).
+  Run 78 (DEBT-256/257): cả 3 CLI có `--dry-run` = kiểm env như lệnh thật, in `target:` + `dry-run: no
+  connection made`, exit 0, **không kết nối**. Gõ biến **một lần** trong subshell, kiểm khô, rồi lệnh thật
+  chỉ chạy sau **cổng xác nhận** (`read` dừng chờ gõ `yes`; dán nguyên khối cũng không tự chạy lệnh ghi)
+  trong CÙNG subshell (sau `pnpm --filter be build` — script đọc `be/dist`). Dán CHỈ khối này:
+  ```bash
+  ( export MONGO_URI='<uri>'            # + các biến khác của lệnh, vd. NODE_ENV/ADMIN_SEED_*
+    pnpm --filter be db:sync-indexes -- --dry-run &&   # ⇒ target: <host>/<db>
+    read -r -p 'target dung? go yes de chay that: ' ok && [ "$ok" = yes ] &&
+    pnpm --filter be db:sync-indexes )
+  ```
+  Đích sai (vd. `target: localhost:27017/sso-idp`) ⇒ gõ gì khác `yes` (hoặc Ctrl-C) ⇒ subshell thoát exit 1,
+  không kết nối. Đổi `db:sync-indexes` thành `db:seed`/`db:seed-dev` ở **cả hai** dòng `pnpm`. Cờ khác
+  `--dry-run` (vd. `--dry-run=true`, `--dryrun`, `-n`) ⇒ `unknown argument`, exit 1, không kết nối (DEBT-522).
+  (pnpm chuyển `--` + `--dry-run` vào `process.argv`, đã kiểm run 78; script nạp `be/.env` nhưng biến đã
+  export thắng. Biến env sai/thiếu ⇒ exit 1 trước khi in đích. Lỗi CLI in `[MONGO_URI]` thay cho URI và bỏ
+  `user:password@` — DEBT-254.)
 - Metric: `GET $IDP/metrics` cần `Authorization: Bearer <METRICS_TOKEN>` (route chỉ có khi đặt biến).
   Alert: `ops/prometheus/alerts.yml`.
 - **Production vs dev (chung)**: chưa có KMS (Q5/B7.3). `KEY_PROVIDER=local` (`LocalKeyProvider`, thư
@@ -178,10 +191,13 @@ thu hồi mọi phiên + RT của user (chủ đích).
 > nên `NODE_ENV=test` + URI prod là **vượt guard**. Production ⇒ §3d break-glass.
 ```bash
 pnpm --filter be build
-NODE_ENV=test MONGO_URI='<uri>' ADMIN_SEED_EMAIL='<email>' ADMIN_SEED_PASSWORD='<tạm>' pnpm --filter be db:seed
+( export NODE_ENV=test MONGO_URI='<uri>' ADMIN_SEED_EMAIL='<email>' ADMIN_SEED_PASSWORD='<tạm>'
+  pnpm --filter be db:seed -- --dry-run &&   # ⇒ target: <host>/<db>
+  read -r -p 'target dung? go yes de chay that: ' ok && [ "$ok" = yes ] &&
+  pnpm --filter be db:seed )
 ```
-- **Trước khi chạy**: kiểm khô đích theo §0 (script nạp `be/.env` nếu không truyền biến; gõ sai tên
-  biến ⇒ rơi về DB dev). Lệnh thật in lại `target: <host>/<db>` (đã bỏ credential) — ghi vào biên bản;
+- **Trước khi chạy**: cổng xác nhận theo §0 — đọc dòng `target:` của dry-run, chỉ gõ `yes` khi đúng (script
+  nạp `be/.env` nếu không truyền biến; gõ sai tên biến ⇒ rơi về DB dev). Lệnh thật in lại `target: <host>/<db>` (đã bỏ credential) — ghi vào biên bản;
   nó KHÔNG phải điểm dừng (kết nối/ghi bắt đầu ngay sau đó).
 - `NODE_ENV` khác `development|test` ⇒ từ chối trước khi kết nối:
   `seed-dev: refusing to run with NODE_ENV=production (only development|test; never production)` (DEBT-164).
@@ -261,7 +277,7 @@ mongodump --uri='<MONGO_URI>' --db=<db> --archive=<file>.gz --gzip 2> <file>.dum
    `const d=db.getSiblingDB('<db_mới>'); d.getCollectionNames().sort().forEach(c=>print(c, d[c].countDocuments(), d[c].getIndexes().map(i=>i.name).sort().join(',')))`
 4. **Bắt buộc — thu hồi toàn bộ RT (4c)** trên `<db_mới>`, app vẫn tắt (mongosh: mọi lệnh ghi qua
    `const d = db.getSiblingDB('<db_mới>')`, không qua `db` trần). **Chưa làm 4d** — 4d cần admin API.
-5. Kiểm khô đích (§0) = `<db_mới>`, rồi `MONGO_URI='<uri tới db_mới>' pnpm --filter be db:sync-indexes`
+5. Chạy khối cổng xác nhận của §0 với `export MONGO_URI='<uri tới db_mới>'`: dry-run phải in `<db_mới>` rồi mới gõ `yes` cho `db:sync-indexes`
    → dòng `target:` = `<db_mới>`, mỗi model `<Model>: synced` (không có `dropped [...]`), exit 0; xác minh như [runbook-deploy §1 + 2c](runbook-deploy.md#1-đồng-bộ-index-mongo-dbsync-indexes).
 6. Trỏ app sang `<db_mới>`, rollout, nhưng **CHƯA mở traffic người dùng** (bước vận hành, tuỳ hạ tầng
    triển khai — repo không có cấu hình ingress/LB: vd. giữ route công khai/ingress đóng hoặc chưa đưa
