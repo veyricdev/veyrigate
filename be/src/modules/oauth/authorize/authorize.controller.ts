@@ -11,13 +11,15 @@
   UseGuards,
 } from '@nestjs/common';
 import { IsOptional, IsString } from 'class-validator';
+import { generateToken, sha256 } from '../../../common/crypto/crypto.util';
 import { buildCsp, safeCspOrigin } from '../../../common/http/csp';
 import type { HttpReply, HttpRequest } from '../../../common/http/http.types';
 import { SessionService } from '../../sessions/session.service';
-import { SessionCookie } from '../../sessions/session.cookie';
+import { hostCookieName, SessionCookie } from '../../sessions/session.cookie';
 import { CsrfGuard, CsrfService } from '../../ui/csrf.service';
 import { HtmlExceptionFilter } from '../../ui/html-exception.filter';
 import { safeReturnTo } from '../../ui/return-to';
+import { AUTHZ_BINDING_COOKIE, CONTEXT_TTL_MS } from './authorize-request-context.service';
 import { AuthorizeErrorPage, AuthorizeRedirectError } from './authorize.errors';
 import {
   AuthorizeService,
@@ -69,6 +71,10 @@ export class AuthorizeController {
   ): Promise<unknown> {
     const session = await this.liveSession(req);
     const audit = { ip: req.ip, requestId: req.id };
+    // DEBT-413: browser binding of the login context. Reused when present (never rotated, several
+    // tabs share it); only its sha256 leaves this method. Hard cut: only this mode's name is read.
+    const existing = req.cookies?.[this.bindingCookieName()] || undefined;
+    const binding = existing ?? generateToken();
 
     try {
       // Resume after login (spec Â§9.1): the return URL carries only `request_id`; the original
@@ -80,13 +86,19 @@ export class AuthorizeController {
         throw new AuthorizeErrorPage('repeated_parameter');
       }
       if (params.request_id) {
-        const resumed = await this.authorize.resume(params.request_id, session, audit);
+        // Never the freshly minted value: a resume without the cookie must fail.
+        const resumed = await this.authorize.resume(
+          params.request_id,
+          session,
+          audit,
+          existing ? sha256(existing) : undefined,
+        );
         if (!resumed) return this.expiredPage(reply);
-        return this.respond(req, reply, resumed);
+        return this.respond(req, reply, resumed, binding);
       }
 
-      const outcome = await this.authorize.handle(params, session, audit);
-      return this.respond(req, reply, outcome);
+      const outcome = await this.authorize.handle(params, session, audit, sha256(binding));
+      return this.respond(req, reply, outcome, binding);
     } catch (err) {
       return this.handleError(reply, err);
     }
@@ -150,9 +162,26 @@ export class AuthorizeController {
       : null;
   }
 
+  private bindingCookieName(): string {
+    return hostCookieName(AUTHZ_BINDING_COOKIE, this.sessionCookie.secure);
+  }
+
   /** Turn a validated-request outcome into an HTTP response (shared by fresh + resumed paths). */
-  private respond(req: HttpRequest, reply: HttpReply, outcome: AuthorizeOutcome): unknown {
+  private respond(
+    req: HttpRequest,
+    reply: HttpReply,
+    outcome: AuthorizeOutcome,
+    binding: string,
+  ): unknown {
     if (outcome.kind === 'login_required') {
+      // DEBT-413: set (or refresh the Max-Age of) the binding the new login context was hashed with.
+      reply.setCookie(this.bindingCookieName(), binding, {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: this.sessionCookie.secure,
+        path: '/',
+        maxAge: CONTEXT_TTL_MS / 1000,
+      });
       // Resumable login: carry request_id so the login flow can return to /authorize.
       const returnTo = safeReturnTo(
         `/authorize?request_id=${encodeURIComponent(outcome.requestId)}`,

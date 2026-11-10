@@ -6,7 +6,8 @@ import { isAdminApp, signInAsAdmin } from "./support/fe-admin";
 /**
  * Run 46 Task 4 (A6.2): resources on the real fe-admin. An invalid identifier is blocked in the
  * form (no request, nothing at the BE), a valid one is created, listed on page 1, then its scopes
- * are edited and the admin API reflects them (identifier unchanged).
+ * are edited and the admin API reflects them (identifier unchanged); a concurrent change through the
+ * admin API makes the next UI save a 409 conflict (DEBT-323, run 81).
  *
  * Data: resources cannot be deleted (no DELETE endpoint) and the E2E DB is never reset, so each
  * run creates ONE new resource `e2e-r<inv>` (`inv` = 9999999999999 - now, so the newest run has
@@ -16,7 +17,7 @@ import { isAdminApp, signInAsAdmin } from "./support/fe-admin";
  * and the BFF refreshes 60 s before expiry; a refresh-grant AT has no `auth_time` => step-up
  * (covered by fe-admin-clients.spec.ts, not here).
  */
-test("fe-admin resources: invalid identifier blocked, create, list, edit scopes", async ({ browser }) => {
+test("fe-admin resources: invalid identifier blocked, create, list, edit scopes, conflict", async ({ browser }) => {
   test.setTimeout(120_000);
   const inv = String(9_999_999_999_999 - Date.now()).padStart(13, "0");
   const resourceId = `e2e-r${inv}`;
@@ -79,6 +80,34 @@ test("fe-admin resources: invalid identifier blocked, create, list, edit scopes"
     const saved = await readResource();
     expect(saved.status).toBe(200);
     expect(saved.body).toMatchObject({ resourceId, identifier, scopes: ["e2e.read", "e2e.admin"] });
+
+    // 5. DEBT-323 (run 81): someone else changes the scopes after the form showed them => the UI
+    // save is refused (409, fixed text, nothing written), the re-read value is shown, saving again
+    // knowingly replaces it.
+    const other = await adminApi(accessToken, "PATCH", `/resources/${encodeURIComponent(resourceId)}`, {
+      scopes: ["e2e.read", "e2e.other"],
+    });
+    expect(other.status).toBe(200);
+    const stale = await adminApi(accessToken, "PATCH", `/resources/${encodeURIComponent(resourceId)}`, {
+      scopes: ["e2e.x"],
+      expectedScopes: ["e2e.read", "e2e.admin"],
+    });
+    expect(stale.status).toBe(409);
+    expect(stale.body).toEqual({ error: "conflict", error_description: "The resource was changed since it was read." });
+    await page.getByLabel("Scopes").fill("e2e.read e2e.write e2e.admin");
+    await page.getByRole("button", { name: "Save scopes" }).click();
+    await expect(page.getByRole("alert").filter({ hasText: "These scopes were changed by someone else." })).toHaveText(
+      "These scopes were changed by someone else. The saved scopes are shown below; saving again replaces them.",
+    );
+    await expect(page.getByText("Currently saved:").locator("..")).toHaveText("Currently saved: e2e.read e2e.other");
+    await expect(page.getByLabel("Scopes")).toHaveValue("e2e.read e2e.write e2e.admin");
+    expect((await readResource()).body).toMatchObject({ scopes: ["e2e.read", "e2e.other"] });
+    await page.getByRole("button", { name: "Save scopes" }).click();
+    // Only a confirmed save clears the line ("Saved." may still be the notice of step 4).
+    await expect(page.getByText("Currently saved:")).toHaveCount(0);
+    await expect(page.getByText("Saved.", { exact: true })).toBeVisible();
+    expect(Date.now() - signedInAt, "writes done before the BFF refresh (no step-up)").toBeLessThan(50_000);
+    expect((await readResource()).body).toMatchObject({ scopes: ["e2e.read", "e2e.write", "e2e.admin"] });
   } finally {
     await context.close();
   }

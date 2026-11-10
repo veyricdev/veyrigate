@@ -57,6 +57,7 @@ import { SESSION_CLOCK, SessionService } from '../src/modules/sessions/session.s
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { UiController } from '../src/modules/ui/ui.controller';
+import { authzBinding } from './oauth-fixtures';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -623,6 +624,8 @@ describe('Admin API guard (B6.1) + step-up (B6.2) on real Mongo + Redis', () => 
       expect(res.json()).toEqual({ error: 'step_up_required', max_age: 0 });
     });
 
+    /** DEBT-413: one test browser; its `idp_authz` is sent on every `/authorize` and resume. */
+    let authzJar: Record<string, string> = {};
     /** Start a step-up re-auth: `/authorize?prompt=login&max_age=0` with a live session. */
     async function startReauth(
       sessionId: string,
@@ -630,9 +633,10 @@ describe('Admin API guard (B6.1) + step-up (B6.2) on real Mongo + Redis', () => 
       const res = await app.inject({
         method: 'GET',
         url: authorizeUrl(CLIENT_A, { prompt: 'login', max_age: '0' }),
-        cookies: { [SESSION_COOKIE]: sessionId },
+        cookies: { [SESSION_COOKIE]: sessionId, ...authzJar },
       });
       expect(res.statusCode).toBe(302);
+      authzJar = { ...authzJar, ...authzBinding(res) };
       const location = new URL(res.headers['location'] as string, ISSUER);
       expect(location.pathname).toBe('/login');
       const returnTo = location.searchParams.get('returnTo')!;
@@ -681,7 +685,7 @@ describe('Admin API guard (B6.1) + step-up (B6.2) on real Mongo + Redis', () => 
       const resumed = await app.inject({
         method: 'GET',
         url: returnTo,
-        cookies: { [SESSION_COOKIE]: newId },
+        cookies: { [SESSION_COOKIE]: newId, ...authzJar },
       });
       expect(resumed.statusCode).toBe(302);
       const code = new URL(resumed.headers['location'] as string).searchParams.get('code');
@@ -699,7 +703,7 @@ describe('Admin API guard (B6.1) + step-up (B6.2) on real Mongo + Redis', () => 
       const res = await app.inject({
         method: 'GET',
         url: returnTo,
-        cookies: { [SESSION_COOKIE]: id },
+        cookies: { [SESSION_COOKIE]: id, ...authzJar },
       });
       expect(res.statusCode).toBe(302);
       const location = new URL(res.headers['location'] as string);
@@ -711,7 +715,7 @@ describe('Admin API guard (B6.1) + step-up (B6.2) on real Mongo + Redis', () => 
       const again = await app.inject({
         method: 'GET',
         url: returnTo,
-        cookies: { [SESSION_COOKIE]: id },
+        cookies: { [SESSION_COOKIE]: id, ...authzJar },
       });
       expect(again.statusCode).toBe(400);
     });
@@ -719,7 +723,7 @@ describe('Admin API guard (B6.1) + step-up (B6.2) on real Mongo + Redis', () => 
     it('bypass with NO session at all on a reauth context => error=login_required, no code', async () => {
       const { id } = await sessions.create(admin, DEFAULT_TENANT_ID);
       const { returnTo } = await startReauth(id);
-      const res = await app.inject({ method: 'GET', url: returnTo });
+      const res = await app.inject({ method: 'GET', url: returnTo, cookies: authzJar });
       expect(res.statusCode).toBe(302);
       const location = new URL(res.headers['location'] as string);
       expect(location.searchParams.get('error')).toBe('login_required');
@@ -760,7 +764,7 @@ describe('Admin API guard (B6.1) + step-up (B6.2) on real Mongo + Redis', () => 
       const resumed = await app.inject({
         method: 'GET',
         url: returnTo,
-        cookies: { [SESSION_COOKIE]: id },
+        cookies: { [SESSION_COOKIE]: id, ...authzJar },
       });
       expect(resumed.statusCode).toBe(400);
     });
@@ -828,7 +832,9 @@ describe('Admin API guard (B6.1) + step-up (B6.2) on real Mongo + Redis', () => 
     };
 
     /** prompt=login&max_age=0 with a live session -> login form -> POST /login; returns rotated cookie. */
-    async function reauth(oldId: string): Promise<{ returnTo: string; newId: string }> {
+    async function reauth(
+      oldId: string,
+    ): Promise<{ returnTo: string; newId: string; authz: Record<string, string> }> {
       const start = await app.inject({
         method: 'GET',
         url: authorizeUrl(CLIENT_A, { prompt: 'login', max_age: '0' }),
@@ -857,7 +863,7 @@ describe('Admin API guard (B6.1) + step-up (B6.2) on real Mongo + Redis', () => 
         .find((c) => c.startsWith(`${SESSION_COOKIE}=`))!
         .split(';')[0]
         .split('=')[1];
-      return { returnTo, newId };
+      return { returnTo, newId, authz: authzBinding(start) };
     }
 
     it('credential: expired admin token => 401 invalid_token', async () => {
@@ -970,10 +976,14 @@ describe('Admin API guard (B6.1) + step-up (B6.2) on real Mongo + Redis', () => 
 
     it('concurrency: after re-login, 5 parallel resumes of the same request_id => exactly one code', async () => {
       const { id: oldId } = await sessions.create(admin, DEFAULT_TENANT_ID);
-      const { returnTo, newId } = await reauth(oldId);
+      const { returnTo, newId, authz } = await reauth(oldId);
       const results = await Promise.all(
         Array.from({ length: 5 }, () =>
-          app.inject({ method: 'GET', url: returnTo, cookies: { [SESSION_COOKIE]: newId } }),
+          app.inject({
+            method: 'GET',
+            url: returnTo,
+            cookies: { [SESSION_COOKIE]: newId, ...authz },
+          }),
         ),
       );
       const withCode = results.filter(

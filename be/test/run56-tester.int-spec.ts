@@ -26,7 +26,7 @@ import {
 } from './full-app';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 import { expectNoIssued, recordIssued } from './issued-tokens';
-import { seedConsent, seedOAuthUser } from './oauth-fixtures';
+import { authzBinding, seedConsent, seedOAuthUser } from './oauth-fixtures';
 
 /**
  * Tester risk tests, run 56 (admin races + disable client), on the REAL app over HTTP:
@@ -683,9 +683,16 @@ describe('run 56 tester: admin races + disable/enable over real HTTP', () => {
         cookies: { [SESSION_COOKIE]: sessionId },
         payload: { _csrf: c.csrf, request_id: c.requestId, approve: 'true' },
       });
+    /** DEBT-413: one test browser; its `idp_authz` is sent on every `/authorize` and resume. */
+    let authzJar: Record<string, string> = {};
     async function loginCtx(clientId: string) {
-      const res = await full.app.inject({ method: 'GET', url: authorizeUrl(clientId) });
+      const res = await full.app.inject({
+        method: 'GET',
+        url: authorizeUrl(clientId),
+        cookies: authzJar,
+      });
       expect(res.statusCode).toBe(302);
+      authzJar = { ...authzJar, ...authzBinding(res) };
       const returnTo = new URL(String(res.headers['location']), FULL_APP_ISSUER).searchParams.get(
         'returnTo',
       )!;
@@ -695,7 +702,7 @@ describe('run 56 tester: admin races + disable/enable over real HTTP', () => {
       full.app.inject({
         method: 'GET',
         url: `/authorize?request_id=${encodeURIComponent(rid)}`,
-        cookies: { [SESSION_COOKIE]: sessionId },
+        cookies: { [SESSION_COOKIE]: sessionId, ...authzJar },
       });
     function expectFirstParty(res: {
       statusCode: number;

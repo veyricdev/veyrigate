@@ -4,6 +4,17 @@ import type { Model } from 'mongoose';
 import { DuplicateError, mapDuplicate } from '../identity/identity.errors';
 import { validateResourceFormat, validateResourceIdentifier } from './resource.validator';
 
+/**
+ * DEBT-323: `updateScopes` with `expectedScopes` found the resource, but its scopes are no longer
+ * the ones the caller read. Nothing was written.
+ */
+export class ConcurrentResourceUpdateError extends Error {
+  constructor() {
+    super('The resource was changed since it was read.');
+    this.name = 'ConcurrentResourceUpdateError';
+  }
+}
+
 export interface Resource {
   resourceId: string;
   identifier: string;
@@ -75,21 +86,35 @@ export class ResourceService {
    * immutable (changing `identifier` would kill every live token's `aud` at once). Returns the
    * before/after documents, or null when not found. `identifier` pins the exact document the
    * caller checked (`resourceId` is not unique, DEBT-077).
+   * `expectedScopes` (DEBT-323): written only while the stored scopes equal it exactly (ordered;
+   * `[]` also matches an absent field) — the condition is in the atomic filter. A mismatch on an
+   * existing resource throws `ConcurrentResourceUpdateError`; absent => last write wins.
    */
   async updateScopes(
     resourceId: string,
     scopes: string[],
     identifier: string,
+    expectedScopes?: string[],
   ): Promise<{ before: Resource; after: Resource } | null> {
+    const expected =
+      expectedScopes === undefined
+        ? {}
+        : expectedScopes.length === 0
+          ? { $or: [{ scopes: { $size: 0 } }, { scopes: { $exists: false } }] }
+          : { scopes: expectedScopes };
     const before = await this.resources
       .findOneAndUpdate(
-        { resourceId, identifier },
+        { resourceId, identifier, ...expected },
         { $set: { scopes } },
         { returnDocument: 'before' },
       )
       .lean<Resource>()
       .exec();
-    return before ? { before, after: { ...before, scopes } } : null;
+    if (before) return { before, after: { ...before, scopes } };
+    if (expectedScopes !== undefined && (await this.resources.exists({ resourceId, identifier }))) {
+      throw new ConcurrentResourceUpdateError();
+    }
+    return null;
   }
 
   findByIdentifier(identifier: string): Promise<Resource | null> {

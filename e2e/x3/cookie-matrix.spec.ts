@@ -18,6 +18,8 @@ import { X3_IDP_HOST, X3_ISSUER, X3_RPS, type X3Label, type X3Rp } from "./env";
 
 const SESSION = "__Host-idp_session";
 const LEGACY = "idp_session";
+/** DEBT-413: browser binding of a `login` context (X3 is Secure: always the `__Host-` name). */
+const AUTHZ = "__Host-idp_authz";
 
 interface Cell {
   case: string;
@@ -26,6 +28,8 @@ interface Cell {
   cookieNames?: string[];
   /** `sameSite` as the browser stored the session cookie (server always sends `Lax`). */
   storedSameSite?: string;
+  /** Case 1: cookie names of the resume `GET /authorize` (DEBT-413 binding). */
+  resumeCookieNames?: string[];
 }
 const cells: (Cell & { browser: string; status: string })[] = [];
 let current: Cell | null = null;
@@ -166,6 +170,17 @@ for (const label of ["alpha", "beta"] as X3Label[]) {
       await expectSessionCookieShape(context, testInfo.project.name, c);
       const cb = await idp.find("POST", "/login");
       c.cookieNames = cb[0]?.names ?? [];
+      // DEBT-413: the resume (`GET /authorize?request_id`, top-level: Lax is sent) carries the binding.
+      const resume = (await idp.find("GET", "/authorize")).at(-1)?.names ?? [];
+      c.resumeCookieNames = resume;
+      if (testInfo.project.name !== "webkit" || resume.length > 0) {
+        expect(resume, "resume carries the authz binding cookie").toContain(AUTHZ);
+      } else {
+        // WebKit-Windows cross-site (DEBT-535): this redirect-followed request reports NO cookie at
+        // all, not even the session cookie the BE needs to issue the code we just got => a reporting
+        // gap, not a missing cookie (the BE refuses a resume without the binding: be int tests).
+        testInfo.annotations.push({ type: "x3-webkit", description: "resume Cookie header not reported: recorded only" });
+      }
       c.outcome = "claims";
       await context.close();
     });

@@ -112,7 +112,11 @@ export class AdminResourcesController {
   @AdminScope('admin.write')
   @SuperAdminOnly()
   @RequireRecentAuth(5)
-  @ApiOperation({ description: 'super_admin only. Only `scopes` can change.' })
+  @ApiOperation({
+    description:
+      'super_admin only. Only `scopes` can change. With `expectedScopes`, 409 `conflict` when the ' +
+      'stored scopes differ from it (nothing written, no audit).',
+  })
   @ApiOkResponse({ type: AdminResourceViewDto })
   async update(
     @Tenant() ctx: TenantContext,
@@ -136,7 +140,12 @@ export class AdminResourcesController {
       );
     }
     // `resourceId` is not unique (DEBT-077): write exactly the document checked above.
-    const res = await this.resources.updateScopes(resourceId, dto.scopes, current.identifier);
+    // DEBT-323: `expectedScopes` makes the write conditional (409 on a concurrent change).
+    const res = await this.resources
+      .updateScopes(resourceId, dto.scopes, current.identifier, dto.expectedScopes)
+      .catch((err: unknown) => {
+        throw toAdminError(err);
+      });
     if (!res) throw AdminAuthError.notFound();
     const before = res.before.scopes ?? [];
     await this.audit.record({

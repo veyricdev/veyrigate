@@ -15,16 +15,19 @@ export class InvalidResourceError extends Error {
   }
 }
 
-/** Throws `InvalidResourceError` unless `resource` is an absolute URI without a fragment. */
+/**
+ * Throws `InvalidResourceError` unless `resource` is an absolute URI without a fragment.
+ * Fixed messages (DEBT-532): the value is never echoed.
+ */
 export function validateResourceFormat(resource: string): void {
   let parsed: URL;
   try {
     parsed = new URL(resource);
   } catch {
-    throw new InvalidResourceError(`resource must be an absolute URI: ${resource}`);
+    throw new InvalidResourceError('resource must be an absolute URI');
   }
   if (parsed.hash) {
-    throw new InvalidResourceError(`resource must not contain a fragment: ${resource}`);
+    throw new InvalidResourceError('resource must not contain a fragment');
   }
 }
 

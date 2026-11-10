@@ -238,6 +238,9 @@ authz_ctx:{request_id}
 }
 ```
 
+**Gắn trình duyệt (DEBT-413, run 81)**: khi outcome là `login_required`, IdP set cookie `idp_authz` (`__Host-idp_authz` khi Secure; `HttpOnly; SameSite=Lax; Path=/; Max-Age=600`, giá trị CSPRNG, dùng lại nếu đã có — không xoay, nhiều tab dùng chung) và context `login` lưu `bindingHash = sha256(cookie)` (không lưu giá trị thô; không bao giờ vào view/URL/log/audit).
+Resume `/authorize?request_id=` chỉ tiêu thụ context `login` khi cookie của request khớp `bindingHash` — so trong Lua **trước** DEL, nên người có URL mà không có cookie (hoặc context cũ không có `bindingHash`) nhận trang "Request expired" 400 và không "đốt" được context của nạn nhân. Context `consent` không đổi (gắn `sessionRef`, DEBT-123).
+
 ### 9.2 Authorization Code Flow + PKCE + Resource binding
 
 ```

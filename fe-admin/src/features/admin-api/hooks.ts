@@ -138,12 +138,15 @@ export function useCreateResource() {
   });
 }
 
-/** Resource scopes update; same invalidation as {@link useCreateResource}. */
+/**
+ * Resource scopes update; same invalidation as {@link useCreateResource}, plus a 409 `conflict`: the
+ * stored scopes are not those the form expected (DEBT-323), so the form shows the re-read value.
+ */
 export function useUpdateResource() {
   const invalidate = useInvalidateResources();
   return useMutation({
     mutationFn: async (input: UpdateResourceParams) => unwrap(await updateResource({ data: input })),
-    onSettled: (_data, error) => invalidate(error),
+    onSettled: (_data, error) => invalidate(error instanceof AdminRequestError && error.code === "conflict" ? null : error),
   });
 }
 

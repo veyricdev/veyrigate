@@ -35,8 +35,9 @@ import {
 import { AuthorizationCodeService } from '../src/modules/oauth/code/authorization-code.service';
 import { ConsentService, type Consent } from '../src/modules/oauth/consent/consent.service';
 import { UserTenantService, type UserTenant } from '../src/modules/identity/user-tenant.service';
-import { seedOAuthUser } from './oauth-fixtures';
+import { authzBinding, seedOAuthUser } from './oauth-fixtures';
 import { dropIntDb, INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
+import { sha256 } from '../src/common/crypto/crypto.util';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -481,8 +482,12 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
     },
   } as unknown as ConfigService;
 
-  beforeAll(async () => {
-    httpRedis = new IORedis(REDIS_URL, { maxRetriesPerRequest: 1 });
+  /** DEBT-413 (1s): same module, only `cookieSecure: true`. */
+  const secureCfg = {
+    getOrThrow: (ns: string) => (ns === 'session' ? { cookieSecure: true } : cfg.getOrThrow(ns)),
+  } as unknown as ConfigService;
+
+  const buildHttpApp = async (config: ConfigService, redis: IORedis) => {
     const moduleRef = await Test.createTestingModule({
       imports: [
         MongooseModule.forRoot(MONGO_URI, {
@@ -507,23 +512,31 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
         AuditService,
         UserTenantService,
         HtmlExceptionFilter,
-        { provide: RedisService, useValue: new RedisService(httpRedis) },
-        { provide: ConfigService, useValue: cfg },
+        { provide: RedisService, useValue: new RedisService(redis) },
+        { provide: ConfigService, useValue: config },
       ],
     }).compile();
 
-    httpApp = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
-    await httpApp.register(cookie);
-    await httpApp.register(view, {
+    const app = moduleRef.createNestApplication<NestFastifyApplication>(new FastifyAdapter());
+    await app.register(cookie);
+    await app.register(view, {
       engine: { eta: new Eta({ views: join(process.cwd(), 'src/views'), autoEscape: true }) },
       root: join(process.cwd(), 'src/views'),
       layout: 'layout.eta',
     });
-    httpApp.useGlobalPipes(
+    app.useGlobalPipes(
       new ValidationPipe({ whitelist: true, forbidNonWhitelisted: false, transform: true }),
     );
-    await httpApp.init();
-    await httpApp.getHttpAdapter().getInstance().ready();
+    await app.init();
+    await app.getHttpAdapter().getInstance().ready();
+    return { app, moduleRef };
+  };
+
+  beforeAll(async () => {
+    httpRedis = new IORedis(REDIS_URL, { maxRetriesPerRequest: 1 });
+    const built = await buildHttpApp(cfg, httpRedis);
+    httpApp = built.app;
+    const moduleRef = built.moduleRef;
 
     sessionSvc = moduleRef.get(SessionService);
     consentSvc = moduleRef.get(ConsentService);
@@ -579,7 +592,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
     const resumed = await httpApp.inject({
       method: 'GET',
       url: `/authorize?request_id=${encodeURIComponent(requestId)}`,
-      cookies: { [SESSION_COOKIE]: id },
+      cookies: { [SESSION_COOKIE]: id, ...authzBinding(first) },
     });
     expect(resumed.statusCode).toBe(200);
     expect(resumed.body).toContain('Authorize access');
@@ -677,7 +690,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
       const resumed = await httpApp.inject({
         method: 'GET',
         url: `/authorize?request_id=${encodeURIComponent(requestId)}`,
-        cookies: { [SESSION_COOKIE]: id },
+        cookies: { [SESSION_COOKIE]: id, ...authzBinding(first) },
       });
       await sessionSvc.revoke(id);
       await httpClientModel.updateOne(
@@ -693,6 +706,207 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
       expect(location).toContain(`iss=${encodeURIComponent(ISSUER)}`);
     },
   );
+  // --- run 81 (DEBT-413): a `login` context resumes only in the browser that created it ----------
+  describe('DEBT-413 browser binding (idp_authz)', () => {
+    const BINDING = 'idp_authz';
+    const startLogin = async (cookies: Record<string, string> = {}, app = httpApp) => {
+      const res = await app.inject({ method: 'GET', url: fullQuery(), cookies });
+      const returnTo = decodeURIComponent(
+        (res.headers['location'] as string).replace('/login?returnTo=', ''),
+      );
+      const requestId = new URLSearchParams(returnTo.split('?')[1]).get('request_id')!;
+      return { res, requestId, set: res.cookies.find((c) => c.name.endsWith(BINDING)) };
+    };
+    const resume = (requestId: string, sessionId: string, binding?: string) =>
+      httpApp.inject({
+        method: 'GET',
+        url: `/authorize?request_id=${encodeURIComponent(requestId)}`,
+        cookies: {
+          [SESSION_COOKIE]: sessionId,
+          ...(binding !== undefined ? { [BINDING]: binding } : {}),
+        },
+      });
+    /** A live session of a member that already consented: a resume issues the code directly. */
+    const consented = async () => {
+      const userId = await member();
+      await consentSvc.grant(
+        userId,
+        `${RUN}-http`,
+        undefined,
+        ['openid', 'profile'],
+        consentSvc.currentVersions(),
+        ['openid', 'profile'],
+      );
+      return (await sessionSvc.create(userId, 'tenant-A')).id;
+    };
+    const codeOf = (res: { headers: Record<string, unknown> }) => {
+      const loc = res.headers['location'] as string | undefined;
+      return loc ? new URL(loc).searchParams.get('code') : null;
+    };
+
+    it('(1) login_required sets idp_authz (HttpOnly, Lax, Path=/, Max-Age=600, not Secure in http dev); an existing cookie is reused, never rotated; Redis keeps only its sha256', async () => {
+      const first = await startLogin();
+      expect(first.res.statusCode).toBe(302);
+      expect(first.set).toMatchObject({
+        name: BINDING,
+        httpOnly: true,
+        sameSite: 'Lax',
+        path: '/',
+        maxAge: 600,
+      });
+      expect(first.set?.secure).toBeFalsy();
+      expect(first.set?.domain).toBeUndefined();
+      const binding = first.set!.value;
+      expect(binding).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      const raw = (await httpRedis.get(`authz_ctx:${first.requestId}`))!;
+      expect(JSON.parse(raw).bindingHash).toBe(sha256(binding));
+      expect(raw).not.toContain(binding);
+      expect(first.res.headers['location']).not.toContain(binding);
+
+      const again = await startLogin({ [BINDING]: binding });
+      expect(again.set?.value).toBe(binding);
+      expect(again.set?.maxAge).toBe(600);
+    });
+
+    it('(1b) no Set-Cookie idp_authz outside login_required (code issued, prompt=none error)', async () => {
+      const sid = await consented();
+      const code = await httpApp.inject({
+        method: 'GET',
+        url: fullQuery(),
+        cookies: { [SESSION_COOKIE]: sid },
+      });
+      expect(codeOf(code)).toBeTruthy();
+      expect(code.cookies.find((c) => c.name.endsWith(BINDING))).toBeUndefined();
+      const none = await httpApp.inject({ method: 'GET', url: fullQuery('&prompt=none') });
+      expect(none.cookies.find((c) => c.name.endsWith(BINDING))).toBeUndefined();
+      await sessionSvc.revoke(sid);
+    });
+
+    it('(1s) Secure => __Host-idp_authz with Secure, Path=/, no Domain; the plain name is never read', async () => {
+      // Own Redis connection: closing the twin quits its client (RedisService), never httpRedis.
+      const secureApp = (
+        await buildHttpApp(secureCfg, new IORedis(REDIS_URL, { maxRetriesPerRequest: 1 }))
+      ).app;
+      try {
+        const first = await startLogin({}, secureApp);
+        expect(first.set).toMatchObject({
+          name: `__Host-${BINDING}`,
+          httpOnly: true,
+          secure: true,
+          sameSite: 'Lax',
+          path: '/',
+          maxAge: 600,
+        });
+        expect(first.set?.domain).toBeUndefined();
+        expect(first.res.cookies.find((c) => c.name === BINDING)).toBeUndefined();
+        const binding = first.set!.value;
+        const sid = await consented();
+        const resumeSecure = (cookies: Record<string, string>) =>
+          secureApp.inject({
+            method: 'GET',
+            url: `/authorize?request_id=${encodeURIComponent(first.requestId)}`,
+            cookies: { [`__Host-${SESSION_COOKIE}`]: sid, ...cookies },
+          });
+        // A tossed plain `idp_authz` with the right value is ignored (hard cut, DEBT-505 rule).
+        expect((await resumeSecure({ [BINDING]: binding })).statusCode).toBe(400);
+        expect(codeOf(await resumeSecure({ [`__Host-${BINDING}`]: binding }))).toBeTruthy();
+        await sessionSvc.revoke(sid);
+      } finally {
+        await secureApp.close();
+      }
+    });
+
+    it('(2) login then resume with the binding cookie => 302 code + state (unchanged behaviour)', async () => {
+      const { requestId, set } = await startLogin();
+      const sid = await consented();
+      const res = await resume(requestId, sid, set!.value);
+      expect(res.statusCode).toBe(302);
+      const url = new URL(res.headers['location'] as string);
+      expect(url.origin + url.pathname).toBe('https://app.example.com/callback');
+      expect(url.searchParams.get('code')).toBeTruthy();
+      expect(url.searchParams.get('state')).toBe('rp-state');
+      await sessionSvc.revoke(sid);
+    });
+
+    it('(3) a valid session without the cookie / with another cookie => 400 expired page, no Location, no state, no code; the context survives and the right cookie still gets the code', async () => {
+      const { requestId, set } = await startLogin();
+      const attacker = await consented();
+      const codes = async () => (await httpRedis.keys('authz_code:*')).length;
+      const codes0 = await codes();
+      const foreign = (await startLogin()).set!.value;
+      for (const binding of [undefined, '', 'x'.repeat(43), foreign]) {
+        const res = await resume(requestId, attacker, binding);
+        expect({ binding, status: res.statusCode }).toEqual({ binding, status: 400 });
+        expect(res.headers['location']).toBeUndefined();
+        expect(res.body).toContain('Request expired');
+        expect(res.body).not.toContain('rp-state');
+        expect(res.body).not.toContain('app.example.com');
+        expect(res.cookies.find((c) => c.name.endsWith(BINDING))).toBeUndefined();
+      }
+      expect(await codes()).toBe(codes0);
+      expect(await httpRedis.exists(`authz_ctx:${requestId}`)).toBe(1);
+
+      const victim = await consented();
+      const ok = await resume(requestId, victim, set!.value);
+      expect(ok.statusCode).toBe(302);
+      expect(codeOf(ok)).toBeTruthy();
+      expect(await httpRedis.exists(`authz_ctx:${requestId}`)).toBe(0);
+      await sessionSvc.revoke(attacker);
+      await sessionSvc.revoke(victim);
+    });
+
+    it('(4) a login context without bindingHash (pre-deploy) => 400 even with a cookie', async () => {
+      const { set } = await startLogin();
+      const requestId = `legacy-${RUN}`;
+      const now = Date.now();
+      await httpRedis.set(
+        `authz_ctx:${requestId}`,
+        JSON.stringify({
+          kind: 'login',
+          clientId: `${RUN}-http`,
+          redirectUri: 'https://app.example.com/callback',
+          codeChallenge: VALID_CHALLENGE,
+          scope: 'openid profile',
+          originalState: 'rp-state',
+          createdAt: now,
+          expiresAt: now + 60_000,
+        }),
+        'PX',
+        60_000,
+      );
+      const sid = await consented();
+      const res = await resume(requestId, sid, set!.value);
+      expect(res.statusCode).toBe(400);
+      expect(res.headers['location']).toBeUndefined();
+      expect(res.body).toContain('Request expired');
+      await httpRedis.del(`authz_ctx:${requestId}`);
+      await sessionSvc.revoke(sid);
+    });
+
+    it('(5) two tabs: two /authorize with the same cookie => both request_ids resume', async () => {
+      const a = await startLogin();
+      const binding = a.set!.value;
+      const b = await startLogin({ [BINDING]: binding });
+      expect(b.set?.value).toBe(binding);
+      const sid = await consented();
+      expect(codeOf(await resume(a.requestId, sid, binding))).toBeTruthy();
+      expect(codeOf(await resume(b.requestId, sid, binding))).toBeTruthy();
+      await sessionSvc.revoke(sid);
+    });
+
+    it('(6) two concurrent resumes with the right cookie => exactly one code', async () => {
+      const { requestId, set } = await startLogin();
+      const sid = await consented();
+      const results = await Promise.all([
+        resume(requestId, sid, set!.value),
+        resume(requestId, sid, set!.value),
+      ]);
+      expect(results.map((r) => r.statusCode).sort()).toEqual([302, 400]);
+      expect(results.filter((r) => codeOf(r)).length).toBe(1);
+      await sessionSvc.revoke(sid);
+    });
+  });
+
   // --- B4.2 consent flow ---------------------------------------------------------------------
 
   // Sign in as a fresh ObjectId-backed user and fetch the consent screen for a fresh /authorize.
@@ -1336,20 +1550,22 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
     it('DEBT-130: resume of a prompt=login context with the OLD session => 400 page when the redirect_uri is gone (302 login_required while registered)', async () => {
       const clientId = await mkClient();
       const a = await signedIn();
+      let jar: Record<string, string> = {}; // DEBT-413: same browser throughout
       const reauth = async () => {
         const res = await httpApp.inject({
           method: 'GET',
           url: query(clientId, '&prompt=login'),
-          cookies: { [SESSION_COOKIE]: a.sessionId },
+          cookies: { [SESSION_COOKIE]: a.sessionId, ...jar },
         });
         expect(res.statusCode).toBe(302);
+        jar = authzBinding(res);
         return loginRequestId(res.headers['location'] as string);
       };
       const resume = (rid: string) =>
         httpApp.inject({
           method: 'GET',
           url: `/authorize?request_id=${encodeURIComponent(rid)}`,
-          cookies: { [SESSION_COOKIE]: a.sessionId }, // never re-authenticated
+          cookies: { [SESSION_COOKIE]: a.sessionId, ...jar }, // never re-authenticated
         });
 
       const control = await resume(await reauth());
@@ -1438,16 +1654,18 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
     it('DEBT-209: login context created before disable -> enable, resumed with a signed-in session => 400 page (control: 200 consent screen)', async () => {
       const clientId = await mkClient();
       const a = await signedIn();
+      let jar: Record<string, string> = {}; // DEBT-413: same browser throughout
       const login = async () => {
-        const res = await httpApp.inject({ method: 'GET', url: query(clientId) }); // no session
+        const res = await httpApp.inject({ method: 'GET', url: query(clientId), cookies: jar }); // no session
         expect(res.statusCode).toBe(302);
+        jar = authzBinding(res);
         return loginRequestId(res.headers['location'] as string);
       };
       const resume = (rid: string) =>
         httpApp.inject({
           method: 'GET',
           url: `/authorize?request_id=${encodeURIComponent(rid)}`,
-          cookies: { [SESSION_COOKIE]: a.sessionId },
+          cookies: { [SESSION_COOKIE]: a.sessionId, ...jar },
         });
       expect((await resume(await login())).statusCode).toBe(200);
 
@@ -1472,7 +1690,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
         await httpApp.inject({
           method: 'GET',
           url: `/authorize?request_id=${encodeURIComponent(rid)}`,
-          cookies: { [SESSION_COOKIE]: a.sessionId },
+          cookies: { [SESSION_COOKIE]: a.sessionId, ...authzBinding(res) },
         }),
       );
       await sessionSvc.revoke(a.sessionId);

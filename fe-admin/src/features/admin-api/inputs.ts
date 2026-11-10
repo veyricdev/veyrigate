@@ -93,10 +93,13 @@ export const CreateResourceInput = z
   .strict();
 export type CreateResourceParams = z.infer<typeof CreateResourceInput>;
 
-/** `PATCH /admin/resources/{id}`: `scopes` only (replaces the whole list; `[]` is valid). */
+/**
+ * `PATCH /admin/resources/{id}`: replaces the whole `scopes` list (`[]` is valid). `expectedScopes` =
+ * the list the admin saw: the BE writes only if it is still the stored one, else 409 (DEBT-323).
+ */
 export const UpdateResourceInput = z.object({
   resourceId: ResourcePathIdSchema,
-  patch: z.object({ scopes: resourceScopes }).strict(),
+  patch: z.object({ scopes: resourceScopes, expectedScopes: resourceScopes.optional() }).strict(),
 });
 export type UpdateResourceParams = z.infer<typeof UpdateResourceInput>;
 

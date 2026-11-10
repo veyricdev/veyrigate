@@ -9,7 +9,10 @@ import { AdminAuthError } from '../identity/tenant-context/admin-auth.errors';
 import { AdminTokenGuard } from '../identity/tenant-context/tenant-context';
 import type { KeyMetadata, RotationMode } from '../keys/key-provider';
 import { AuditAction } from '../security/audit/audit-action.enum';
-import { toPage } from './admin.dto';
+import { plainToInstance } from 'class-transformer';
+import { validateSync } from 'class-validator';
+import { ConcurrentResourceUpdateError } from '../resources/resource.service';
+import { toPage, UpdateResourceDto } from './admin.dto';
 import {
   toAdminAuditEvent,
   toAdminClient,
@@ -177,6 +180,45 @@ describe('assertKeepsOwnAccess (run 76, DEBT-515)', () => {
     await expect(
       assertKeepsOwnAccess({ allowedResources: ['admin'] }, TS, () => Promise.reject(down)),
     ).rejects.toBe(down);
+  });
+});
+
+describe('UpdateResourceDto.expectedScopes (run 81, DEBT-323)', () => {
+  const errors = (body: Record<string, unknown>) =>
+    validateSync(plainToInstance(UpdateResourceDto, body), {
+      whitelist: true,
+      forbidNonWhitelisted: true,
+    }).map((e) => e.property);
+
+  it.each([
+    [{ scopes: ['a'] }],
+    [{ scopes: ['a'], expectedScopes: ['b', 'c'] }],
+    [{ scopes: [], expectedScopes: [] }],
+  ])('accepts %j', (body) => {
+    expect(errors(body)).toEqual([]);
+  });
+
+  it.each([
+    [null],
+    ['a'],
+    [[1]],
+    [['a b']],
+    [['x'.repeat(257)]],
+    [Array.from({ length: 51 }, (_, i) => `s${i}`)],
+  ])('refuses expectedScopes %j', (expectedScopes) => {
+    expect(errors({ scopes: ['a'], expectedScopes })).toEqual(['expectedScopes']);
+  });
+
+  it('ConcurrentResourceUpdateError => 409 conflict with the fixed text (no scopes)', () => {
+    const err = toAdminError(new ConcurrentResourceUpdateError()) as AdminAuthError;
+    expect(err).toBeInstanceOf(AdminAuthError);
+    expect({ status: err.status, body: err.body }).toEqual({
+      status: 409,
+      body: {
+        error: 'conflict',
+        error_description: 'The resource was changed since it was read.',
+      },
+    });
   });
 });
 

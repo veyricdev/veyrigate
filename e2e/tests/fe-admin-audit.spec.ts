@@ -14,6 +14,9 @@ test("fe-admin audit: lock + unlock of the E2E user are listed under their filte
   test.setTimeout(120_000);
   const start = new Date(Date.now() - 60_000);
   start.setMilliseconds(0);
+  // DEBT-527: Chrome normalises `hh:mm:00` to `hh:mm` in a `datetime-local step=1`, so Playwright's
+  // fill reads back a different value (`Malformed value`). Second 1 is still before every event here.
+  if (start.getSeconds() === 0) start.setSeconds(1);
 
   const apiContext = await browser.newContext();
   const { accessToken } = await adminToken(apiContext).finally(() => apiContext.close());

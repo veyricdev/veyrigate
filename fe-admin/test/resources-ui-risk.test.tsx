@@ -219,7 +219,7 @@ describe("uncertain update (DEBT-327)", () => {
     await settle();
     expect(notice().textContent).not.toBe("No changes to save.");
     expect(mocks.update).toHaveBeenCalledTimes(2);
-    expect(mocks.update.mock.calls[1]![0]).toEqual({ data: { resourceId: "demo", patch: { scopes: ["read", "write"] } } });
+    expect(mocks.update.mock.calls[1]![0]).toEqual({ data: { resourceId: "demo", patch: { scopes: ["read", "write"], expectedScopes: ["admin"] } } });
     expect(document.body.textContent).not.toMatch(/Currently saved:/); // confirmed: the base is known again
     type("Scopes", "read  write");
     submit("Save scopes");
@@ -259,7 +259,8 @@ describe("client form resource picker after a resource write", () => {
 // confirmed; a 4xx in between does not make the server value known again.
 describe("uncertain update: failure sequences (case 9, round 2)", () => {
   const lastPatch = () => mocks.update.mock.calls.at(-1)![0];
-  const sentScopes = (scopes: string[]) => ({ data: { resourceId: "demo", patch: { scopes } } });
+  // DEBT-323: once unsure, `expectedScopes` = the re-read value shown as "Currently saved".
+  const sentScopes = (scopes: string[], expectedScopes: string[]) => ({ data: { resourceId: "demo", patch: { scopes, expectedScopes } } });
   const uncertain = () => fail("unavailable", "x", true) as never;
 
   async function open() {
@@ -280,12 +281,12 @@ describe("uncertain update: failure sequences (case 9, round 2)", () => {
     await save("admin", /result is unknown/);
     await save("admin", /result is unknown/);
     expect(mocks.update).toHaveBeenCalledTimes(2);
-    expect(lastPatch()).toEqual(sentScopes(["admin"]));
+    expect(lastPatch()).toEqual(sentScopes(["admin"], ["admin"]));
     mocks.update.mockResolvedValue(ok(RES) as never);
     type("Scopes", "read write");
     submit("Save scopes");
     await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(3));
-    expect(lastPatch()).toEqual(sentScopes(["read", "write"]));
+    expect(lastPatch()).toEqual(sentScopes(["read", "write"], ["admin"]));
   });
 
   it("uncertain, then a 4xx (not uncertain), then save again: still sent (the 4xx proves nothing)", async () => {
@@ -300,7 +301,7 @@ describe("uncertain update: failure sequences (case 9, round 2)", () => {
     mocks.update.mockResolvedValue(ok(RES) as never);
     submit("Save scopes"); // same "read write" again: equals the mount base, must still be sent
     await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(3));
-    expect(lastPatch()).toEqual(sentScopes(["read", "write"]));
+    expect(lastPatch()).toEqual(sentScopes(["read", "write"], ["admin"]));
     await settle();
     expect(document.body.textContent).not.toMatch(/Currently saved:/);
   });
@@ -314,7 +315,7 @@ describe("uncertain update: failure sequences (case 9, round 2)", () => {
     type("Scopes", "read write");
     submit("Save scopes");
     await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(2));
-    expect(lastPatch()).toEqual(sentScopes(["read", "write"]));
+    expect(lastPatch()).toEqual(sentScopes(["read", "write"], ["admin"]));
   });
 
   it("uncertain that did NOT land: saving again re-sends exactly the same value; a confirmed save re-enables 'No changes'", async () => {
@@ -327,7 +328,7 @@ describe("uncertain update: failure sequences (case 9, round 2)", () => {
     mocks.update.mockResolvedValue(ok({ ...RES, scopes: ["admin", "write"] }) as never);
     submit("Save scopes");
     await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(2));
-    expect(lastPatch()).toEqual(sentScopes(["admin", "write"]));
+    expect(lastPatch()).toEqual(sentScopes(["admin", "write"], ["read", "write"]));
     await settle();
     submit("Save scopes");
     await settle();
@@ -386,6 +387,6 @@ describe("uncertain update: failure sequences (case 9, round 2)", () => {
     type("Scopes", "read write");
     submit("Save scopes");
     await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(2));
-    expect(lastPatch()).toEqual(sentScopes(["read", "write"]));
+    expect(lastPatch()).toEqual(sentScopes(["read", "write"], ["read", "write"]));
   });
 });

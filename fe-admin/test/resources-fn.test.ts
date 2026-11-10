@@ -96,6 +96,19 @@ describe("endpoints", () => {
     expect(Object.keys(call().body)).toEqual(["scopes"]);
   });
 
+  it("update forwards expectedScopes as given (DEBT-323)", async () => {
+    beFetch.mockResolvedValue(json(200, { ...R, scopes: ["read", "write"] }));
+    await fns.updateResource({ data: { resourceId: "demo", patch: { scopes: ["read", "write"], expectedScopes: ["read"] } } });
+    expect(call().body).toEqual({ scopes: ["read", "write"], expectedScopes: ["read"] });
+    expect(Object.keys(call().body)).toEqual(["scopes", "expectedScopes"]);
+  });
+
+  it("409 conflict of a stale expectedScopes reaches the browser as code conflict (DEBT-323)", async () => {
+    beFetch.mockResolvedValue(json(409, { error: "conflict", error_description: "The resource was changed since it was read." }));
+    const result = await fns.updateResource({ data: { resourceId: "demo", patch: { scopes: [], expectedScopes: [] } } });
+    expect(result).toEqual({ ok: false, error: { code: "conflict", message: "The resource was changed since it was read." } });
+  });
+
   it("update with [] is valid (replaces the list)", async () => {
     beFetch.mockResolvedValue(json(200, { ...R, scopes: [] }));
     await fns.updateResource({ data: { resourceId: "demo", patch: { scopes: [] } } });
@@ -189,6 +202,11 @@ describe("input validators (before the BE)", () => {
     ["scope with a space", { resourceId: "demo", patch: { scopes: ["a b"] } }],
     ["51 scopes", { resourceId: "demo", patch: { scopes: Array.from({ length: 51 }, (_, i) => `s${i}`) } }],
     ["257-char scope", { resourceId: "demo", patch: { scopes: ["s".repeat(257)] } }],
+    ["expectedScopes a string", { resourceId: "demo", patch: { scopes: [], expectedScopes: "read" } }],
+    ["expectedScopes null", { resourceId: "demo", patch: { scopes: [], expectedScopes: null } }],
+    ["expectedScopes of numbers", { resourceId: "demo", patch: { scopes: [], expectedScopes: [1] } }],
+    ["expectedScopes with a space", { resourceId: "demo", patch: { scopes: [], expectedScopes: ["a b"] } }],
+    ["51 expectedScopes", { resourceId: "demo", patch: { scopes: [], expectedScopes: Array.from({ length: 51 }, (_, i) => `s${i}`) } }],
   ])("updateResource: %s => refused", async (_, data) => {
     await expect(fns.updateResource({ data })).rejects.toThrow();
     expect(beFetch).not.toHaveBeenCalled();

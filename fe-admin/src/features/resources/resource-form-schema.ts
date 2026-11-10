@@ -72,8 +72,12 @@ export const NewResourceDraftSchema = z.object({
   scopes: z.string().max(TEXT_MAX),
 });
 export type NewResourceValues = z.infer<typeof NewResourceDraftSchema>;
-export const EditResourceDraftSchema = z.object({ scopes: z.string().max(TEXT_MAX) });
-export type EditResourceValues = z.infer<typeof EditResourceDraftSchema>;
+/** Edit draft: the form text + the scopes the form was opened with (the PATCH `expectedScopes`, DEBT-323). */
+export const EditResourceDraftSchema = z.object({
+  scopes: z.string().max(TEXT_MAX),
+  expectedScopes: z.array(z.string().max(RESOURCE_SCOPE_MAX_LEN)).max(RESOURCE_SCOPES_MAX).optional(),
+});
+export type EditResourceValues = { scopes: string };
 
 /** Same scopes, same order (the PATCH replaces the list as sent). */
 export const sameScopes = (a: string, b: string) => JSON.stringify(scopeList(a)) === JSON.stringify(scopeList(b));

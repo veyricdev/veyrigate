@@ -118,7 +118,7 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** @description super_admin only. Only `scopes` can change. */
+        /** @description super_admin only. Only `scopes` can change. With `expectedScopes`, 409 `conflict` when the stored scopes differ from it (nothing written, no audit). */
         patch: operations["AdminResourcesController_update"];
         trace?: never;
     };
@@ -457,6 +457,8 @@ export interface components {
         };
         UpdateResourceDto: {
             scopes: string[];
+            /** @description The scopes the caller read (exact, ordered; [] also matches a resource without scopes). Present => written only if the stored scopes still equal it, otherwise 409 conflict. Absent => last write wins. */
+            expectedScopes?: string[];
         };
         AdminUserViewDto: {
             id: string;

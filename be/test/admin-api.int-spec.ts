@@ -1103,15 +1103,26 @@ describe('Admin API B6.3a (clients, secrets, resources) on real Mongo + Redis', 
           'data:text/html,x',
           'file:///etc/passwd',
           'a:',
+          // DEBT-532: the format branches (not absolute / fragment) never echo the value.
+          'abc-MARK',
+          'https://a/#x-MARK',
         ].map((identifier, i) => ({ resourceId: `${rid}-bad${i}`, identifier })),
       ]) {
         const res = await call('POST', '/admin/resources', token, body);
         expect({ body, status: res.statusCode }).toEqual({ body, status: 400 });
+        expect(res.json()).toMatchObject({ error: 'invalid_request' });
+        expect(JSON.stringify(res.json())).not.toContain('MARK');
         if (String(body.identifier).startsWith('javascript:')) {
           expect(res.json()).toMatchObject({ error: 'invalid_request' });
           expect(res.body).not.toContain('alert(1)');
         }
       }
+      expect(
+        await auditModel.countDocuments({
+          action: 'ADMIN_RESOURCE_CREATED',
+          targetId: { $regex: `^${rid}-bad` },
+        }),
+      ).toBe(0);
       for (const identifier of ['HTTPS://A-R1/', 'http://localhost:3000/r1/', 'urn:example:r1']) {
         const ok = await call('POST', '/admin/resources', token, {
           resourceId: `${rid}-ok${identifier.length}`,
@@ -1202,6 +1213,153 @@ describe('Admin API B6.3a (clients, secrets, resources) on real Mongo + Redis', 
       const emptied = await call('PATCH', `/admin/resources/${rid}`, token, { scopes: [] });
       expect(emptied.statusCode).toBe(200);
       expect(emptied.json().scopes).toEqual([]);
+    });
+
+    // Run 81 (DEBT-323): optimistic concurrency on PATCH scopes. `expectedScopes` = the scopes the
+    // caller read (ordered, exact); a mismatch with a live resource => 409, DB untouched, no audit.
+    describe('DEBT-323 expectedScopes', () => {
+      const CONFLICT = {
+        error: 'conflict',
+        error_description: 'The resource was changed since it was read.',
+      };
+      const updates = (rid: string) =>
+        auditModel.countDocuments({ action: 'ADMIN_RESOURCE_UPDATED', targetId: rid });
+      const mk = async (suffix: string, scopes: string[]) => {
+        const rid = `${RUN}-x${suffix}`.toLowerCase();
+        const res = await call('POST', '/admin/resources', await tok(superA), {
+          resourceId: rid,
+          identifier: `https://${rid}.example.com/`,
+          scopes,
+        });
+        expect(res.statusCode).toBe(201);
+        return rid;
+      };
+      const stored = async (rid: string) =>
+        (await resourceModel.findOne({ resourceId: rid }).lean())?.scopes;
+
+      it('(1) expectedScopes = stored => 200, written, 1 success audit', async () => {
+        const rid = await mk('1', ['a', 'b']);
+        const res = await call('PATCH', `/admin/resources/${rid}`, await tok(superA), {
+          scopes: ['a', 'c'],
+          expectedScopes: ['a', 'b'],
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json().scopes).toEqual(['a', 'c']);
+        expect(await stored(rid)).toEqual(['a', 'c']);
+        expect(
+          await auditModel
+            .find({ action: 'ADMIN_RESOURCE_UPDATED', targetId: rid, result: 'success' })
+            .countDocuments(),
+        ).toBe(1);
+      });
+
+      it.each([[['a']], [['b', 'a']], [['a', 'b', 'c']], [[]]])(
+        '(2) expectedScopes %j != stored [a,b] => 409 conflict (fixed text, no scopes), DB unchanged, 0 audit',
+        async (expectedScopes) => {
+          const rid = await mk(`2${expectedScopes.join('')}${expectedScopes.length}`, ['a', 'b']);
+          const res = await call('PATCH', `/admin/resources/${rid}`, await tok(superA), {
+            scopes: ['z'],
+            expectedScopes,
+          });
+          expect(res.statusCode).toBe(409);
+          expect(res.json()).toEqual(CONFLICT);
+          expect(await stored(rid)).toEqual(['a', 'b']);
+          expect(await updates(rid)).toBe(0);
+        },
+      );
+
+      it('(3) expectedScopes [] matches an empty array and an absent field => 200', async () => {
+        const empty = await mk('3e', []);
+        const r1 = await call('PATCH', `/admin/resources/${empty}`, await tok(superA), {
+          scopes: ['n'],
+          expectedScopes: [],
+        });
+        expect(r1.statusCode).toBe(200);
+        expect(await stored(empty)).toEqual(['n']);
+
+        const absent = await mk('3a', ['old']);
+        await resourceModel.collection.updateOne({ resourceId: absent }, { $unset: { scopes: 1 } });
+        expect(await resourceModel.collection.findOne({ resourceId: absent })).not.toHaveProperty(
+          'scopes',
+        );
+        const r2 = await call('PATCH', `/admin/resources/${absent}`, await tok(superA), {
+          scopes: ['n'],
+          expectedScopes: [],
+        });
+        expect(r2.statusCode).toBe(200);
+        expect(await stored(absent)).toEqual(['n']);
+      });
+
+      it('(4) no expectedScopes => last-write-wins as before (200)', async () => {
+        const rid = await mk('4', ['a']);
+        const res = await call('PATCH', `/admin/resources/${rid}`, await tok(superA), {
+          scopes: ['b'],
+        });
+        expect(res.statusCode).toBe(200);
+        expect(await stored(rid)).toEqual(['b']);
+      });
+
+      it('(5) unknown resource + expectedScopes => 404 not_found', async () => {
+        const res = await call('PATCH', `/admin/resources/${RUN}-x5-none`, await tok(superA), {
+          scopes: ['a'],
+          expectedScopes: ['a'],
+        });
+        expect(res.statusCode).toBe(404);
+        expect(res.json()).toEqual({ error: 'not_found' });
+      });
+
+      it('(6) two concurrent PATCHes with the same expectedScopes => exactly one 200, one 409', async () => {
+        const rid = await mk('6', ['a']);
+        const token = await tok(superA);
+        const results = await Promise.all(
+          [['p'], ['q']].map((scopes) =>
+            call('PATCH', `/admin/resources/${rid}`, token, { scopes, expectedScopes: ['a'] }),
+          ),
+        );
+        expect(results.map((r) => r.statusCode).sort()).toEqual([200, 409]);
+        const winner = results.find((r) => r.statusCode === 200)!;
+        expect(await stored(rid)).toEqual(winner.json().scopes);
+        expect(await updates(rid)).toBe(1);
+      });
+
+      it('(7) expectedScopes of the wrong type / > 50 items / null / bad token => 400, DB unchanged', async () => {
+        const rid = await mk('7', ['a']);
+        const token = await tok(superA);
+        for (const expectedScopes of [
+          null,
+          'a',
+          [1],
+          ['a b'],
+          Array.from({ length: 51 }, (_, i) => `s${i}`),
+        ]) {
+          const res = await call('PATCH', `/admin/resources/${rid}`, token, {
+            scopes: ['z'],
+            expectedScopes,
+          });
+          expect({ expectedScopes, status: res.statusCode }).toEqual({
+            expectedScopes,
+            status: 400,
+          });
+        }
+        expect(await stored(rid)).toEqual(['a']);
+        expect(await updates(rid)).toBe(0);
+      });
+
+      it('(8) admin resource without admin.* + correct expectedScopes => still the 400 admin-scope refusal', async () => {
+        const current = (await resourceModel.findOne({ resourceId: 'admin' }).lean())!.scopes;
+        const res = await call('PATCH', '/admin/resources/admin', await tok(superA), {
+          scopes: ['admin.read'],
+          expectedScopes: current,
+        });
+        expect(res.statusCode).toBe(400);
+        expect(res.json()).toEqual({
+          error: 'invalid_request',
+          error_description: 'The admin resource must keep the admin.read and admin.write scopes.',
+        });
+        expect((await resourceModel.findOne({ resourceId: 'admin' }).lean())!.scopes).toEqual(
+          current,
+        );
+      });
     });
 
     it('stale auth_time => 403 step_up_required on resource writes', async () => {

@@ -245,7 +245,8 @@ describe('db:seed re-point: a public client must never obtain aud=admin (DEBT-13
     const consentPage = await app.inject({
       method: 'GET',
       url: returnTo,
-      headers: { cookie: session },
+      // DEBT-413: the resume runs in the browser that started (binding cookie of the 302).
+      headers: { cookie: `${session}; ${cookieOf(start.headers, 'idp_authz')!}` },
     });
     if (consentPage.statusCode !== 200) return;
     const consent = await app.inject({

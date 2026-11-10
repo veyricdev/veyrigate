@@ -204,6 +204,22 @@ export class UpdateResourceDto {
   @MaxLength(256, { each: true })
   @Matches(SCOPE_TOKEN, { each: true })
   scopes!: string[];
+
+  @ApiPropertyOptional({
+    type: [String],
+    maxItems: MAX_RESOURCE_SCOPES,
+    description:
+      'The scopes the caller read (exact, ordered; [] also matches a resource without scopes). ' +
+      'Present => written only if the stored scopes still equal it, otherwise 409 conflict. ' +
+      'Absent => last write wins.',
+  })
+  @IfPresent()
+  @IsArray()
+  @ArrayMaxSize(MAX_RESOURCE_SCOPES)
+  @IsString({ each: true })
+  @MaxLength(256, { each: true })
+  @Matches(SCOPE_TOKEN, { each: true })
+  expectedScopes?: string[];
 }
 
 /** `GET /admin/users` — exact-match filters only (no regex: `User` is global, ReDoS/enumeration). */

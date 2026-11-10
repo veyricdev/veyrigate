@@ -319,8 +319,8 @@ describe("resource detail", () => {
     type("Scopes", "read");
     submit("Save scopes");
     await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(1));
-    expect(mocks.update.mock.calls[0]![0]).toEqual({ data: { resourceId: "demo", patch: { scopes: ["read"] } } });
-    expect(Object.keys((mocks.update.mock.calls[0]![0] as { data: { patch: object } }).data.patch)).toEqual(["scopes"]);
+    expect(mocks.update.mock.calls[0]![0]).toEqual({ data: { resourceId: "demo", patch: { scopes: ["read"], expectedScopes: ["read", "write"] } } });
+    expect(Object.keys((mocks.update.mock.calls[0]![0] as { data: { patch: object } }).data.patch)).toEqual(["scopes", "expectedScopes"]);
     await waitFor(() => expect(notice().textContent).toBe("Saved."));
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Scopes" })));
   });
@@ -334,11 +334,11 @@ describe("resource detail", () => {
     type("Scopes", "write read");
     submit("Save scopes");
     await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(1));
-    expect(mocks.update.mock.calls[0]![0]).toEqual({ data: { resourceId: "demo", patch: { scopes: ["write", "read"] } } });
+    expect(mocks.update.mock.calls[0]![0]).toEqual({ data: { resourceId: "demo", patch: { scopes: ["write", "read"], expectedScopes: ["read", "write"] } } });
     type("Scopes", "");
     submit("Save scopes");
     await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(2));
-    expect(mocks.update.mock.calls[1]![0]).toEqual({ data: { resourceId: "demo", patch: { scopes: [] } } });
+    expect(mocks.update.mock.calls[1]![0]).toEqual({ data: { resourceId: "demo", patch: { scopes: [], expectedScopes: ["write", "read"] } } });
   });
 
   it("result regions exist before the submit and are filled after it", async () => {
@@ -388,6 +388,51 @@ describe("resource detail", () => {
     expect(mocks.update).toHaveBeenCalledTimes(1);
   });
 
+  it("uncertain => the next save expects the re-read value, not the mount value (DEBT-323)", async () => {
+    mocks.update.mockResolvedValueOnce(fail("unavailable", "x", true) as never);
+    renderAt("/resources/demo");
+    await screen.findByLabelText("Scopes");
+    type("Scopes", "read");
+    mocks.get.mockResolvedValue(ok({ ...RES, scopes: ["read"] }) as never);
+    submit("Save scopes");
+    await waitFor(() => expect(formAlert().textContent).toMatch(/result is unknown/));
+    await waitFor(() => expect(screen.getByText("Currently saved:").parentElement!.textContent).toBe("Currently saved: read"));
+    mocks.update.mockResolvedValueOnce(ok({ ...RES, scopes: ["read"] }) as never);
+    submit("Save scopes");
+    await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(2));
+    expect(mocks.update.mock.calls[0]![0]).toEqual({ data: { resourceId: "demo", patch: { scopes: ["read"], expectedScopes: ["read", "write"] } } });
+    expect(mocks.update.mock.calls[1]![0]).toEqual({ data: { resourceId: "demo", patch: { scopes: ["read"], expectedScopes: ["read"] } } });
+  });
+
+  it("409 conflict => fixed message + the saved scopes; saving again expects the server value, then Saved. (DEBT-323)", async () => {
+    mocks.update.mockResolvedValueOnce(fail("conflict", "The resource was changed since it was read.") as never);
+    renderAt("/resources/demo");
+    await screen.findByLabelText("Scopes");
+    type("Scopes", "read admin");
+    mocks.get.mockResolvedValue(ok({ ...RES, scopes: ["read", "other"] }) as never);
+    submit("Save scopes");
+    await waitFor(() =>
+      expect(formAlert().textContent).toBe(
+        "These scopes were changed by someone else. The saved scopes are shown below; saving again replaces them.",
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByText("Currently saved:").parentElement!.textContent).toBe("Currently saved: read other"),
+    );
+    expect(field("Scopes").value).toBe("read admin");
+    expect(mocks.update.mock.calls[0]![0]).toEqual({ data: { resourceId: "demo", patch: { scopes: ["read", "admin"], expectedScopes: ["read", "write"] } } });
+
+    mocks.update.mockResolvedValueOnce(ok({ ...RES, scopes: ["read", "admin"] }) as never);
+    submit("Save scopes");
+    await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(2));
+    expect(mocks.update.mock.calls[1]![0]).toEqual({
+      data: { resourceId: "demo", patch: { scopes: ["read", "admin"], expectedScopes: ["read", "other"] } },
+    });
+    await waitFor(() => expect(notice().textContent).toBe("Saved."));
+    expect(formAlert().textContent).toBe("");
+    expect(screen.queryByText("Currently saved:")).toBeNull();
+  });
+
   it("a refetch while editing never overwrites the edit; the diff base stays the loaded data", async () => {
     mocks.update.mockResolvedValue(ok(RES) as never);
     renderAt("/resources/demo");
@@ -404,10 +449,10 @@ describe("resource detail", () => {
     expect(field("Scopes").value).toBe("read write admin");
     submit("Save scopes");
     await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(1));
-    expect(mocks.update.mock.calls[0]![0]).toEqual({ data: { resourceId: "demo", patch: { scopes: ["read", "write", "admin"] } } });
+    expect(mocks.update.mock.calls[0]![0]).toEqual({ data: { resourceId: "demo", patch: { scopes: ["read", "write", "admin"], expectedScopes: ["read", "write"] } } });
   });
 
-  it("step_up_required => draft { scopes } + re-auth; back: restored, NOT sent, submit sends once", async () => {
+  it("step_up_required => draft { scopes, expectedScopes } + re-auth; back: restored, NOT sent, submit sends once", async () => {
     mocks.update.mockResolvedValueOnce(fail("step_up_required") as never);
     renderAt("/resources/demo");
     await screen.findByLabelText("Scopes");
@@ -416,9 +461,11 @@ describe("resource detail", () => {
     await waitFor(() => expect(assign).toHaveBeenCalledWith("/auth/login?stepup=1&returnTo=%2Fresources%2Fdemo"));
     const stored = JSON.parse(sessionStorage.getItem(KEY)!);
     expect(stored).toMatchObject({ action: "resource.update", path: "/resources/demo", sub: "u1" });
-    expect(stored.payload).toEqual({ scopes: "read admin" });
+    expect(stored.payload).toEqual({ scopes: "read admin", expectedScopes: ["read", "write"] });
     cleanup();
 
+    // Someone else saved meanwhile: the restored draft still sends what the admin first saw (AC3).
+    mocks.get.mockResolvedValue(ok({ ...RES, scopes: ["changed"] }) as never);
     mocks.update.mockResolvedValue(ok({ ...RES, scopes: ["read", "admin"] }) as never);
     renderAt("/resources/demo");
     await waitFor(() => expect(field("Scopes").value).toBe("read admin"));
@@ -427,7 +474,7 @@ describe("resource detail", () => {
     expect(mocks.update).toHaveBeenCalledTimes(1);
     submit("Save scopes");
     await waitFor(() => expect(mocks.update).toHaveBeenCalledTimes(2));
-    expect(mocks.update.mock.calls[1]![0]).toEqual({ data: { resourceId: "demo", patch: { scopes: ["read", "admin"] } } });
+    expect(mocks.update.mock.calls[1]![0]).toEqual({ data: { resourceId: "demo", patch: { scopes: ["read", "admin"], expectedScopes: ["read", "write"] } } });
   });
 
   it("not found => message", async () => {

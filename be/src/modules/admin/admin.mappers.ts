@@ -13,7 +13,7 @@ import type { UserView } from '../identity/user.service';
 import type { Consent } from '../oauth/consent/consent.service';
 import type { FamilySummary } from '../oauth/token/refresh-token.service';
 import { AdminAuthError } from '../identity/tenant-context/admin-auth.errors';
-import type { Resource } from '../resources/resource.service';
+import { ConcurrentResourceUpdateError, type Resource } from '../resources/resource.service';
 import type { AuditEvent } from '../security/audit/audit.types';
 import { InvalidResourceError } from '../resources/resource.validator';
 import { maskIp } from './mask-ip';
@@ -236,5 +236,8 @@ export function toAdminError(err: unknown): unknown {
   if (err instanceof ForbiddenClientConfigError) return AdminAuthError.forbidden();
   if (err instanceof DuplicateError) return AdminAuthError.conflict(`${err.entity} already exists`);
   if (err instanceof ConcurrentClientUpdateError) return AdminAuthError.conflict(err.message);
+  if (err instanceof ConcurrentResourceUpdateError) {
+    return AdminAuthError.conflict('The resource was changed since it was read.');
+  }
   return err;
 }

@@ -73,6 +73,7 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { UiController } from '../src/modules/ui/ui.controller';
+import { authzBinding } from './oauth-fixtures';
 
 /**
  * Run 32 (B5.1 + B5.2): federation broker end to end on real Mongo + Redis, with Google/GitHub
@@ -250,14 +251,22 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       ...extra,
     }).toString()}`;
 
+  /**
+   * DEBT-413: the `idp_authz` cookie of "the" test browser. Every `/authorize` of this file runs in
+   * that one browser (sends it, keeps what is set), every resume forwards it; a test that needs
+   * another browser passes its own jar.
+   */
+  let authzJar: Record<string, string> = {};
+
   /** RP -> /authorize (signed out) -> 302 /login?returnTo=/authorize?request_id=X; returns X. */
   async function rpAuthorize(extra: Record<string, string> = {}, sessionId?: string) {
     const res = await app.inject({
       method: 'GET',
       url: authorizeQuery(extra),
-      ...(sessionId ? { cookies: { [SESSION_COOKIE]: sessionId } } : {}),
+      cookies: { ...authzJar, ...(sessionId ? { [SESSION_COOKIE]: sessionId } : {}) },
     });
     expect(res.statusCode).toBe(302);
+    authzJar = { ...authzJar, ...authzBinding(res) };
     const login = new URL(res.headers.location as string, ISSUER);
     expect(login.pathname).toBe('/login');
     const returnTo = login.searchParams.get('returnTo')!;
@@ -327,7 +336,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
     let res = await app.inject({
       method: 'GET',
       url: location,
-      cookies: { [SESSION_COOKIE]: sessionId },
+      cookies: { [SESSION_COOKIE]: sessionId, ...authzJar },
     });
     if (res.statusCode === 200) {
       const requestId = res.body.match(/name="request_id" value="([^"]+)"/)?.[1];
@@ -666,6 +675,34 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       ]);
     });
 
+    it('DEBT-413 (8): callback -> resume in the browser that started (idp_authz) => code; the same session from another browser (no / foreign idp_authz) => 400, the context stays', async () => {
+      const { requestId } = await rpAuthorize();
+      const own = { ...authzJar };
+      expect(Object.keys(own)).toEqual(['idp_authz']);
+      const { res: cb } = await socialLogin('google', requestId, {
+        claims: { sub: `${RUN}-g-413` },
+      });
+      expect(cb.statusCode).toBe(302);
+      expect(cb.headers.location).toBe(`/authorize?request_id=${encodeURIComponent(requestId)}`);
+      const sid = cookieOf(cb, SESSION_COOKIE)!.value;
+      for (const jar of [{}, { idp_authz: generateToken() }] as Record<string, string>[]) {
+        const other = await app.inject({
+          method: 'GET',
+          url: cb.headers.location as string,
+          cookies: { [SESSION_COOKIE]: sid, ...jar },
+        });
+        expect(other.statusCode).toBe(400);
+        expect(other.headers.location).toBeUndefined();
+        expect(other.body).not.toContain(RP_STATE);
+      }
+      expect(await redis.exists(`authz_ctx:${requestId}`)).toBe(1);
+      expect(authzJar).toEqual(own);
+      const rp = await resumeToRp(cb.headers.location as string, sid);
+      expect(rp.origin + rp.pathname).toBe(REDIRECT);
+      expect(rp.searchParams.get('code')).toBeTruthy();
+      expect(rp.searchParams.get('state')).toBe(RP_STATE);
+    });
+
     it('GitHub: primary+verified email provisions; providerId = numeric id; full flow to /token', async () => {
       const ghId = 900_000 + Math.floor(Math.random() * 1000);
       const email = `${RUN}-gh@example.com`;
@@ -833,7 +870,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       const resumed = await app.inject({
         method: 'GET',
         url: cb.headers.location as string,
-        cookies: { [SESSION_COOKIE]: cookieOf(cb, SESSION_COOKIE)!.value },
+        cookies: { [SESSION_COOKIE]: cookieOf(cb, SESSION_COOKIE)!.value, ...authzJar },
       });
       expect(resumed.statusCode).toBe(400);
       expect(resumed.headers.location).toBeUndefined();
@@ -1936,7 +1973,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       const direct = await app.inject({
         method: 'GET',
         url: `/authorize?request_id=${encodeURIComponent(requestId)}`,
-        cookies: { [SESSION_COOKIE]: stale.id },
+        cookies: { [SESSION_COOKIE]: stale.id, ...authzJar },
       });
       expect(direct.statusCode).toBe(302);
       const loc = new URL(direct.headers.location as string);
@@ -2685,7 +2722,11 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       expect(location).toBe(returnTo);
       const before = await codeCount();
       expectDeniedAtRp(
-        await app.inject({ method: 'GET', url: location, cookies: { [SESSION_COOKIE]: sid } }),
+        await app.inject({
+          method: 'GET',
+          url: location,
+          cookies: { [SESSION_COOKIE]: sid, ...authzJar },
+        }),
       );
       expect(await codeCount()).toBe(before);
       expect(await utModel.countDocuments({ tenantId: 'tenant-B', userId: local.sub })).toBe(0);
@@ -2712,7 +2753,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
         await app.inject({
           method: 'GET',
           url: res.headers.location as string,
-          cookies: { [SESSION_COOKIE]: sid },
+          cookies: { [SESSION_COOKIE]: sid, ...authzJar },
         }),
       );
       expect(await codeCount()).toBe(before);

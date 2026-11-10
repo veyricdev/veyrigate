@@ -4,6 +4,7 @@
 // duplicate scopes. Table-driven: what passes / what is blocked.
 import { describe, expect, it } from "vitest";
 import {
+  EditResourceDraftSchema,
   EditResourceSchema,
   NewResourceSchema,
   identifierProblem,
@@ -79,5 +80,18 @@ describe("scopes (resource: ≤ 50, each ≤ 256, no whitespace, no duplicate; N
     expect(sameScopes("a b", " a\nb ")).toBe(true);
     expect(sameScopes("a b", "b a")).toBe(false);
     expect(sameScopes("", " ")).toBe(true);
+  });
+});
+
+describe("edit step-up draft (DEBT-323: carries the scopes the form was opened with)", () => {
+  it("with and without expectedScopes", () => {
+    expect(EditResourceDraftSchema.parse({ scopes: "a b", expectedScopes: ["a"] })).toEqual({ scopes: "a b", expectedScopes: ["a"] });
+    expect(EditResourceDraftSchema.parse({ scopes: "a b", expectedScopes: [] })).toEqual({ scopes: "a b", expectedScopes: [] });
+    expect(EditResourceDraftSchema.parse({ scopes: "a b" })).toEqual({ scopes: "a b" });
+  });
+  it("an invalid expectedScopes refuses the draft", () => {
+    for (const expectedScopes of ["a", null, [1], Array.from({ length: 51 }, (_, i) => `s${i}`), ["s".repeat(257)]]) {
+      expect(EditResourceDraftSchema.safeParse({ scopes: "a", expectedScopes }).success).toBe(false);
+    }
   });
 });

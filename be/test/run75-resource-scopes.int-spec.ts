@@ -359,12 +359,14 @@ describe('run 75: Resource.scopes enforced (DEBT-321) + refresh narrows (DEBT-51
 
     it('(e) resume after login when the resource lost the scope meanwhile => invalid_scope', async () => {
       const s = await setup(FULL, ['api.read', 'api.write']);
-      const out = await authz.handle(authorizeParams(s, 'openid api.write'), null);
+      // DEBT-413: the login context is bound to the browser's `idp_authz` hash; resume with it.
+      const binding = 'b'.repeat(64);
+      const out = await authz.handle(authorizeParams(s, 'openid api.write'), null, {}, binding);
       if (out.kind !== 'login_required') throw new Error('expected login_required');
       await setResourceScopes(s.resourceId, ['api.read']);
       const { view: v } = await session(s.userId);
       const code0 = await codeKeys();
-      await expect(authz.resume(out.requestId, v)).rejects.toMatchObject({
+      await expect(authz.resume(out.requestId, v, {}, binding)).rejects.toMatchObject({
         error: 'invalid_scope',
         redirectUri: REDIRECT,
         state: 'rp-state',

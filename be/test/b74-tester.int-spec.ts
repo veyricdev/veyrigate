@@ -29,7 +29,7 @@ import {
   type InjectResponse,
 } from './full-app';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
-import { seedConsent, seedOAuthUser } from './oauth-fixtures';
+import { authzBinding, seedConsent, seedOAuthUser } from './oauth-fixtures';
 
 /**
  * Tester cross-checks for run 38 (B7.4), beyond the dev specs:
@@ -310,6 +310,10 @@ describe('B7.4 tester cross-checks', () => {
       requestId = new URL(returnTo, 'http://x').searchParams.get('request_id') ?? '';
       expect(requestId).toBeTruthy();
       keep('request_id', requestId);
+      // DEBT-413: the browser-binding cookie value never reaches a log line either.
+      const binding = Object.values(authzBinding(res))[0];
+      expect(binding).toBeTruthy();
+      keep('idp_authz binding', binding);
     }, 60_000);
 
     it('runs the federation + admin failure paths and the log carries none of their secrets', async () => {

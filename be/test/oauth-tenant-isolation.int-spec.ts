@@ -29,7 +29,7 @@ import { SESSION_COOKIE, SessionCookie } from '../src/modules/sessions/session.c
 import { SessionService } from '../src/modules/sessions/session.service';
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
-import { seedConsent, seedOAuthUser } from './oauth-fixtures';
+import { authzBinding, seedConsent, seedOAuthUser } from './oauth-fixtures';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 
 const MONGO_URI =
@@ -78,8 +78,10 @@ describe('OAuth tenant isolation at /authorize + POST /authorize/consent (MT1/MT
   let sessions: SessionService;
   let auditModel: Model<AuditEvent>;
 
+  /** DEBT-413: one test browser; its `idp_authz` is sent on every `/authorize` and resume. */
+  let authzJar: Record<string, string> = {};
   const get = (url: string, sessionId: string) =>
-    app.inject({ method: 'GET', url, cookies: { [SESSION_COOKIE]: sessionId } });
+    app.inject({ method: 'GET', url, cookies: { [SESSION_COOKIE]: sessionId, ...authzJar } });
   const sessionOf = async (userId: string) => (await sessions.create(userId, DEFAULT_TENANT_ID)).id;
   const countKeys = async () =>
     (await redis.keys('authz_code:*')).length + (await redis.keys('authz_ctx:*')).length;
@@ -304,8 +306,13 @@ describe('OAuth tenant isolation at /authorize + POST /authorize/consent (MT1/MT
   // `/authorize?request_id=` with a session of a non-member => access_denied built from the
   // consumed context (state from ctx), no code, the context is single-use.
   const startSignedOut = async (clientId: string, extra = '') => {
-    const res = await app.inject({ method: 'GET', url: authorizeUrl(clientId, extra) });
+    const res = await app.inject({
+      method: 'GET',
+      url: authorizeUrl(clientId, extra),
+      cookies: authzJar,
+    });
     expect(res.statusCode).toBe(302);
+    authzJar = { ...authzJar, ...authzBinding(res) };
     const login = new URL(res.headers['location'] as string, ISSUER);
     expect(login.pathname).toBe('/login');
     const returnTo = login.searchParams.get('returnTo')!;

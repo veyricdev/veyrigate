@@ -90,3 +90,15 @@ export async function seedCodeGrant(
     scopes: data.scope.split(' ').filter(Boolean),
   });
 }
+
+/**
+ * DEBT-413: the browser-binding cookie (`idp_authz` / `__Host-idp_authz`) a 302 `/authorize` set,
+ * as an inject `cookies` fragment to forward on the resume `/authorize?request_id=` (the resume is
+ * refused without it). `{}` when the response set none.
+ */
+export function authzBinding(res: {
+  cookies: Array<{ name: string; value: string }>;
+}): Record<string, string> {
+  const c = res.cookies.find((x) => x.name === 'idp_authz' || x.name === '__Host-idp_authz');
+  return c ? { [c.name]: c.value } : {};
+}

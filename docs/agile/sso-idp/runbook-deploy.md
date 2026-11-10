@@ -489,6 +489,7 @@ Khi `SESSION_COOKIE_SECURE=true` (bắt buộc ở production), tên cookie là 
   `__Host-idp_link` với `Path=/` (trước là `Path=/auth/`). Leg Google/GitHub đang dở lúc deploy
   (≤ 10 phút TTL) về callback/link không thấy cookie mới ⇒ trang lỗi cố định `invalid_state` 400;
   người dùng bấm lại "Sign in with …" là xong. Không cần thao tác vận hành.
+- **Cookie `idp_authz` (DEBT-413, run 81)**: login đang dở lúc deploy (context ≤ 10 phút, không có `bindingHash`) ⇒ sau khi đăng nhập thấy "Request expired"; người dùng bắt đầu lại từ RP. Không cần thao tác vận hành.
 - Dev chạy http phải giữ `SESSION_COOKIE_SECURE=false`. Nếu để `true` trên `http://`, WebKit lưu cookie
   nhưng không gửi ⇒ không đăng nhập được.
 - Reverse proxy/CDN không được viết lại `Set-Cookie` (thêm `Domain`, đổi `Path`): trình duyệt sẽ từ

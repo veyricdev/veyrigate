@@ -66,6 +66,23 @@ describe('validateResourceIdentifier (write path, DEBT-324/329)', () => {
     }
   });
 
+  // DEBT-532: the format branches (not absolute / fragment) use fixed messages too.
+  it.each(['abc-MARK', 'https://a/#x-MARK'])(
+    'format branch never echoes %j (validateResourceFormat and validateResourceIdentifier)',
+    (v) => {
+      for (const fn of [validateResourceFormat, validateResourceIdentifier]) {
+        let caught: unknown;
+        try {
+          fn(v);
+        } catch (err) {
+          caught = err;
+        }
+        expect(caught).toBeInstanceOf(InvalidResourceError);
+        expect((caught as Error).message).not.toContain('MARK');
+      }
+    },
+  );
+
   it('runtime validateResourceFormat is unchanged (a stored odd identifier is only "not found")', () => {
     expect(() => validateResourceFormat('javascript:alert(1)')).not.toThrow();
     expect(() => validateResourceFormat('https://a/b c')).not.toThrow();

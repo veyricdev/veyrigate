@@ -87,28 +87,45 @@ function EditScopesForm({ resource, sub }: { resource: AdminResource; sub: strin
   // is not trusted: the next save is always sent (PATCH replaces the whole list: idempotent) and the
   // re-read value is shown beside the form (never written into the admin's draft).
   const [unsure, setUnsure] = useState(false);
+  // DEBT-323: a 409 (someone else saved since this form was opened) shows the re-read value the same way.
+  const [conflict, setConflict] = useState(false);
+  // DEBT-323: the PATCH `expectedScopes` = what the admin saw: the scopes at mount (never a refetch),
+  // or those of the step-up draft, or the last save. Only after `unsure` / a 409 the re-read value
+  // shown below the form (saving again then knowingly replaces it).
+  const [mountScopes] = useState(resource.scopes);
+  const [savedScopes, setSavedScopes] = useState<string[] | null>(null);
+  const showSaved = unsure || conflict;
   return (
     <>
       <ResourceForm
         key={draft ? "restored" : "blank"}
         title="Scopes"
-        initial={draft ?? valuesFrom(resource)}
+        initial={draft ? { scopes: draft.scopes } : valuesFrom(resource)}
         // Mount (also on a draft restore) = the server data then; never follows a refetch.
         base={valuesFrom(resource)}
         schema={EditResourceSchema}
         restored={draft !== null}
         submitLabel="Save scopes"
         onSubmit={async (values, base) => {
-          if (!unsure && sameScopes(values.scopes, base.scopes)) return { info: "No changes to save." };
+          if (!showSaved && sameScopes(values.scopes, base.scopes)) return { info: "No changes to save." };
+          const expectedScopes = showSaved ? resource.scopes : (savedScopes ?? draft?.expectedScopes ?? mountScopes);
           try {
             const { scopes } = EditResourceSchema.parse(values);
-            const saved = await update.mutateAsync({ resourceId: resource.resourceId, patch: { scopes } });
+            const saved = await update.mutateAsync({ resourceId: resource.resourceId, patch: { scopes, expectedScopes } });
             setUnsure(false);
+            setConflict(false);
+            setSavedScopes(saved.scopes);
             return { saved: valuesFrom(saved), info: "Saved." };
           } catch (err) {
             if (err instanceof AdminRequestError && err.code === "step_up_required") {
-              startStepUp(EditResourceDraftSchema, { action: ACTION, path, sub, payload: { scopes: values.scopes } });
+              startStepUp(EditResourceDraftSchema, { action: ACTION, path, sub, payload: { scopes: values.scopes, expectedScopes } });
               return { info: "Confirm your identity to continue…" };
+            }
+            if (err instanceof AdminRequestError && err.code === "conflict") {
+              setConflict(true);
+              return {
+                error: "These scopes were changed by someone else. The saved scopes are shown below; saving again replaces them.",
+              };
             }
             if (!(err instanceof AdminRequestError) || err.uncertain) setUnsure(true);
             const message = failureMessage(
@@ -119,7 +136,7 @@ function EditScopesForm({ resource, sub }: { resource: AdminResource; sub: strin
           }
         }}
       />
-      {unsure && (
+      {showSaved && (
         <p className="font-mono text-sm break-all">
           <span className="font-sans text-muted-foreground">Currently saved: </span>
           {resource.scopes.length ? resource.scopes.join(" ") : "—"}

@@ -164,8 +164,10 @@ export class AuthorizeService {
     requestId: string,
     session: SessionView | null,
     audit: { ip?: string; userAgent?: string; requestId?: string } = {},
+    bindingHash?: string,
   ): Promise<AuthorizeOutcome | null> {
-    const ctx = await this.contexts.consume(requestId);
+    // DEBT-413: only the browser that created the login context (same `idp_authz`) consumes it.
+    const ctx = await this.contexts.consumeForResume(requestId, bindingHash);
     // Only a login context resumes here; a consent context belongs to POST /authorize/consent.
     if (!ctx || ctx.kind !== 'login') return null;
     // DEBT-130/209: every resume exit re-checks the client first (disabled, redirect_uri removed,
@@ -192,13 +194,14 @@ export class AuthorizeService {
       code_challenge: ctx.codeChallenge,
       code_challenge_method: 'S256',
     };
-    return this.handle(params, session, audit);
+    return this.handle(params, session, audit, bindingHash);
   }
 
   async handle(
     params: AuthorizeParams,
     session: SessionView | null,
     audit: { ip?: string; userAgent?: string; requestId?: string } = {},
+    bindingHash?: string,
   ): Promise<AuthorizeOutcome> {
     // --- Phase 1: establish a trusted redirect_uri (INV-3). Failures here => error page. ---
     // DEBT-205: a repeated client_id/redirect_uri arrives as an array. Refuse it BEFORE the lookup
@@ -277,6 +280,8 @@ export class AuthorizeService {
           resource,
           params,
           this.reauthAfter(prompt.has('login'), maxAge),
+          undefined,
+          bindingHash,
         );
         await this.recordAuthorize(client, audit, session?.userId, 'login_required');
         return { kind: 'login_required', requestId };
@@ -499,6 +504,7 @@ export class AuthorizeService {
     params: AuthorizeParams,
     reauthAfter?: number,
     sessionRef?: string,
+    bindingHash?: string,
   ): Promise<{ requestId: string }> {
     const { requestId } = await this.contexts.create({
       kind,
@@ -511,6 +517,7 @@ export class AuthorizeService {
       nonce: params.nonce,
       ...(reauthAfter !== undefined ? { reauthAfter } : {}),
       ...(sessionRef !== undefined ? { sessionRef } : {}),
+      ...(bindingHash !== undefined ? { bindingHash } : {}),
     });
     return { requestId };
   }

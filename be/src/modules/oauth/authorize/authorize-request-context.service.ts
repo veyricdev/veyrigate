@@ -7,7 +7,14 @@ import { RedisService } from '../../../database/redis/redis.service';
 export const AUTHZ_CTX_CLOCK = 'AUTHZ_CTX_CLOCK';
 
 /** TTL of an AuthorizeRequestContext (spec §9.1: 5–10 min). Fixed at 10 min; set once, never slid. */
-const CONTEXT_TTL_MS = 10 * 60 * 1000;
+export const CONTEXT_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * DEBT-413: browser-binding cookie of a `login` context (`__Host-idp_authz` when Secure). One value
+ * per browser, reused (never rotated) so several tabs do not break each other; `Max-Age` =
+ * `CONTEXT_TTL_MS`. Only its sha256 is stored (`AuthorizeRequestContext.bindingHash`).
+ */
+export const AUTHZ_BINDING_COOKIE = 'idp_authz';
 
 /**
  * Persisted context of an in-flight `/authorize` request (spec §9.1).
@@ -43,6 +50,12 @@ export interface AuthorizeRequestContext {
    * only: never rendered, logged, audited or put in a URL.
    */
   sessionRef?: string;
+  /**
+   * DEBT-413: sha256 of the `idp_authz` cookie of the browser that created the context (`login`
+   * contexts only). The resume refuses any other browser (and a context without it). Server-side
+   * only: never rendered, logged, audited or put in a URL.
+   */
+  bindingHash?: string;
   createdAt: number;
   expiresAt: number;
 }
@@ -63,7 +76,28 @@ if v then redis.call('DEL', KEYS[1]) end
 return v`,
 };
 
-type AuthzRedis = { authzCtxConsume(key: string): Promise<string | null> };
+/**
+ * DEBT-413: the resume door. A `login` context is returned and deleted only when the caller's
+ * binding hash equals the stored one; otherwise nil and the key is KEPT, so a holder of the URL
+ * cannot burn the victim's context (compare-before-DEL, like `consumeAuthCode`, INV-13). A context
+ * of another kind is consumed as before (DEBT-122: the caller then refuses it).
+ */
+const CONSUME_LOGIN_SCRIPT = {
+  name: 'authzCtxConsumeLogin',
+  numberOfKeys: 1,
+  lua: `
+local v = redis.call('GET', KEYS[1])
+if not v then return nil end
+local d = cjson.decode(v)
+if d.kind == 'login' and (ARGV[1] == '' or d.bindingHash ~= ARGV[1]) then return nil end
+redis.call('DEL', KEYS[1])
+return v`,
+};
+
+type AuthzRedis = {
+  authzCtxConsume(key: string): Promise<string | null>;
+  authzCtxConsumeLogin(key: string, bindingHash: string): Promise<string | null>;
+};
 
 /**
  * AuthorizeRequestContext store on Redis (B4.1, spec §9.1).
@@ -81,7 +115,7 @@ export class AuthorizeRequestContextService {
     @Optional() @Inject(AUTHZ_CTX_CLOCK) now?: () => number,
   ) {
     this.now = now ?? Date.now;
-    loadLuaScripts(redis.client, [CONSUME_SCRIPT]);
+    loadLuaScripts(redis.client, [CONSUME_SCRIPT, CONSUME_LOGIN_SCRIPT]);
   }
 
   async create(
@@ -113,6 +147,23 @@ export class AuthorizeRequestContextService {
     if (!requestId) return null;
     const raw = await (this.redis.client as unknown as AuthzRedis).authzCtxConsume(
       ctxKey(requestId),
+    );
+    return raw ? (JSON.parse(raw) as AuthorizeRequestContext) : null;
+  }
+
+  /**
+   * Resume door (DEBT-413): like `consume`, but a `login` context is consumed only when
+   * `bindingHash` matches the stored one (atomic, compared before the DEL). A missing hash never
+   * matches, so a resume without the cookie, or of a context created before DEBT-413, is refused.
+   */
+  async consumeForResume(
+    requestId: string,
+    bindingHash: string | undefined,
+  ): Promise<AuthorizeRequestContext | null> {
+    if (!requestId) return null;
+    const raw = await (this.redis.client as unknown as AuthzRedis).authzCtxConsumeLogin(
+      ctxKey(requestId),
+      bindingHash ?? '',
     );
     return raw ? (JSON.parse(raw) as AuthorizeRequestContext) : null;
   }

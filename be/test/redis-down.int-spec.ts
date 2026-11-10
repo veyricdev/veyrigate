@@ -249,6 +249,17 @@ describe('Redis down ⇒ 503 temporarily_unavailable, fail-closed, recovers (run
         await full.app.inject({ method: 'GET', url: authorizeUrl() }),
         'html',
       );
+      // DEBT-413: the resume door (no session cookie => the binding-checked Lua consume is the first
+      // Redis call) fails closed like every other path, never "Request expired".
+      expectUnavailable(
+        'GET /authorize?request_id (resume, idp_authz)',
+        await full.app.inject({
+          method: 'GET',
+          url: `/authorize?request_id=${randomBytes(32).toString('base64url')}`,
+          cookies: { idp_authz: randomBytes(32).toString('base64url') },
+        }),
+        'html',
+      );
       expectUnavailable(
         'POST /login',
         await form(

@@ -26,7 +26,7 @@ import {
 } from './full-app';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 import { expectNoIssued, recordIssued } from './issued-tokens';
-import { seedConsent, seedOAuthUser } from './oauth-fixtures';
+import { authzBinding, seedConsent, seedOAuthUser } from './oauth-fixtures';
 
 /**
  * Tester risk tests, run 55 (OAuth security sweep), on the REAL app over HTTP (real CSRF, real
@@ -458,21 +458,24 @@ describe('run 55 tester: OAuth sweep risk tests (DEBT-123/130/177/216) over real
       expect(await codeKeys()).toBe(codes);
     });
 
+    /** DEBT-413: one test browser; its `idp_authz` is sent on every `/authorize` and resume. */
+    let authzJar: Record<string, string> = {};
     /** `prompt=login&max_age=0` with a live session => 302 to /login with a reauth context. */
     async function stepUp(clientId: string, sessionId: string): Promise<string> {
       const res = await full.app.inject({
         method: 'GET',
         url: authorizeUrl(clientId, '&prompt=login&max_age=0'),
-        cookies: { [SESSION_COOKIE]: sessionId },
+        cookies: { [SESSION_COOKIE]: sessionId, ...authzJar },
       });
       expect(res.statusCode).toBe(302);
+      authzJar = { ...authzJar, ...authzBinding(res) };
       return loginRequestId(String(res.headers['location']));
     }
     const resume = (rid: string, sessionId?: string) =>
       full.app.inject({
         method: 'GET',
         url: `/authorize?request_id=${encodeURIComponent(rid)}`,
-        ...(sessionId ? { cookies: { [SESSION_COOKIE]: sessionId } } : {}),
+        cookies: { ...authzJar, ...(sessionId ? { [SESSION_COOKIE]: sessionId } : {}) },
       }) as Promise<InjectResponse>;
 
     it('step-up prompt=login&max_age=0, resume with the OLD session: URI registered => 302 login_required + state; URI removed => 400; client disabled => 400', async () => {
