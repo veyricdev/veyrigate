@@ -2,7 +2,7 @@
 
 - **Phạm vi**: T1 DEBT-538 — scope token theo RFC 6749 §3.3 `/^[\x21\x23-\x5B\x5D-\x7E]+$/` cho scopes client + resource (BE DTO, fe-admin inputs + 2 form, câu lỗi cố định); `expectedScopes` giữ quy tắc lỏng để sửa bản ghi cũ; runbook-ops §8 truy vấn chỉ đọc (neo `\z`), runbook-deploy §4 bước 5'. T2 DEBT-533 — 8 câu lỗi redirect URI/CORS/`allowedResources` cố định, không echo. T3 DEBT-537 — filter `expectedScopes` = `$expr $eq [$ifNull ['$scopes', []], $literal]` (null ≡ `[]`, không khớp `[null]`). T4 DEBT-535/536 — proxy X3 ghi tên cookie của resume (bộ nhớ, ≤ 256, probe `/__x3_seen`), cả 6 ô ca 1 assert `__Host-idp_authz` + `__Host-idp_session` phía proxy; miễn trừ header trình duyệt chỉ còn WebKit cross-site.
 - **Verify**: be 806, int FULL 1968/1968 (`vg-int-*` 4→4), fe-admin 1613, E2E 38, X3 42 (chạy sau khi code BE/FE chốt; tester chỉ thêm spec). Tester +175 ca int: mọi byte biên trên 4 đường ghi, `abc\n`, surrogate, 80 giá trị độc qua mọi nhánh T2 (không lộ trong body/pino), `$$ROOT`/`$literal`, ma trận 7×4 dạng lưu, 12 PATCH song song trên `null` ⇒ đúng 1 thắng; 16 mutation đều đỏ. Mutation proxy ⇒ 6/6 ô ca 1 đỏ.
-- **Commit**: `<hash>`.
+- **Commit**: `adf130a`.
 - **Vòng lặp**: tech-lead=1, BE dev=1, FE dev=1 (+1 gate E2E/X3), senior=1 (PASS), tester=1 (PASS); orchestrator sửa runbook §8 theo đo của tester (DEBT-546).
 - **Debt**: đóng DEBT-533/535/536/537/538/546; mở 💭 DEBT-539 (tech-lead), 545 (FE), 547 (senior), 548/549 (tester).
 - **⚠ Deploy**: chạy `runbook-ops.md` §8 trước — client/resource đang lưu scope ngoài ngữ pháp sẽ `400` ở lần sửa kế tiếp (fe-admin form client không lưu được tới khi dọn, DEBT-545).
