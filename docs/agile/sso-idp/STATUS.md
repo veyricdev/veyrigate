@@ -2,10 +2,10 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: — (chưa mở run 82). Quyết định đã chốt (người dùng ủy quyền): `plan.md` §12 "Chốt bổ sung". Còn cần người dùng: push (CI replica set + Dependabot chỉ có hiệu lực khi push; bật Dependabot alerts trong Settings); Node 22.23.4 máy dev (Q62.2); xoá image cũ; xoá 4 DB `vg-int-vault-v7-*`; 610 DB `vg-int-*` biến mất (đã chạy `drop-int-orphans.mjs --yes`?); tiến trình jest treo PID 23008 (run 79 tester).
+- **Run hiện tại**: — (chưa mở run 83). Quyết định đã chốt (người dùng ủy quyền): `plan.md` §12 "Chốt bổ sung". Còn cần người dùng: push (CI replica set + Dependabot chỉ có hiệu lực khi push; bật Dependabot alerts trong Settings); Node 22.23.4 máy dev (Q62.2); xoá image cũ; xoá 4 DB `vg-int-vault-v7-*`; 610 DB `vg-int-*` biến mất (đã chạy `drop-int-orphans.mjs --yes`?); tiến trình jest treo PID 23008 (run 79 tester).
 - **⚠ Người dùng**: `be/.env` dev còn placeholder `your-*` cho `GOOGLE_*`/`GITHUB_*` ⇒ từ run 32 sẽ BẬT provider với credential rác ⇒ đặt 4 biến rỗng (hoặc credential thật).
-- **Run vừa đóng**: `81-sweep-mixed` ✅ 4/4 — cookie binding `idp_authz` chống dùng `request_id` từ trình duyệt khác (DEBT-413), `expectedScopes` + 409 chống ghi đè scopes resource (DEBT-323), message cố định (DEBT-532), E2E audit hết flake (DEBT-527); be 806, int 1677, fe-admin 1589, E2E 38, X3 42. Xem `runs/81-sweep-mixed/summary.md`. ⚠ Deploy: login đang dở lúc deploy (≤ 10 phút) phải bắt đầu lại (run 81); production cần Mongo replica set/mongos (run 79); runbook-deploy §12 q1–q3 trước (run 75); mọi user đăng nhập lại 1 lần (run 73) + login federation dở ⇒ thử lại. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev — lần đầu sau run 71 XOÁ VĨNH VIỄN audit cũ hơn 180 ngày (chạy `-- --dry-run` trước, runbook-ops §0).
-- **Việc tiếp theo**: sweep 🟡 còn lại (BE DEBT-120, 121, 134, 192, 193, 517; E2E DEBT-535/536; 💭 533/534/537/538); cuối cùng X6 release checklist (DEBT-129 rotate lại khi 5xx, DEBT-157/349/393 cache JWKS).
+- **Run vừa đóng**: `82-sweep-mixed2` ✅ 4/4 — scope token theo RFC 6749 cho client/resource (DEBT-538), câu lỗi redirect/CORS cố định (DEBT-533), `expectedScopes` coi `null` = `[]` (DEBT-537), X3 ca 1 đo cookie phía proxy (DEBT-535/536); be 806, int 1968, fe-admin 1613, E2E 38, X3 42. Xem `runs/82-sweep-mixed2/summary.md`. ⚠ Deploy: chạy `runbook-ops.md` §8 trước (scope ngoài ngữ pháp ⇒ lần sửa kế tiếp `400`, run 82); login đang dở lúc deploy phải bắt đầu lại (run 81); production cần Mongo replica set/mongos (run 79); runbook-deploy §12 q1–q3 trước (run 75); mọi user đăng nhập lại 1 lần (run 73) + login federation dở ⇒ thử lại. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev — lần đầu sau run 71 XOÁ VĨNH VIỄN audit cũ hơn 180 ngày (chạy `-- --dry-run` trước, runbook-ops §0).
+- **Việc tiếp theo**: debt 🟡 còn lại đều đã hoãn có lý do (DEBT-120, 121, 134, 192, 193, 517) ⇒ chuyển X6 release checklist (DEBT-129 rotate lại khi 5xx, DEBT-157/349/393 cache JWKS); 💭 gom dần (DEBT-539, 545, 547–549).
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
 
@@ -26,6 +26,7 @@
 | [79](runs/79-sweep-be3/summary.md) | M7 | Sweep 🟡 BE đợt 3 (DEBT-119/168/179/180/182/188/483/521/528) | ✅ int 1563 + fe-admin 1570 + E2E 38 + X3 42 + be 715 | `7b69671` |
 | [80](runs/80-sweep-be4/summary.md) | M7 | Sweep 🟡 BE đợt 4 (DEBT-237/324/325/329/411/526/529–531) | ✅ int 1611 + fe-admin 1578 + E2E 38 + X3 42 + be 794 | `756a1d1` |
 | [81](runs/81-sweep-mixed/summary.md) | M7 | Sweep 🟡 hỗn hợp (DEBT-323/413/527/532) | ✅ int 1677 + fe-admin 1589 + E2E 38 + X3 42 + be 806 | `6ccf410` |
+| [82](runs/82-sweep-mixed2/summary.md) | M7 | Sweep 🟡/💭 đợt 2 (DEBT-533/535–538/546) | ✅ int 1968 + fe-admin 1613 + E2E 38 + X3 42 + be 806 | `<hash>` |
 
 ## Chặn / cần người quyết định
 

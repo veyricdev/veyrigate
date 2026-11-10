@@ -30,18 +30,18 @@ export interface RedirectUriValidationOptions {
  */
 export function validateRedirectUriFormat(uri: string, opts: RedirectUriValidationOptions): void {
   if (uri.includes('*')) {
-    throw new InvalidRedirectUriError(`redirect_uri must not contain a wildcard: ${uri}`);
+    throw new InvalidRedirectUriError('redirect_uri must not contain a wildcard');
   }
 
   let parsed: URL;
   try {
     parsed = new URL(uri);
   } catch {
-    throw new InvalidRedirectUriError(`redirect_uri must be an absolute URI: ${uri}`);
+    throw new InvalidRedirectUriError('redirect_uri must be an absolute URI');
   }
 
   if (parsed.hash) {
-    throw new InvalidRedirectUriError(`redirect_uri must not contain a fragment: ${uri}`);
+    throw new InvalidRedirectUriError('redirect_uri must not contain a fragment');
   }
 
   // WHATWG URL accepts `;`, `,` and (encoded) whitespace inside the host, so `new URL(...).origin`
@@ -49,14 +49,14 @@ export function validateRedirectUriFormat(uri: string, opts: RedirectUriValidati
   // `frame-src` allowlist for front-channel logout, where those characters would terminate/inject a
   // directive. Reject them at registration so no stored URI can ever carry them (B4.7 hardening).
   if (/[;,\s]/.test(parsed.host)) {
-    throw new InvalidRedirectUriError(`redirect_uri host contains an invalid character: ${uri}`);
+    throw new InvalidRedirectUriError('redirect_uri host contains an invalid character');
   }
 
   const isDevLocalhost =
     opts.allowHttpLocalhost && parsed.protocol === 'http:' && parsed.hostname === 'localhost';
   if (parsed.protocol !== 'https:' && !isDevLocalhost) {
     throw new InvalidRedirectUriError(
-      `redirect_uri must use https (http://localhost only allowed outside production): ${uri}`,
+      'redirect_uri must use https (http://localhost only allowed outside production)',
     );
   }
 }

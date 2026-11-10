@@ -30,8 +30,16 @@ import { AuditAction } from '../security/audit/audit-action.enum';
 
 const MAX_ITEMS = 20;
 const MAX_LEN = 2048;
-/** A scope token: non-empty, no whitespace (RFC 6749 §3.3). */
-const SCOPE_TOKEN = /^\S+$/;
+/**
+ * A scope token, RFC 6749 §3.3: `scope-token = 1*( %x21 / %x23-5B / %x5D-7E )` — visible ASCII
+ * except `"` and `\` (DEBT-538: no invisible/bidi/non-ASCII look-alikes).
+ */
+const SCOPE_TOKEN = /^[\x21\x23-\x5B\x5D-\x7E]+$/;
+/**
+ * `expectedScopes` only: the old loose rule (non-empty, no whitespace), so a resource still
+ * storing a legacy out-of-grammar token can be repaired (it is compared with `$literal`, T3).
+ */
+const STORED_SCOPE_TOKEN = /^\S+$/;
 
 /** `undefined` = field absent (skip); `null` or anything else is validated (so `null` fails). */
 const IfPresent = () => ValidateIf((_o: unknown, v: unknown) => v !== undefined);
@@ -211,14 +219,15 @@ export class UpdateResourceDto {
     description:
       'The scopes the caller read (exact, ordered; [] also matches a resource without scopes). ' +
       'Present => written only if the stored scopes still equal it, otherwise 409 conflict. ' +
-      'Absent => last write wins.',
+      'Absent => last write wins. Items follow the loose stored rule (non-empty, no whitespace), ' +
+      'not the scope-token grammar of `scopes`, so a resource holding a legacy token can be repaired.',
   })
   @IfPresent()
   @IsArray()
   @ArrayMaxSize(MAX_RESOURCE_SCOPES)
   @IsString({ each: true })
   @MaxLength(256, { each: true })
-  @Matches(SCOPE_TOKEN, { each: true })
+  @Matches(STORED_SCOPE_TOKEN, { each: true })
   expectedScopes?: string[];
 }
 

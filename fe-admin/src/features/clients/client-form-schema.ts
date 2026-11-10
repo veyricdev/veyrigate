@@ -3,6 +3,8 @@ import {
   AUTH_METHODS,
   CLIENT_TYPES,
   GRANT_TYPES,
+  SCOPE_TOKEN,
+  SCOPE_TOKEN_MESSAGE,
   type CreateClientParams,
   type UpdateClientParams,
 } from "@/features/admin-api/inputs";
@@ -90,7 +92,7 @@ const optionalUri = z
   })
   .transform((text) => text.trim() || null);
 
-/** Space- or line-separated scope tokens (BE: non-empty, no whitespace). */
+/** Space- or line-separated scope tokens (BE `SCOPE_TOKEN`: RFC 6749 scope-token). */
 const scopeTokens = z
   .string()
   .superRefine((text, ctx) => {
@@ -98,6 +100,7 @@ const scopeTokens = z
     if (tokens.length > MAX_ITEMS) ctx.addIssue({ code: "custom", message: `At most ${MAX_ITEMS} scopes` });
     const long = tokens.find((t) => t.length > MAX_LEN);
     if (long) ctx.addIssue({ code: "custom", message: `A scope must be at most ${MAX_LEN} characters` });
+    if (tokens.some((t) => !SCOPE_TOKEN.test(t))) ctx.addIssue({ code: "custom", message: SCOPE_TOKEN_MESSAGE });
     const dup = tokens.find((t, i) => tokens.indexOf(t) !== i);
     if (dup) ctx.addIssue({ code: "custom", message: `"${dup}" is listed twice` });
   })

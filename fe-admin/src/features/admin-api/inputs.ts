@@ -28,6 +28,11 @@ export const GRANT_TYPES = ["authorization_code", "refresh_token"] as const;
 
 const uriList = z.array(z.string().max(2048)).max(20);
 
+/** RFC 6749 §3.3 `scope-token` (BE `SCOPE_TOKEN`, DEBT-538): visible ASCII except `"` and `\`. */
+export const SCOPE_TOKEN = /^[\x21\x23-\x5B\x5D-\x7E]+$/;
+/** Fixed text: never the token (it may be invisible or a lookalike). */
+export const SCOPE_TOKEN_MESSAGE = 'Scopes may only use visible ASCII characters other than " and \\';
+
 /** Fields shared by create and update (BE `ClientFieldsDto`). */
 const clientFields = {
   grantTypes: z.array(z.enum(GRANT_TYPES)).max(20).optional(),
@@ -35,7 +40,7 @@ const clientFields = {
   postLogoutRedirectUris: uriList.optional(),
   allowedCorsOrigins: uriList.optional(),
   allowedResources: z.array(z.string().max(2048)).max(20).optional(),
-  scopes: z.array(z.string().max(2048)).max(20).optional(),
+  scopes: z.array(z.string().max(2048).regex(SCOPE_TOKEN, SCOPE_TOKEN_MESSAGE)).max(20).optional(),
 };
 
 /** `PATCH /admin/clients/{id}` body (BE `UpdateClientDto`, which rejects unknown keys). */
@@ -81,7 +86,11 @@ export const RESOURCE_SCOPES_MAX = 50;
 export const RESOURCE_SCOPE_MAX_LEN = 256;
 export const RESOURCE_IDENTIFIER_MAX_LEN = 2048;
 
-const resourceScopes = z.array(z.string().min(1).max(RESOURCE_SCOPE_MAX_LEN).regex(/^\S+$/)).max(RESOURCE_SCOPES_MAX);
+const resourceScopes = z
+  .array(z.string().max(RESOURCE_SCOPE_MAX_LEN).regex(SCOPE_TOKEN, SCOPE_TOKEN_MESSAGE))
+  .max(RESOURCE_SCOPES_MAX);
+/** `expectedScopes` names what is stored, so it keeps the old loose rule (BE `STORED_SCOPE_TOKEN`). */
+const storedResourceScopes = z.array(z.string().min(1).max(RESOURCE_SCOPE_MAX_LEN).regex(/^\S+$/)).max(RESOURCE_SCOPES_MAX);
 
 /** `POST /admin/resources` body (BE `CreateResourceDto`). */
 export const CreateResourceInput = z
@@ -99,7 +108,7 @@ export type CreateResourceParams = z.infer<typeof CreateResourceInput>;
  */
 export const UpdateResourceInput = z.object({
   resourceId: ResourcePathIdSchema,
-  patch: z.object({ scopes: resourceScopes, expectedScopes: resourceScopes.optional() }).strict(),
+  patch: z.object({ scopes: resourceScopes, expectedScopes: storedResourceScopes.optional() }).strict(),
 });
 export type UpdateResourceParams = z.infer<typeof UpdateResourceInput>;
 

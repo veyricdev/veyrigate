@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { test, expect, type Browser, type BrowserContext, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Browser, type BrowserContext, type Page } from "@playwright/test";
 import { DEV_SEED_EMAIL, DEV_SEED_PASSWORD, E2E_USER_EMAIL, E2E_USER_PASSWORD } from "../config/env";
 import { X3_IDP_HOST, X3_ISSUER, X3_RPS, type X3Label, type X3Rp } from "./env";
 
@@ -10,7 +10,8 @@ import { X3_IDP_HOST, X3_ISSUER, X3_RPS, type X3Label, type X3Rp } from "./env";
  * is same-site (`app.alpha`) and cross-site (`app.beta`) with the IdP (`idp.alpha`). "Was the
  * session cookie sent?" is measured from the browser's own request headers (navigations, form POST)
  * or, for the credentialed fetch, by the X3 proxy's `/__x3_echo` on the IdP host — cookie NAMES
- * only, never a value. Results go to `test-results/x3-matrix.json` (names/outcomes only).
+ * only, never a value. Case 1 also reads the resume `GET /authorize?request_id` as the proxy received
+ * it (`/__x3_seen`, DEBT-535). Results go to `test-results/x3-matrix.json` (names/outcomes only).
  *
  * WebKit on Windows does not enforce `SameSite` (tech-lead probe, DEBT-506), so the "not sent
  * cross-site" asserts are Chromium/Firefox only; WebKit cells are recorded as measured.
@@ -28,8 +29,10 @@ interface Cell {
   cookieNames?: string[];
   /** `sameSite` as the browser stored the session cookie (server always sends `Lax`). */
   storedSameSite?: string;
-  /** Case 1: cookie names of the resume `GET /authorize` (DEBT-413 binding). */
+  /** Case 1: cookie names of the resume `GET /authorize` (DEBT-413 binding), as the browser reported them. */
   resumeCookieNames?: string[];
+  /** Case 1: the same request's cookie names as the X3 proxy received them (`/__x3_seen`, DEBT-535). */
+  resumeCookieNamesProxy?: string[];
 }
 const cells: (Cell & { browser: string; status: string })[] = [];
 let current: Cell | null = null;
@@ -61,7 +64,7 @@ function cell(name: string, topology: string): Cell {
 
 /** Cookie NAMES the browser attached to IdP requests (method + path + names, never values). */
 function trackIdp(page: Page) {
-  const pending: Promise<{ method: string; path: string; auth: boolean; names: string[] }>[] = [];
+  const pending: Promise<{ method: string; path: string; auth: boolean; names: string[]; requestId: string | null }>[] = [];
   page.on("request", (req) => {
     const url = new URL(req.url());
     if (url.hostname !== X3_IDP_HOST) return;
@@ -70,6 +73,7 @@ function trackIdp(page: Page) {
         method: req.method(),
         path: url.pathname,
         auth: "authorization" in h,
+        requestId: url.searchParams.get("request_id"),
         names: (h.cookie ?? "")
           .split(";")
           .map((c) => c.trim().split("=")[0])
@@ -90,6 +94,20 @@ function trackIdp(page: Page) {
 
 /** Chromium/Firefox enforce SameSite; WebKit-Windows does not (DEBT-506) — record only. */
 const enforcesSameSite = (projectName: string) => projectName !== "webkit";
+
+/**
+ * The one cell whose browser-reported resume header may be empty (DEBT-535/536): WebKit-Windows,
+ * cross-site. The proxy oracle still applies to it.
+ */
+const resumeHeaderUnreported = (projectName: string, topology: string, names: string[]) =>
+  projectName === "webkit" && topology === "cross-site" && names.length === 0;
+
+/** Cookie names the X3 proxy saw on `GET /authorize?request_id=<id>` (fresh context: no cookie of the page). */
+async function proxySeen(api: APIRequestContext, requestId: string): Promise<string[]> {
+  const res = await api.get(`${X3_ISSUER}/__x3_seen?request_id=${encodeURIComponent(requestId)}`);
+  expect(res.status(), "X3 proxy probe /__x3_seen answers (not forwarded to the BE)").toBe(200);
+  return (await res.json()) as string[];
+}
 
 const loginForm = (page: Page) => page.locator('form[action="/login"]');
 
@@ -162,7 +180,7 @@ for (const label of ["alpha", "beta"] as X3Label[]) {
   const other = X3_RPS[label === "alpha" ? "beta" : "alpha"];
 
   test.describe(`${rp.topology} (${rp.origin})`, () => {
-    test(`1 interactive login — ${rp.topology}`, async ({ browser }, testInfo) => {
+    test(`1 interactive login — ${rp.topology}`, async ({ browser, playwright }, testInfo) => {
       const c = cell("1-login", rp.topology);
       const { context, page } = await fresh(browser);
       const idp = trackIdp(page);
@@ -171,15 +189,25 @@ for (const label of ["alpha", "beta"] as X3Label[]) {
       const cb = await idp.find("POST", "/login");
       c.cookieNames = cb[0]?.names ?? [];
       // DEBT-413: the resume (`GET /authorize?request_id`, top-level: Lax is sent) carries the binding.
-      const resume = (await idp.find("GET", "/authorize")).at(-1)?.names ?? [];
+      const resumeReq = (await idp.find("GET", "/authorize")).filter((r) => r.requestId).at(-1);
+      expect(resumeReq, "a resume GET /authorize?request_id was made").toBeDefined();
+      const resume = resumeReq!.names;
       c.resumeCookieNames = resume;
-      if (testInfo.project.name !== "webkit" || resume.length > 0) {
+      // Server-side oracle (DEBT-535), every project x topology: what the proxy actually received.
+      const api = await playwright.request.newContext({ ignoreHTTPSErrors: true });
+      try {
+        c.resumeCookieNamesProxy = await proxySeen(api, resumeReq!.requestId!);
+      } finally {
+        await api.dispose();
+      }
+      expect(c.resumeCookieNamesProxy, "proxy: resume carries the authz binding cookie").toContain(AUTHZ);
+      expect(c.resumeCookieNamesProxy, "proxy: resume carries the session cookie").toContain(SESSION);
+      if (!resumeHeaderUnreported(testInfo.project.name, rp.topology, resume)) {
         expect(resume, "resume carries the authz binding cookie").toContain(AUTHZ);
       } else {
-        // WebKit-Windows cross-site (DEBT-535): this redirect-followed request reports NO cookie at
-        // all, not even the session cookie the BE needs to issue the code we just got => a reporting
-        // gap, not a missing cookie (the BE refuses a resume without the binding: be int tests).
-        testInfo.annotations.push({ type: "x3-webkit", description: "resume Cookie header not reported: recorded only" });
+        // WebKit-Windows cross-site (DEBT-535): Playwright reports NO cookie on this redirect-followed
+        // request; the proxy oracle above proves both cookies were sent.
+        testInfo.annotations.push({ type: "x3-webkit", description: "resume Cookie header not reported by the browser: proxy oracle used" });
       }
       c.outcome = "claims";
       await context.close();

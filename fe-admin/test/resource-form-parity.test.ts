@@ -4,7 +4,9 @@
 // UpdateResourceDto, body), { whitelist: true, forbidNonWhitelisted: true })` then
 // `validateResourceIdentifier(identifier)` (be/src/modules/admin/admin.dto.ts,
 // be/src/modules/resources/resource.validator.ts). Run 80: re-measured by the identifier corpus of
-// be/src/modules/resources/resource.validator.spec.ts. If either side changes, re-measure.
+// be/src/modules/resources/resource.validator.spec.ts. Run 82 (DEBT-538): the scope rows follow the
+// RFC 6749 §3.3 scope-token contract of the fold (BE `SCOPE_TOKEN`, be/test/run82-scope-token.int-spec.ts).
+// If either side changes, re-measure.
 // Invariant: the form NEVER accepts what the BE refuses; every divergence is FE-stricter and listed.
 import { describe, expect, it } from "vitest";
 import { EditResourceSchema, NewResourceSchema, identifierProblem } from "@/features/resources/resource-form-schema";
@@ -120,10 +122,11 @@ describe("scopes: server fn vs measured BE verdict; form output never refused by
     ["51", n(51), false, null],
     ["256 chars", [x(256)], true, [x(256)]],
     ["257 chars", [x(257)], false, null],
-    ["128 astral (256 units)", [E.repeat(128)], true, [E.repeat(128)]],
-    ["129 astral (258 units): FE-stricter", [E.repeat(129)], true, null],
+    ["astral (not a scope-token)", [E], false, null],
     ["duplicate: FE-stricter", ["a", "a"], true, null],
-    ["zero-width space inside (not \\s)", ["a​b"], true, ["a​b"]],
+    ["zero-width space inside (not \\s, not a scope-token)", ["a​b"], false, null],
+    ["RFC 6749 scope-token edges", ["!#$%&'()*+,-./:;<=>?@[]^_`{|}~"], true, ["!#$%&'()*+,-./:;<=>?@[]^_`{|}~"]],
+    ['" and \\ (outside scope-token)', ['a"b', "a\\b"], false, null],
   ];
   it.each(LISTS)("%s", (_, list, be, form) => {
     const parsed = EditResourceSchema.safeParse({ scopes: list.join(" ") });
@@ -132,6 +135,7 @@ describe("scopes: server fn vs measured BE verdict; form output never refused by
       expect(be).toBe(true);
       expect(UpdateResourceInput.safeParse({ resourceId: "a", patch: { scopes: form } }).success).toBe(true);
     }
+    if (!be) expect(UpdateResourceInput.safeParse({ resourceId: "a", patch: { scopes: list } }).success).toBe(false);
   });
 
   it.each([

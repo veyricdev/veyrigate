@@ -457,7 +457,7 @@ export interface components {
         };
         UpdateResourceDto: {
             scopes: string[];
-            /** @description The scopes the caller read (exact, ordered; [] also matches a resource without scopes). Present => written only if the stored scopes still equal it, otherwise 409 conflict. Absent => last write wins. */
+            /** @description The scopes the caller read (exact, ordered; [] also matches a resource without scopes). Present => written only if the stored scopes still equal it, otherwise 409 conflict. Absent => last write wins. Items follow the loose stored rule (non-empty, no whitespace), not the scope-token grammar of `scopes`, so a resource holding a legacy token can be repaired. */
             expectedScopes?: string[];
         };
         AdminUserViewDto: {

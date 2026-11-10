@@ -4,6 +4,8 @@ import {
   RESOURCE_IDENTIFIER_MAX_LEN,
   RESOURCE_SCOPES_MAX,
   RESOURCE_SCOPE_MAX_LEN,
+  SCOPE_TOKEN,
+  SCOPE_TOKEN_MESSAGE,
 } from "@/features/admin-api/inputs";
 
 /**
@@ -37,7 +39,7 @@ export function identifierProblem(v: string): string | null {
 /** Scope tokens of the textarea (split on spaces / new lines). */
 export const scopeList = (text: string) => text.split(/\s+/).filter(Boolean);
 
-/** Space- or line-separated resource scopes (≤ 50, each ≤ 256, no duplicate). Output: the list. */
+/** Space- or line-separated resource scopes (≤ 50, each ≤ 256, RFC 6749 scope-token, no duplicate). Output: the list. */
 const scopesText = z
   .string()
   .superRefine((text, ctx) => {
@@ -46,6 +48,7 @@ const scopesText = z
     if (tokens.some((t) => t.length > RESOURCE_SCOPE_MAX_LEN)) {
       ctx.addIssue({ code: "custom", message: `A scope must be at most ${RESOURCE_SCOPE_MAX_LEN} characters` });
     }
+    if (tokens.some((t) => !SCOPE_TOKEN.test(t))) ctx.addIssue({ code: "custom", message: SCOPE_TOKEN_MESSAGE });
     const dup = tokens.find((t, i) => tokens.indexOf(t) !== i);
     if (dup) ctx.addIssue({ code: "custom", message: `"${dup}" is listed twice` });
   })

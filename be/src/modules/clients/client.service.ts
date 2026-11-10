@@ -156,15 +156,13 @@ export function validateCorsOrigin(origin: string, opts: { allowHttpLocalhost: b
     parsed = undefined;
   }
   if (!parsed || origin.includes('*') || parsed.origin !== origin) {
-    throw new InvalidClientConfigError(
-      `allowedCorsOrigins entry must be an exact origin: ${origin}`,
-    );
+    throw new InvalidClientConfigError('allowedCorsOrigins entry must be an exact origin');
   }
   const isDevLocalhost =
     opts.allowHttpLocalhost && parsed.protocol === 'http:' && parsed.hostname === 'localhost';
   if (parsed.protocol !== 'https:' && !isDevLocalhost) {
     throw new InvalidClientConfigError(
-      `allowedCorsOrigins entry must use https (http://localhost only outside production): ${origin}`,
+      'allowedCorsOrigins entry must use https (http://localhost only outside production)',
     );
   }
 }
@@ -456,9 +454,7 @@ export class ClientService {
     const known = new Set(found.map((r) => r.resourceId));
     const missing = resourceIds.find((id) => !known.has(id));
     if (missing !== undefined) {
-      throw new InvalidClientConfigError(
-        `allowedResources entry is not a known resource: ${missing}`,
-      );
+      throw new InvalidClientConfigError('allowedResources entry is not a known resource');
     }
     const grantsAdmin = found.some((r) => r.identifier === adminIdentifier);
     if (grantsAdmin && !isSuperAdmin(actor)) {

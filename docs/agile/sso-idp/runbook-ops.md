@@ -396,3 +396,21 @@ if (r.matchedCount !== 1) throw new Error('clients: matchedCount=' + r.matchedCo
   Secret mất hết ⇒ không tạo secret bằng tay trong DB; sau khi đăng nhập lại được bằng client khác thì
   dùng Cách 1 để phát hành secret.
 - **Xác minh**: đăng nhập fe-admin (`prompt=login`) → trang Clients mở được (`GET /admin/clients` `200`).
+
+## 8. Scope ngoài ngữ pháp RFC 6749 §3.3 trong dữ liệu cũ (run 82, DEBT-538)
+
+Từ run 82, `scopes` của client và resource qua admin API chỉ nhận `scope-token` của RFC 6749 §3.3 (ASCII
+hiển thị trừ `"` và `\`). Document lưu trước đó có token ngoài ngữ pháp (ZWSP, bidi, chữ có dấu, khoảng
+trắng…) vẫn chạy như cũ, nhưng **lần PATCH kế tiếp gửi lại đúng mảng đó sẽ `400`** cho tới khi dọn. Không có
+migration tự động. Tìm (chỉ đọc, qua `d` đã in `DB:` như §3d):
+```js
+const bad = { scopes: { $elemMatch: { $not: /^[\x21\x23-\x5B\x5D-\x7E]+\z/ } } }; // \z, không phải $: regex Mongo (PCRE) cho $ khớp trước \n cuối chuỗi
+d.clients.find(bad, { _id: 0, tenantId: 1, clientId: 1, scopes: 1 }).forEach((c) => printjson(c));
+d.resources.find(bad, { _id: 0, resourceId: 1, identifier: 1, scopes: 1 }).forEach((r) => printjson(r));
+```
+- Dọn qua admin API (có audit): client ⇒ `PATCH /admin/clients/<id>` với `scopes` sạch (RP nào đang xin
+  token cũ phải đổi theo); resource ⇒ `PATCH /admin/resources/<id>` với `scopes` sạch và `expectedScopes` =
+  đúng mảng đang lưu (`expectedScopes` cố ý giữ quy tắc lỏng cũ nên vẫn khớp được token cũ). fe-admin làm việc
+  này qua form sửa resource. Ngoại lệ: token đang lưu chứa khoảng trắng/`\n` không qua được cả quy tắc lỏng
+  (DEBT-549) ⇒ PATCH qua API **không** kèm `expectedScopes` (last-write-wins) khi không ai đang sửa resource đó.
+  Không sửa Mongo tay.

@@ -42,6 +42,17 @@ if (gen.error || gen.status !== 0) {
   process.exit(1);
 }
 
+/** Sorted cookie NAMES of a request (never a value). */
+const cookieNames = (req) =>
+  (req.headers.cookie ?? "").split(";").map((c) => c.trim().split("=")[0]).filter(Boolean).sort();
+
+/**
+ * Test-only (DEBT-535): cookie names of each resume `GET /authorize?request_id=<id>` on the IdP host,
+ * by `request_id`. Memory only (never logged or written), FIFO-capped.
+ */
+const SEEN_MAX = 256;
+const seen = new Map();
+
 /** Upstream port for a `Host` header, or undefined (unknown hosts are refused). */
 function upstream(host) {
   return ROUTES[(host ?? "").replace(/:\d+$/, "").toLowerCase()];
@@ -57,13 +68,27 @@ const server = createServer({ key: readFileSync(keyPath), cert: readFileSync(cer
   // cross-origin fetch (a failed CORS request exposes no `cookie` header to Playwright).
   if (port === ROUTES["idp.alpha.localhost"] && req.url === "/__x3_echo") {
     const origin = req.headers.origin;
-    const names = (req.headers.cookie ?? "").split(";").map((c) => c.trim().split("=")[0]).filter(Boolean).sort();
+    const names = cookieNames(req);
     res.writeHead(200, {
       "content-type": "application/json",
       "cache-control": "no-store",
       ...(ECHO_ORIGINS.has(origin) ? { "access-control-allow-origin": origin, "access-control-allow-credentials": "true", vary: "Origin" } : {}),
     });
     return res.end(JSON.stringify(names));
+  }
+  if (port === ROUTES["idp.alpha.localhost"] && req.method === "GET") {
+    const url = new URL(req.url ?? "/", "https://x3.invalid");
+    // Test-only probe (no CORS: read by the Playwright API client): names seen for one request_id.
+    if (url.pathname === "/__x3_seen") {
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+      return res.end(JSON.stringify(seen.get(url.searchParams.get("request_id")) ?? []));
+    }
+    const requestId = url.searchParams.get("request_id");
+    if (url.pathname === "/authorize" && requestId) {
+      seen.delete(requestId);
+      seen.set(requestId, cookieNames(req));
+      if (seen.size > SEEN_MAX) seen.delete(seen.keys().next().value);
+    }
   }
   if (!port) {
     res.writeHead(421, { "content-type": "text/plain" });

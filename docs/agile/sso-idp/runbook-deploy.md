@@ -160,6 +160,7 @@ fail-closed (thao tác ghi phiên/code lỗi rõ ràng) thay vì âm thầm mấ
 3. `pnpm --filter be build && pnpm --filter be db:sync-indexes` (1 + 2).
 4. Xác minh index (2c).
 5. Đặt `maxmemory-policy noeviction` (3) nếu chưa.
+5'. Từ run 82: chạy truy vấn chỉ đọc `runbook-ops.md` §8 (scope ngoài RFC 6749 §3.3) — khác rỗng ⇒ dọn qua admin API trước, hoặc chấp nhận lần sửa kế tiếp của bản ghi đó sẽ `400`.
 6. Rollout tiến trình ứng dụng.
 
 ## 5. `TRUST_PROXY` khi chạy sau reverse proxy (DEBT-006)

@@ -87,7 +87,7 @@ export class ResourceService {
    * before/after documents, or null when not found. `identifier` pins the exact document the
    * caller checked (`resourceId` is not unique, DEBT-077).
    * `expectedScopes` (DEBT-323): written only while the stored scopes equal it exactly (ordered;
-   * `[]` also matches an absent field) — the condition is in the atomic filter. A mismatch on an
+   * `[]` also matches an absent or `null` field, DEBT-537) — the condition is in the atomic filter. A mismatch on an
    * existing resource throws `ConcurrentResourceUpdateError`; absent => last write wins.
    */
   async updateScopes(
@@ -96,12 +96,13 @@ export class ResourceService {
     identifier: string,
     expectedScopes?: string[],
   ): Promise<{ before: Resource; after: Resource } | null> {
+    // DEBT-537: compare the admin view (`scopes ?? []`, as `toAdminResource`), so `[]` matches an
+    // absent field, `null` and `[]` but never `[null]`. `$literal`: a `$`-prefixed scope is a valid
+    // token and must not be read as a field path.
     const expected =
       expectedScopes === undefined
         ? {}
-        : expectedScopes.length === 0
-          ? { $or: [{ scopes: { $size: 0 } }, { scopes: { $exists: false } }] }
-          : { scopes: expectedScopes };
+        : { $expr: { $eq: [{ $ifNull: ['$scopes', []] }, { $literal: expectedScopes }] } };
     const before = await this.resources
       .findOneAndUpdate(
         { resourceId, identifier, ...expected },
