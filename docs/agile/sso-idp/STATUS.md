@@ -26,7 +26,7 @@
 | [80](runs/80-sweep-be4/summary.md) | M7 | Sweep 🟡 BE đợt 4 (DEBT-237/324/325/329/411/526/529–531) | ✅ int 1611 + fe-admin 1578 + E2E 38 + X3 42 + be 794 | `756a1d1` |
 | [81](runs/81-sweep-mixed/summary.md) | M7 | Sweep 🟡 hỗn hợp (DEBT-323/413/527/532) | ✅ int 1677 + fe-admin 1589 + E2E 38 + X3 42 + be 806 | `6ccf410` |
 | [82](runs/82-sweep-mixed2/summary.md) | M7 | Sweep 🟡/💭 đợt 2 (DEBT-533/535–538/546) | ✅ int 1968 + fe-admin 1613 + E2E 38 + X3 42 + be 806 | `adf130a` |
-| [83](runs/83-deps-security/summary.md) | M7 | Dependency có advisory (nodemailer, nest/fastify, @fastify/static, seroval, eslint, minimatch/glob, CodeQL) | ✅ int 1982 + fe-admin 1613 + E2E 38 + X3 42 + be 819 | `<hash>` |
+| [83](runs/83-deps-security/summary.md) | M7 | Dependency có advisory (nodemailer, nest/fastify, @fastify/static, seroval, eslint, minimatch/glob, CodeQL) | ✅ int 1982 + fe-admin 1613 + E2E 38 + X3 42 + be 819 | `b76b78f` |
 
 ## Chặn / cần người quyết định
 

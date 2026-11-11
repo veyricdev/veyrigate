@@ -2,7 +2,7 @@
 
 - **Phạm vi**: T1 nodemailer 10.0.12 → 10.1.7 (5 GHSA addressparser; test SMTP giả ghi RCPT TO: 10.0.12 gửi tới `attacker@evil.test`, 10.1.7 đúng `good.test`). T2 `@nestjs/*` 12.2.0 ⇒ fastify 5.12.7; fast-uri 3.1.9/4.2.3 qua lockfile. T3 `@fastify/static` 10.1.10, `@nestjs/cli` 12.0.12, `@nestjs/schematics` 12.0.13. T4 override theo range `minimatch` 11.0.5 / `glob` 14.0.4 cho đường dev chưa có bản vá; `ignoreGhsas` deepmerge (dev-only, xem lại 2027-02-10). T5 CodeQL `@v3.39.3`. T6 seroval 1.6.12 (giữ override), eslint 9.39.5 ở be/fe-admin/fe-sso-test. Mọi pin chính xác; ngoại lệ 14 ngày cho bản vá bảo mật (+ DEBT-554: @fastify/send 4.2.1, set-cookie-parser 3.2.2, path-scurry 3.0.0).
 - **Verify**: `pnpm audit` 0 (1 ignored low), frozen install xanh; be 819, int FULL 1982/1982 (`vg-int-*` 0→0, mail thật qua mailpit), fe-admin 1613 + build + `check:bundle`, fe-sso-test 269, E2E 38, X3 42, docker smoke be/fe-admin xanh (tag `:run83` đã xoá). Tester +14 ca static (ETag/304/Range/HEAD, 7 kiểu traversal), 4 mutation đều đỏ; tái hiện nodemailer 10.0.12 4/7 đỏ vs 10.1.7 0/7 ngoài repo.
-- **Commit**: `<hash>`.
+- **Commit**: `b76b78f`.
 - **Vòng lặp**: tech-lead=1, BE dev=1, FE dev=1, senior=1 (PASS), tester=1 (+1 resume sau khi phiên ngắt; PASS); orchestrator chốt DEBT-554 (senior: lần sau để tech-lead ký) và sửa DEBT-555.
 - **Debt**: đóng DEBT-554/555; mở 🟡 DEBT-550 (siết ngữ pháp email đầu vào), 💭 551–553, 556–559.
 - **⚠ Người dùng**: sau push kiểm GitHub Security → Dependabot (giả thuyết 2 high = `codeql-action@v3` trôi, đã ghim).
