@@ -459,7 +459,11 @@ describe('run 53 tester: Vault Transit KeyProvider risk tests', () => {
       expect(ui.headers['retry-after']).toBe('5');
       expect(ui.json()).toMatchObject({ error: 'temporarily_unavailable' });
       const intro = await introspect(full, client, at);
-      expect(intro).toEqual({ error: 'temporarily_unavailable' });
+      // Run 80 (756a1d1) added the fixed error_description; still never an `active` member.
+      expect(intro).toEqual({
+        error: 'temporarily_unavailable',
+        error_description: expect.any(String),
+      });
       expectOutage(await full.app.inject({ method: 'GET', url: '/jwks.json' })); // DEBT-401
       expect(logs.some((l) => /^vault read failed: /.test(l))).toBe(true);
 

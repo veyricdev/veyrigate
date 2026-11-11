@@ -2,9 +2,9 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: — (chưa mở run 85). Quyết định đã chốt (người dùng ủy quyền): `plan.md` §12 "Chốt bổ sung". Còn cần người dùng: `pnpm --filter be db:sync-indexes` trên DB dev (classifier chặn orchestrator; 0 audit cũ hơn 180 ngày ⇒ không mất gì); xem GitHub Security → Dependabot (máy không có `gh`); ký duyệt `release-checklist.md` mục F ở X6 đợt 4.
-- **Run vừa đóng**: `84-X6-release1` ✅ 5/5 — ngữ pháp email D84.1 ở register/forgot/federation/mailer (DEBT-550/556), JWKS `no-cache` (DEBT-157), runbook rotate secret/JWKS/email, `release-checklist.md` (200 dòng, **7 P0 ❌**); be 905, int 2052, E2E 38. Xem `runs/84-X6-release1/summary.md`. ⚠ Deploy: chạy `runbook-ops.md` §10 trước (email đã lưu ngoài D84.1 ⇒ không đăng ký lại/quên mật khẩu được, run 84); chạy `runbook-ops.md` §8 trước (scope ngoài ngữ pháp ⇒ lần sửa kế tiếp `400`, run 82); login đang dở lúc deploy phải bắt đầu lại (run 81); production cần Mongo replica set/mongos (run 79); runbook-deploy §12 q1–q3 trước (run 75); mọi user đăng nhập lại 1 lần (run 73) + login federation dở ⇒ thử lại. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev — lần đầu sau run 71 XOÁ VĨNH VIỄN audit cũ hơn 180 ngày (chạy `-- --dry-run` trước, runbook-ops §0).
-- **Việc tiếp theo**: X6 đợt 2 (run 85) — 7 P0 ❌ của checklist (DEBT-571, 573, 574, 575, 576, 577, 584) + DEBT-393 pre-publish (D84.4) + DEBT-553/557 pin action theo SHA; đợt 3 diễn tập rotate/backup (DEBT-252/253); đợt 4 pentest + ký duyệt.
+- **Run hiện tại**: chưa mở — kế tiếp `86-X6-release2b`.
+- **Run vừa đóng**: `85-X6-release2` ✅ 6/6 — mongoose 9.11.4 + pin action theo SHA + SBOM/`audit.yml`/thời hạn vá (DEBT-553/557/576), `request`/`request_uri` + `POST /userinfo` (DEBT-571/584), 10k mật khẩu phổ biến (DEBT-574), chống khoá có chủ đích (DEBT-575/016), đổi mật khẩu (DEBT-573), race DEBT-600; be 931, int 2143, vault 31, E2E 39, X3 42; checklist **P0 ❌ còn 1** (C-14.2.1). Xem `runs/85-X6-release2/summary.md`. ⚠ Deploy: `/login` throttle 5/(email, mạng), 20/email, 10/thiết bị tin cậy mỗi 15', không còn khoá cứng; Redis lỗi ⇒ login 5xx (run 85); chạy `runbook-ops.md` §10 trước (email đã lưu ngoài D84.1 ⇒ không đăng ký lại/quên mật khẩu được, run 84); chạy `runbook-ops.md` §8 trước (scope ngoài ngữ pháp ⇒ lần sửa kế tiếp `400`, run 82); login đang dở lúc deploy phải bắt đầu lại (run 81); production cần Mongo replica set/mongos (run 79); runbook-deploy §12 q1–q3 trước (run 75); mọi user đăng nhập lại 1 lần (run 73) + login federation dở ⇒ thử lại. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev — lần đầu sau run 71 XOÁ VĨNH VIỄN audit cũ hơn 180 ngày (chạy `-- --dry-run` trước, runbook-ops §0). ⚠ Người dùng: GitHub Security → Dependabot (cảnh báo mongoose tự đóng sau push run 85? dismiss `deepmerge`) + tab Actions; ký `release-checklist.md` mục F ở run 88.
+- **Việc tiếp theo**: run 86 X6 đợt 2b (DEBT-577 token sang fragment, DEBT-393 pre-publish BE+FE theo D85.7, DEBT-572, DEBT-583); run 87 diễn tập (DEBT-252/253); run 88 pentest + ký duyệt.
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
 
@@ -28,10 +28,11 @@
 | [82](runs/82-sweep-mixed2/summary.md) | M7 | Sweep 🟡/💭 đợt 2 (DEBT-533/535–538/546) | ✅ int 1968 + fe-admin 1613 + E2E 38 + X3 42 + be 806 | `adf130a` |
 | [83](runs/83-deps-security/summary.md) | M7 | Dependency có advisory (nodemailer, nest/fastify, @fastify/static, seroval, eslint, minimatch/glob, CodeQL) | ✅ int 1982 + fe-admin 1613 + E2E 38 + X3 42 + be 819 | `b76b78f` |
 | [84](runs/84-X6-release1/summary.md) | M8 | X6 đợt 1: release checklist, ngữ pháp email, JWKS cache, runbook (DEBT-129/157/349/550/556) | ✅ int 2052 + E2E 38 + be 905 | `6570f3a` |
+| [85](runs/85-X6-release2/summary.md) | M8 | X6 đợt 2: supply chain, `request`/UserInfo POST, mật khẩu phổ biến, chống khoá có chủ đích, đổi mật khẩu (DEBT-016/553/557/571/573–576/584/600) | ✅ int 2143 + vault 31 + E2E 39 + X3 42 + be 931 + fe-admin 1613 | `<hash>` |
 
 ## Chặn / cần người quyết định
 
-Xem `plan.md` §12. Q1–Q9 đã chốt hết (Q7–Q9 ngày 2026-11-06); quyết định bổ sung ở "Chốt bổ sung" (gồm D84.1–D84.7 run 84).
+Xem `plan.md` §12. Q1–Q9 đã chốt hết (Q7–Q9 ngày 2026-11-06); quyết định bổ sung ở "Chốt bổ sung" (gồm D84.1–D84.7 run 84, D85.1–D85.11 run 85).
 
 ## Backlog mở
 

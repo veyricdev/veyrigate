@@ -139,9 +139,9 @@ export function assertDevOrTestEnv(nodeEnv: string | undefined): void {
  * Dev-user seed config (DEBT-076). Read ONLY here, via its own zod schema — deliberately NOT added
  * to the app `envSchema`, so app boot and the integration-test harness never start requiring these
  * variables. A missing/invalid variable fails BEFORE any DB connection with a message naming it.
- * Password reuses the same 8–128 rule as `AuthenticationService.validatePassword` (kept in sync by
- * hand: it is a one-line bound, not worth importing a private method). `DEV_SEED_PASSWORD` is never
- * logged.
+ * Password reuses the same 8–128 length rule as `assertAcceptablePassword` / `PASSWORD_LENGTH_MESSAGE`
+ * (`authentication/password-policy`, kept in sync by hand: a one-line bound). The seed checks the
+ * length only, never the common-password list (D85.4). `DEV_SEED_PASSWORD` is never logged.
  */
 const devSeedUserEnvSchema = z.object({
   DEV_SEED_EMAIL: z

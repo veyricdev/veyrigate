@@ -24,6 +24,7 @@ import { AdminResourcesController } from '../src/modules/admin/admin-resources.c
 import { AdminController } from '../src/modules/admin/admin.controller';
 import { registerAdminOpenApi } from '../src/modules/admin/admin.openapi';
 import { AuthenticationService } from '../src/modules/authentication/authentication.service';
+import { LoginThrottleService } from '../src/modules/authentication/login-throttle.service';
 import { ClientAuthenticationService } from '../src/modules/clients/client-authentication.service';
 import { ClientCorsService } from '../src/modules/clients/client-cors.service';
 import { ClientCredentialService } from '../src/modules/clients/client-credential.service';
@@ -268,6 +269,7 @@ describe('Admin API B6.3a (clients, secrets, resources) on real Mongo + Redis', 
         TokenVerifier,
         HtmlExceptionFilter,
         AuthenticationService,
+        LoginThrottleService,
         UserService,
         UserTenantService,
         LogoutService,

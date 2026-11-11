@@ -41,6 +41,14 @@ export class HtmlExceptionFilter implements ExceptionFilter {
         ? String((response as { retryAfter: unknown }).retryAfter)
         : undefined;
     if (status === 429 && retryAfter) reply.header('Retry-After', retryAfter);
+    // A 429 may carry its own fixed server-side text (login throttle, DEBT-575); never client input.
+    const throttledText =
+      status === 429 &&
+      typeof response === 'object' &&
+      response &&
+      typeof (response as { message?: unknown }).message === 'string'
+        ? (response as { message: string }).message
+        : undefined;
     if (unavailable) reply.header('Retry-After', String(DEPENDENCY_RETRY_AFTER_SEC));
     // Error pages are per-request (may follow a credential form post): never cached (B7.4).
     reply.header('Cache-Control', 'no-store');
@@ -48,7 +56,7 @@ export class HtmlExceptionFilter implements ExceptionFilter {
       title: 'Request failed',
       message:
         status === 429
-          ? 'Too many requests. Please try again later.'
+          ? (throttledText ?? 'Too many requests. Please try again later.')
           : unavailable
             ? 'The service is temporarily unavailable. Please try again in a few seconds.'
             : status < 500

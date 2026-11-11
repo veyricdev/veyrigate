@@ -21,6 +21,7 @@ import { RedisService } from '../src/database/redis/redis.service';
 import { seedBootstrap, type AdminSeedConfig } from '../src/database/seed';
 import { AdminController } from '../src/modules/admin/admin.controller';
 import { AuthenticationService } from '../src/modules/authentication/authentication.service';
+import { LoginThrottleService } from '../src/modules/authentication/login-throttle.service';
 import { ClientAuthenticationService } from '../src/modules/clients/client-authentication.service';
 import { ClientCorsService } from '../src/modules/clients/client-cors.service';
 import { ClientCredentialService } from '../src/modules/clients/client-credential.service';
@@ -217,6 +218,7 @@ describe.each(MISFITS)(
           TokenVerifier,
           HtmlExceptionFilter,
           AuthenticationService,
+          LoginThrottleService,
           UserService,
           UserTenantService,
           LogoutService,

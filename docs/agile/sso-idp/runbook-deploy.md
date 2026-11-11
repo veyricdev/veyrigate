@@ -572,3 +572,48 @@ Kỳ vọng: `q1.ok: true`, `q2: []`, `q3.narrow = q3.revoke = 0`. Nếu không:
 - **JWKS**: `/jwks.json` trả `Cache-Control: no-cache` (trước đây không có header). CDN/proxy trước IdP **không được**
   ghi đè thành TTL dài; sau deploy kiểm `curl -sI $IDP/jwks.json` qua đường public ⇒ `cache-control: no-cache`
   ([runbook-ops §1](runbook-ops.md#1-key-ký-nghi-bị-lộ--emergency-rotation) bước 5).
+
+## 14. Lỗ hổng thành phần — thời hạn khắc phục và SBOM (run 85, DEBT-576)
+
+Nguồn phát hiện: bước CI "Dependency audit" (mỗi push/PR), workflow `Dependency audit` (`.github/workflows/audit.yml`,
+hằng ngày 02:41 UTC + chạy tay), cảnh báo Dependabot (tab Security). Thời hạn tính từ **lần phát hiện đầu tiên** ở
+bất kỳ nguồn nào, theo mức của advisory (GHSA/CVSS):
+
+| Mức | Chạy ở production (dependency prod của be/fe-admin, base image, image compose prod) | Chỉ dev/CI |
+|---|---|---|
+| Critical | ≤ 72 h | ≤ 7 ngày |
+| High | ≤ 7 ngày | ≤ 30 ngày |
+| Moderate | ≤ 30 ngày | ≤ 90 ngày |
+| Low | ≤ 180 ngày hoặc lô dependency kế tiếp | ≤ 180 ngày hoặc lô dependency kế tiếp |
+
+"Chạy ở production" xác định bằng SBOM `--prod` (dưới) hoặc `pnpm why -r <gói>`: gói chỉ tới qua devDependencies
+(jest, eslint, playwright…) thuộc cột "Chỉ dev/CI".
+
+- **Có bản vá**: nâng gói (hoặc thêm `overrides` theo khoảng phiên bản như run 83) trong thời hạn. Bản vá bảo mật
+  được bỏ qua cooldown 14 ngày; ghi ngoại lệ (GHSA, ngày phát hành) trong comment `pnpm-workspace.yaml`.
+- **Không có bản vá**: thêm GHSA vào `auditConfig.ignoreGhsas` của `pnpm-workspace.yaml`, kèm comment ghi lý do, khả
+  năng chạm tới (đường đi `pnpm why -r`, input có do kẻ tấn công kiểm soát không) và hạn xem lại ≤ 90 ngày; người dùng
+  dismiss cảnh báo Dependabot tương ứng ("Risk is tolerable") với cùng lý do. Hết hạn xem lại ⇒ đánh giá lại hoặc thay gói.
+- **Cập nhật thường** (không có advisory): PR Dependabot hằng tuần; merge trong ≤ 30 ngày sau cooldown 14 ngày; nâng
+  major theo kế hoạch (đọc release note, ghi vào log run).
+- **GitHub Actions**: mọi `uses:` pin theo commit đã peel kèm `# vX.Y.Z` (kiểm:
+  `grep -hE '^\s*-?\s*uses:' .github/workflows/*.yml | grep -vE '@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+$'` phải rỗng).
+  Đổi phiên bản ⇒ đọc SHA bằng `git ls-remote https://github.com/<repo>.git "refs/tags/<tag>" "refs/tags/<tag>^{}"`
+  (có dòng `^{}` thì dùng SHA dòng đó).
+
+### SBOM
+
+CycloneDX 1.7, mỗi gói deploy một file, chỉ dependency production, sinh từ lockfile bằng `pnpm sbom` (có sẵn trong
+pnpm, không thêm dependency, không cần `pnpm i`):
+
+- Lấy từ CI: job `sbom` của workflow `CI` trên mỗi push vào `develop`/`main`, artifact `sbom` (giữ 90 ngày) gồm
+  `sbom-be.cdx.json`, `sbom-fe-admin.cdx.json`. Lưu bản của commit được deploy vào ticket deploy.
+- Chạy tay ở thư mục gốc repo (đúng commit deploy):
+
+```bash
+pnpm --filter @sso-idp/be sbom --sbom-format cyclonedx --sbom-type application --prod --lockfile-only --out sbom-be.cdx.json
+pnpm --filter @sso-idp/fe-admin sbom --sbom-format cyclonedx --sbom-type application --prod --lockfile-only --out sbom-fe-admin.cdx.json
+```
+
+SBOM không gồm base image Docker (`node:*`, image compose prod) — Dependabot cũng không cảnh báo cho docker; quét image
+theo DEBT-591. Chưa ký/attest SBOM (DEBT-592).

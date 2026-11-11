@@ -15,6 +15,7 @@ import { MODELS } from '../src/database/mongo/models';
 import { RedisService } from '../src/database/redis/redis.service';
 import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
 import { AuthenticationService } from '../src/modules/authentication/authentication.service';
+import { LoginThrottleService } from '../src/modules/authentication/login-throttle.service';
 import { ADMIN_LOCKED_UNTIL, UserService } from '../src/modules/identity/user.service';
 import { UserTenantService } from '../src/modules/identity/user-tenant.service';
 import { MAILER, type MailMessage } from '../src/modules/mailer/mailer';
@@ -72,6 +73,7 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
       controllers: [UiController],
       providers: [
         AuthenticationService,
+        LoginThrottleService,
         UserService,
         UserTenantService,
         SessionService,
@@ -192,9 +194,12 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
     }
   });
 
-  it('sends ten concurrent login requests through the controller and RateLimitService', async () => {
+  // Run 85 (DEBT-575, intentional change): no lock is written any more; the login throttle lets
+  // exactly 5 of 10 concurrent failures from one network reach Argon2 (5 x 401) and refuses the
+  // rest with the fixed 429 (unique email: the throttle keys outlive the per-run DB).
+  it('sends ten concurrent login requests through the controller and the login throttle', async () => {
     const user = await users.create({
-      email: 'http-lock@example.com',
+      email: `http-lock-${Date.now()}@example.com`,
       password: 'correct password',
     });
     await users.verifyEmail(user.sub);
@@ -214,8 +219,11 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
         }),
       ),
     );
-    expect(responses.every((response) => response.statusCode === 401)).toBe(true);
-    expect((await users.findById(user.sub))?.failedLoginCount).toBe(10);
+    const codes = responses.map((response) => response.statusCode);
+    expect(codes.filter((c) => c === 401)).toHaveLength(5);
+    expect(codes.filter((c) => c === 429)).toHaveLength(5);
+    expect((await users.findById(user.sub))?.failedLoginCount ?? 0).toBe(0);
+    expect((await users.findById(user.sub))?.lockedUntil).toBeUndefined();
   });
 
   it('registers, verifies without GET consumption, logs in, and revokes the real session on POST logout', async () => {
@@ -429,7 +437,10 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
     it('fail-closed: a DB error re-reading the user after establish => 500, no session cookie, session dead', async () => {
       const user = await verifiedUser();
       const created = lockAfterEstablish(async () => {
-        jest.spyOn(users, 'findById').mockRejectedValueOnce(new Error('mongo down secret-detail'));
+        // Run 85 (DEBT-600): the post-establish re-read also reads the hash.
+        jest
+          .spyOn(users, 'findByIdForAuthentication')
+          .mockRejectedValueOnce(new Error('mongo down secret-detail'));
       });
       const res = await postLogin(user.email, LOGIN_PASSWORD);
       expect(res.statusCode).toBe(500);

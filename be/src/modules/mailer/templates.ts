@@ -46,3 +46,23 @@ export function resetPasswordMessage(
 ): MailMessage {
   return render(to, 'Reset your password', 'Reset your password:', link, expiresInMinutes);
 }
+
+/**
+ * Notice after a password change or reset (run 85, DEBT-573): no token, no one-time link; only the
+ * time (UTC) and where to recover if the user did not do it.
+ */
+export function passwordChangedMessage(
+  to: string,
+  atIsoUtc: string,
+  forgotUrl: string,
+): MailMessage {
+  const intro = `The password of your account was changed at ${atIsoUtc} (UTC). Every session was signed out.`;
+  const outro = 'If you did not change it, reset your password now:';
+  const safeLink = escapeHtml(forgotUrl);
+  return {
+    to,
+    subject: 'Your password was changed',
+    text: `${intro}\n\n${outro}\n${forgotUrl}\n`,
+    html: `<p>${escapeHtml(intro)}</p><p>${outro} <a href="${safeLink}">${safeLink}</a></p>`,
+  };
+}

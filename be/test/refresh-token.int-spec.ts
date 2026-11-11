@@ -32,6 +32,7 @@ import { TokenService, adminResourceIdentifier } from '../src/modules/oauth/toke
 import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
 import { SessionService } from '../src/modules/sessions/session.service';
 import { AuthenticationService } from '../src/modules/authentication/authentication.service';
+import { LoginThrottleService } from '../src/modules/authentication/login-throttle.service';
 import { UserService } from '../src/modules/identity/user.service';
 import { UserTenantService } from '../src/modules/identity/user-tenant.service';
 import { ConsentService } from '../src/modules/oauth/consent/consent.service';
@@ -77,6 +78,7 @@ const cfg = {
         clientAuthFailIpMax: 100000,
         clientAuthFailClientMax: 100000,
       };
+    if (ns === 'session') return { cookieSecure: false }; // run 85: LoginThrottleService
     throw new Error(`unexpected ns ${ns}`);
   },
 } as unknown as ConfigService;
@@ -343,6 +345,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
         // DEBT-050: a real AuthenticationService so `resetPassword` drives the real refresh-family
         // + session revoke (no mocks) end to end against Mongo/Redis.
         AuthenticationService,
+        LoginThrottleService,
         UserService,
         UserTenantService,
         ConsentService,

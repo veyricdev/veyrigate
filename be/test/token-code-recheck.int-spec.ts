@@ -898,8 +898,16 @@ describe('/token code grant re-check after the family insert (run 35 Task 3)', (
 
     // ---- run 36 tester: risk matrix additions (identity/lock kind, exposure, state/replay,
     // dependency failure, concurrency). Each pins one invariant the dev tests did not cover.
+    // Run 85 (DEBT-575): login no longer writes a lock; a temporary lock only survives as data
+    // written before the deploy (`failedLoginCount` >= 5, `lockedUntil` = now + 15'). Seed exactly
+    // that, and only on a user that is not already locked (the old pipeline never lowered a lock).
     const failedLogins = async (userId: string, n: number) => {
-      for (let i = 0; i < n; i++) await app.get(UserService).recordFailedLogin(userId);
+      await app
+        .get(getModelToken('User'))
+        .updateOne(
+          { _id: userId, lockedUntil: { $not: { $gt: new Date() } } },
+          { $set: { failedLoginCount: n, lockedUntil: new Date(Date.now() + 15 * 60_000) } },
+        );
     };
 
     it('tester G1: brute-force after an ADMIN lock cannot downgrade it => code grant still refused (user_locked)', async () => {

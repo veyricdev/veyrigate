@@ -24,6 +24,7 @@ import { MODELS } from '../src/database/mongo/models';
 import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
 import { RedisService } from '../src/database/redis/redis.service';
 import { AuthenticationService } from '../src/modules/authentication/authentication.service';
+import { LoginThrottleService } from '../src/modules/authentication/login-throttle.service';
 import {
   ClientAuthRateLimitedError,
   ClientAuthenticationService,
@@ -248,6 +249,7 @@ describe('Prometheus /metrics + business metrics (B7.2)', () => {
         AuthorizeRequestContextService,
         AuthorizationCodeService,
         AuthenticationService,
+        LoginThrottleService,
         ConsentService,
         CsrfService,
         CsrfGuard,

@@ -1,4 +1,4 @@
-import { Controller, Get, Header, HttpStatus, Req, Res } from '@nestjs/common';
+import { Controller, Get, Header, HttpStatus, Post, Req, Res } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Types, type Model } from 'mongoose';
@@ -52,9 +52,11 @@ const PROFILE_STRING_CLAIMS = [
 ] as const;
 
 /**
- * `GET /userinfo` (OIDC Core 5.3, spec 11).
+ * `GET`/`POST /userinfo` (OIDC Core 5.3, spec 11; POST per 5.3.1, DEBT-584): one handler, same
+ * answer for both methods.
  *
- * The access token is taken ONLY from the `Authorization: Bearer` header (never query/body), is
+ * The access token is taken ONLY from the `Authorization: Bearer` header (never query/body; a POST
+ * form body, even an RFC 6750 §2.2 `access_token`, is ignored, D85.9), is
  * verified as a genuine access token (`TokenVerifier.verifyAccessToken`: RS256, `iss`, header
  * `typ=at+jwt`, required claims) so an ID token cannot be replayed here, and must carry scope
  * `openid`. Claims are returned strictly by granted scope from an explicit whitelist - the User
@@ -81,7 +83,17 @@ export class UserinfoController {
 
   @Get('/userinfo')
   @Header('Cache-Control', 'no-store')
-  async userinfo(@Req() req: HttpRequest, @Res() reply: UserinfoReply): Promise<unknown> {
+  userinfo(@Req() req: HttpRequest, @Res() reply: UserinfoReply): Promise<unknown> {
+    return this.handle(req, reply);
+  }
+
+  @Post('/userinfo')
+  @Header('Cache-Control', 'no-store')
+  userinfoPost(@Req() req: HttpRequest, @Res() reply: UserinfoReply): Promise<unknown> {
+    return this.handle(req, reply);
+  }
+
+  private async handle(req: HttpRequest, reply: UserinfoReply): Promise<unknown> {
     const token = bearerToken(req);
     if (!token) {
       return this.unauthorized(req, reply, 'invalid_token');

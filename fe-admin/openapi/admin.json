@@ -956,7 +956,9 @@
                 "ADMIN_USER_LOCKED",
                 "ADMIN_USER_UNLOCKED",
                 "ADMIN_USER_ROLES_CHANGED",
-                "OAUTH_CONSENT_REVOKED"
+                "OAUTH_CONSENT_REVOKED",
+                "AUTH_LOGIN_THROTTLED",
+                "AUTH_PASSWORD_CHANGED"
               ]
             }
           },
@@ -1879,7 +1881,9 @@
               "ADMIN_USER_LOCKED",
               "ADMIN_USER_UNLOCKED",
               "ADMIN_USER_ROLES_CHANGED",
-              "OAUTH_CONSENT_REVOKED"
+              "OAUTH_CONSENT_REVOKED",
+              "AUTH_LOGIN_THROTTLED",
+              "AUTH_PASSWORD_CHANGED"
             ]
           },
           "targetType": {

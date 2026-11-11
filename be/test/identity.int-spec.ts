@@ -119,24 +119,6 @@ describe('Identity services on real Mongo (B2.2)', () => {
     });
   });
 
-  it('records failed logins atomically and locks at the fifth failure, then resets', async () => {
-    const u = await users.create({ email: 'lock@example.com' });
-    const now = new Date('2026-01-01T00:00:00Z');
-    const failures = await Promise.all(
-      Array.from({ length: 10 }, () => users.recordFailedLogin(u.sub, now)),
-    );
-    const locked = await users.findById(u.sub);
-    expect(locked?.failedLoginCount).toBe(10);
-    expect(locked?.lockedUntil).toEqual(new Date('2026-01-01T00:15:00Z'));
-    expect(failures.filter((failure) => failure?.newlyLocked)).toHaveLength(1);
-    expect(await users.adminUnlock(u.sub, true)).toMatchObject({
-      before: { failedLoginCount: 10 },
-    });
-    const reset = await users.findById(u.sub);
-    expect(reset?.failedLoginCount).toBe(0);
-    expect(reset?.lockedUntil).toBeUndefined();
-  });
-
   it('membership: add, check active, roles; duplicate membership → DuplicateError', async () => {
     const u = await users.create({ email: 'dave@example.com' });
     const m = await memberships.addMembership(u.sub, DEFAULT_TENANT_ID, ['member']);

@@ -99,6 +99,9 @@ export class DiscoveryController {
       introspection_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
       revocation_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
       authorization_response_iss_parameter_supported: true,
+      // DEBT-571: OIDC Discovery defaults request_uri_parameter_supported to `true` when absent.
+      request_parameter_supported: false,
+      request_uri_parameter_supported: false,
     });
   }
 

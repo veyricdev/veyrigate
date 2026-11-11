@@ -151,6 +151,8 @@ describe('/.well-known/openid-configuration discovery (B4.6 Task 1)', () => {
       introspection_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
       revocation_endpoint_auth_methods_supported: ['client_secret_basic', 'client_secret_post'],
       authorization_response_iss_parameter_supported: true,
+      request_parameter_supported: false,
+      request_uri_parameter_supported: false,
     });
   });
 

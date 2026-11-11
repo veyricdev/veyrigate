@@ -10,6 +10,7 @@ import { jest } from '@jest/globals';
 import { Eta } from 'eta';
 import { join } from 'node:path';
 import { AuthenticationService } from '../src/modules/authentication/authentication.service';
+import { LoginThrottleService } from '../src/modules/authentication/login-throttle.service';
 import { AuditAction } from '../src/modules/security/audit/audit-action.enum';
 import { AuditService } from '../src/modules/security/audit/audit.service';
 import { RateLimitService } from '../src/modules/security/rate-limit/rate-limit.service';
@@ -51,12 +52,18 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
         onFailure?: Parameters<AuthenticationService['revokeAllUserCredentials']>[2],
       ) =>
         AuthenticationService.prototype.revokeAllUserCredentials.call(
-          { refreshTokens, sessions },
+          { refreshTokens, sessions, throttle: loginThrottle },
           userId,
           now,
           onFailure,
         ),
     ),
+  };
+  // Run 85 (DEBT-575): login throttle/device cookie are covered by run85-anti-lockout.int-spec.
+  const loginThrottle = {
+    readDeviceToken: jest.fn(() => undefined),
+    setDeviceCookie: jest.fn(),
+    forgetDevices: jest.fn(async () => undefined),
   };
   const sessions = {
     get: jest.fn<SessionService['get']>(async () => null),
@@ -102,6 +109,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
         HtmlExceptionFilter,
         SessionCookie,
         { provide: AuthenticationService, useValue: auth },
+        { provide: LoginThrottleService, useValue: loginThrottle },
         { provide: SessionService, useValue: sessions },
         { provide: RefreshTokenService, useValue: refreshTokens },
         { provide: LogoutService, useValue: logoutRp },

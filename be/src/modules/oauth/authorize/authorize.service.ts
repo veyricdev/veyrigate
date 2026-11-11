@@ -34,6 +34,9 @@ export interface AuthorizeParams {
   max_age?: string;
   /** Opaque IdP request id used to resume a stored context after login (spec §9.1). */
   request_id?: string;
+  /** OIDC request object / reference (Core §6): never processed, only refused (DEBT-571). */
+  request?: unknown;
+  request_uri?: unknown;
 }
 
 /** The minimal view of the current session the flow needs (null when not signed in). */
@@ -228,6 +231,21 @@ export class AuthorizeService {
     // the error, which is required on the resume-after-login path where the inbound HTTP params
     // no longer carry `redirect_uri`/`state` (those live in the already-consumed context).
     try {
+      // DEBT-571 (OIDC Core §6.1/§6.2, D85.9): a request object / request_uri is not supported.
+      // Refused whenever present (even empty or repeated) instead of ignored, so an RP never
+      // believes its signed parameters were applied; `request_uri` is never fetched.
+      if (params.request !== undefined) {
+        throw new AuthorizeRedirectError(
+          'request_not_supported',
+          'The request parameter is not supported.',
+        );
+      }
+      if (params.request_uri !== undefined) {
+        throw new AuthorizeRedirectError(
+          'request_uri_not_supported',
+          'The request_uri parameter is not supported.',
+        );
+      }
       // DEBT-204/205: any other recognised parameter repeated => invalid_request to the trusted
       // redirect_uri (no 500, no array reaching a context/code). `resource` keeps invalid_target.
       if (repeatedParam(params, PHASE2_PARAM_KEYS) !== undefined) {

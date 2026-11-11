@@ -21,9 +21,9 @@ jobs:
   quality:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
 
@@ -35,7 +35,7 @@ jobs:
         run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
 
       - name: Cache pnpm store
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.pnpm-store.outputs.path }}
           key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
@@ -96,9 +96,9 @@ jobs:
           --health-cmd "/mailpit readyz"
           --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
 
@@ -110,7 +110,7 @@ jobs:
         run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
 
       - name: Cache pnpm store
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.pnpm-store.outputs.path }}
           key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
@@ -184,9 +184,9 @@ jobs:
           --health-cmd "redis-cli ping"
           --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
 
@@ -198,7 +198,7 @@ jobs:
         run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
 
       - name: Cache pnpm store
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.pnpm-store.outputs.path }}
           key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
@@ -226,7 +226,7 @@ jobs:
 
       - name: Upload Playwright report on failure
         if: ${{ failure() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-report
           path: e2e/playwright-report
@@ -241,7 +241,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           # The repo is mounted into a third-party image: keep GITHUB_TOKEN out of .git/config (DEBT-232).
@@ -259,7 +259,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -284,11 +284,11 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
 
@@ -310,7 +310,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -321,3 +321,56 @@ jobs:
 
       - name: Smoke test image
         run: bash be/scripts/docker-smoke.sh veyrigate-be:ci veyrigate-be:ci-build
+
+  # SBOM (run 85, DEBT-576): CycloneDX per deployable package from the lockfile (`pnpm sbom`, built
+  # into pnpm, no extra dependency, no install), production dependencies only. Kept 90 days as a CI
+  # artifact; how to use it and the remediation deadlines: runbook-deploy.md §14.
+  sbom:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Enable corepack (pnpm)
+        run: corepack enable
+
+      - name: Generate SBOM (CycloneDX, production dependencies)
+        run: |
+          pnpm --filter @sso-idp/be sbom --sbom-format cyclonedx --sbom-type application --prod --lockfile-only --out sbom-be.cdx.json
+          pnpm --filter @sso-idp/fe-admin sbom --sbom-format cyclonedx --sbom-type application --prod --lockfile-only --out sbom-fe-admin.cdx.json
+
+      # Fails if a file is not CycloneDX, is suspiciously small, misses the package's main runtime
+      # dependency, or contains a dev-only package (jest => --prod was dropped).
+      - name: Check SBOM
+        run: |
+          node -e "
+          const fs = require('fs');
+          for (const [file, want] of [['sbom-be.cdx.json', 'mongoose'], ['sbom-fe-admin.cdx.json', 'react']]) {
+            const bom = JSON.parse(fs.readFileSync(file, 'utf8'));
+            const names = (bom.components || []).map((c) => (c.group ? c.group + '/' + c.name : c.name));
+            const errors = [];
+            if (bom.bomFormat !== 'CycloneDX') errors.push('bomFormat');
+            if (names.length < 100) errors.push('components ' + names.length);
+            if (!names.includes(want)) errors.push('missing ' + want);
+            if (names.includes('jest')) errors.push('dev dependency jest');
+            if (errors.length) { console.error(file + ': ' + errors.join(', ')); process.exit(1); }
+            console.log(file + ': ' + names.length + ' components');
+          }"
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sbom
+          path: |
+            sbom-be.cdx.json
+            sbom-fe-admin.cdx.json
+          retention-days: 90

@@ -9,7 +9,6 @@ import {
 } from 'mongoose';
 import { hashPassword } from '../../common/crypto/crypto.util';
 import { mapDuplicate } from './identity.errors';
-import { randomUUID } from 'node:crypto';
 
 interface UserDoc {
   _id: Types.ObjectId;
@@ -29,11 +28,6 @@ interface UserDoc {
 
 export interface UserWithPassword extends UserView {
   passwordHash?: string;
-}
-
-export interface FailedLoginResult {
-  user: UserView;
-  newlyLocked: boolean;
 }
 
 /** Public user shape. `sub` = `User._id` (A6), immutable. Never contains `passwordHash`. */
@@ -179,6 +173,37 @@ export class UserService {
     return doc ? { ...toView(doc), passwordHash: doc.passwordHash } : null;
   }
 
+  /** By id, with `passwordHash` (password change, DEBT-573). */
+  async findByIdForAuthentication(sub: string): Promise<UserWithPassword | null> {
+    if (!isValidObjectId(sub)) return null;
+    const doc = await this.users.findById(sub).select('+passwordHash').lean<UserDoc>().exec();
+    return doc ? { ...toView(doc), passwordHash: doc.passwordHash } : null;
+  }
+
+  /**
+   * Self-service password change (DEBT-573): compare-and-set on the hash the caller verified, and
+   * only while the user is not locked at write time. A concurrent reset/change (hash differs) or a
+   * lock => null. Touches nothing but `passwordHash` (no `emailVerifiedAt`, no lock state).
+   */
+  async changePassword(
+    sub: string,
+    oldHash: string,
+    newHash: string,
+    now = new Date(),
+  ): Promise<UserView | null> {
+    if (!isValidObjectId(sub)) return null;
+    const doc = await this.users
+      .findOneAndUpdate(
+        { _id: sub, passwordHash: oldHash, lockedUntil: { $not: { $gt: now } } },
+        { $set: { passwordHash: newHash } },
+        { returnDocument: 'after' },
+      )
+      .select(PUBLIC_FIELDS)
+      .lean<UserDoc>()
+      .exec();
+    return doc ? toView(doc) : null;
+  }
+
   /** Change email; `sub` is unaffected. Duplicate email → DuplicateError. */
   async changeEmail(sub: string, email: string): Promise<UserView | null> {
     if (!isValidObjectId(sub)) return null;
@@ -194,74 +219,6 @@ export class UserService {
         .exec(),
     );
     return doc ? toView(doc) : null;
-  }
-
-  async recordFailedLogin(sub: string, now = new Date()): Promise<FailedLoginResult | null> {
-    if (!isValidObjectId(sub)) return null;
-    const lockUntil = new Date(now.getTime() + 15 * 60 * 1000);
-    const nonce = randomUUID();
-    const doc = await this.users
-      .findByIdAndUpdate(
-        sub,
-        [
-          {
-            $set: {
-              failedLoginCount: {
-                $cond: [
-                  {
-                    $and: [
-                      { $ne: [{ $type: '$lockedUntil' }, 'missing'] },
-                      { $lte: ['$lockedUntil', now] },
-                    ],
-                  },
-                  1,
-                  { $add: [{ $ifNull: ['$failedLoginCount', 0] }, 1] },
-                ],
-              },
-            },
-          },
-          {
-            $set: {
-              lockedUntil: {
-                $cond: [
-                  {
-                    $and: [
-                      { $gte: ['$failedLoginCount', 5] },
-                      { $not: [{ $gt: ['$lockedUntil', now] }] },
-                    ],
-                  },
-                  lockUntil,
-                  '$lockedUntil',
-                ],
-              },
-              lockTransitionNonce: {
-                $cond: [
-                  {
-                    $and: [
-                      { $gte: ['$failedLoginCount', 5] },
-                      { $not: [{ $gt: ['$lockedUntil', now] }] },
-                    ],
-                  },
-                  nonce,
-                  '$lockTransitionNonce',
-                ],
-              },
-            },
-          },
-        ],
-        { returnDocument: 'after', updatePipeline: true },
-      )
-      .select(`${PUBLIC_FIELDS} +lockTransitionNonce`)
-      .lean<UserDoc>()
-      .exec();
-    if (!doc) return null;
-    const newlyLocked = doc.lockTransitionNonce === nonce;
-    if (newlyLocked)
-      await this.users.updateOne(
-        { _id: sub, lockTransitionNonce: nonce },
-        { $unset: { lockTransitionNonce: 1 } },
-      );
-    return { user: toView(doc), newlyLocked };
   }
 
   /**

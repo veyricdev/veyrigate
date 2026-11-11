@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { AuthenticationService } from './authentication.service';
+import { LoginThrottleService } from './login-throttle.service';
 import { UserService } from '../identity/user.service';
 import { UserTenantService } from '../identity/user-tenant.service';
 import { SessionService } from '../sessions/session.service';
@@ -28,8 +29,8 @@ describe('AuthenticationService', () => {
     findByEmail: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
     findByEmailForAuthentication: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
     findById: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
+    findByIdForAuthentication: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
     verifyEmail: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
-    recordFailedLogin: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
     clearFailedLoginsIfUnlocked: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
     setPassword: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
   };
@@ -40,17 +41,32 @@ describe('AuthenticationService', () => {
   const sessions = {
     establish: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
     revokeAllForUser: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
+    revoke: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
   };
   const refreshTokens = {
     revokeAllForUser: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
   };
   const memberships = { addMembership: jest.fn<(...args: unknown[]) => Promise<unknown>>() };
   const audit = { record: jest.fn<(...args: unknown[]) => Promise<unknown>>() };
+  // Run 85 (DEBT-575): throttle behaviour is covered on real Redis (run85-anti-lockout.int-spec).
+  const throttle = {
+    buckets: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
+    reserve: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
+    onSuccess: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
+    forgetDevices: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
+    clearAccount: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
+  };
   let service: AuthenticationService;
 
   beforeEach(async () => {
     jest.clearAllMocks();
     tokenModel.create.mockResolvedValue(undefined);
+    throttle.buckets.mockResolvedValue({ trusted: false, keys: [] });
+    throttle.reserve.mockResolvedValue({ blocked: false });
+    throttle.onSuccess.mockResolvedValue(undefined);
+    throttle.forgetDevices.mockResolvedValue(undefined);
+    throttle.clearAccount.mockResolvedValue(undefined);
+    audit.record.mockResolvedValue(undefined);
     const module = await Test.createTestingModule({
       providers: [
         AuthenticationService,
@@ -59,6 +75,7 @@ describe('AuthenticationService', () => {
         { provide: SessionService, useValue: sessions },
         { provide: RefreshTokenService, useValue: refreshTokens },
         { provide: AuditService, useValue: audit },
+        { provide: LoginThrottleService, useValue: throttle },
         {
           provide: MAILER,
           useValue: { send: jest.fn<() => Promise<void>>(async () => undefined) },
@@ -213,44 +230,66 @@ describe('AuthenticationService', () => {
     expect(tokenModel.create).not.toHaveBeenCalled();
   });
 
-  it('audits exactly the atomic transition into lock under concurrent failures', async () => {
-    users.findByEmailForAuthentication.mockResolvedValue({
-      ...user,
-      emailVerifiedAt: new Date(),
-      passwordHash: '$invalid-hash',
+  it('a throttled attempt is a 429 with the fixed text, no Argon2 result, no user write (DEBT-575)', async () => {
+    users.findByEmailForAuthentication.mockResolvedValue({ ...user, passwordHash: '$x' });
+    throttle.reserve.mockResolvedValue({
+      blocked: true,
+      retryAfterSec: 42,
+      scope: 'network',
+      report: false,
     });
-    let failure = 0;
-    users.recordFailedLogin.mockImplementation(async () => ({ newlyLocked: ++failure === 5 }));
-    audit.record.mockResolvedValue(undefined);
-
-    await Promise.allSettled(
-      Array.from({ length: 10 }, () => service.login(user.email, 'wrong password', {})),
-    );
-
-    expect(audit.record).toHaveBeenCalledTimes(11);
-    expect(audit.record).toHaveBeenCalledWith(
-      expect.objectContaining({ action: AuditAction.AUTH_ACCOUNT_LOCKED }),
-    );
+    await expect(service.login(user.email, 'wrong password', {})).rejects.toMatchObject({
+      status: 429,
+      response: {
+        retryAfter: 42,
+        message: 'Too many sign-in attempts. Try again later or reset your password.',
+      },
+    });
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(users.clearFailedLoginsIfUnlocked).not.toHaveBeenCalled();
   });
 
   it('uses a generic login failure and establishes a fresh session on success', async () => {
-    users.findByEmailForAuthentication.mockResolvedValueOnce(null).mockResolvedValueOnce({
+    const withHash = {
       ...user,
       passwordHash: await import('../../common/crypto/crypto.util').then(({ hashPassword }) =>
         hashPassword('correct password'),
       ),
-    });
+    };
+    users.findByEmailForAuthentication.mockResolvedValueOnce(null).mockResolvedValueOnce(withHash);
     await expect(service.login('missing@example.com', 'wrong', {})).rejects.toBeInstanceOf(
       UnauthorizedException,
     );
     sessions.establish.mockResolvedValue({ id: 'new-id', session: {} });
     users.clearFailedLoginsIfUnlocked.mockResolvedValue(user);
-    users.findById.mockResolvedValue(user); // run 36: post-establish re-read (still unlocked)
+    // run 36 + DEBT-600: post-establish re-read (still unlocked, same hash)
+    users.findByIdForAuthentication.mockResolvedValue(withHash);
     await expect(
       service.login('a@example.com', 'correct password', { oldSessionId: 'old' }),
     ).resolves.toMatchObject({ id: 'new-id' });
     expect(sessions.establish).toHaveBeenCalledWith('old', user.sub, 'default-tenant', {
       amr: ['pwd'],
     });
+  });
+
+  it('DEBT-600: the hash changed between verify and establish => session revoked, generic 401, no success audit/trust', async () => {
+    const withHash = {
+      ...user,
+      passwordHash: await import('../../common/crypto/crypto.util').then(({ hashPassword }) =>
+        hashPassword('correct password'),
+      ),
+    };
+    users.findByEmailForAuthentication.mockResolvedValueOnce(withHash);
+    sessions.establish.mockResolvedValue({ id: 'raced-id', session: { ref: 'r' } });
+    users.clearFailedLoginsIfUnlocked.mockResolvedValue(user);
+    users.findByIdForAuthentication.mockResolvedValue({ ...withHash, passwordHash: '$changed' });
+    await expect(
+      service.login('a@example.com', 'correct password', { trustDevice: true }),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(sessions.revoke).toHaveBeenCalledWith('raced-id');
+    expect(throttle.onSuccess).not.toHaveBeenCalled();
+    const actions = audit.record.mock.calls.map(([e]) => (e as { action: AuditAction }).action);
+    expect(actions).not.toContain(AuditAction.AUTH_LOGIN_SUCCESS);
+    expect(actions).toContain(AuditAction.AUTH_LOGIN_FAILED);
   });
 });

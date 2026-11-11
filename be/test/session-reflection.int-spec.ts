@@ -38,6 +38,7 @@ import { SESSION_COOKIE, SessionCookie } from '../src/modules/sessions/session.c
 import { LogoutService } from '../src/modules/oauth/logout/logout.service';
 import { AuthorizeRequestContextService } from '../src/modules/oauth/authorize/authorize-request-context.service';
 import { AuthenticationService } from '../src/modules/authentication/authentication.service';
+import { LoginThrottleService } from '../src/modules/authentication/login-throttle.service';
 import { UserService } from '../src/modules/identity/user.service';
 import { UserTenantService } from '../src/modules/identity/user-tenant.service';
 import { ConsentService } from '../src/modules/oauth/consent/consent.service';
@@ -209,6 +210,7 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
         LogoutService,
         AuthorizeRequestContextService,
         AuthenticationService,
+        LoginThrottleService,
         UserService,
         UserTenantService,
         ConsentService,

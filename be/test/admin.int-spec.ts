@@ -19,6 +19,7 @@ import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
 import { RedisService } from '../src/database/redis/redis.service';
 import { AdminController } from '../src/modules/admin/admin.controller';
 import { AuthenticationService } from '../src/modules/authentication/authentication.service';
+import { LoginThrottleService } from '../src/modules/authentication/login-throttle.service';
 import { ClientAuthenticationService } from '../src/modules/clients/client-authentication.service';
 import { ClientCorsService } from '../src/modules/clients/client-cors.service';
 import { ClientCredentialService } from '../src/modules/clients/client-credential.service';
@@ -287,6 +288,7 @@ describe('Admin API guard (B6.1) + step-up (B6.2) on real Mongo + Redis', () => 
         TokenVerifier,
         HtmlExceptionFilter,
         AuthenticationService,
+        LoginThrottleService,
         UserService,
         UserTenantService,
         LogoutService,

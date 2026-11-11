@@ -2,16 +2,20 @@ import { ConfigService } from '@nestjs/config';
 import { getModelToken, MongooseModule } from '@nestjs/mongoose';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { jest } from '@jest/globals';
+import IORedis from 'ioredis';
 import type { Model } from 'mongoose';
 import { MODELS } from '../src/database/mongo/models';
+import { RedisService } from '../src/database/redis/redis.service';
 import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
 import { AuthenticationService } from '../src/modules/authentication/authentication.service';
+import { LoginThrottleService } from '../src/modules/authentication/login-throttle.service';
 import { sha256 } from '../src/common/crypto/crypto.util';
 import { UserService } from '../src/modules/identity/user.service';
 import { UserTenantService } from '../src/modules/identity/user-tenant.service';
 import { MAILER, type MailMessage } from '../src/modules/mailer/mailer';
 import { AuditAction } from '../src/modules/security/audit/audit-action.enum';
 import { AuditService } from '../src/modules/security/audit/audit.service';
+import { RateLimitService } from '../src/modules/security/rate-limit/rate-limit.service';
 import { SessionService } from '../src/modules/sessions/session.service';
 import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
@@ -19,6 +23,7 @@ import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
   `mongodb://localhost:27117/vg-int-auth-${Date.now()}?directConnection=true`;
+const REDIS_URL = process.env.TEST_REDIS_URL ?? 'redis://localhost:6479';
 
 describe('Authentication races on real Mongo (B2.4, C2-C6, C13)', () => {
   let moduleRef: TestingModule;
@@ -35,9 +40,12 @@ describe('Authentication races on real Mongo (B2.4, C2-C6, C13)', () => {
     revokeAllForUser: jest.fn(async () => 0),
   };
   const messages: MailMessage[] = [];
+  let redis: IORedis;
 
   // DEBT-448: afterAll waits for a setup that outlived its hook, then cleans up what it opened.
   const boot = async (): Promise<void> => {
+    // Run 85 (DEBT-575): the login throttle runs on the real test Redis.
+    redis = new IORedis(REDIS_URL, { maxRetriesPerRequest: 1 });
     moduleRef = await Test.createTestingModule({
       imports: [
         MongooseModule.forRoot(MONGO_URI, {
@@ -49,8 +57,11 @@ describe('Authentication races on real Mongo (B2.4, C2-C6, C13)', () => {
       ],
       providers: [
         AuthenticationService,
+        LoginThrottleService,
         UserService,
         UserTenantService,
+        RateLimitService,
+        { provide: RedisService, useValue: new RedisService(redis) },
         { provide: SessionService, useValue: sessions },
         { provide: RefreshTokenService, useValue: refreshTokens },
         { provide: AuditService, useValue: audit },
@@ -60,7 +71,14 @@ describe('Authentication races on real Mongo (B2.4, C2-C6, C13)', () => {
         },
         {
           provide: ConfigService,
-          useValue: { getOrThrow: () => ({ issuer: 'https://issuer.example' }) },
+          useValue: {
+            getOrThrow: () => ({
+              issuer: 'https://issuer.example',
+              cookieSecure: false,
+              rateLimitMax: 100,
+              rateLimitWindow: 60,
+            }),
+          },
         },
       ],
     }).compile();
@@ -80,7 +98,7 @@ describe('Authentication races on real Mongo (B2.4, C2-C6, C13)', () => {
   afterAll(async () => {
     await settled(setup);
     await userModel?.db.dropDatabase();
-    await moduleRef?.close();
+    await moduleRef?.close(); // RedisService.onApplicationShutdown quits the client
   }, INT_SETUP_TIMEOUT_MS);
 
   it('concurrent registration returns the same success result and creates one account', async () => {
@@ -111,20 +129,31 @@ describe('Authentication races on real Mongo (B2.4, C2-C6, C13)', () => {
     expect(sessions.revokeAllForUser).toHaveBeenCalledTimes(1);
   });
 
-  it('ten concurrent failed logins persist ten failures and one lock audit event', async () => {
-    const user = await users.create({ email: 'locked@example.com', password: 'correct password' });
+  // Run 85 (DEBT-575, intentional change): login no longer writes a lock. Ten concurrent failures
+  // from one network: the throttle lets exactly 5 reach Argon2, the user document is untouched,
+  // no AUTH_ACCOUNT_LOCKED, one AUTH_LOGIN_THROTTLED.
+  it('ten concurrent failed logins: 5 checked, 5 throttled, no lock written, one throttle audit', async () => {
+    const user = await users.create({
+      email: `locked-${Date.now()}@example.com`,
+      password: 'correct password',
+    });
     await users.verifyEmail(user.sub);
     const results = await Promise.allSettled(
-      Array.from({ length: 10 }, () => auth.login(user.email, 'wrong password', {})),
+      Array.from({ length: 10 }, () =>
+        auth.login(user.email, 'wrong password', { ip: '198.51.100.7' }),
+      ),
     );
     expect(results.every((result) => result.status === 'rejected')).toBe(true);
-    expect((await users.findById(user.sub))?.failedLoginCount).toBe(10);
-    expect((await users.findById(user.sub))?.lockedUntil).toBeInstanceOf(Date);
-    expect(
-      audit.record.mock.calls.filter(
-        ([event]) => (event as { action: AuditAction }).action === AuditAction.AUTH_ACCOUNT_LOCKED,
-      ),
-    ).toHaveLength(1);
+    const statuses = results.map((r) =>
+      r.status === 'rejected' ? (r.reason as { getStatus(): number }).getStatus() : 0,
+    );
+    expect(statuses.filter((c) => c === 401)).toHaveLength(5);
+    expect(statuses.filter((c) => c === 429)).toHaveLength(5);
+    expect((await users.findById(user.sub))?.failedLoginCount ?? 0).toBe(0);
+    expect((await users.findById(user.sub))?.lockedUntil).toBeUndefined();
+    const actions = audit.record.mock.calls.map(([e]) => (e as { action: AuditAction }).action);
+    expect(actions.filter((a) => a === AuditAction.AUTH_ACCOUNT_LOCKED)).toHaveLength(0);
+    expect(actions.filter((a) => a === AuditAction.AUTH_LOGIN_THROTTLED)).toHaveLength(1);
   });
 
   it('B7.1 AE8: five concurrent verifyEmail with one token => exactly one success, one verification, one audit', async () => {

@@ -21,6 +21,7 @@ import type { HttpReply, HttpRequest } from '../../common/http/http.types';
 import { IsDeliverableEmail } from '../../common/validation/email-address';
 import type { AppConfig, SessionConfig } from '../../config/configuration';
 import { AuthenticationService, type RevokeStep } from '../authentication/authentication.service';
+import { LoginThrottleService } from '../authentication/login-throttle.service';
 import { normalizeEmail } from '../identity/user.service';
 import { AuditAction } from '../security/audit/audit-action.enum';
 import { AuditService } from '../security/audit/audit.service';
@@ -63,6 +64,10 @@ class TokenDto extends FormDto {
 class ResetDto extends TokenDto {
   @IsString() @Length(8, 128) password!: string;
 }
+class ChangePasswordDto extends FormDto {
+  @IsString() @Length(1, 128) current_password!: string;
+  @IsString() @Length(8, 128) new_password!: string;
+}
 /** Raw RP-initiated logout fields carried by the confirmation form. All re-validated on POST. */
 class LogoutDto extends FormDto {
   @IsOptional() @IsString() @Length(0, 4096) id_token_hint?: string;
@@ -94,6 +99,7 @@ export class UiController {
     private readonly logoutRp: LogoutService,
     private readonly authzContexts: AuthorizeRequestContextService,
     config: ConfigService,
+    private readonly loginThrottle: LoginThrottleService,
     // Optional: absent (tests composing UiController without FederationModule) => no buttons.
     @Optional() @Inject(FEDERATION_PROVIDERS) private readonly federation?: FederationProviders,
   ) {
@@ -106,6 +112,8 @@ export class UiController {
     return reply.view('message.eta', {
       title: 'Signed in',
       message: 'You are signed in.',
+      secondaryUrl: '/account/password',
+      secondaryLabel: 'Change password',
       actionUrl: '/logout',
       actionLabel: 'Sign out',
     });
@@ -279,14 +287,19 @@ export class UiController {
   @Post('/login')
   @UseGuards(CsrfGuard)
   async loginPost(@Body() body: LoginDto, @Req() req: UiRequest, @Res() reply: UiReply) {
-    await this.limit('login', req, body.email);
+    // DEBT-575: no `account` dimension here — the per-email limit lives in the login throttle,
+    // where a trusted device is exempt (a shared per-account counter would be a lockout vector).
+    await this.limit('login', req);
     const established = await this.auth.login(normalizeEmail(body.email), body.password, {
       oldSessionId: this.sessionCookie.read(req),
       ip: req.ip,
       userAgent: String(req.headers['user-agent'] ?? ''),
       requestId: req.id,
+      deviceToken: this.loginThrottle.readDeviceToken(req),
+      trustDevice: true,
     });
     this.sessionCookie.set(reply, established.id);
+    if (established.deviceToken) this.loginThrottle.setDeviceCookie(reply, established.deviceToken);
     return reply.redirect(safeReturnTo(body.returnTo, this.issuer), 302);
   }
   @Post('/forgot')
@@ -317,6 +330,75 @@ export class UiController {
       title: 'Password changed',
       message: 'Your password has been changed.',
     });
+  }
+  /** DEBT-573 (D85.6): change password form; a live session is required. */
+  @Get('/account/password') async passwordForm(@Req() req: UiRequest, @Res() reply: UiReply) {
+    const session = await this.liveSession(req, reply);
+    if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fpassword', 302);
+    if (!(await this.auth.hasPassword(session.userId))) {
+      reply.header('Cache-Control', 'no-store');
+      return reply.view('message.eta', {
+        title: 'Change password',
+        message: 'This account has no password. Use "Forgot password" to set one.',
+        actionUrl: '/forgot',
+        actionLabel: 'Forgot password',
+      });
+    }
+    return this.form(req, reply, 'password-change.eta', { title: 'Change password' });
+  }
+  @Post('/account/password')
+  @UseGuards(CsrfGuard)
+  async passwordChange(
+    @Body() body: ChangePasswordDto,
+    @Req() req: UiRequest,
+    @Res() reply: UiReply,
+  ) {
+    const session = await this.liveSession(req, reply);
+    if (!session) return reply.redirect('/login', 302);
+    await this.limit('password_change', req, session.userId);
+    const outcome = await this.auth.changePassword(
+      session.userId,
+      body.current_password,
+      body.new_password,
+      { ip: req.ip, userAgent: String(req.headers['user-agent'] ?? ''), requestId: req.id },
+    );
+    reply.header('Cache-Control', 'no-store');
+    switch (outcome.kind) {
+      case 'throttled':
+        throw new HttpException(
+          { retryAfter: outcome.retryAfterSec, message: 'Too many attempts. Try again later.' },
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      case 'no_password':
+        reply.status(HttpStatus.BAD_REQUEST);
+        return reply.view('message.eta', {
+          title: 'Change password',
+          message: 'This account has no password. Use "Forgot password" to set one.',
+          actionUrl: '/forgot',
+          actionLabel: 'Forgot password',
+        });
+      case 'invalid_current':
+      case 'policy':
+        reply.status(HttpStatus.BAD_REQUEST);
+        return this.form(req, reply, 'password-change.eta', {
+          title: 'Change password',
+          error: outcome.kind === 'policy' ? outcome.message : 'The current password is incorrect.',
+        });
+      case 'conflict':
+        reply.status(HttpStatus.CONFLICT);
+        return reply.view('message.eta', {
+          title: 'Password not changed',
+          message: 'Your password could not be changed. Sign in again and retry.',
+        });
+      case 'changed':
+        // Every session (this one too) is already revoked: drop the dead cookie.
+        this.sessionCookie.clear(reply);
+        reply.status(HttpStatus.OK);
+        return reply.view('message.eta', {
+          title: 'Password changed',
+          message: 'Your password has been changed. Sign in again with your new password.',
+        });
+    }
   }
   @Post('/logout')
   @UseGuards(CsrfGuard)
@@ -496,12 +578,17 @@ export class UiController {
     return reply.view(template, { ...data, csrf: this.csrf.token(identity) });
   }
   private async hasLiveSession(req: UiRequest, reply: UiReply): Promise<boolean> {
+    return (await this.liveSession(req, reply)) !== null;
+  }
+  /** The live session of the cookie, or null (a dead cookie is cleared). */
+  private async liveSession(req: UiRequest, reply: UiReply) {
     const id = this.sessionCookie.read(req);
-    if (!id) return false;
-    if (await this.sessions.get(id)) return true;
+    if (!id) return null;
+    const session = await this.sessions.get(id);
+    if (session) return session;
     this.sessionCookie.clear(reply);
     delete req.cookies?.[this.sessionCookie.name];
-    return false;
+    return null;
   }
   private identity(req: UiRequest, reply: UiReply): string {
     return formCsrfIdentity(this.sessionCookie.read(req), req, reply, this.secure);

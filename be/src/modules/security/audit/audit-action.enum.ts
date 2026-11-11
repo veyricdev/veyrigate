@@ -30,6 +30,10 @@ export enum AuditAction {
   ADMIN_USER_UNLOCKED = 'ADMIN_USER_UNLOCKED',
   ADMIN_USER_ROLES_CHANGED = 'ADMIN_USER_ROLES_CHANGED',
   OAUTH_CONSENT_REVOKED = 'OAUTH_CONSENT_REVOKED',
+  /** Run 85 (DEBT-575): a login attempt refused by the throttle; once per bucket per window. */
+  AUTH_LOGIN_THROTTLED = 'AUTH_LOGIN_THROTTLED',
+  /** Run 85 (DEBT-573): self-service password change at `/account/password`. */
+  AUTH_PASSWORD_CHANGED = 'AUTH_PASSWORD_CHANGED',
 }
 
 /** Actions that must raise a separate alert (spec §10: reuse, key rotation, admin control-plane). */

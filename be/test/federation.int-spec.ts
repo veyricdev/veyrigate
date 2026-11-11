@@ -30,6 +30,7 @@ import { MODELS } from '../src/database/mongo/models';
 import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
 import { RedisService } from '../src/database/redis/redis.service';
 import { AuthenticationService } from '../src/modules/authentication/authentication.service';
+import { LoginThrottleService } from '../src/modules/authentication/login-throttle.service';
 import { ClientAuthenticationService } from '../src/modules/clients/client-authentication.service';
 import { ClientCorsService } from '../src/modules/clients/client-cors.service';
 import { ClientCredentialService } from '../src/modules/clients/client-credential.service';
@@ -463,6 +464,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
         TokenVerifier,
         HtmlExceptionFilter,
         AuthenticationService,
+        LoginThrottleService,
         UserService,
         UserTenantService,
         FederatedIdentityService,
@@ -1633,7 +1635,8 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       );
       expect(await contexts.peek(leg.requestId)).not.toBeNull();
       expect((await linkPage({ idp_link: leg.link, idp_fed: leg.fed })).statusCode).toBe(400);
-      expect((await users.findById(local.sub))?.failedLoginCount).toBe(1);
+      // Run 85 (DEBT-575, intentional): a wrong password no longer writes a failure counter/lock.
+      expect((await users.findById(local.sub))?.failedLoginCount ?? 0).toBe(0);
       await expectNotLinked(leg.sub, local.sub);
     });
 
@@ -1981,7 +1984,11 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       expect(loc.searchParams.get('code')).toBeNull();
     });
 
-    it('T33-3 POST /auth/link shares the REAL `login` account bucket with /login (pending email): exhausted => 429 on both, the pending link is NOT consumed', async () => {
+    // Run 85 (DEBT-575, intentional change): /login no longer has the `account` dimension of the
+    // shared `login` limiter (a lockout vector, D85.2); /auth/link keeps it (checked BEFORE the
+    // pending link is consumed). So an exhausted account bucket still 429s the link, but no longer
+    // blocks the owner's own /login.
+    it('T33-3 POST /auth/link keeps the `login` account bucket (pending email): exhausted => 429 on the link, NOT on /login, the pending link is NOT consumed', async () => {
       const local = await localUser();
       const leg = await linkLeg(local.email);
       const key = `rl:login:account:${sha256(local.email.trim().toLowerCase())}`;
@@ -1990,7 +1997,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
         const blocked = await submitLink(leg, PASSWORD);
         expect(blocked.statusCode).toBe(429);
         expect(cookieOf(blocked, SESSION_COOKIE)).toBeUndefined();
-        // Same bucket as the password form: /login for that email is throttled too.
+        // The password form is not bound by that bucket any more (anti-lockout).
         const { returnTo } = await rpAuthorize();
         const page = await loginPage(returnTo);
         const csrf = page.body.match(/name="_csrf" value="([^"]+)"/)![1];
@@ -2000,7 +2007,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
           cookies: { idp_csrf: cookieOf(page, 'idp_csrf')!.value },
           payload: { _csrf: csrf, email: local.email, password: PASSWORD, returnTo },
         });
-        expect(viaLogin.statusCode).toBe(429);
+        expect(viaLogin.statusCode).toBe(302);
         await expectNotLinked(leg.sub, local.sub);
         expect((await users.findById(local.sub))?.failedLoginCount ?? 0).toBe(0);
       } finally {

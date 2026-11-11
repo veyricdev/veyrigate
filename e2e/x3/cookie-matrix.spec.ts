@@ -21,6 +21,8 @@ const SESSION = "__Host-idp_session";
 const LEGACY = "idp_session";
 /** DEBT-413: browser binding of a `login` context (X3 is Secure: always the `__Host-` name). */
 const AUTHZ = "__Host-idp_authz";
+/** Run 85 (DEBT-575): trusted-device cookie of a password login (X3 is Secure). */
+const DEVICE = "__Host-idp_dc";
 
 interface Cell {
   case: string;
@@ -174,6 +176,27 @@ async function expectSessionCookieShape(context: BrowserContext, projectName: st
   expect(all.some((x) => x.name === LEGACY && x.domain.includes(X3_IDP_HOST)), "no legacy name set").toBe(false);
 }
 
+/**
+ * Run 85 (DEBT-575, D85.2/D85.11): the trusted-device cookie set by a password login has the same
+ * shape as the session cookie: `__Host-idp_dc`, Secure, HttpOnly, Path=/, host-only on the IdP,
+ * Lax (where SameSite is applied), ~90 days, and never the unprefixed `idp_dc` name.
+ */
+async function expectDeviceCookieShape(context: BrowserContext, projectName: string) {
+  const all = await context.cookies();
+  const devices = all.filter((c) => c.name === DEVICE);
+  expect(devices.length, "one __Host-idp_dc device cookie").toBe(1);
+  const [c] = devices;
+  expect(c.value).toMatch(/^[A-Za-z0-9_-]{43}$/);
+  expect(c.secure).toBe(true);
+  expect(c.httpOnly).toBe(true);
+  if (enforcesSameSite(projectName)) expect(c.sameSite).toBe("Lax");
+  expect(c.path).toBe("/");
+  expect(c.domain, "host-only on the IdP").toBe(X3_IDP_HOST);
+  const days = (c.expires - Date.now() / 1000) / 86400;
+  expect(days > 89 && days <= 90, "Max-Age 7776000 (90 days)").toBe(true);
+  expect(all.some((x) => x.name === "idp_dc"), "no unprefixed idp_dc").toBe(false);
+}
+
 
 for (const label of ["alpha", "beta"] as X3Label[]) {
   const rp = X3_RPS[label];
@@ -186,6 +209,7 @@ for (const label of ["alpha", "beta"] as X3Label[]) {
       const idp = trackIdp(page);
       await login(page, rp);
       await expectSessionCookieShape(context, testInfo.project.name, c);
+      await expectDeviceCookieShape(context, testInfo.project.name);
       const cb = await idp.find("POST", "/login");
       c.cookieNames = cb[0]?.names ?? [];
       // DEBT-413: the resume (`GET /authorize?request_id`, top-level: Lax is sent) carries the binding.

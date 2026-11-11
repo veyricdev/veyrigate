@@ -21,6 +21,7 @@ import {
   type DevSeedUserConfig,
 } from '../src/database/seed-dev';
 import { AuthenticationService } from '../src/modules/authentication/authentication.service';
+import { LoginThrottleService } from '../src/modules/authentication/login-throttle.service';
 import { UserService, normalizeEmail } from '../src/modules/identity/user.service';
 import { UserTenantService } from '../src/modules/identity/user-tenant.service';
 import { MAILER } from '../src/modules/mailer/mailer';
@@ -827,6 +828,16 @@ describe('seed-dev: dev user (DEBT-076) on real Mongo', () => {
       ],
       providers: [
         AuthenticationService,
+        // Run 85: the login throttle (DEBT-575) is covered by run85-anti-lockout.int-spec; this
+        // spec has no Redis, so a never-blocking stand-in keeps the REAL login path under test.
+        {
+          provide: LoginThrottleService,
+          useValue: {
+            buckets: async () => ({ trusted: false, keys: [] }),
+            reserve: async () => ({ blocked: false }),
+            onSuccess: async () => undefined,
+          },
+        },
         UserService,
         UserTenantService,
         { provide: SessionService, useValue: sessions },

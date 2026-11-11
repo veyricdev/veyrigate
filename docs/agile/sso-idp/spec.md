@@ -137,6 +137,22 @@ Production dùng Redis Sentinel hoặc Redis Cluster, không chạy single insta
 
 - `@fastify/helmet` cho các header bảo mật cơ bản.
 - Rate limiting đa chiều qua `@nestjs/throttler` + Redis storage: theo IP, theo account/email, và theo deviceId — không chỉ giới hạn theo IP vì attacker có thể xoay IP.
+- **Bảng bucket và chống khoá có chủ đích (run 85, DEBT-575/016, D85.2; ASVS 6.1.1/6.3.1)**. Mọi bucket trên Redis, khoá băm (không lưu email/IP thô); Redis lỗi ở bước quyết định ⇒ fail-closed (5xx, không Argon2, không phiên).
+
+  | Bucket | Khoá | Ngưỡng / cửa sổ | Ghi chú |
+  |---|---|---|---|
+  | Limiter chung `/register`, `/forgot`, `/reset` | `rl:<name>:{ip,account,deviceId}:<sha256>` | `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW` (mặc định 100/60 s) | `deviceId` = cookie CSRF ẩn danh |
+  | Limiter chung `/login` | `rl:login:{ip,deviceId}:<sha256>` | như trên | **không** có chiều `account` (là vector khoá) |
+  | Login N — (email, mạng), thiết bị chưa tin cậy | `lt:{e:<sha256(email)>}:n:<sha256(mạng)>` | 5 / 900 s | mạng = IPv4 /32, IPv6 /64, IPv4-mapped ⇒ IPv4 |
+  | Login A — email, mọi thiết bị chưa tin cậy | `lt:{e:<sha256(email)>}:a` | 20 / 900 s | reset thành công xoá bucket này |
+  | Login D — (email, device cookie tin cậy) | `lt:{e:<sha256(email)>}:d:<sha256(cookie)>` | 10 / 900 s | không chịu N, A |
+  | Đổi mật khẩu — mật khẩu hiện tại sai | `pwc:{u:<sha256(userId)>}` | 5 / 900 s (+ limiter chung `password_change` ip/account/device) | trả lại khi policy từ chối hoặc thành công |
+  | Client auth `/token`, `/introspect`, `/revoke` | DEBT-029 | `CLIENT_AUTH_FAIL_*` | xem `client-auth-rate-limit.int-spec.ts` |
+
+  - Login: N/A (hoặc D) được **reserve nguyên tử trước Argon2** (`RateLimitService.reserve`), email không tồn tại đi cùng ngưỡng và cùng phản hồi 429 cố định (`Too many sign-in attempts. Try again later or reset your password.`, `Retry-After`); audit `AUTH_LOGIN_THROTTLED` tối đa 1 lần mỗi bucket mỗi cửa sổ. Đăng nhập đúng ⇒ xoá N (hoặc D), trả lại A.
+  - **Không khoá cứng theo tài khoản** (bỏ khoá tạm 15'/5 lần): login không ghi gì vào user. Khoá admin (`ADMIN_LOCKED_UNTIL`) và khoá tạm cũ còn sót trong dữ liệu vẫn được tôn trọng (khoá cũ tự hết ≤ 15').
+  - Thiết bị tin cậy: cookie `idp_dc` (`__Host-idp_dc` khi Secure), 32 byte ngẫu nhiên, `HttpOnly; SameSite=Lax; Path=/; Max-Age=7776000`, không `Domain`; đặt sau đăng nhập mật khẩu thành công với giá trị **mới mỗi lần** (D85.11: không dùng lại cookie gửi lên, hash cũ bị `ZREM`; federation không đọc/đặt). Có cookie đúng dạng thì luôn tra ZSET, kể cả email không tồn tại (DEBT-597, cùng số round-trip). Tin cậy gắn **với user**: ZSET `dc:{u:<sha256(userId)>}` (member = sha256(cookie), score = lần đăng nhập thành công gần nhất, giữ 20 thiết bị, 90 ngày). Ghi trust lỗi ⇒ chỉ mất trạng thái tin cậy (fail-safe). `revokeAllUserCredentials` (reset, đổi mật khẩu, khoá admin, admin revoke sessions, logout toàn cục) xoá ZSET (best-effort, không đổi kết quả).
+  - **Giới hạn còn lại**: kẻ chung NAT hoặc chung mạng /64 với nạn nhân chặn được nạn nhân **trên thiết bị mới** tối đa 15' mỗi lần (bucket N), và kẻ có botnet giữ bucket A bão hoà thì chặn được nạn nhân trên thiết bị mới; nạn nhân thoát bằng thiết bị quen (D không chịu N/A) hoặc đặt lại mật khẩu (xoá A). Đoán mật khẩu tối đa 5 lần/mạng và 20 lần/email mỗi 15' trên thiết bị chưa tin cậy; kẻ từng giữ device cookie hợp lệ (đã biết mật khẩu) được 10 lần/15' cho tới khi reset/đổi mật khẩu.
 - `class-validator` + `class-transformer` cho mọi input, bật `whitelist: true` để chặn field lạ.
 - Logging bằng Pino (mặc định của Fastify), redact tuyệt đối các field nhạy cảm: password, access_token, refresh_token, authorization_code, client_secret không bao giờ xuất hiện trong log.
 - HTTPS bắt buộc ở production (redirect HTTP→HTTPS ở tầng gateway).

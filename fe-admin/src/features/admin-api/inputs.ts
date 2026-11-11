@@ -186,6 +186,8 @@ export const AUDIT_ACTIONS = [
   "ADMIN_USER_UNLOCKED",
   "ADMIN_USER_ROLES_CHANGED",
   "OAUTH_CONSENT_REVOKED",
+  "AUTH_LOGIN_THROTTLED",
+  "AUTH_PASSWORD_CHANGED",
 ] as const;
 /** `targetType` values the BE writes today (free string in the BE query: this is the UI choice). */
 export const AUDIT_TARGET_TYPES = ["user", "client", "resource", "session", "signing_key"] as const;
