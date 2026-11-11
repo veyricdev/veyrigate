@@ -5,6 +5,7 @@ import type { Connection } from 'mongoose';
 import { constantTimeEqual, generateToken, sha256 } from '../../common/crypto/crypto.util';
 import { deriveS256Challenge } from '../../common/crypto/pkce.util';
 import { safeCspOrigin } from '../../common/http/csp';
+import { isDeliverableEmail } from '../../common/validation/email-address';
 import type { AppConfig } from '../../config/configuration';
 import { AuthenticationService } from '../authentication/authentication.service';
 import { FederatedIdentityService } from '../identity/federated-identity.service';
@@ -354,7 +355,9 @@ export class FederationService {
       };
     }
     // F5: no verified email => stop BEFORE any lookup by email (an unverified one never probes).
-    if (!identity.email) throw new FederationError('email_unverified');
+    // Run 84 D84.1: an address outside the narrow grammar never creates nor links an account.
+    if (!identity.email || !isDeliverableEmail(identity.email))
+      throw new FederationError('email_unverified');
     const email = normalizeEmail(identity.email);
     const local = await this.users.findByEmail(email);
     if (local) {

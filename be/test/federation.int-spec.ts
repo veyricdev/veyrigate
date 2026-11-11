@@ -2931,4 +2931,84 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       expect(await fiModel.countDocuments({ providerId: `${RUN}-s4`, userId: local.sub })).toBe(1);
     });
   });
+
+  /**
+   * Run 84 T1 (D84.1, DEBT-550/556): a provider-verified email outside the narrow grammar never
+   * creates or links an account (F5 => `email_unverified`, before any lookup by email); an identity
+   * that is ALREADY linked keeps signing in (lookup by providerId only).
+   */
+  describe('run 84 T1: provider email grammar on new/link (D84.1)', () => {
+    const HOSTILE = '"x>attacker@evil.test"@good.test';
+    const linkKeys = async () => (await redis.keys('fed_link:*')).length;
+
+    const expectRefused = async (res: Res, providerId: string, email: string) => {
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toContain('verified email address is required');
+      expect(res.body).not.toContain('evil.test');
+      expect(cookieOf(res, 'idp_link')).toBeUndefined();
+      expectNoSession(res);
+      expect(await fiModel.countDocuments({ providerId })).toBe(0);
+      expect(await userModel.countDocuments({ email })).toBe(0);
+    };
+
+    it.each([
+      HOSTILE,
+      '"a;attacker@evil.test"@good.test',
+      'victim%evil.test@good.test',
+      'victim@bücher.de',
+    ])(
+      'Google new identity with verified %j => email_unverified, 0 user, 0 FI, 0 pending link',
+      async (email) => {
+        const sub = `${RUN}-r84-${generateToken(6)}`;
+        const links = await linkKeys();
+        const { res } = await socialLogin('google', (await rpAuthorize()).requestId, {
+          claims: { sub, email, email_verified: true },
+        });
+        await expectRefused(res, sub, email);
+        expect(await linkKeys()).toBe(links);
+      },
+    );
+
+    it('GitHub new identity with primary+verified quoted email => email_unverified, nothing created', async () => {
+      const id = 840_000 + Math.floor(Math.random() * 10_000);
+      const { res } = await socialLogin('github', (await rpAuthorize()).requestId, {
+        gh: { id, emails: [{ email: HOSTILE, primary: true, verified: true }] },
+      });
+      await expectRefused(res, String(id), HOSTILE);
+    });
+
+    it('legacy local account whose stored email is the same hostile string => no pending link', async () => {
+      const email = `"r84-${generateToken(4).toLowerCase()}>attacker@evil.test"@good.test`;
+      const local = await users.create({ email, password: 'local password 123' });
+      const sub = `${RUN}-r84-link-${generateToken(6)}`;
+      const links = await linkKeys();
+      const { res } = await socialLogin('google', (await rpAuthorize()).requestId, {
+        claims: { sub, email, email_verified: true },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toContain('verified email address is required');
+      expect(cookieOf(res, 'idp_link')).toBeUndefined();
+      expectNoSession(res);
+      expect(await linkKeys()).toBe(links);
+      expect(await fiModel.countDocuments({ providerId: sub })).toBe(0);
+      expect(await fiModel.countDocuments({ userId: local.sub })).toBe(0);
+    });
+
+    it('an ALREADY linked identity still signs in when the provider now sends an email outside the grammar', async () => {
+      const sub = `${RUN}-r84-old-${generateToken(6)}`;
+      const first = await socialLogin('google', (await rpAuthorize()).requestId, {
+        claims: { sub, email: `${sub.toLowerCase()}@example.com`, email_verified: true },
+      });
+      expect(first.res.statusCode).toBe(302);
+      const renamed = `"${sub.toLowerCase()}>attacker@evil.test"@good.test`;
+      const users0 = await userModel.countDocuments({});
+      const again = await socialLogin('google', (await rpAuthorize()).requestId, {
+        claims: { sub, email: renamed, email_verified: true },
+      });
+      expect(again.res.statusCode).toBe(302);
+      expect(cookieOf(again.res, SESSION_COOKIE)?.value).toBeTruthy();
+      expect(await userModel.countDocuments({})).toBe(users0);
+      expect(await userModel.countDocuments({ email: renamed })).toBe(0);
+    });
+  });
 });

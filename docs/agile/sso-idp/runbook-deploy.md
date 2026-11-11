@@ -161,6 +161,7 @@ fail-closed (thao tác ghi phiên/code lỗi rõ ràng) thay vì âm thầm mấ
 4. Xác minh index (2c).
 5. Đặt `maxmemory-policy noeviction` (3) nếu chưa.
 5'. Từ run 82: chạy truy vấn chỉ đọc `runbook-ops.md` §8 (scope ngoài RFC 6749 §3.3) — khác rỗng ⇒ dọn qua admin API trước, hoặc chấp nhận lần sửa kế tiếp của bản ghi đó sẽ `400`.
+5''. Từ run 84: chạy truy vấn chỉ đọc `runbook-ops.md` §10 (email ngoài ngữ pháp D84.1), ghi `count` vào ticket deploy — xem §13.
 6. Rollout tiến trình ứng dụng.
 
 ## 5. `TRUST_PROXY` khi chạy sau reverse proxy (DEBT-006)
@@ -560,3 +561,14 @@ Kỳ vọng: `q1.ok: true`, `q2: []`, `q3.narrow = q3.revoke = 0`. Nếu không:
   trước cho RP liệt kê (RP xin scope đó sẽ nhận `invalid_scope`; người dùng có family bị revoke phải đăng
   nhập lại). Thêm lại scope sau deploy **không** khôi phục family đã thu hẹp/revoke — RP cần `/authorize` mới.
 - AT đã phát trước deploy giữ scope cũ tới khi hết hạn (≤ 15').
+
+## 13. Trước deploy run 84 — ngữ pháp email D84.1 và JWKS `no-cache` (DEBT-550/556/157)
+
+- **Email**: từ run 84 `/register`, `/forgot`, federation tạo mới/gắn tài khoản và mailer chỉ nhận `local@domain`
+  ASCII hẹp (D84.1). **Trước deploy** chạy truy vấn chỉ đọc ở [runbook-ops §10](runbook-ops.md#10-email-ngoài-ngữ-pháp-d841-trong-dữ-liệu-cũ-run-84-debt-550556)
+  trên DB production và ghi `count` vào ticket deploy. `count > 0` không chặn deploy: các tài khoản đó vẫn đăng
+  nhập được, nhưng sau deploy không nhận được thư đặt lại mật khẩu/xác minh và không tạo/gắn được qua federation ⇒
+  xử lý từng tài khoản theo §10. Đăng ký/quên mật khẩu với địa chỉ ngoài ngữ pháp giờ trả trang `400` chung.
+- **JWKS**: `/jwks.json` trả `Cache-Control: no-cache` (trước đây không có header). CDN/proxy trước IdP **không được**
+  ghi đè thành TTL dài; sau deploy kiểm `curl -sI $IDP/jwks.json` qua đường public ⇒ `cache-control: no-cache`
+  ([runbook-ops §1](runbook-ops.md#1-key-ký-nghi-bị-lộ--emergency-rotation) bước 5).

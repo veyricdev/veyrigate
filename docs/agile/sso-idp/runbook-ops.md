@@ -82,13 +82,37 @@ lạ ký hợp lệ. Sau khi xoay: alert `SsoEmergencyKeyRotation`
      Một lần xoay thừa không phá gì nhưng làm AT mới ký bằng key vừa tạo cũng chết (DEBT-158, chấp nhận).
 4. Dev `LocalKeyProvider`: làm theo [runbook-deploy §6](runbook-deploy.md#6-sau-emergency-rotate--kiểm-key_local_dir-debt-163-dev-localkeyprovider)
    (PEM mồ côi; chỉ xoá đúng `<oldKid>.pem`).
-5. Báo các RP xoá cache JWKS / refetch `/.well-known/openid-configuration` + `/jwks.json` (DEBT-157): RP cache JWKS lâu sẽ từ chối AT mới
-   (kid lạ) hoặc — tệ hơn — vẫn chấp nhận AT ký bằng key đã lộ nếu tự verify bằng cache.
+5. Cache JWKS ngoài IdP (DEBT-157/349, run 84 D84.2/D84.3):
+   - (i) `/jwks.json` trả `Cache-Control: no-cache` trên 200 (GET/HEAD, kèm `Vary: Origin`; lỗi 503 = `no-store`) ⇒
+     CDN/proxy phải revalidate mỗi lần, **không được** cấu hình ghi đè thành TTL dài (`max-age`/`s-maxage`, "cache
+     everything"). Kiểm qua đúng đường public: `curl -sI $IDP/jwks.json` (xem Xác minh).
+   - (ii) Sau emergency: báo **mọi** RP/resource server tự verify JWT **xoá cache JWKS ngay** (restart/reload process
+     hoặc lệnh xoá cache của thư viện) — kể cả RP cache ngắn. Lý do: AT giả ký bằng key đã lộ mang đúng `oldKid`, kid
+     đó vẫn nằm trong cache nên RP **không** gặp kid lạ và **không** refetch; refetch-theo-kid không giúp gì ở đây.
+     RP không xoá cache ⇒ vẫn chấp nhận AT ký bằng key đã lộ trong suốt thời gian cache của nó: với jose
+     `createRemoteJWKSet` mặc định (`cacheMaxAge` 10') đó là cửa sổ còn lại **tối đa 10 phút** sau rotate; RP cache
+     lâu hơn ⇒ lâu hơn tương ứng. Yêu cầu thường trực với RP: cache JWKS trong process ≤ 10 phút.
+   - (iii) fe-admin **không cần** restart: JWKS của nó chỉ verify ID token nhận qua back-channel `/token` (client đã
+     xác thực, TLS tới chính IdP); sau emergency IdP không còn ký bằng key đã gỡ nên không token nào ký bằng key
+     đó đi vào kênh này (D84.3).
+   - (iv) Rotate **normal** (không có key lộ): RP phải **refetch khi gặp `kid` lạ** (jose `createRemoteJWKSet` mặc định
+     đạt). Giới hạn còn lại: rotate normal ký ngay bằng key mới ⇒ RP còn cache JWKS cũ gặp kid lạ và phải refetch
+     (RP giới hạn tần suất refetch có thể từ chối AT mới trong thời gian ngắn) — tới khi có pre-publish (DEBT-393, run 85).
 
 **Xác minh** (kỳ vọng cụ thể)
 - `ADMIN_AT` vừa dùng để xoay cũng ký bằng `oldKid` ⇒ giờ `401`. Đọc kiểm tra bằng AT mới: refresh RT
   admin (`grant_type=refresh_token`) là đủ cho `GET` (`admin.read` không cần step-up).
 - `curl -sS $IDP/jwks.json` → `keys[].kid` chỉ có `newKid` (không còn `oldKid` hay key `retiring` nào).
+- `curl -sI $IDP/jwks.json` (qua CDN/proxy public) → `200` với `cache-control: no-cache` và `vary: Origin`.
+  Output thật (run 84, BE cục bộ trên DB test `vg-int-*`, bỏ các header bảo mật ở giữa):
+  ```
+  HTTP/1.1 200 OK
+  ...
+  vary: Origin
+  cache-control: no-cache
+  content-type: application/json; charset=utf-8
+  ```
+  Thấy `max-age=…`, `s-maxage` hoặc `Age:` lớn ⇒ CDN đang ghi đè: sửa cấu hình CDN rồi purge `/jwks.json`.
 - AT/ID token cũ: admin API → `401 invalid_token`; RP verify theo JWKS → fail.
 - Refresh vẫn chạy: `POST /token grant_type=refresh_token` → `200`, AT mới có header `kid = newKid`.
 - `GET /admin/keys` → đúng 1 item `{kid:newKid,status:"active"}`.
@@ -414,3 +438,78 @@ d.resources.find(bad, { _id: 0, resourceId: 1, identifier: 1, scopes: 1 }).forEa
   này qua form sửa resource. Ngoại lệ: token đang lưu chứa khoảng trắng/`\n` không qua được cả quy tắc lỏng
   (DEBT-549) ⇒ PATCH qua API **không** kèm `expectedScopes` (last-write-wins) khi không ai đang sửa resource đó.
   Không sửa Mongo tay.
+
+---
+
+## 9. 5xx/timeout khi tạo hoặc rotate client secret (run 84, DEBT-129)
+
+**Dấu hiệu**: `POST /admin/clients/<id>/secrets` trả 5xx hoặc timeout; fe-admin hiện `UNCERTAIN_ISSUE`
+(không chắc secret đã được phát). Fail-closed (run 79): audit được ghi **trước** khi trả plaintext, audit lỗi ⇒
+5xx và plaintext không bao giờ được gửi. Nhưng version mới có thể **đã** được tạo, và version cũ **đã** vào grace
+(`expiresAt` = lúc gọi + `CLIENT_SECRET_GRACE_TTL`) ⇒ client ngừng xác thực khi hết grace nếu không làm gì.
+
+**KHÔNG gọi lại mù** (mỗi lần gọi tạo thêm 1 version mà không ai có plaintext). Các bước (`admin.write` + step-up, §0):
+1. `GET /admin/clients/<id>/secrets` → `items[].{version,createdAt,expiresAt,revokedAt,status}`.
+   - Version client **đang dùng** = version cũ, giờ `status:"grace"`; ghi lại `expiresAt` của nó = **hạn chót thật**
+     để giao secret mới.
+   - Version **mồ côi** = version lớn hơn version đang dùng, `createdAt` ≈ thời điểm lỗi, `status:"active"` (đã
+     `revoked` nếu lỗi ở bước kiểm lại quyền sau khi ghi — khi đó không cần thu hồi). Không có version mới ⇒ lỗi
+     xảy ra trước khi ghi: không có gì để thu hồi, sang bước 4.
+2. Kiểm audit: `GET /admin/audit?action=CLIENT_SECRET_ROTATED&targetId=<id>` (secret đầu tiên:
+   `action=CLIENT_SECRET_CREATED`) → có event `result:"success"` với `metadata.version` = version mồ côi?
+   - **Thiếu** ⇒ đúng ca DEBT-129: ghi audit (Mongo) lỗi. **Khắc phục Mongo/audit trước** rồi mới làm bước 4 — gọi
+     lại khi audit còn hỏng chỉ tạo thêm version mồ côi.
+   - Có ⇒ request đã xong nhưng phản hồi mất (timeout mạng/proxy): plaintext vẫn mất, làm tiếp như dưới.
+3. Thu hồi version mồ côi: `DELETE /admin/clients/<id>/secrets/<version_mồ_côi>` → `204`. **Chỉ** version lớn hơn
+   version đang dùng, xác định theo `createdAt`/thời điểm lỗi — **KHÔNG** thu hồi version client đang dùng (thu hồi có
+   hiệu lực ngay, không grace ⇒ client chết ngay).
+4. Rotate lại **đúng 1 lần**: `POST /admin/clients/<id>/secrets` → `201 {"clientId","version","clientSecret"}`; triển
+   khai `clientSecret` cho client **trước `expiresAt` của version cũ** (bước 1). Lần rotate lại **không gia hạn**
+   grace: `rotateSecret` chỉ hạ `expiresAt` (version chưa có hạn hoặc có hạn muộn hơn), không bao giờ nâng. Lỡ hạn ⇒
+   client nhận `401 invalid_client`; **không có API gia hạn** — chỉ còn cách giao secret mới càng sớm càng tốt. Lại
+   5xx ⇒ quay lại bước 1.
+
+**Xác minh** (kỳ vọng cụ thể)
+- Client dùng secret mới: luồng thật của RP (`POST /token` `grant_type=authorization_code`/`refresh_token`,
+  `client_secret_basic`) → `200`. Kiểm nhanh không cần người dùng:
+  `curl -sS -u <client_id>:<secret_mới> -d token=x $IDP/introspect` → `200 {"active":false}` (xác thực client đạt;
+  secret sai/đã thu hồi ⇒ `401 {"error":"invalid_client"}`).
+- `GET /admin/clients/<id>/secrets`: đúng **1** version `active` (mới nhất), version cũ `grace` với `expiresAt`
+  **không đổi** so với bước 1, version mồ côi `revoked`.
+- Audit: `CLIENT_SECRET_REVOKED` cho version mồ côi, `CLIENT_SECRET_ROTATED result:"success"` cho version mới.
+
+---
+
+## 10. Email ngoài ngữ pháp D84.1 trong dữ liệu cũ (run 84, DEBT-550/556)
+
+Từ run 84, `/register`, `/forgot`, federation tạo mới/gắn tài khoản và `SmtpMailer` chỉ nhận `local@domain` ASCII hẹp
+(D84.1: local `[A-Za-z0-9._+'-]` 1–64 ký tự, không `.` đầu/cuối, không `..`; domain ≥ 2 nhãn LDH, nhãn cuối bắt đầu
+bằng chữ, ≤ 253; tổng ≤ 254; không quote, comment, `%`, `!`, IP literal, Unicode). Tài khoản lưu **trước** đó với địa
+chỉ ngoài ngữ pháp (vd. quoted local part):
+- **vẫn đăng nhập** bằng mật khẩu (`/login` giữ luật cũ) và bằng identity federation **đã liên kết**;
+- **không nhận được** thư xác minh/đặt lại mật khẩu: `/forgot` trả `400` trang lỗi chung (như với địa chỉ không có
+  tài khoản — không lộ tài khoản tồn tại);
+- federation **tạo mới/gắn** với email đó bị chặn (`email_unverified`).
+
+Tìm (chỉ đọc, qua `d` đã in `DB:` như §3d; regex neo `^…\z`, không cờ `m` — `$` của PCRE khớp trước `\n` cuối chuỗi):
+```js
+const d = db.getSiblingDB('<db>'); print('DB:', d.getName());   // phải = DB app đang dùng
+const D841 = /^(?=[^@]{1,64}@)(?=.{1,254}\z)[A-Za-z0-9_+'-]+(?:\.[A-Za-z0-9_+'-]+)*@(?=.{1,253}\z)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\z/;
+const bad = { email: { $not: D841 } };
+print('count:', d.users.countDocuments(bad));
+d.users.find(bad, { _id: 1 }).limit(5).forEach((u) => print(u._id.toString()));
+```
+Output thật (run 84, DB tạm `vg-int-run84-runbook-*` trên `vg-test-mongo`, đã drop; seed = 9 địa chỉ hợp lệ + 30 địa
+chỉ bị từ chối lấy từ bảng `be/src/common/validation/email-address.spec.ts`; đối chiếu chéo trên cùng DB: 0 địa chỉ
+hợp lệ bị đánh dấu, 0 địa chỉ bị từ chối lọt qua):
+```
+DB: vg-int-run84-runbook-1794362614
+count: 30
+6af3cd1785a3fe331b82ef2c
+6af3cd1785a3fe331b82ef2d
+6af3cd1785a3fe331b82ef2e
+6af3cd1785a3fe331b82ef2f
+6af3cd1785a3fe331b82ef30
+```
+Chỉ in `_id` (không đưa email vào ticket/chat). `count: 0` ⇒ không cần làm gì. Khác 0 ⇒ liên hệ người dùng qua kênh đã
+xác minh khác, đổi email qua kênh có kiểm soát (từng tài khoản, có người duyệt). **Không sửa hàng loạt** trong Mongo.

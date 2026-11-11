@@ -2,9 +2,9 @@
 
 > File duy nhất mọi agent đọc đầu tiên. Ghi đè, giữ ≤ 40 dòng.
 
-- **Run hiện tại**: — (chưa mở run 84). Quyết định đã chốt (người dùng ủy quyền): `plan.md` §12 "Chốt bổ sung". Đã xử lý 2026-11-10 (người dùng: "tự xử lý"): push, Node 22.23.4 (nvm + corepack pnpm 12.6.0), xoá image smoke cũ, drop `vg-int-vault-v7-*`, `be/.env` 4 biến GOOGLE/GITHUB placeholder ⇒ rỗng, câu hỏi 610 DB đóng. Còn cần người dùng: `pnpm --filter be db:sync-indexes` trên DB dev (classifier chặn orchestrator; 0 audit cũ hơn 180 ngày ⇒ không mất gì); xem GitHub Security → Dependabot sau push (máy không có `gh`).
-- **Run vừa đóng**: `83-deps-security` ✅ 7/7 — nâng dependency có advisory: nodemailer 10.1.7, `@nestjs/*` 12.2.0 (fastify 5.12.7), `@fastify/static` 10.1.10, seroval 1.6.12, eslint 9.39.5, override minimatch/glob, CodeQL ghim; `pnpm audit` 0; be 819, int 1982, fe-admin 1613, fe-sso-test 269, E2E 38, X3 42. Xem `runs/83-deps-security/summary.md`. ⚠ Deploy: chạy `runbook-ops.md` §8 trước (scope ngoài ngữ pháp ⇒ lần sửa kế tiếp `400`, run 82); login đang dở lúc deploy phải bắt đầu lại (run 81); production cần Mongo replica set/mongos (run 79); runbook-deploy §12 q1–q3 trước (run 75); mọi user đăng nhập lại 1 lần (run 73) + login federation dở ⇒ thử lại. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev — lần đầu sau run 71 XOÁ VĨNH VIỄN audit cũ hơn 180 ngày (chạy `-- --dry-run` trước, runbook-ops §0).
-- **Việc tiếp theo**: X6 release checklist (DEBT-129 rotate lại khi 5xx, DEBT-157/349/393 cache JWKS) + 🟡 DEBT-550 (ngữ pháp email đầu vào); 🟡 hoãn có lý do: DEBT-120, 121, 134, 192, 193, 517; 💭 gom dần (539, 545, 547–549, 551–553, 556–559).
+- **Run hiện tại**: — (chưa mở run 85). Quyết định đã chốt (người dùng ủy quyền): `plan.md` §12 "Chốt bổ sung". Còn cần người dùng: `pnpm --filter be db:sync-indexes` trên DB dev (classifier chặn orchestrator; 0 audit cũ hơn 180 ngày ⇒ không mất gì); xem GitHub Security → Dependabot (máy không có `gh`); ký duyệt `release-checklist.md` mục F ở X6 đợt 4.
+- **Run vừa đóng**: `84-X6-release1` ✅ 5/5 — ngữ pháp email D84.1 ở register/forgot/federation/mailer (DEBT-550/556), JWKS `no-cache` (DEBT-157), runbook rotate secret/JWKS/email, `release-checklist.md` (200 dòng, **7 P0 ❌**); be 905, int 2052, E2E 38. Xem `runs/84-X6-release1/summary.md`. ⚠ Deploy: chạy `runbook-ops.md` §10 trước (email đã lưu ngoài D84.1 ⇒ không đăng ký lại/quên mật khẩu được, run 84); chạy `runbook-ops.md` §8 trước (scope ngoài ngữ pháp ⇒ lần sửa kế tiếp `400`, run 82); login đang dở lúc deploy phải bắt đầu lại (run 81); production cần Mongo replica set/mongos (run 79); runbook-deploy §12 q1–q3 trước (run 75); mọi user đăng nhập lại 1 lần (run 73) + login federation dở ⇒ thử lại. ⚠ Người dùng: `pnpm -C be db:sync-indexes` trên DB dev — lần đầu sau run 71 XOÁ VĨNH VIỄN audit cũ hơn 180 ngày (chạy `-- --dry-run` trước, runbook-ops §0).
+- **Việc tiếp theo**: X6 đợt 2 (run 85) — 7 P0 ❌ của checklist (DEBT-571, 573, 574, 575, 576, 577, 584) + DEBT-393 pre-publish (D84.4) + DEBT-553/557 pin action theo SHA; đợt 3 diễn tập rotate/backup (DEBT-252/253); đợt 4 pentest + ký duyệt.
 - **Hạ tầng DEV/E2E (người dùng chỉ định, KHÔNG `compose up` thêm, KHÔNG FLUSH/drop)**: `aegate-mongo`@27017 (DB `sso-idp` dev / `sso-idp-e2e` E2E), `aegate-redis`@6379 (`/1` dev, `/2` E2E; db0 thuộc project khác), `veyrigate-mailpit-1` SMTP@1025/UI@8025. E2E: `pnpm -C e2e e2e`.
 - **Hạ tầng test**: BE int `vg-test-mongo@27117` (rs0) + `vg-test-redis@6479` (`test:int` tự kiểm và báo lệnh `docker start` nếu chưa chạy); FE `pnpm -C fe-sso-test test`. Seed dev: `pnpm -C be db:seed-dev` (cần `DEV_SEED_*` trong `be/.env`); E2E cần `e2e/.env` (`DEV_SEED_PASSWORD`).
 
@@ -27,10 +27,11 @@
 | [81](runs/81-sweep-mixed/summary.md) | M7 | Sweep 🟡 hỗn hợp (DEBT-323/413/527/532) | ✅ int 1677 + fe-admin 1589 + E2E 38 + X3 42 + be 806 | `6ccf410` |
 | [82](runs/82-sweep-mixed2/summary.md) | M7 | Sweep 🟡/💭 đợt 2 (DEBT-533/535–538/546) | ✅ int 1968 + fe-admin 1613 + E2E 38 + X3 42 + be 806 | `adf130a` |
 | [83](runs/83-deps-security/summary.md) | M7 | Dependency có advisory (nodemailer, nest/fastify, @fastify/static, seroval, eslint, minimatch/glob, CodeQL) | ✅ int 1982 + fe-admin 1613 + E2E 38 + X3 42 + be 819 | `b76b78f` |
+| [84](runs/84-X6-release1/summary.md) | M8 | X6 đợt 1: release checklist, ngữ pháp email, JWKS cache, runbook (DEBT-129/157/349/550/556) | ✅ int 2052 + E2E 38 + be 905 | `<hash>` |
 
 ## Chặn / cần người quyết định
 
-Xem `plan.md` §12. Còn mở: **Q7–Q9**. Q1, Q3 (BFF), Q4, Q5 (Vault Transit + Redis Sentinel), Q6 đã chốt.
+Xem `plan.md` §12. Q1–Q9 đã chốt hết (Q7–Q9 ngày 2026-11-06); quyết định bổ sung ở "Chốt bổ sung" (gồm D84.1–D84.7 run 84).
 
 ## Backlog mở
 

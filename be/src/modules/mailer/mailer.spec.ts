@@ -1,6 +1,7 @@
 import { createServer, type Server, type Socket } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { IsEmail, validateSync } from 'class-validator';
+import { createTransport } from 'nodemailer';
 import { SmtpMailer } from './smtp.mailer';
 import { resetPasswordMessage, verifyEmailMessage } from './templates';
 
@@ -110,13 +111,27 @@ describe('SmtpMailer envelope vs hostile addresses (run 83)', () => {
     await new Promise((r) => server.close(r));
   });
 
-  async function rcptsFor(to: string): Promise<{ rcpts: string[]; rejected: boolean }> {
-    const { port } = server.address() as AddressInfo;
-    const mailer = new SmtpMailer(`smtp://127.0.0.1:${port}`, 'no-reply@good.test');
+  const smtpUrl = () => `smtp://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const message = (to: string) => ({ to, subject: 's', text: 't', html: '<p>t</p>' });
+  /** Straight through nodemailer (no D84.1 guard): what its address parser puts in RCPT TO. */
+  const viaTransport = async (to: string): Promise<void> => {
+    await createTransport({ url: smtpUrl() }).sendMail({
+      from: 'no-reply@good.test',
+      ...message(to),
+    });
+  };
+  /** Through the app's sink (run 84 D84.1 guard first). */
+  const viaMailer = (to: string): Promise<void> =>
+    new SmtpMailer(smtpUrl(), 'no-reply@good.test').send(message(to));
+
+  async function rcptsFor(
+    to: string,
+    send: (to: string) => Promise<void> = viaTransport,
+  ): Promise<{ rcpts: string[]; rejected: boolean }> {
     rcpts = [];
     let rejected = false;
     try {
-      await mailer.send({ to, subject: 's', text: 't', html: '<p>t</p>' });
+      await send(to);
     } catch (err) {
       // Only nodemailer's own envelope refusal counts as "rejected"; a connection error or timeout must
       // fail the test instead of skipping its assertions (DEBT-555).
@@ -126,15 +141,19 @@ describe('SmtpMailer envelope vs hostile addresses (run 83)', () => {
     return { rcpts, rejected };
   }
 
-  it('baseline: one RCPT TO for a plain address', async () => {
-    const r = await rcptsFor('victim@good.test');
+  it.each([
+    ['transport', viaTransport],
+    ['SmtpMailer', viaMailer],
+  ])('baseline (%s): one RCPT TO for a plain address', async (_name, send) => {
+    const r = await rcptsFor('victim@good.test', send);
     expect(r.rejected).toBe(false);
     expect(r.rcpts).toEqual(['<victim@good.test>']);
   });
 
-  // The smuggled domain is evil.test; a quoted local part may still spell "evil.test" as text, so the
-  // check is on the RCPT domain (after the last "@"). `exact` pins the expected envelope where the
-  // advisory is about the local part rather than the domain.
+  // Run 83 (restored by DEBT-563): nodemailer itself, without the run 84 guard, so a downgrade or a
+  // parser regression still turns these red. The smuggled domain is evil.test; a quoted local part may
+  // still spell "evil.test" as text, so the check is on the RCPT domain (after the last "@"). `exact`
+  // pins the expected envelope where the advisory is about the local part rather than the domain.
   it.each<[string, string, string[] | undefined]>([
     // GHSA-85x2: ">" inside a quoted local part ends the angle-addr early.
     ['GHSA-85x2 quoted ">"', 'Victim <"x>, attacker@evil.test, "@good.test>', undefined],
@@ -148,7 +167,7 @@ describe('SmtpMailer envelope vs hostile addresses (run 83)', () => {
       '<(attacker@evil.test)victim@good.test>',
       ['<victim@good.test>'],
     ],
-  ])('%s: no RCPT TO at evil.test', async (_name, to, exact) => {
+  ])('transport %s: no RCPT TO at evil.test', async (_name, to, exact) => {
     const r = await rcptsFor(to);
     if (r.rejected) return;
     const domains = r.rcpts.map((x) => x.replace(/>$/, '').split('@').pop());
@@ -158,7 +177,7 @@ describe('SmtpMailer envelope vs hostile addresses (run 83)', () => {
 
   // Quoted local parts that @IsEmail() accepts (see the characterization below): one RCPT, at good.test.
   it.each(['"a;attacker@evil.test"@good.test', '"x>attacker@evil.test"@good.test'])(
-    'IsEmail-accepted %s: exactly one RCPT TO, at good.test',
+    'transport, IsEmail-accepted %s: exactly one RCPT TO, at good.test',
     async (to) => {
       const r = await rcptsFor(to);
       expect(r.rejected).toBe(false);
@@ -166,6 +185,29 @@ describe('SmtpMailer envelope vs hostile addresses (run 83)', () => {
       expect(r.rcpts[0]).toMatch(/@good\.test>$/);
     },
   );
+
+  // Run 84 T1 (D84.1, DEBT-550/556): the sink refuses every address outside the narrow grammar BEFORE
+  // nodemailer parses it: a fixed error (never the address) and no SMTP RCPT at all. This covers the
+  // run 83 advisory strings and the quoted local parts nodemailer 10.1.7 rewrites (DEBT-556).
+  it.each([
+    'Victim <"x>, attacker@evil.test, "@good.test>',
+    'g:"a;attacker@evil.test"@good.test;',
+    '(a (b) attacker@evil.test c) victim@good.test',
+    '<(attacker@evil.test)victim@good.test>',
+    '"a;attacker@evil.test"@good.test',
+    '"x>attacker@evil.test"@good.test',
+    'a%attacker@good.test',
+    'victim@good.test\r\nRCPT TO:<attacker@evil.test>',
+  ])('SmtpMailer, hostile %j: rejected before transport, 0 RCPT TO', async (to) => {
+    const err = await rcptsFor(to, viaMailer).then(
+      () => undefined,
+      (e: unknown) => e as Error,
+    );
+    expect(err).toBeInstanceOf(Error);
+    expect(err!.message).toBe('mailer: recipient rejected');
+    expect(err!.message).not.toContain('good.test');
+    expect(rcpts).toEqual([]);
+  });
 });
 
 /**

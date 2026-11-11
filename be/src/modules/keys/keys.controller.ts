@@ -25,16 +25,19 @@ export class KeysController {
    */
   @Get('jwks.json')
   async jwks(@Req() req: HttpRequest, @Res() reply: JwksReply): Promise<unknown> {
-    // Always `Vary: Origin` (even with no Origin): JWKS is cached, so a shared cache must not serve
-    // a stored no-Origin copy (no ACAO) to a later CORS request.
+    // Always `Vary: Origin` (even with no Origin): a shared cache may store JWKS, so it must not
+    // serve a stored no-Origin copy (no ACAO) to a later CORS request.
     const origin = requestOrigin(req);
     applyCors(
       reply,
       origin,
       origin ? await this.cors.isOriginRegisteredForAnyClient(origin) : false,
     );
+    // D84.2 (DEBT-157): `no-cache`, never a `max-age` - every refetch by an RP/CDN revalidates, so
+    // an emergency rotate takes effect at the HTTP layer at once. Errors stay `no-store` (filter).
     return reply
       .status(200)
+      .header('Cache-Control', 'no-cache')
       .send({ keys: await this.keys.getPublicKeys() } as { keys: PublicJwk[] });
   }
 }

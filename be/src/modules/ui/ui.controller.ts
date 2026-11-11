@@ -18,6 +18,7 @@ import { IsEmail, IsOptional, IsString, Length } from 'class-validator';
 import { ConfigService } from '@nestjs/config';
 import { buildCsp, safeCspOrigin } from '../../common/http/csp';
 import type { HttpReply, HttpRequest } from '../../common/http/http.types';
+import { IsDeliverableEmail } from '../../common/validation/email-address';
 import type { AppConfig, SessionConfig } from '../../config/configuration';
 import { AuthenticationService, type RevokeStep } from '../authentication/authentication.service';
 import { normalizeEmail } from '../identity/user.service';
@@ -46,9 +47,15 @@ class LoginDto extends FormDto {
   @IsString() @Length(8, 128) password!: string;
   @IsOptional() @IsString() returnTo?: string;
 }
-class RegisterDto extends LoginDto {}
+// Run 84 D84.1: every address that may get a mail or a new account also passes the narrow grammar
+// (next to `@IsEmail()`, never instead). Login keeps the old rule so legacy accounts still sign in.
+class RegisterDto extends FormDto {
+  @IsEmail() @IsDeliverableEmail() email!: string;
+  @IsString() @Length(8, 128) password!: string;
+  @IsOptional() @IsString() returnTo?: string;
+}
 class EmailDto extends FormDto {
-  @IsEmail() email!: string;
+  @IsEmail() @IsDeliverableEmail() email!: string;
 }
 class TokenDto extends FormDto {
   @IsString() token!: string;
