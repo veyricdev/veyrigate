@@ -18,15 +18,21 @@ allowBuilds:
 # `pnpm audit` exceptions (B7.4, run 38). Every entry needs a reason and a re-review date; CI runs
 # `pnpm audit --audit-level high` fail-closed, so anything not listed here blocks the merge.
 auditConfig:
-  ignoreGhsas: []
+  ignoreGhsas:
+    # Run 83: deepmerge <=4.3.1 prototype poisoning (low), no patched release exists. Only reached via
+    # jest-config (dev; merges this repo's own jest config, no attacker-controlled input); no runtime
+    # path (`pnpm why -r deepmerge`). Re-review 2027-02-10 or when jest drops/bumps deepmerge (DEBT-552).
+    - GHSA-gcqx-w48m-w2h4
 
 # Release-age pins (run 41, fe-admin A1): transitive deps of @tanstack/react-start 1.168.60 resolved
 # to releases < 14 days old; pin to the newest release <= 2026-10-07 that still satisfies the
-# parent's range (router-core/start-*: seroval ^1.6.7; router-generator: prettier ^3.9.6).
-# Drop once the registry ages past them or Start is bumped (DEBT-267/228).
+# parent's range (router-generator: prettier ^3.9.6).
+# Run 83 (security): seroval/seroval-plugins 1.6.12 (2026-10-21), last 1.6.x, fixes GHSA-f86p-h4j2-7qgj
+# (<1.6.11) and GHSA-9wx9-5pv9-3349 (<1.6.10); router-core/start-* range ^1.6.7. Kept pinned because
+# unpinned resolves 1.8.0 (2026-11-09, < 14 days). Drop once Start is bumped (DEBT-267/228).
 overrides:
-  seroval: 1.6.8
-  seroval-plugins: 1.6.8
+  seroval: 1.6.12
+  seroval-plugins: 1.6.12
   '@tanstack/router-generator>prettier': 3.9.9
   # Run 43 (fe-admin A5): openapi-typescript 7.13.0 (dev, ^1.34.6) resolved @redocly/openapi-core
   # 1.34.21 (2026-10-13, < 14 days); pin the newest older release (1.34.20, 2026-09-09).
@@ -36,3 +42,11 @@ overrides:
   # (@tanstack/*, @t3-oss/env-core, eslint-plugin-react-hooks) onto the fix. Security exception to the
   # 14-day rule: 4.6.6 released 2026-10-11, 0 deps. Drop on the next zod bump (DEBT-479).
   zod: 4.6.6
+  # Run 83 (tech-lead): GHSA-g3hv-75wg-m249 (minimatch <11.0.1, ReDoS) and GHSA-3g3m-2fjr-6pw4
+  # (glob <=14.0.1). Runtime (@fastify/static) and @nestjs/cli already resolve the fix by bumping the
+  # parent; these ranged keys only force the dev copies whose newest parent is still unpatched
+  # (@typescript-eslint/typescript-estree minimatch ^10.2.2, jest glob ^13.0.6) onto the same release.
+  # minimatch 3.x and glob <9 are outside the advisory ranges and untouched. Drop each once
+  # `pnpm why -r` shows the parent on minimatch >=11.0.1 / glob >=14.0.2 (DEBT-552).
+  'minimatch@>=7.0.0 <11.0.1': 11.0.5
+  'glob@>=9.0.0 <14.0.2': 14.0.4
