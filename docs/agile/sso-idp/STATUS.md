@@ -26,7 +26,7 @@
 | [84](runs/84-X6-release1/summary.md) | M8 | X6 đợt 1: release checklist, ngữ pháp email, JWKS cache, runbook (DEBT-129/157/349/550/556) | ✅ int 2052 + E2E 38 + be 905 | `6570f3a` |
 | [85](runs/85-X6-release2/summary.md) | M8 | X6 đợt 2: supply chain, `request`/UserInfo POST, mật khẩu phổ biến, chống khoá có chủ đích, đổi mật khẩu (DEBT-016/553/557/571/573–576/584/600) | ✅ int 2143 + vault 31 + E2E 39 + X3 42 + be 931 + fe-admin 1613 | `545a3c6` |
 | [86](runs/86-X6-release2b/summary.md) | M8 | X6 đợt 2b: token fragment, pre-publish key BE+FE, logout POST, CSP `base-uri`, `networkOf` (DEBT-393/572/577/583/599/605–607) | ✅ int 2246 + vault 32 + E2E 42 + X3 42 + be 979 + fe-admin 1626 | `51818d6` |
-| [87](runs/87-X6-drills/summary.md) | M8 | X6 diễn tập: backup/restore + rotate khẩn cấp, CLI khôi phục super_admin, pin digest (DEBT-252/253/589/590/608/613–617/620/621) | ✅ int 2275 + vault 32 + E2E 42×2 + X3 42 + be 1018 + fe-admin 1626 + drill 36/23/30 | `<hash>` |
+| [87](runs/87-X6-drills/summary.md) | M8 | X6 diễn tập: backup/restore + rotate khẩn cấp, CLI khôi phục super_admin, pin digest (DEBT-252/253/589/590/608/613–617/620/621) | ✅ int 2275 + vault 32 + E2E 42×2 + X3 42 + be 1018 + fe-admin 1626 + drill 36/23/30 | `0555cdd` |
 
 ## Chặn / cần người quyết định
 
