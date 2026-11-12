@@ -1,0 +1,191 @@
+{
+  "drill": "rotate-vault",
+  "startedAt": "2026-11-12T06:07:06.927Z",
+  "checks": [
+    {
+      "name": "vault: mount",
+      "ok": true
+    },
+    {
+      "name": "vault: key rsa-2048 exportable=false",
+      "ok": true
+    },
+    {
+      "name": "vault: policy from ops/vault/idp-signer.hcl",
+      "ok": true
+    },
+    {
+      "name": "vault: app token",
+      "ok": true
+    },
+    {
+      "name": "db:seed exit 0",
+      "ok": true
+    },
+    {
+      "name": "fe-admin secret issued",
+      "ok": true
+    },
+    {
+      "name": "one active key before",
+      "ok": true
+    },
+    {
+      "name": "AT_old: /userinfo 200",
+      "ok": true
+    },
+    {
+      "name": "AT_old: /introspect active",
+      "ok": true
+    },
+    {
+      "name": "AT_old: /userinfo on B 200 (B cache warm)",
+      "ok": true
+    },
+    {
+      "name": "RP verifier (warm cache) accepts AT_old",
+      "ok": true
+    },
+    {
+      "name": "POST /admin/keys/rotate emergency => 200",
+      "ok": true,
+      "detail": 200
+    },
+    {
+      "name": "new kid differs",
+      "ok": true
+    },
+    {
+      "name": "JWKS A = [newKid] at once",
+      "ok": true,
+      "detail": [
+        "HwGoslrsx3u61LoSz5D_mwMn2h2gtM0OI3oN6kKjk94"
+      ]
+    },
+    {
+      "name": "JWKS cache-control no-cache",
+      "ok": true
+    },
+    {
+      "name": "JWKS B = [newKid] within 32 s",
+      "ok": true,
+      "detail": 29119
+    },
+    {
+      "name": "AT_old on B /userinfo 401 within 32 s",
+      "ok": true,
+      "detail": 29129
+    },
+    {
+      "name": "AT_old: /userinfo 401",
+      "ok": true
+    },
+    {
+      "name": "AT_old: /introspect active:false",
+      "ok": true
+    },
+    {
+      "name": "AT_old: admin API 401",
+      "ok": true
+    },
+    {
+      "name": "Vault: latest = min_decryption = min_encryption = min_available, one version left",
+      "ok": true,
+      "detail": {
+        "latest_version": 2,
+        "min_decryption_version": 2,
+        "min_encryption_version": 2,
+        "min_available_version": 2,
+        "versions": [
+          "2"
+        ]
+      }
+    },
+    {
+      "name": "refresh after emergency => 200",
+      "ok": true,
+      "detail": 200
+    },
+    {
+      "name": "new AT kid = newKid",
+      "ok": true
+    },
+    {
+      "name": "new RP verifier accepts the new AT",
+      "ok": true
+    },
+    {
+      "name": "new RP verifier rejects AT_old",
+      "ok": true
+    },
+    {
+      "name": "audit SIGNING_KEY_ROTATED success mode emergency",
+      "ok": true
+    },
+    {
+      "name": "sso_signing_key_rotations_total{mode=emergency,result=success} +1",
+      "ok": true,
+      "detail": {
+        "before": 0,
+        "after": 1
+      }
+    },
+    {
+      "name": "GET /admin/keys: exactly one active, the new kid",
+      "ok": true
+    },
+    {
+      "name": "normal rotation => 200 + one pending key",
+      "ok": true
+    },
+    {
+      "name": "second normal rotation while pending => 409 conflict",
+      "ok": true
+    }
+  ],
+  "timings": {
+    "rotateLatencyMs": 196,
+    "jwksAOnlyNewMs": 205,
+    "jwksBOnlyNewMs": 29119,
+    "userinfoB401Ms": 29129
+  },
+  "vaultKey": {
+    "latest_version": 2,
+    "min_decryption_version": 2,
+    "min_encryption_version": 2,
+    "min_available_version": 2,
+    "versions": [
+      "2"
+    ]
+  },
+  "warmVerifier": {
+    "acceptsAtOld": true,
+    "acceptsNewAtImmediately": false,
+    "msSinceRotate": 29353
+  },
+  "metric": {
+    "before": 0,
+    "after": 1
+  },
+  "kids": {
+    "oldKid": "jxUS9d8MUZXMo9hX7QTqDWO1N_0PDuuQ7JiqvR-_qos",
+    "newKid": "HwGoslrsx3u61LoSz5D_mwMn2h2gtM0OI3oN6kKjk94",
+    "pendingKid": "uSvnxBhNygO4uWs6TCuXKfDK7CV8BQdr5wdFr1Df94s"
+  },
+  "tools": {
+    "node": "v22.23.4",
+    "head": "8855df0",
+    "dist": "<repo>\\be\\dist"
+  },
+  "limits": "BE runs NODE_ENV=development (production: https Vault + Secure cookies, covered by docker-smoke.sh); KEY_PREPUBLISH_SEC=600, ACCESS_TOKEN_TTL=900 as in production.",
+  "cleanupErrors": [],
+  "postCheck": {
+    "drillDbsLeft": [],
+    "redisDbSizes": {
+      "8": 0
+    },
+    "e2eUnchanged": true
+  },
+  "finishedAt": "2026-11-12T06:07:54.414Z",
+  "ok": true
+}

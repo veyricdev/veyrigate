@@ -253,10 +253,10 @@ export class AdminUsersController {
     }
     if (!unlocked) throw AdminAuthError.notFound();
     const { before, unlockMarkAt } = unlocked;
-    if (before.lockedUntil != null || before.failedLoginCount > 0) {
+    if (before.lockedUntil != null) {
       await this.audit.record({ ...base, result: 'success' }, { timestamp: unlockMarkAt });
     }
-    const after = { ...before, failedLoginCount: 0, lockedUntil: undefined };
+    const after = { ...before, lockedUntil: undefined };
     return toAdminUser(after, t.member, new Date());
   }
 

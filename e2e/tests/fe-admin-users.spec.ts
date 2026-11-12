@@ -81,12 +81,14 @@ test("fe-admin users: filter by email, lock blocks refresh + sign-in, unlock, re
     await page.reload();
     const families = page.getByRole("region", { name: "Refresh token families" });
     const revoke = families.getByRole("button", { name: "Revoke family of fe-admin" });
-    // Families are sorted by id (revoked ones of older runs too): page until the active one. The
-    // bound grows with the persisted E2E DB (493 families = 25 pages at run 86; DEBT-608).
+    // DEBT-608 (D87.19): the seed deletes every RT of the target, so only this run's families exist.
+    // The live one is on the first page; at most 2 "Next page" for families other specs made meanwhile.
+    let seen = 0;
     for (let i = 0; ; i++) {
       await expect(families.getByRole("table").or(families.getByText(/^No (more families|refresh token family)\.$/))).toBeVisible();
       if ((await revoke.count()) > 0) break;
-      expect(i < 100, "an active family within 100 pages").toBe(true);
+      seen += Math.max(0, (await families.getByRole("row").count()) - 1);
+      expect(i < 2, `an active family within the first 3 pages (${seen} families seen)`).toBe(true);
       await Promise.all([
         page.waitForResponse((r) => r.url().includes("/_serverFn/")),
         families.getByRole("button", { name: "Next page" }).click(),

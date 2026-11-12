@@ -121,8 +121,8 @@ export interface AdminUserView {
 }
 
 /**
- * User + its membership of the token's tenant (B6.3b). Never `passwordHash`, `mfaSecret`,
- * `lockTransitionNonce`, `failedLoginCount`, profile, or any session/token field.
+ * User + its membership of the token's tenant (B6.3b). Never `passwordHash`, `mfaSecret`, profile,
+ * or any session/token field (legacy fields `lockTransitionNonce`/`failedLoginCount` removed run 87).
  */
 export function toAdminUser(
   u: UserView,

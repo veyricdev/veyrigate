@@ -20,7 +20,6 @@ describe('AuthenticationService', () => {
     email: 'a@example.com',
     profile: {},
     emailVerifiedAt: new Date(),
-    failedLoginCount: 0,
     createdAt: new Date(),
     updatedAt: new Date(),
   };

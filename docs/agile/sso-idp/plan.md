@@ -485,4 +485,193 @@ Mục tiêu app này: **kiểm chứng IdP từ phía RP** — vừa là demo, v
     - Lý do giữ đúng định dạng 4 nhóm đệm 0 như hiện nay: key bucket Redis giữ nguyên byte, deploy không reset đếm.
     - Không dùng `toNormalizedString()` như backlog gợi ý, vì nó bỏ đệm 0 ⇒ key đổi.
   - **D86.15 (T5) CSP**: `baseUri: ["'none'"]` trong helmet (`bootstrap.ts`) **và** `['base-uri', "'none'"]` trong `csp.ts`. Vị trí directive giữ nguyên (thứ tự mặc định helmet), test byte-identity sẽ chứng minh.
+  - **D87.1 Lô**: thứ tự như trên, gói trong một run.
+  - **D87.2 Cơ chế**
+    - Dump logic toàn bộ DB app **mỗi giờ**, phút :17 UTC: `mongodump --archive --gzip --db=<db>`, đọc từ secondary (`readPreference=secondary` trong config).
+    - Binary: image `mongo:7.0.43@sha256:1f995ad…` (cùng major với server, đã pin ở smoke) hoặc database-tools 100.x trên host backup.
+    - Không dùng `--oplog` vì option này chỉ chạy khi dump cả instance. Hệ quả: snapshot không nhất quán tuyệt đối giữa các collection. Dữ liệu nhỏ nên dump chỉ mất vài giây, và restore đã chịu được độ lệch này (§4c thu hồi mọi RT, §4d áp lại thay đổi bảo mật, `db:sync-indexes`). Runbook phải ghi rõ điều này.
+    - Replica set (bắt buộc từ run 79) lo mất node; backup dành cho lỗi logic, thao tác nhầm, mất site.
+  - **D87.3 RPO/RTO**
+    - **RPO ≤ 1 h**, tính bằng khoảng cách giữa hai backup thành công. Alert khi bản thành công cuối cũ hơn 2 h.
+    - **RTO ≤ 2 h**, từ quyết định restore tới khi mở lại traffic, gồm cả checklist §4d làm tay.
+    - Phần kỹ thuật (giải mã + restore + §4c + `db:sync-indexes` + boot) **≤ 30 phút** với archive ≤ 1 GB.
+    - Ngưỡng cho diễn tập (dữ liệu nhỏ): phần kỹ thuật ≤ 10 phút; vượt ⇒ FAIL, phải điều tra.
+  - **D87.4 PITR: không làm ở bản phát hành này.**
+    - PITR tự dựng từ oplog (dump `local.oplog.rs` theo `ts` + `mongorestore --oplogReplay --oplogFile --oplogLimit`) không rename được namespace, nên không restore song song vào DB mới như §4b được.
+    - Nó cũng là một cơ chế thứ hai phải diễn tập và trực.
+    - Công cụ đúng cho việc này là Percona Backup for MongoDB (cần tải) ⇒ DEBT-610.
+    - RPO 1 h chấp nhận được vì §4c/§4d đã bù phần thay đổi bảo mật.
+  - **D87.5 Mã hoá: `gpg` khoá công khai**
+    - Lệnh: `gpg --batch --yes --trust-model always --recipient-file <backup-pub.asc> --cipher-algo AES256 --compress-algo none --encrypt`.
+    - Archive đã gzip nên gpg không nén. Toàn vẹn dựa vào MDC/AEAD của gpg cộng `sha256` ghi trong manifest.
+    - Host backup **chỉ giữ public key**: lộ host hay storage cũng không đọc được backup.
+    - Private key có passphrase, sinh offline. File key ở secret store A (ops lead), passphrase ở secret store B (người thứ hai, security hoặc ops khác) ⇒ **restore cần 2 người**.
+    - Xoay key hằng năm; giữ private key cũ tới khi bản cuối cùng mã hoá bằng nó hết retention (35 ngày).
+    - Loại `openssl enc` (không có AEAD, mặc định không xác thực), `openssl cms` (giải mã file lớn không chạy theo luồng), `age` (không có sẵn, cần tải).
+    - Production cần gói `gnupg` của distro trên host backup. Đây là điều kiện hạ tầng ghi trong runbook, không phải tải trong run này.
+  - **D87.6 Retention**
+    - Bản hằng giờ giữ **48 h** trên host backup (thư mục `0700`, đĩa mã hoá).
+    - Bản 00:17 UTC mỗi ngày chép offsite, giữ **35 ngày**. Không có bản tháng.
+    - Lý do:
+      - restore cũ hơn vài ngày gần như vô ích với IdP (RT, phiên, khoá đã đổi);
+      - 35 ngày đủ để phát hiện sự cố muộn trong một chu kỳ tháng;
+      - đồng thời giới hạn thời gian PII của user đã xoá còn trong backup.
+    - Audit có TTL 180 ngày riêng; lưu audit lâu hơn là việc khác, ngoài phạm vi.
+    - Xoá bằng lifecycle rule ở storage offsite; script chỉ prune thư mục local theo đúng mẫu tên.
+  - **D87.7 Nơi lưu và quyền**
+    - Offsite: object storage ở **failure domain khác** production (khác region/tài khoản nhà cung cấp), bật versioning và **object lock** 35 ngày.
+    - Credential của job backup chỉ có quyền `put` (không list/get/delete). Credential restore riêng, chỉ đọc, do ops giữ.
+    - Mongo: user `backup` (role có sẵn `backup`) cho dump; user `restore` (role `restore`) chỉ tạo khi cần restore.
+    - URI/mật khẩu Mongo đi qua `--config=<file 0600>` (YAML `uri:`), **không** đặt trên argv. Script từ chối `MONGO_URI` có `@` trên argv. Đây là phần DEBT-258 cho đường backup/restore.
+    - Mỗi lần restore ghi biên bản: ai, khi nào, ticket nào.
+  - **D87.8 Giám sát**
+    - Script backup chỉ ghi `veyrigate_backup_last_success_timestamp_seconds` vào textfile collector (khi có `BACKUP_TEXTFILE_DIR`) sau khi **mọi** bước thành công.
+    - Alert `SsoMongoBackupStale`: `time() - veyrigate_backup_last_success_timestamp_seconds > 7200` trong 10 phút, thêm vào `ops/prometheus/alerts.yml` + `ops-rules.spec`.
+    - Mỗi lần chạy, script tự kiểm `sha256` và `gpg --list-packets` (không cần private key).
+    - Diễn tập restore đầy đủ **mỗi quý** và sau mỗi thay đổi schema lớn, bằng harness D87.11.
+  - **D87.9 Ngoài Mongo**
+    - Redis: không backup (giữ quyết định §4).
+    - Signing key Vault: ngoài phạm vi (DEBT-391 vẫn mở). Mất storage Vault ⇒ tạo transit key mới và xử lý như emergency (mọi token cũ chết). Runbook thêm 1 dòng.
+  - **D87.10 Script trong repo (dùng chung cho production và diễn tập)**
+    - `ops/backup/mongo-backup.sh <db> <out-dir>`
+      - Env: `MONGO_BACKUP_CONFIG` hoặc `MONGO_URI` không có credential, `BACKUP_PUBKEY`, `MONGODUMP` (mặc định `mongodump`; diễn tập dùng `docker exec veyrigate-mongo mongodump`), `BACKUP_TEXTFILE_DIR`.
+      - Pipe dump → gpg, ghi ra `<name>.partial`; không có file rõ nào chạm đĩa, không có file nào trong container.
+      - `set -o pipefail`; chỉ `mv` sang tên chuẩn `idp-<db>-<UTC yyyymmddTHHMMSSZ>.archive.gz.gpg` khi mọi bước exit 0.
+      - Ghi `<name>.manifest.json`: `{db, startedAt, finishedAt, toolVersion, collections:{name:count}, totalDocuments, bytes, sha256}`. Số document lấy từ stderr "done dumping".
+      - Sau đó: `sha256sum -c` + `gpg --list-packets`, prune file local > 48 h đúng mẫu tên, rồi mới ghi metric.
+      - Lỗi ở bất kỳ bước nào ⇒ exit ≠ 0, xoá `.partial`, không ghi metric.
+    - `ops/backup/mongo-restore.sh <file.gpg> <src-db> <dst-db>`
+      - Kiểm `sha256` theo manifest.
+      - Từ chối: `dst` đã tồn tại, `dst == src`, có `--drop`, tên đích không hợp lệ.
+      - Lệnh: `gpg --decrypt | $MONGORESTORE --archive --gzip --nsInclude='<src>.*' --nsFrom='<src>.*' --nsTo='<dst>.*'`.
+      - Bắt buộc dòng cuối `N document(s) restored successfully. 0 document(s) failed` với N = `totalDocuments` của manifest; lệch ⇒ exit 1.
+    - `ops/backup/revoke-all-refresh-tokens.mongosh.js`: khối §4c tách ra file, nhận DB qua `--eval "const TARGET='<db>'"`. Runbook và harness gọi **cùng** file để không lệch nhau.
+  - **D87.11 Harness diễn tập + bằng chứng tái lập**
+    - Vị trí: `be/scripts/drills/`, Node ESM, import `be/dist` và dependency của `be` (mongoose, jose). Không vào image (Dockerfile chỉ chép `dist`).
+    - Gồm: `lib.mjs` (boot BE con, luồng code + PKCE lấy AT/RT, timeout), `seed-drill-data.mjs`, `collection-digest.mongosh.js`, `backup-restore-drill.mjs`, `rotate-drill.mjs`.
+    - Chạy lại bằng `node be/scripts/drills/backup-restore-drill.mjs` và `node be/scripts/drills/rotate-drill.mjs --provider local|vault`.
+    - Đầu ra: `runs/87-X6-drills/evidence/<drill>-<UTC>.json` (+ `.log`), commit làm bằng chứng.
+    - **Không gian tên** (assert lúc bắt đầu; sai ⇒ exit trước khi ghi):
+      - Mongo `127.0.0.1:27017/?directConnection=true`, DB khớp `^vg-drill-(src|restore|rotate-local|rotate-vault)$`.
+      - Redis `redis://127.0.0.1:6379/7` (backup + rotate local) và `/8` (rotate vault); `DBSIZE` phải = 0 lúc bắt đầu.
+      - Cổng BE 4987/4988.
+      - `KEY_LOCAL_DIR`, `GNUPGHOME`, archive và cwd đều trong `mkdtemp` của scratch.
+    - **Dọn** (`finally`):
+      - `dropDatabase` **chỉ** với DB khớp regex trên;
+      - `redis-cli -n 7|8 FLUSHDB` chỉ đúng db index đó (**không bao giờ** `FLUSHALL`, không đụng db 0/1/2);
+      - xoá thư mục tạm, kill tiến trình con.
+    - **Hậu kiểm**: `listDatabases` không còn `vg-drill-*`; `DBSIZE` db 7/8 = 0; `sso-idp-e2e` có cùng số collection/document như lúc bắt đầu (chỉ đếm, trước và sau).
+    - **Bằng chứng chỉ được chứa**: tên collection, số document, tên/spec index, digest sha256, mã HTTP, `kid`, thời gian, phiên bản công cụ.
+      - **Không** chứa token, mật khẩu, hash, email thật (dùng `drill-*@drill.invalid`), URI có credential.
+      - Harness tự grep bằng chứng theo `eyJ`, `$argon2`, `password`, `secret` ⇒ khớp thì exit 1.
+    - Mọi HTTP `AbortSignal.timeout(5000)`; boot ≤ 30 s; toàn harness ≤ 10 phút.
+    - BE diễn tập chạy `NODE_ENV=development`, vì production đòi `SESSION_COOKIE_SECURE` + Vault https (phần đó đã có `docker-smoke.sh` lo). Report ghi giới hạn này.
+
+  **Khôi phục super_admin (DEBT-252)**
+
+  - **D87.12 CLI `admin-recover`**
+    - File `be/src/database/admin-recover.ts` ⇒ `dist/database/admin-recover.js`; script `db:admin-recover`.
+    - Chạy production: `docker run --rm -i --env-file <env app production> <image> node dist/database/admin-recover.js <args>`.
+    - Dùng **chính env của app** (`validateEnv` đầy đủ ⇒ `MONGO_URI` đúng là DB app). Chấp nhận **mọi** `NODE_ENV`, kể cả production (khác seed).
+    - **Tham số** (allowlist; lạ ⇒ exit 1, không echo):
+      - `--email <e>`
+      - `--requested-by <id>`, `--approved-by <id>`: `^[a-z0-9._-]{2,64}$`, phải **khác nhau**
+      - `--ticket <ref>`: `^[A-Za-z0-9._#/-]{1,64}$`
+      - tuỳ chọn: `--unlock`, `--allow-existing-super-admin`, `--dry-run`
+    - **`--dry-run`** theo quy ước DEBT-256: kiểm tham số + env, in `target:` + `dry-run: no connection made`, exit 0, **không kết nối**.
+    - **Chạy thật**:
+      1. Kết nối với `serverSelectionTimeoutMS: 5000`.
+      2. Đọc kế hoạch:
+         - user theo `normalizeEmail`; không có ⇒ từ chối, **không bao giờ tạo user**;
+         - membership `default-tenant` hiện tại;
+         - trạng thái khoá;
+         - số super_admin **dùng được** của `default-tenant`, định nghĩa giống `SuperAdminGuard`: membership active + `super_admin`, user tồn tại, `lockedUntil ≠ ADMIN_LOCKED_UNTIL`.
+      3. In kế hoạch: `target: host/db`, `user <id>`, membership, locked yes/no, `usable super_admins: N`, hai tên, ticket. **Không in email.**
+      4. In mã xác nhận ngẫu nhiên 8 chữ số (`crypto.randomInt`, dạng `1234-5678`), rồi đọc **một dòng** stdin, chờ tối đa 120 s.
+      5. Mã đúng ⇒ **một transaction** qua `SuperAdminGuard.runGuarded`:
+         - touch `$inc superAdminGuard` các membership super_admin của tenant;
+         - đếm lại số super_admin dùng được trong transaction;
+         - upsert membership `{status:'active', $addToSet roles 'super_admin'}`;
+         - nếu có `--unlock`: `UserService.adminUnlock(id, true, now, session)` (thêm tham số `session`);
+         - insert audit `ADMIN_RECOVERED`.
+      6. Commit ⇒ in `recovered: user <id>, audit event <eventId>`, exit 0.
+    - **Audit `ADMIN_RECOVERED`** (enum mới, thêm vào `ALERT_ACTIONS`):
+      - `actorType:'system'`, `actorId:<requested-by>`, `tenantId:'default-tenant'` (để thấy qua `GET /admin/audit`), `targetType:'user'`, `targetId:<userId>`, `result`, `reason?`.
+      - `metadata:{requestedBy, approvedBy, ticket, unlocked, forced, usableSuperAdmins, host: os.hostname()}`.
+      - **Không** có email, hash, IP. Đi qua `sanitizeMetadata`.
+      - CLI in thêm một dòng JSON `{alert:true, action:'ADMIN_RECOVERED', eventId}` ra stdout để log pipeline bắn alert (alert listener chỉ có trong process app).
+    - **Từ chối** (exit 1, không đổi membership/user). Có kết nối thì ghi thêm audit **failure** best-effort, ngoài transaction:
+      - `reason:'user_not_found'` (không có `targetId`);
+      - `'super_admin_exists'`;
+      - `'target_locked'`: user bị admin khoá mà thiếu `--unlock` (nếu vẫn nâng thì được một admin không đăng nhập được);
+      - `'not_confirmed'`: sai mã, EOF hoặc hết 120 s.
+      - Audit failure lỗi ⇒ vẫn exit 1, in câu cố định.
+    - **Lỗi trong transaction** (Mongo standalone không có transaction, audit insert lỗi, mất kết nối) ⇒ abort, **không ghi gì**, exit 1. Thông báo lỗi qua `cliErrorText`.
+    - **Sau khi phục hồi** (ghi trong runbook): user đăng nhập `prompt=login`; nếu nghi lộ thì đổi mật khẩu ở `/account/password` (thu hồi mọi phiên, D85.6).
+    - CLI **không** đụng Redis và không thu hồi phiên: không thêm phụ thuộc lúc đang sự cố, và admin API vẫn đòi `prompt=login`/step-up cho thao tác ghi.
+  - **D87.13 "Xác nhận 2 người" offline là kiểm soát thủ tục, không phải mật mã — runbook ghi thẳng như vậy.**
+    - Ai có `MONGO_URI` quyền ghi đều vượt được mọi CLI. Kiểm soát thật gồm:
+      - (a) env production/credential Mongo chỉ mở ra khi có 2 người (secret store);
+      - (b) CLI bắt hai định danh khác nhau, và người duyệt phải đọc to `target:`, user id, N rồi mới gõ lại mã;
+      - (c) audit nằm trong cùng transaction và alert qua log.
+    - Đã loại token/HMAC hai pha và chia secret kiểu XOR: tốn công quản lý khoá mà vẫn không chặn được người có quyền ghi DB.
+  - **D87.14 Đã có super_admin dùng được ⇒ mặc định từ chối.**
+    - `--allow-existing-super-admin` dành cho trường hợp super_admin còn đó nhưng không ai đăng nhập được (người đã nghỉ, mất hộp thư).
+    - Khi dùng: audit `metadata.forced:true` + `usableSuperAdmins:N`; `--ticket` vẫn bắt buộc.
+    - Race (CLI ∥ CLI, CLI ∥ demote qua API) được tuần tự hoá bằng touch trong transaction: write conflict ⇒ driver retry trên snapshot mới ⇒ thấy N ≥ 1 ⇒ từ chối, trừ khi có force.
+  - **D87.15 Chứng minh "chạy trong image production" mà không tạo container local**
+    - (a) Local: `pnpm --filter @sso-idp/be deploy --prod <scratch>/deploy`, chép `be/dist` vào (đúng bố cục `/app` của Dockerfile), chạy `node dist/database/admin-recover.js --dry-run …` với cwd đó ⇒ exit 0. Thêm một lần chạy thật vào `vg-drill-restore` trong diễn tập T1.
+    - (b) CI: `be/scripts/docker-smoke.sh` thêm check `docker run --rm --network none -e … <image> node dist/database/admin-recover.js --dry-run …` ⇒ exit 0 + dòng `target:`. Chạy ở job `be-image` khi người dùng push, không chạy local.
+
+  **Rotate khẩn cấp**
+
+  - **D87.16 Diễn tập rotate (T3)**
+    - **Local**: một BE, `KEY_PROVIDER=local`, `KEY_PREPUBLISH_SEC=600` (như production), `ACCESS_TOKEN_TTL=900`, `METRICS_TOKEN` ngẫu nhiên.
+    - **Vault**: hai BE A/B cùng `vg-drill-rotate-vault` + Redis `/8`; Vault `vg-b73-vault`, mount riêng `vg-drill-transit`; policy theo `ops/vault/idp-signer.hcl` (làm đúng runbook-deploy §8, tức là kiểm luôn mục đó). Token app nằm trong file `0600` ở scratch (`VAULT_TOKEN_FILE`), xoá khi dọn.
+    - **Đo** (ms, tính từ lúc gửi rotate):
+      - latency của rotate;
+      - JWKS A chỉ còn `newKid`;
+      - JWKS B chỉ còn `newKid` (**≤ 32 s** = cache 30 s + biên);
+      - `/userinfo` trên B với AT cũ trả 401 (≤ 32 s).
+    - Thêm một lượt **làm tay** theo runbook-ops §1 bằng curl ở Local (tester), ghi tổng thời gian. Bước nào sai thì sửa runbook ngay trong run này.
+    - **Phần Vault do orchestrator chạy trong một lệnh Bash** (root token chỉ sống trong process đó, không in, không ghi file):
+      1. `T=$(openssl rand -hex 16)`
+      2. `docker run` theo `vault-preflight.mjs`
+      3. `node be/scripts/drills/rotate-drill.mjs --provider vault`
+      4. `pnpm -C be test:vault` (gate T6)
+      5. `docker rm -f vg-b73-vault`, chạy cả khi bước trước lỗi
+      6. `docker ps -a --filter name=vg-b73-vault` phải rỗng.
+
+  **Sweep**
+
+  - **D87.17 DEBT-589 (sửa phạm vi)**
+    - Bỏ `failedLoginCount` và `lockTransitionNonce` khỏi `user.schema.ts`, `UserDoc`, `UserView`, `UserStatusPatch` và mọi chỗ ghi (`user.service.ts`, `seed.ts`, `seed-dev.ts`, `test/e2e/seed-e2e-admin.ts`).
+    - Điều kiện audit unlock (`admin-users.controller.ts:256`) chỉ còn `before.lockedUntil != null`.
+    - Giữ `lockedUntil`, `adminLockLevel`, `adminLockMarkAt`.
+    - Không đổi FE/OpenAPI (vốn không lộ); thêm test hồi quy chứng minh không lộ.
+    - Dọn dữ liệu bằng khối mongosh ở `runbook-deploy.md` §15 mới, chạy sau deploy qua `const d = db.getSiblingDB('<db>')`:
+      - (i) **dry-run**: `countDocuments` cho `{$or:[{failedLoginCount:{$exists:true}},{lockTransitionNonce:{$exists:true}}]}` và cho khoá tạm cũ `{lockedUntil:{$lt:new Date(), $ne: ISODate('9999-12-31T23:59:59.999Z')}}`;
+      - (ii) `updateMany` với `$unset` tương ứng;
+      - (iii) chạy lại ⇒ `modifiedCount 0` (idempotent).
+    - Không thêm CLI: chạy một lần, và field sót lại vô hại vì mongoose strict không đọc.
+  - **D87.18 DEBT-590 digest**
+    - Pin `mongo:7.0.43@sha256:1f995ad6fdb93244a1addab1b58f934a0bc2f5643c38e02f5e9d7f0c7d227a7b` và `redis:7.4.10-bookworm@sha256:e9b2e45ecd47fbb69b877cf8d045d5cccaaaed52524b6e098b4abe8212994f73` (cùng digest với `docker-smoke.sh`/`prod.example.yml`, đã ≥ 14 ngày).
+    - Pin `axllent/mailpit:v1.21@sha256:81370195cd4a0eab9604d17c2617a7525b0486f9365555253b6c5376c6350f1a` (RepoDigest local, image 2024-12).
+    - Chỗ áp dụng: `ci.yml` dòng 84/180 (`redis` service), 91 (mailpit), 124/215 (`docker run … mongo:7`); `docker-compose.yml` (3 service). Mỗi chỗ kèm comment `# <tag>, pinned 2026-11-12 (DEBT-590)`.
+    - Không pull, không `compose up`. Local vẫn chạy `veyrigate-mongo` 7.0.48 trong khi CI chạy 7.0.43: chấp nhận được (cùng 7.0, chỉ là image test).
+    - Guard: spec Jest mới `be/src/common/ops/image-pins.spec.ts`.
+      - Đọc `.github/workflows/*.yml`, `docker-compose.yml`, `ops/compose/*.yml`, `be/scripts/docker-smoke.sh`, `be/test/vault-preflight.mjs`.
+      - Mọi tham chiếu image (`image:` và ảnh trong `docker run`) phải có `@sha256:[0-9a-f]{64}`; được miễn placeholder `<registry>/veyrigate-be@sha256:<digest>`.
+    - Dependabot không cập nhật image trong `services:` của workflow ⇒ DEBT-611.
+  - **D87.19 DEBT-608**
+    - Mỗi lần chạy, `seed:e2e-admin` xoá **mọi** `refreshtokens` của user mục tiêu `E2E_USER_EMAIL`. Guard sẵn có: chỉ `NODE_ENV=test` + DB `sso-idp-e2e`. Hợp lý vì spec vốn mở đầu bằng revoke all; không đổi API.
+    - Spec bỏ vòng 100 trang: family sống phải ở **trang đầu**, cho phép tối đa 2 lần "Next page" (family do spec khác trong cùng lượt tạo). Không thấy ⇒ fail, thông điệp ghi số family.
+    - Đã loại phương án `?active=true`: phải đổi Admin API/fe-admin chỉ vì một test.
+  - **D87.20 Checklist**
+    - D-4/D-5/D-6 ⇒ ✅, bằng chứng là evidence JSON + spec.
+    - E-252/E-253 ⇒ đóng. D-3 ghi chú DEBT-590 đã đóng.
+    - Thêm **D-16** "Bootstrap production (resource `admin`, client `fe-admin` với redirect từ env, super_admin đầu tiên)" ❌ **P1**, DEBT-164. Phần super_admin đầu tiên do T2 giải; phần còn lại đề xuất làm ở run 88, trước phần F.
+    - D-13 giữ ⚠ (DEBT-391/392).
+
+  ---
 - **Không tự quyết (cần người dùng)**: push lên remote; cài Node 22.23.4 trên máy dev (Q62.2); xoá image Docker cũ; xoá DB test/dev; sửa `be/.env`.

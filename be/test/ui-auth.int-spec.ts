@@ -223,7 +223,6 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
     const codes = responses.map((response) => response.statusCode);
     expect(codes.filter((c) => c === 401)).toHaveLength(5);
     expect(codes.filter((c) => c === 429)).toHaveLength(5);
-    expect((await users.findById(user.sub))?.failedLoginCount ?? 0).toBe(0);
     expect((await users.findById(user.sub))?.lockedUntil).toBeUndefined();
   });
 
@@ -356,7 +355,7 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
 
         const doc = await userModel.findById(user.sub).lean();
         expect((doc!.lockedUntil as Date).getTime()).toBe(lockedUntil.getTime());
-        expect(doc!.failedLoginCount).toBe(0); // no counter bump on this path
+        expect(doc).not.toHaveProperty('failedLoginCount'); // no counter (run 87, DEBT-589)
         expect(await sessions.listByUser(user.sub)).toEqual([]);
         expect(
           await auditModel.exists({ action: AuditAction.AUTH_LOGIN_SUCCESS, actorId: user.sub }),
@@ -418,7 +417,7 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
         expect(res.headers.location).toBeUndefined();
         expect(await sessions.exists(sha256(created[0]))).toBe(false);
         expect(await sessions.listByUser(user.sub)).toEqual([]);
-        expect((await userModel.findById(user.sub).lean())!.failedLoginCount).toBe(0);
+        expect(await userModel.findById(user.sub).lean()).not.toHaveProperty('failedLoginCount');
         expect(
           await auditModel.exists({ action: AuditAction.AUTH_LOGIN_SUCCESS, actorId: user.sub }),
         ).toBeNull();
@@ -453,17 +452,16 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
       ).toBeNull();
     });
 
-    it('normal login still resets the counter and clears an EXPIRED lock, creating a session', async () => {
+    it('normal login still clears an EXPIRED lock, creating a session', async () => {
       const user = await verifiedUser();
       await userModel.updateOne(
         { _id: user.sub },
-        { $set: { failedLoginCount: 3, lockedUntil: new Date(Date.now() - 1000) } },
+        { $set: { lockedUntil: new Date(Date.now() - 1000) } },
       );
       const res = await postLogin(user.email, LOGIN_PASSWORD);
       expect(res.statusCode).toBe(302);
       expect(sessionCookieSet(res.headers)).toBe(true);
       const doc = await userModel.findById(user.sub).lean();
-      expect(doc!.failedLoginCount).toBe(0);
       expect(doc!.lockedUntil).toBeUndefined();
       expect(await sessions.listByUser(user.sub)).toHaveLength(1);
     });

@@ -2229,11 +2229,10 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
       const id = await mkUser({ [TENANT_A]: [] });
       await userModel.updateOne(
         { _id: id },
-        { $set: { lockedUntil: new Date(Date.now() + 15 * MIN), failedLoginCount: 5 } },
+        { $set: { lockedUntil: new Date(Date.now() + 15 * MIN) } },
       );
       expect((await unlock(id, tadminA)).statusCode).toBe(200);
       expect(await lockedUntilOf(id)).toBeNull();
-      expect((await userModel.findById(id).lean())?.failedLoginCount).toBe(0);
       expect(await unlockAudits(id)).toBe(1);
     });
 

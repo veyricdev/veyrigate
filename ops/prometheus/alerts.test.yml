@@ -138,3 +138,42 @@ tests:
       - eval_time: 20m
         alertname: SsoHttp5xxRatioHigh
         exp_alerts: []
+  # Run 87 (D87.8): last good backup frozen at t=0 => stale after 2 h (+10m for) => fires; a backup every
+  # minute => silent; no metric at all => fires (absent).
+  - interval: 1m
+    input_series:
+      - series: 'veyrigate_backup_last_success_timestamp_seconds{db="sso-idp",instance="backup"}'
+        values: '0x200'
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: SsoMongoBackupStale
+        exp_alerts: []
+      - eval_time: 150m
+        alertname: SsoMongoBackupStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: No successful encrypted MongoDB backup for more than 2 hours
+              description: The RPO of 1 hour is at risk. Check the backup job log of ops/backup/mongo-backup.sh and runbook-ops section 4.
+  - interval: 1m
+    input_series:
+      - series: 'veyrigate_backup_last_success_timestamp_seconds{db="sso-idp",instance="backup"}'
+        values: '0+60x200'
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: SsoMongoBackupStale
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'sso_audit_events_total{action="TOKEN_REUSE_DETECTED",result="failure",instance="a"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: SsoMongoBackupStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: No successful encrypted MongoDB backup for more than 2 hours
+              description: The RPO of 1 hour is at risk. Check the backup job log of ops/backup/mongo-backup.sh and runbook-ops section 4.

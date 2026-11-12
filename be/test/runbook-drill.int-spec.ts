@@ -1,7 +1,9 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { decodeProtectedHeader } from 'jose';
+import { PassThrough } from 'node:stream';
 import { Types, type Model } from 'mongoose';
 import { hashPassword, verifyPassword } from '../src/common/crypto/crypto.util';
+import { recoverSuperAdmin } from '../src/database/admin-recover';
 import { seedBootstrap } from '../src/database/seed';
 import { AuthenticationService } from '../src/modules/authentication/authentication.service';
 import { ClientCredentialService } from '../src/modules/clients/client-credential.service';
@@ -349,7 +351,7 @@ describe('Runbook drill (run 40 B7.5): runbook-ops §1 key, §2 reuse, §3 admin
     }
   }, 60_000);
 
-  it('§3 lost admin: seed refuses production, restores super_admin, never resets the password nor the lock; break-glass unlock', async () => {
+  it('§3 lost admin: seed refuses production, restores super_admin, never resets the password nor the lock; admin-recover --unlock', async () => {
     // Arrange: 0 super_admin anywhere; the admin to recover is suspended + brute-force locked.
     await memberModel.updateMany({ roles: 'super_admin' }, { $pull: { roles: 'super_admin' } });
     expect(await memberModel.countDocuments({ roles: 'super_admin' })).toBe(0);
@@ -362,7 +364,6 @@ describe('Runbook drill (run 40 B7.5): runbook-ops §1 key, §2 reuse, §3 admin
       email,
       passwordHash: await hashPassword(OLD_PASSWORD),
       emailVerifiedAt: new Date(),
-      failedLoginCount: 5,
       lockedUntil,
     });
     const targetId = (target._id as Types.ObjectId).toHexString();
@@ -397,25 +398,47 @@ describe('Runbook drill (run 40 B7.5): runbook-ops §1 key, §2 reuse, §3 admin
     const after = await userModel
       .findById(target._id)
       .select('+passwordHash')
-      .lean<{ passwordHash: string; lockedUntil?: Date; failedLoginCount: number }>();
+      .lean<{ passwordHash: string; lockedUntil?: Date }>();
     expect(await verifyPassword(after!.passwordHash, OLD_PASSWORD)).toBe(true);
     expect(await verifyPassword(after!.passwordHash, SEED_PASSWORD)).toBe(false);
     expect(after?.lockedUntil?.getTime()).toBe(lockedUntil.getTime());
-    expect(after?.failedLoginCount).toBe(5);
     const auth = full.app.get(AuthenticationService);
     await expect(auth.login(email, OLD_PASSWORD, {})).rejects.toThrow();
 
-    // Break-glass unlock (runbook mongosh, no other admin left) => the OLD password logs in.
-    const u = await userModel.findOne({ email }, { _id: 1 }).lean();
-    expect(u).not.toBeNull();
-    const unlocked = await userModel.updateOne(
-      { _id: u!._id },
-      { $unset: { lockedUntil: 1 }, $set: { failedLoginCount: 0 } },
+    // §3d production break-glass (run 87, DEBT-252): `admin-recover --unlock`, two names + the code
+    // typed back => unlocked, super_admin kept, ADMIN_RECOVERED visible in the admin audit.
+    const input = new PassThrough();
+    const out: string[] = [];
+    const result = await recoverSuperAdmin(
+      full.conn,
+      {
+        email,
+        requestedBy: 'ops-a',
+        approvedBy: 'ops-b',
+        ticket: 'DRILL-3',
+        unlock: true,
+        allowExistingSuperAdmin: false,
+        dryRun: false,
+      },
+      {
+        input,
+        write: (line) => {
+          out.push(line);
+          const code = /confirmation code: (\d{4}-\d{4})/.exec(line)?.[1];
+          if (code) input.write(`${code}\n`);
+        },
+      },
     );
-    expect(unlocked.matchedCount).toBe(1);
+    expect(result).toMatchObject({ status: 'recovered', userId: targetId });
+    expect(out.join('\n')).not.toContain(email);
     const session = await auth.login(email, OLD_PASSWORD, {});
     const recovered = await login(targetId, adminClient, FLOW_ADMIN_AUD, ADMIN_SCOPE, session.id);
     expect((await admin('GET', '/admin/keys', recovered.access_token)).statusCode).toBe(200);
+    const trail = await admin('GET', '/admin/audit?action=ADMIN_RECOVERED', recovered.access_token);
+    expect(trail.statusCode).toBe(200);
+    expect(trail.json<{ items: Record<string, unknown>[] }>().items).toEqual([
+      expect.objectContaining({ action: 'ADMIN_RECOVERED', result: 'success', targetId }),
+    ]);
   }, 60_000);
 
   it('§4(i) post-restore "revoke every RT" (runbook mongosh): live RTs die as plain invalid_grant, no reuse burst', async () => {

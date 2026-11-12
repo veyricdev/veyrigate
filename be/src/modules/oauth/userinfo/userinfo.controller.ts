@@ -60,8 +60,7 @@ const PROFILE_STRING_CLAIMS = [
  * verified as a genuine access token (`TokenVerifier.verifyAccessToken`: RS256, `iss`, header
  * `typ=at+jwt`, required claims) so an ID token cannot be replayed here, and must carry scope
  * `openid`. Claims are returned strictly by granted scope from an explicit whitelist - the User
- * document is never spread, so `passwordHash`/`mfaSecret`/`lockTransitionNonce` (all `select:false`
- * anyway) can never escape. Every failure is a 401 `invalid_token` (403 `insufficient_scope` when
+ * document is never spread, so `passwordHash`/`mfaSecret` can never escape. Every failure is a 401 `invalid_token` (403 `insufficient_scope` when
  * the only problem is the missing `openid` scope); nothing leaks the precise reason. All responses
  * are `no-store` and carry no PII in headers/logs.
  */

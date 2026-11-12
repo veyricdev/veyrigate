@@ -879,11 +879,10 @@ describe('seed-dev: dev user (DEBT-076) on real Mongo', () => {
     const user = userDoc as unknown as {
       _id: { toString(): string };
       emailVerifiedAt: Date;
-      failedLoginCount: number;
       lockedUntil?: Date;
     };
     expect(user.emailVerifiedAt).toBeInstanceOf(Date);
-    expect(user.failedLoginCount).toBe(0);
+    expect(user).not.toHaveProperty('failedLoginCount'); // removed field (run 87, DEBT-589)
     expect(user.lockedUntil).toBeUndefined();
 
     expect(
@@ -911,24 +910,19 @@ describe('seed-dev: dev user (DEBT-076) on real Mongo', () => {
     await expect(auth.login(DEV_EMAIL, 'wrong-password', {})).rejects.toThrow();
   });
 
-  it('re-seeding resets lockout: failedLoginCount -> 0 and lockedUntil unset', async () => {
+  it('re-seeding resets lockout: lockedUntil unset', async () => {
     await seedDevUser(connection, devConfig, 'development');
     const normalized = normalizeEmail(DEV_EMAIL);
     // Simulate a prior run that failed/locked the account.
     await userModel
-      .updateOne(
-        { email: normalized },
-        { $set: { failedLoginCount: 9, lockedUntil: new Date(Date.now() + 3_600_000) } },
-      )
+      .updateOne({ email: normalized }, { $set: { lockedUntil: new Date(Date.now() + 3_600_000) } })
       .exec();
 
     await seedDevUser(connection, devConfig, 'development');
 
     const user = (await userModel.findOne({ email: normalized }).lean().exec()) as unknown as {
-      failedLoginCount: number;
       lockedUntil?: Date;
     };
-    expect(user.failedLoginCount).toBe(0);
     expect(user.lockedUntil).toBeUndefined();
   });
 

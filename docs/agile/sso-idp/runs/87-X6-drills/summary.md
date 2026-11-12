@@ -1,0 +1,10 @@
+# Summary — run 87 X6 diễn tập (M8, lane BE + ops + QA) — ✅ PASS 6/6 task
+
+- **Phạm vi**: T1 DEBT-253 — chính sách backup (hằng giờ `mongodump --archive --gzip`, RPO ≤ 1 h, RTO ≤ 2 h, không PITR ⇒ DEBT-610, gpg ký + mã hoá, retention 48 h / 35 ngày offsite object lock, alert `SsoMongoBackupStale`), `ops/backup/mongo-backup.sh` / `mongo-restore.sh` / `revoke-all-refresh-tokens.mongosh.js`, harness `be/scripts/drills/*`. T2 DEBT-252 — CLI `admin-recover` (2 người xác nhận, `SuperAdminGuard.runGuarded` + audit `ADMIN_RECOVERED` cùng transaction, không in email, `--dry-run` không kết nối). T3 diễn tập rotate khẩn cấp Local + Vault. T4 DEBT-589 bỏ `failedLoginCount`/`lockTransitionNonce` + runbook-deploy §15. T5 DEBT-590 pin `@sha256:` + DEBT-608 seed E2E xoá RT. T6 checklist + gate.
+- **Diễn tập**: backup/restore 36/36 (dump+ký+mã hoá 1,9 s, giải mã+restore 5,0 s, kỹ thuật tổng 12,8 s; 8/8 ca âm bị từ chối gồm khoá ký giả mạo; 12 collection khớp count/index/sha256; §15 200/50 → 0/0; `admin-recover --unlock` trên DB restore). Rotate Local 23/23 (JWKS key mới sau 99 ms), Vault 30/30 (instance khác ~29 s), lượt tay runbook-ops §1 khớp. Bằng chứng `runs/87-X6-drills/evidence/`, không có secret.
+- **Verify**: be 1018, int FULL 2275/2275 (`vg-int-*` 0→0), vault 32, E2E 42 ×2, X3 42, fe-admin 1626. Không tạo container (trừ Vault thử đã xoá); diễn tập chỉ dùng `vg-drill-*` + Redis db 7/8.
+- **Checklist**: 202 dòng = 149 ✅ / 29 ⚠ / 5 ❌ / 19 N/A; P0 ❌ = 0; ❌ P1: C-6.3.3, C-7.5.2, C-10.7b, D-14, D-16 (bootstrap production DEBT-164).
+- **Commit**: `<hash>`.
+- **Vòng lặp**: tech-lead=1, BE dev=1 (+1 sửa senior REJECT, +1 sửa DEBT-620/621), senior=2 (REJECT 🔴 harness dọn khi guard từ chối ⇒ PASS), tester=2 (FAIL: script backup luôn exit 1 với mongodump 100.20.1 + harness treo ⇒ PASS).
+- **Debt**: đóng DEBT-252/253/589/590/608/613–617/620/621; mở DEBT-610–612, 618 (phần app tự alert), 619. Quyết định D87.1–D87.20 chép vào `plan.md` §12.
+- **⚠ Deploy**: runbook-deploy §15 (dry-run trước); backup cần `BACKUP_SIGN_KEY` + `BACKUP_SIGNER_FPR`; `admin-recover` thay break-glass mongosh.

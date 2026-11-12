@@ -150,7 +150,6 @@ describe('Authentication races on real Mongo (B2.4, C2-C6, C13)', () => {
     );
     expect(statuses.filter((c) => c === 401)).toHaveLength(5);
     expect(statuses.filter((c) => c === 429)).toHaveLength(5);
-    expect((await users.findById(user.sub))?.failedLoginCount ?? 0).toBe(0);
     expect((await users.findById(user.sub))?.lockedUntil).toBeUndefined();
     const actions = audit.record.mock.calls.map(([e]) => (e as { action: AuditAction }).action);
     expect(actions.filter((a) => a === AuditAction.AUTH_ACCOUNT_LOCKED)).toHaveLength(0);

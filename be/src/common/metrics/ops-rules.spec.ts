@@ -50,6 +50,12 @@ const KEYWORDS = new Set([
   'offset',
 ]);
 const BASE_SUFFIX = /_(count|sum|bucket)$/;
+/**
+ * Metrics written by ops scripts, not by the app (run 87, D87.8): `ops/backup/mongo-backup.sh` writes the
+ * node_exporter textfile `veyrigate_backup_<db>.prom` only after a fully successful backup.
+ */
+const EXTERNAL_METRICS = new Set(['veyrigate_backup_last_success_timestamp_seconds']);
+const isExternal = (expr: string) => metricNames(expr).every((n) => EXTERNAL_METRICS.has(n));
 
 /** Metric names an expression selects (functions, keywords, label lists and ranges removed). */
 function metricNames(expr: string): string[] {
@@ -98,6 +104,7 @@ describe('ops/prometheus + ops/grafana vs the exported metrics (B7.2 Task 3)', (
     expect(rules.map((r) => r.alert).sort()).toEqual([
       'SsoEmergencyKeyRotation',
       'SsoHttp5xxRatioHigh',
+      'SsoMongoBackupStale',
       'SsoTokenErrorRatioHigh',
       'SsoTokenReuseDetected',
     ]);
@@ -107,8 +114,8 @@ describe('ops/prometheus + ops/grafana vs the exported metrics (B7.2 Task 3)', (
       expect(r.annotations?.summary).toEqual(expect.any(String));
       // No label templating in annotations (nothing identifying can leak into a notification).
       expect(JSON.stringify(r.annotations)).not.toMatch(/\{\{|\$labels|\$value/);
-      // Multi-instance safe: every selector is aggregated.
-      expect(r.expr).toMatch(/^sum\(/);
+      // Multi-instance safe: every selector is aggregated (a backup age: the oldest db, `max`).
+      expect(r.expr).toMatch(isExternal(r.expr) ? /^max\(/ : /^sum\(/);
     }
   });
 
@@ -120,7 +127,10 @@ describe('ops/prometheus + ops/grafana vs the exported metrics (B7.2 Task 3)', (
   it.each(allExprs)('$where: every metric it selects is exported by the app', ({ expr }) => {
     const names = metricNames(expr);
     expect(names.length).toBeGreaterThan(0);
-    for (const name of names) expect([...exported.keys()]).toContain(name.replace(BASE_SUFFIX, ''));
+    for (const name of names) {
+      if (EXTERNAL_METRICS.has(name)) continue;
+      expect([...exported.keys()]).toContain(name.replace(BASE_SUFFIX, ''));
+    }
   });
 
   it.each(allExprs)('$where: every label matcher names a real label and value', ({ expr }) => {
@@ -160,6 +170,7 @@ describe('ops/prometheus + ops/grafana vs the exported metrics (B7.2 Task 3)', (
       }
       for (const s of t.input_series) {
         const name = /^([a-zA-Z_:][\w:]*)/.exec(s.series)![1];
+        if (EXTERNAL_METRICS.has(name)) continue;
         expect([...exported.keys()]).toContain(name.replace(BASE_SUFFIX, ''));
       }
     }

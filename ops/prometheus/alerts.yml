@@ -43,3 +43,17 @@ groups:
         annotations:
           summary: More than 5% of HTTP requests fail with 5xx
           description: Fail-closed paths (DB/Redis/KMS down) answer 5xx; check dependencies and logs.
+
+      # Run 87 (DEBT-253, D87.8): written by ops/backup/mongo-backup.sh (node_exporter textfile) only after
+      # every step of an encrypted backup succeeded. RPO 1 h => page after 2 h without a good backup, or
+      # when the metric is missing altogether (job never ran / textfile collector broken).
+      - alert: SsoMongoBackupStale
+        expr: >-
+          max(time() - veyrigate_backup_last_success_timestamp_seconds) > 7200
+          or absent(veyrigate_backup_last_success_timestamp_seconds)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: No successful encrypted MongoDB backup for more than 2 hours
+          description: The RPO of 1 hour is at risk. Check the backup job log of ops/backup/mongo-backup.sh and runbook-ops section 4.

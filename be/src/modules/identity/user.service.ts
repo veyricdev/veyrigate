@@ -16,12 +16,10 @@ interface UserDoc {
   passwordHash?: string;
   profile: Record<string, unknown>;
   emailVerifiedAt?: Date;
-  failedLoginCount: number;
   lockedUntil?: Date;
   adminLockLevel?: AdminLockLevel;
   /** Per-user strictly increasing mark of admin lock/unlock writes (run 57). Never in a view. */
   adminLockMarkAt?: Date;
-  lockTransitionNonce?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -36,16 +34,13 @@ export interface UserView {
   email: string;
   profile: Record<string, unknown>;
   emailVerifiedAt?: Date;
-  failedLoginCount: number;
   lockedUntil?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
 
 /** Status fields that may be updated (existing schema fields only — no new `status`). */
-export type UserStatusPatch = Partial<
-  Pick<UserDoc, 'emailVerifiedAt' | 'failedLoginCount' | 'lockedUntil'>
->;
+export type UserStatusPatch = Partial<Pick<UserDoc, 'emailVerifiedAt' | 'lockedUntil'>>;
 
 export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
@@ -88,7 +83,6 @@ function toView(doc: UserDoc): UserView {
     email: doc.email,
     profile: doc.profile ?? {},
     emailVerifiedAt: doc.emailVerifiedAt,
-    failedLoginCount: doc.failedLoginCount ?? 0,
     lockedUntil: doc.lockedUntil,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
@@ -222,7 +216,7 @@ export class UserService {
   }
 
   /**
-   * Login success path (DEBT-154): clear the counter and an EXPIRED lock, but only while the user is
+   * Login success path (DEBT-154): clear an EXPIRED lock, but only while the user is
    * not locked at write time (`lockedUntil` missing, null or <= now). An admin lock or a brute-force
    * lock set after the login read its snapshot does not match => null, and login must fail. Admin
    * unlock uses `adminUnlock`.
@@ -232,7 +226,7 @@ export class UserService {
     const doc = await this.users
       .findOneAndUpdate(
         { _id: sub, lockedUntil: { $not: { $gt: now } } },
-        { $set: { failedLoginCount: 0 }, $unset: { lockedUntil: 1 } },
+        { $unset: { lockedUntil: 1 } },
         { returnDocument: 'after' },
       )
       .select(PUBLIC_FIELDS)
@@ -246,7 +240,7 @@ export class UserService {
   }
 
   /**
-   * New password (reset): clears the counter and a brute-force lock (B2.4), but NEVER an admin lock
+   * New password (reset): clears a temporary lock (B2.4), but NEVER an admin lock
    * (`ADMIN_LOCKED_UNTIL`) - self-service must not undo an admin decision. One atomic pipeline.
    */
   async setPassword(sub: string, passwordHash: string): Promise<UserView | null> {
@@ -259,7 +253,6 @@ export class UserService {
             $set: {
               passwordHash: { $literal: passwordHash }, // a hash starts with `$`: not a field path
               emailVerifiedAt: new Date(),
-              failedLoginCount: 0,
               lockedUntil: {
                 $cond: [{ $eq: ['$lockedUntil', ADMIN_LOCKED_UNTIL] }, '$lockedUntil', '$$REMOVE'],
               },
@@ -318,24 +311,26 @@ export class UserService {
   }
 
   /**
-   * Admin unlock (DEBT-147/153): clear the lock, its level and the counter (and bump the run-57
+   * Admin unlock (DEBT-147/153): clear the lock and its level (and bump the run-57
    * mark) in ONE write and return the document BEFORE it plus the mark written (the caller audits from that, not from an earlier read). A tenant_admin
    * may not lift a super_admin (or legacy unlevelled) lock: 'forbidden'. null = no such user.
+   * `session`: run inside the caller's transaction (run 87 `admin-recover`).
    */
   async adminUnlock(
     sub: string,
     actorIsSuperAdmin: boolean,
     now = new Date(),
+    session?: ClientSession,
   ): Promise<{ before: UserView; unlockMarkAt: Date } | 'forbidden' | null> {
     if (!isValidObjectId(sub)) return null;
     const before = await this.users
       .findOneAndUpdate(
         actorIsSuperAdmin ? { _id: sub } : tenantAdminMayChangeLock(sub),
         [
-          { $set: { failedLoginCount: 0, adminLockMarkAt: adminLockMarkExpr(now) } },
+          { $set: { adminLockMarkAt: adminLockMarkExpr(now) } },
           { $unset: ['lockedUntil', 'adminLockLevel'] },
         ],
-        { returnDocument: 'before', updatePipeline: true },
+        { returnDocument: 'before', updatePipeline: true, session },
       )
       .select(PUBLIC_FIELDS)
       .lean<UserDoc>()
@@ -351,11 +346,9 @@ export class UserService {
   }
 
   async updateStatus(sub: string, patch: UserStatusPatch): Promise<UserView | null> {
-    const { emailVerifiedAt, failedLoginCount, lockedUntil } = patch;
+    const { emailVerifiedAt, lockedUntil } = patch;
     const set = Object.fromEntries(
-      Object.entries({ emailVerifiedAt, failedLoginCount, lockedUntil }).filter(
-        ([, v]) => v !== undefined,
-      ),
+      Object.entries({ emailVerifiedAt, lockedUntil }).filter(([, v]) => v !== undefined),
     );
     return this.update(sub, set);
   }

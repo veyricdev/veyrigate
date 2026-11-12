@@ -398,7 +398,6 @@ describe('run 56 tester: admin races + disable/enable over real HTTP', () => {
       userModel.findById(id).lean<{
         lockedUntil?: Date;
         adminLockLevel?: string;
-        failedLoginCount?: number;
         adminLockMarkAt?: Date;
       }>();
     const lockTrail = (id: string) =>
@@ -442,16 +441,15 @@ describe('run 56 tester: admin races + disable/enable over real HTTP', () => {
       expect((await dbUser(id))?.lockedUntil).toBeUndefined();
     });
 
-    it('L3 brute-force lock (no level) => tenant_admin unlock 200, counter 0, 1 success audit', async () => {
+    it('L3 brute-force lock (no level) => tenant_admin unlock 200, 1 success audit', async () => {
       const id = await target();
       await userModel.updateOne(
         { _id: id },
-        { $set: { lockedUntil: new Date(Date.now() + 15 * 60_000), failedLoginCount: 5 } },
+        { $set: { lockedUntil: new Date(Date.now() + 15 * 60_000) } },
       );
       expect((await unlock(id, tadminAt)).statusCode).toBe(200);
       const u = await dbUser(id);
       expect(u?.lockedUntil).toBeUndefined();
-      expect(u?.failedLoginCount).toBe(0);
       expect((await lockTrail(id)).map((r) => `${r.action}:${r.result}`)).toEqual([
         'ADMIN_USER_UNLOCKED:success',
       ]);

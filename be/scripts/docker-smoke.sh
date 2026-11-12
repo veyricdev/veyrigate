@@ -5,7 +5,8 @@
 # env/key files (the build stage must not have seen them either).
 # Used locally and by the CI job `be-image`. Creates only the network vg-b73b-net, the containers
 # vg-b73b-mongo, vg-b73b-redis, vg-b73b-vault (throwaway dev Vault with TLS) and vg-be-smoke-ok,
-# vg-be-smoke-noenv, vg-be-smoke-local (all removed on exit), publishes 127.0.0.1:4400 only, never
+# vg-be-smoke-noenv, vg-be-smoke-local (all removed on exit) + one `--rm --network none` run of the
+# admin-recover CLI (check 12), publishes 127.0.0.1:4400 only, never
 # touches the image itself or any other container. Secrets (Vault root token, Mongo password, CSRF
 # secret, Vault app token) are generated per run, passed with `-e NAME` or stdin (never on a command
 # line, never in a host file) and never printed. Vault container logs are never printed (dev mode logs
@@ -227,4 +228,15 @@ done
 if grep -qE 'hvs\.|X-Vault-Token|/tmp/vault/token' "$TMP/log"; then fail 11 "app log mentions the Vault token or its file"; fi
 pass 11 "app log: no Mongo password, CSRF secret, Vault token or token path"
 
-echo "docker-smoke: 11/11 passed for $IMAGE"
+# 12. break-glass CLI runs from the production image (run 87, DEBT-252, D87.15b): --dry-run with the app env
+# and no network => exit 0, prints the target, never connects nor echoes the password or the email
+out="$(docker run --rm --network none "${HARDEN[@]}" "${ENV_ARGS[@]}" -e CSRF_SECRET "$IMAGE" \
+  node dist/database/admin-recover.js --dry-run --email recover@example.invalid \
+  --requested-by smoke-a --approved-by smoke-b --ticket SMOKE-87 2>&1)" ||
+  fail 12 "admin-recover --dry-run exited != 0"
+printf '%s\n' "$out" | grep -qx 'target: vg-b73b-mongo:27017/sso-idp' || fail 12 "admin-recover printed no target line"
+printf '%s\n' "$out" | grep -qx 'dry-run: no connection made' || fail 12 "admin-recover printed no dry-run line"
+if printf '%s' "$out" | grep -qF -e "$MONGO_PASSWORD" -e recover@example.invalid; then fail 12 "admin-recover echoed a secret or the email"; fi
+pass 12 "admin-recover --dry-run in the image => exit 0, target printed, no connection"
+
+echo "docker-smoke: 12/12 passed for $IMAGE"

@@ -35,6 +35,7 @@ import type { ConfigService } from '@nestjs/config';
  *   4. (run 47, Q-47.3) when `E2E_USER_EMAIL`/`E2E_USER_PASSWORD` are set, a separate non-admin
  *      target user (lock/revoke specs) is converged: verified, password, no lock, an active
  *      membership of the default tenant with NO role. Never the admin nor the dev user.
+ *      Every refresh token of that user is deleted (DEBT-608).
  *   5. (run 73, X3) when `E2E_X3=1`, two public clients `x3-alpha`/`x3-beta` (fe-sso-test shape)
  *      bound to the X3 https origins (same-site / cross-site RP of the cookie topology suite).
  * Nothing secret is written to stdout/stderr.
@@ -200,22 +201,17 @@ async function resetAdminUser(connection: Connection, cfg: AdminSeedConfig): Pro
   const user = await userModel
     .findOne({ email })
     .select('+passwordHash')
-    .lean<{ passwordHash?: string; failedLoginCount?: number; lockedUntil?: Date | null }>()
+    .lean<{ passwordHash?: string; lockedUntil?: Date | null }>()
     .exec();
   if (!user) throw new Error('seed-e2e-admin: admin user missing after seedBootstrap');
   const passwordOk = await passwordMatches(user.passwordHash, cfg.password);
-  if (passwordOk && !user.failedLoginCount && user.lockedUntil == null) {
+  if (passwordOk && user.lockedUntil == null) {
     console.log('seed-e2e-admin: admin user unchanged');
     return;
   }
   const passwordHash = await hashPassword(cfg.password);
   await upsert(() =>
-    userModel
-      .updateOne(
-        { email },
-        { $set: { passwordHash, failedLoginCount: 0 }, $unset: { lockedUntil: 1 } },
-      )
-      .exec(),
+    userModel.updateOne({ email }, { $set: { passwordHash }, $unset: { lockedUntil: 1 } }).exec(),
   );
   console.log('seed-e2e-admin: admin user password/lock reset');
 }
@@ -231,7 +227,6 @@ async function seedE2eUser(connection: Connection, cfg: E2eUserConfig): Promise<
   type Row = {
     _id: Types.ObjectId;
     passwordHash?: string;
-    failedLoginCount?: number;
     lockedUntil?: Date | null;
     emailVerifiedAt?: Date | null;
   };
@@ -241,7 +236,6 @@ async function seedE2eUser(connection: Connection, cfg: E2eUserConfig): Promise<
   let user = await findUser();
   const userOk =
     !!user &&
-    !user.failedLoginCount &&
     user.lockedUntil == null &&
     user.emailVerifiedAt != null &&
     (await passwordMatches(user.passwordHash, cfg.password));
@@ -252,7 +246,7 @@ async function seedE2eUser(connection: Connection, cfg: E2eUserConfig): Promise<
         .updateOne(
           { email },
           {
-            $set: { passwordHash, failedLoginCount: 0 },
+            $set: { passwordHash },
             $min: { emailVerifiedAt: new Date() },
             $unset: { lockedUntil: 1 },
           },
@@ -281,6 +275,12 @@ async function seedE2eUser(connection: Connection, cfg: E2eUserConfig): Promise<
         .exec(),
     );
   }
+  // DEBT-608 (D87.19): the families list of the target starts empty every run, so the E2E spec finds
+  // its one live family on the first page instead of paging through those of every earlier run.
+  const rtModel = connection.models.RefreshToken ?? connection.model('RefreshToken');
+  const { deletedCount } = await rtModel.deleteMany({ userId }).exec();
+  if (deletedCount > 0)
+    console.log(`seed-e2e-admin: E2E user refresh tokens deleted (${deletedCount})`);
   // Identifier only, never the password or its hash.
   console.log(
     userOk && memberOk

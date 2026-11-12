@@ -620,3 +620,35 @@ pnpm --filter @sso-idp/fe-admin sbom --sbom-format cyclonedx --sbom-type applica
 
 SBOM không gồm base image Docker (`node:*`, image compose prod) — Dependabot cũng không cảnh báo cho docker; quét image
 theo DEBT-591. Chưa ký/attest SBOM (DEBT-592).
+
+## 15. Sau deploy run 87 — dọn field user cũ `failedLoginCount`/`lockTransitionNonce` (DEBT-589)
+
+Từ run 87 schema `User` không còn `failedLoginCount` (bộ đếm đã ngừng tăng từ run 85) và `lockTransitionNonce`; không
+code nào đọc/ghi chúng nữa, unlock chỉ ghi audit khi user thật sự đang khoá (`lockedUntil`). Field còn sót trong doc cũ
+vô hại (mongoose strict không đọc, view admin không lộ) ⇒ dọn **một lần sau deploy**, không cần dừng app. Khoá tạm cũ
+(`lockedUntil` tương lai nhưng ≠ sentinel admin) vẫn chặn login tới khi hết hạn (≤ 15', run 85), rồi bị login thành công
+gỡ như cũ; khối dưới chỉ dọn bản **đã hết hạn**. Không bao giờ đụng sentinel admin `9999-12-31T23:59:59.999Z`.
+
+mongosh với URI production (secret store), mọi lệnh qua `d`; người chứng kiến đọc to dòng `DB:`. Dán từng khối:
+
+```js
+// (i) dry-run — chỉ đếm, ghi số vào ticket deploy
+const d = db.getSiblingDB('<db_production>'); print('DB:', d.getName());
+if (!db.adminCommand({ listDatabases: 1, nameOnly: true }).databases.some((x) => x.name === d.getName())) throw new Error('DB không tồn tại: ' + d.getName());
+const LEGACY = { $or: [{ failedLoginCount: { $exists: true } }, { lockTransitionNonce: { $exists: true } }] };
+const EXPIRED = { lockedUntil: { $lt: new Date(), $ne: ISODate('9999-12-31T23:59:59.999Z') } };
+print('legacy fields:', d.users.countDocuments(LEGACY), 'expired temporary locks:', d.users.countDocuments(EXPIRED));
+```
+
+```js
+// (ii) apply — cùng phiên mongosh (`d`, `LEGACY`, `EXPIRED` ở trên); modifiedCount phải = số của (i)
+printjson(d.users.updateMany(LEGACY, { $unset: { failedLoginCount: 1, lockTransitionNonce: 1 } }));
+printjson(d.users.updateMany(EXPIRED, { $unset: { lockedUntil: 1 } }));
+```
+
+```js
+// (iii) chạy lại (ii) ⇒ cả hai `modifiedCount: 0` (idempotent); đếm lại (i) ⇒ 0 0
+```
+
+- Số của (ii) có thể lớn hơn (i) một chút với `EXPIRED` (khoá hết hạn giữa hai lần chạy) — chấp nhận; không bao giờ nhỏ
+  hơn cho `LEGACY` (không còn code ghi field này). Diễn tập: `runs/87-X6-drills/drill-report.md` (AC5 của T4).

@@ -34,6 +34,8 @@ export enum AuditAction {
   AUTH_LOGIN_THROTTLED = 'AUTH_LOGIN_THROTTLED',
   /** Run 85 (DEBT-573): self-service password change at `/account/password`. */
   AUTH_PASSWORD_CHANGED = 'AUTH_PASSWORD_CHANGED',
+  /** Run 87 (DEBT-252): super_admin restored by the `admin-recover` CLI (break-glass). */
+  ADMIN_RECOVERED = 'ADMIN_RECOVERED',
 }
 
 /** Actions that must raise a separate alert (spec §10: reuse, key rotation, admin control-plane). */
@@ -52,4 +54,7 @@ export const ALERT_ACTIONS: ReadonlySet<AuditAction> = new Set([
   AuditAction.ADMIN_USER_UNLOCKED,
   AuditAction.ADMIN_USER_ROLES_CHANGED,
   AuditAction.OAUTH_CONSENT_REVOKED,
+  // Written by the `admin-recover` CLI, where no app listener runs: that path alerts through the JSON log line
+  // it prints (`{alert:true,...}`), which runbook-ops section 3d requires pasting into the incident channel.
+  AuditAction.ADMIN_RECOVERED,
 ]);

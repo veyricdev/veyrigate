@@ -1,5 +1,5 @@
 import { jest } from '@jest/globals';
-import mongoose, { type Connection, type Model } from 'mongoose';
+import mongoose, { Types, type Connection, type Model } from 'mongoose';
 import { verifyPassword } from '../src/common/crypto/crypto.util';
 import { MODELS } from '../src/database/mongo/models';
 import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
@@ -98,7 +98,6 @@ describe('seed-e2e-admin (run 39 Task 0) on real Mongo', () => {
         {
           $set: {
             passwordHash: 'not-a-valid-hash',
-            failedLoginCount: 7,
             lockedUntil: new Date(Date.now() + 3_600_000),
           },
         },
@@ -106,7 +105,6 @@ describe('seed-e2e-admin (run 39 Task 0) on real Mongo', () => {
       .exec();
     await run();
     const user = await users.findOne({ email }).select('+passwordHash').lean().exec();
-    expect(user?.failedLoginCount).toBe(0);
     expect(user?.lockedUntil).toBeUndefined();
     expect(await verifyPassword(String(user?.passwordHash), ADMIN.password)).toBe(true);
   });
@@ -134,7 +132,7 @@ describe('seed-e2e-admin (run 39 Task 0) on real Mongo', () => {
       await runWithUser(E2E_USER);
       const user = await readUser();
       expect(user?.emailVerifiedAt).toBeInstanceOf(Date);
-      expect(user?.failedLoginCount).toBe(0);
+      expect(user).not.toHaveProperty('failedLoginCount'); // removed field (run 87, DEBT-589)
       expect(user?.lockedUntil).toBeUndefined();
       expect(await verifyPassword(String(user?.passwordHash), E2E_USER.password)).toBe(true);
       const member = await readMember();
@@ -160,7 +158,6 @@ describe('seed-e2e-admin (run 39 Task 0) on real Mongo', () => {
           {
             $set: {
               passwordHash: 'not-a-valid-hash',
-              failedLoginCount: 5,
               lockedUntil: ADMIN_LOCKED_UNTIL,
             },
             $unset: { emailVerifiedAt: 1 },
@@ -177,7 +174,6 @@ describe('seed-e2e-admin (run 39 Task 0) on real Mongo', () => {
       await runWithUser(E2E_USER);
       expect(output.join('\n')).toMatch(/E2E user reset/);
       const after = await readUser();
-      expect(after?.failedLoginCount).toBe(0);
       expect(after?.lockedUntil).toBeUndefined();
       expect(after?.emailVerifiedAt).toBeInstanceOf(Date);
       expect(await verifyPassword(String(after?.passwordHash), E2E_USER.password)).toBe(true);
@@ -202,6 +198,32 @@ describe('seed-e2e-admin (run 39 Task 0) on real Mongo', () => {
       await runWithUser(E2E_USER);
       expect(await readMember()).toMatchObject({ status: 'active', roles: [] });
       expect((await readUser())?.passwordHash).toBe(before?.passwordHash);
+    });
+
+    it('DEBT-608: every refresh token of the target user is deleted; another user keeps theirs', async () => {
+      await runWithUser(E2E_USER);
+      const target = await readUser();
+      const other = new Types.ObjectId();
+      const rt = (userId: Types.ObjectId, i: number, revoked: boolean) => ({
+        tokenHash: `r87-${userId.toHexString()}-${i}`,
+        familyId: `fam-${i % 10}`,
+        userId,
+        clientId: 'fe-admin',
+        resource: 'http://localhost:4000/admin',
+        scope: ['openid'],
+        issuedAt: new Date(),
+        expiresAt: new Date(Date.now() + 86_400_000),
+        ...(revoked ? { revokedAt: new Date() } : {}),
+      });
+      const rts = connection.collection('refreshtokens');
+      await rts.insertMany([
+        ...Array.from({ length: 30 }, (_, i) => rt(target!._id as Types.ObjectId, i, i % 2 === 0)),
+        rt(other, 99, false),
+      ]);
+      await runWithUser(E2E_USER);
+      expect(await rts.countDocuments({ userId: target!._id })).toBe(0);
+      expect(await rts.countDocuments({ userId: other })).toBe(1);
+      await rts.deleteMany({ userId: other });
     });
 
     it('email equal to the admin seed (normalized) => throws before any write', async () => {

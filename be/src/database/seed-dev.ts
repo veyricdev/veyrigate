@@ -185,8 +185,7 @@ export function readDevSeedUserConfig(
  * Upsert a single dev user (DEBT-076) that can log in through the real login flow:
  *   - `emailVerifiedAt` is set on insert (clears the `!user.emailVerifiedAt` gate in
  *     `AuthenticationService.login`); kept at its original value on re-seed (`$min` of `now`);
- *   - `failedLoginCount` reset to 0 and `lockedUntil` unset on EVERY run, so a prior failed/locked
- *     run never blocks the next (lockout reset);
+ *   - `lockedUntil` unset on EVERY run, so a prior locked run never blocks the next (lockout reset);
  *   - a `UserTenant {tenantId: DEFAULT_TENANT_ID, status: 'active', roles: []}` membership is upserted
  *     (like `register()` → `addMembership`; without it `TenantGuard` returns 403). NO role is granted:
  *     the dev user is a plain non-admin, deliberately separate from the admin seed.
@@ -226,7 +225,7 @@ export async function seedDevUser(
       .updateOne(
         { email },
         {
-          $set: { passwordHash, failedLoginCount: 0 },
+          $set: { passwordHash },
           $min: { emailVerifiedAt: now },
           $unset: { lockedUntil: 1, adminLockLevel: 1 },
         },

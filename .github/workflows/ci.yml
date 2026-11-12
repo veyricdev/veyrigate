@@ -81,14 +81,14 @@ jobs:
     timeout-minutes: 30
     services:
       redis:
-        image: redis:7
+        image: redis:7.4.10-bookworm@sha256:e9b2e45ecd47fbb69b877cf8d045d5cccaaaed52524b6e098b4abe8212994f73 # 7.4.10-bookworm, pinned 2026-11-12 (DEBT-590)
         ports:
           - 6479:6379
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s --health-timeout 5s --health-retries 5
       mailpit:
-        image: axllent/mailpit:v1.21
+        image: axllent/mailpit:v1.21@sha256:81370195cd4a0eab9604d17c2617a7525b0486f9365555253b6c5376c6350f1a # v1.21, pinned 2026-11-12 (DEBT-590)
         ports:
           - 1025:1025
           - 8025:8025
@@ -121,7 +121,8 @@ jobs:
 
       - name: Start Mongo replica set (rs0)
         run: |
-          docker run -d --name vg-ci-mongo -p 27117:27017 mongo:7 --replSet rs0
+          # mongo 7.0.43, pinned 2026-11-12 (DEBT-590)
+          docker run -d --name vg-ci-mongo -p 27117:27017 mongo:7.0.43@sha256:1f995ad6fdb93244a1addab1b58f934a0bc2f5643c38e02f5e9d7f0c7d227a7b --replSet rs0
           until docker exec vg-ci-mongo mongosh --quiet --eval 'db.adminCommand("ping").ok' >/dev/null 2>&1; do sleep 1; done
           docker exec vg-ci-mongo mongosh --quiet --eval 'rs.initiate({_id:"rs0",members:[{_id:0,host:"localhost:27017"}]})'
           for i in $(seq 1 60); do
@@ -177,7 +178,7 @@ jobs:
       DEV_SEED_PASSWORD: dev-password-123
     services:
       redis:
-        image: redis:7
+        image: redis:7.4.10-bookworm@sha256:e9b2e45ecd47fbb69b877cf8d045d5cccaaaed52524b6e098b4abe8212994f73 # 7.4.10-bookworm, pinned 2026-11-12 (DEBT-590)
         ports:
           - 6379:6379
         options: >-
@@ -212,7 +213,8 @@ jobs:
 
       - name: Start Mongo replica set (rs0)
         run: |
-          docker run -d --name vg-ci-mongo -p 27017:27017 mongo:7 --replSet rs0
+          # mongo 7.0.43, pinned 2026-11-12 (DEBT-590)
+          docker run -d --name vg-ci-mongo -p 27017:27017 mongo:7.0.43@sha256:1f995ad6fdb93244a1addab1b58f934a0bc2f5643c38e02f5e9d7f0c7d227a7b --replSet rs0
           until docker exec vg-ci-mongo mongosh --quiet --eval 'db.adminCommand("ping").ok' >/dev/null 2>&1; do sleep 1; done
           docker exec vg-ci-mongo mongosh --quiet --eval 'rs.initiate({_id:"rs0",members:[{_id:0,host:"localhost:27017"}]})'
           for i in $(seq 1 60); do

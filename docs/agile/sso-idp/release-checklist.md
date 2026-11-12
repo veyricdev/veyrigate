@@ -13,8 +13,10 @@
 | A — RFC 9700 | 36 | 28 | 5 | 0 | 3 | 0 |
 | B — OIDC + RFC khác | 42 | 38 | 3 | 0 | 1 | 0 |
 | C — ASVS 5.0.0 L2 | 108 | 73 | 17 | 3 | 15 | 0 |
-| D — Vận hành phát hành | 15 | 7 | 4 | 4 | 0 | 0 |
-| **Tổng A–D** | **201** | **146** | **29** | **7** | **19** | **0** |
+| D — Vận hành phát hành | 16 | 10 | 4 | 2 | 0 | 0 |
+| **Tổng A–D** | **202** | **149** | **29** | **5** | **19** | **0** |
+
+Run 87 (T6, tester, 2026-11-12; đếm lại bằng script trên cột Trạng thái; 286 bằng chứng `đường-dẫn › tên test` kiểm "đúng 1 dòng chứa tên", 0 lỗi): D-4 ❌ ⇒ ✅ (diễn tập rotate Local + Vault + lượt tay runbook §1), D-6 ❌ ⇒ ✅ (CLI `admin-recover`, DEBT-252), thêm D-16 ❌ P1 (bootstrap production, DEBT-164), E-252 ⇒ ✅, D-3 ghi chú DEBT-590 đóng; retry 1 T6: D-5 ❌ ⇒ ✅ và E-253 ⇒ ✅ (diễn tập backup/restore 36/36 sau khi sửa DEBT-620 `mongo-backup.sh` không đọc được log mongodump 100.x và DEBT-621 harness treo khi lỗi). Bảng trước run 87: 201 dòng, 146/29/7/19, P0 ❌ 0.
 
 Run 86 (T6, tester, 2026-11-11; đếm lại bằng script trên cột Trạng thái; mọi bằng chứng `đường-dẫn › tên test` của file này kiểm bằng script "đúng 1 dòng chứa tên", 0 lỗi): C-14.2.1 ❌ ⇒ ✅ (DEBT-577, token trong fragment; ⚠ phụ lịch sử trình duyệt DEBT-604 ghi trong dòng), B-L2d ❌ ⇒ ✅ (DEBT-572), C-3.4c ❌ ⇒ ✅ (DEBT-583), B-10.1.1 ⚠ ⇒ ✅ (DEBT-393 pre-publish). Bảng trước run 86: 201 dòng, 142/30/10/19, P0 ❌ 1.
 
@@ -22,7 +24,7 @@ Run 85 (T6, tester, 2026-11-11; đếm lại bằng script trên cột Trạng t
 
 Phần E (triage 54 dòng 🟡 mở lúc bắt đầu T4) không tính vào bảng trên; đề xuất: P0 = 0, P1 = 15, P2 = 35, đã đóng/đóng khi đóng run 84 = 4 (DEBT-157, 550, 563, 564).
 
-**P0 ❌ (0)**: run 86 đóng C-14.2.1 (DEBT-577, token một lần trong query ⇒ fragment, D85.3/D86.1–D86.3). Không còn dòng nào chặn phát hành; ❌ còn lại (7) là P1/P2 hoặc việc của run 87/88 (C-6.3.3, C-7.5.2, C-10.7b, D-4, D-5, D-6, D-14). Run 85 đã đóng 6/7 P0 của run 84 (B-6.1, B-5.3.1, C-6.1.1, C-6.2.2, C-6.2.4, C-15.1.1). C-7.4b (DEBT-600, tester phát hiện ở run 85) đã sửa và ✅ trong cùng run.
+**P0 ❌ (0)**: run 86 đóng C-14.2.1 (DEBT-577, token một lần trong query ⇒ fragment, D85.3/D86.1–D86.3). Không còn dòng nào chặn phát hành; ❌ còn lại (5) là P1/P2 hoặc việc của run 88 (C-6.3.3, C-7.5.2, C-10.7b, D-14, D-16; run 87 đóng D-4, D-5, D-6). Run 85 đã đóng 6/7 P0 của run 84 (B-6.1, B-5.3.1, C-6.1.1, C-6.2.2, C-6.2.4, C-15.1.1). C-7.4b (DEBT-600, tester phát hiện ở run 85) đã sửa và ✅ trong cùng run.
 
 ## A — OAuth 2.0 Security BCP (RFC 9700)
 
@@ -233,10 +235,10 @@ Phạm vi: IdP (`be/`) và fe-admin (BFF); V10.2/10.3/10.5 thêm fe-sso-test (RP
 |---|---|---|---|---|---|
 | D-1 | plan X6 | Dependency audit không còn high/critical | ✅ | `runs/85-X6-release2/log.md` (T1: `pnpm audit` 0 trừ deepmerge đã ignore, mongoose 9.11.4); CI `ci.yml` bước Dependency audit (high/critical) | Run 85: 4 GHSA mongoose (2026-11-10) đã vá |
 | D-2 | plan X6 / DEBT-466 | Cảnh báo bảo mật dependency tự động (Dependabot) | ⚠ | `.github/dependabot.yml` (run 72); `.github/workflows/audit.yml` (bù: audit hằng ngày, D-15) | Chờ người dùng xác nhận cột Manifest của 9 cảnh báo (mục 1–3 phần Dependabot, `tasks.md` run 85) ⇒ DEBT-585/500 (P1) |
-| D-3 | plan X6 | Pin GitHub Actions theo commit SHA; CodeQL v4 | ✅ | `.github/workflows/ci.yml`, `codeql.yml`, `audit.yml`: mọi `uses:` dạng `@<40 hex> # vX.Y.Z` (lệnh grep kiểm pin của T1 ra rỗng, chạy lại ở `runs/85-X6-release2/log.md` dòng tester); `github/codeql-action/*@33d7b85… # v4.39.3` | Run 85 T1 (DEBT-553/557, DEBT-231). Image Docker trong workflow chưa pin digest (DEBT-590, 💭) |
-| D-4 | plan X6 / B7.5 | Diễn tập emergency rotate (Local dev + Vault int), đo thời gian, bước sai | ❌ | runbook-ops §1 (quy trình có); `be/test/runbook-drill.int-spec.ts` (mô phỏng tự động, không thay diễn tập) | **P1**, task đợt 3 (run 86) |
-| D-5 | plan X6 / B7.5 | Diễn tập backup/restore Mongo | ❌ | runbook-ops §4 | **P1**, task đợt 3 (run 86); chính sách production DEBT-253 |
-| D-6 | plan X6 | Break-glass super_admin ở production (có audit) | ❌ | runbook-ops §3 (mongosh thủ công) | **P1**. DEBT-252, đợt 3 (run 86) |
+| D-3 | plan X6 | Pin GitHub Actions theo commit SHA; CodeQL v4 | ✅ | `.github/workflows/ci.yml`, `codeql.yml`, `audit.yml`: mọi `uses:` dạng `@<40 hex> # vX.Y.Z` (lệnh grep kiểm pin của T1 ra rỗng, chạy lại ở `runs/85-X6-release2/log.md` dòng tester); `github/codeql-action/*@33d7b85… # v4.39.3` | Run 85 T1 (DEBT-553/557, DEBT-231). Run 87 T5: image Docker trong `ci.yml`/`docker-compose.yml` pin `@sha256` (DEBT-590 đóng; `be/src/common/ops/image-pins.spec.ts › finds the images it must guard (not vacuous)`) |
+| D-4 | plan X6 / B7.5 | Diễn tập emergency rotate (Local dev + Vault int), đo thời gian, bước sai | ✅ | `runs/87-X6-drills/evidence/rotate-local-20261112T062325Z.json` (23/23 check)<br>`runs/87-X6-drills/evidence/rotate-vault-20261112T060754Z.json` (30/30 check, 2 BE)<br>`runs/87-X6-drills/drill-report.md` (lượt tay runbook-ops §1 bằng curl, 1,98 s)<br>`be/test/runbook-drill.int-spec.ts` | Run 87 T3: rotate 94/196 ms; JWKS instance kia và `/userinfo` AT cũ 401 sau 29,1 s (≤ 32 s); verifier RP cache nóng còn nhận AT cũ ⇒ runbook §1 5(ii) (đã ghi số đo). Runbook §0/§1 sửa |
+| D-5 | plan X6 / B7.5 | Diễn tập backup/restore Mongo | ✅ | `runs/87-X6-drills/evidence/backup-restore-20261112T071348Z.json` (36/36 check)<br>`runs/87-X6-drills/drill-report.md` §T1<br>`be/src/common/ops/backup-scripts.spec.ts › restore checks the real summary line: %s` | Run 87 T1 (DEBT-253): dump+ký+mã hoá 1,9 s, phần kỹ thuật 12,8 s (≤ 10 phút diễn tập, ≤ 30 phút production chưa đo ở 1 GB); 8 ca âm script (DB đích có sẵn, `dst==src`, `--drop`, sha lệch, khoá ký không pin, số document lệch, URI có credential, dump lỗi); §4c `active RT 0` + `RT_pre` 400; §15 200/50 → 0; `admin-recover` trên DB restore. DEBT-620/621 tìm thấy và sửa trong run. PITR không làm (DEBT-610) |
+| D-6 | plan X6 | Break-glass super_admin ở production (có audit) | ✅ | `be/test/run87-admin-recover.int-spec.ts › AC1 no usable super_admin, right code => membership active + super_admin, 1 success audit in the same transaction`<br>`be/test/run87-admin-recover.int-spec.ts › AC8 the success audit insert fails inside the transaction => abort: membership and lock unchanged, throws`<br>`be/test/runbook-drill.int-spec.ts › §3 lost admin: seed refuses production, restores super_admin, never resets the password nor the lock; admin-recover --unlock`<br>`runs/87-X6-drills/drill-report.md` (`--dry-run` từ bố cục `pnpm deploy --prod`) | Run 87 T2 (DEBT-252): CLI `admin-recover`, audit `ADMIN_RECOVERED` cùng transaction, runbook-ops §3d. Lần chạy thật trên DB restore nằm trong diễn tập T1 (D-5) |
 | D-7 | plan X6 | "Việc cần quyết định" đã đóng hết | ✅ | `plan.md` §12 Q1–Q9 (`[x]`, Q7–Q9 chốt 2026-11-06) + "Chốt bổ sung" | STATUS còn ghi "Còn mở: Q7–Q9" ⇒ orchestrator sửa khi đóng run (T5 fold) |
 | D-8 | plan X6 | Tài liệu vận hành có mục lục và cập nhật run 84 | ✅ | `runbook-ops.md` §0–§10 (§1 JWKS/RP sau DEBT-564, §9 secret 5xx, §10 email D84.1); `runbook-deploy.md` §1–§13 | URI có mật khẩu trên argv (DEBT-258, P1) |
 | D-9 | plan X5 | Security regression trong CI | ✅ | `.github/workflows/ci.yml` job `quality`, `int` ("Integration tests (security suite)", Vault, Sentinel), `e2e` | security-matrix: 77 dòng, 76 `có` |
@@ -246,6 +248,7 @@ Phạm vi: IdP (`be/`) và fe-admin (BFF); V10.2/10.3/10.5 thêm fe-sso-test (RP
 | D-13 | plan B7.3 | Hạ tầng production (Vault HA, Redis TLS, Mongo replica set) | ⚠ | runbook-deploy §8, §10; STATUS (Mongo replica set bắt buộc, run 79) | DEBT-391, DEBT-392 (P1) |
 | D-14 | plan X6 | Ký duyệt checklist | ❌ | Phần F (trống) | Ký ở đợt 4 (run 87); không phải P-level |
 | D-15 | plan X6 / D85.5 | Audit dependency theo lịch (không chờ push) | ✅ | `.github/workflows/audit.yml` (`schedule` `cron: '41 2 * * *'` + `workflow_dispatch`, `pnpm audit --audit-level high`, `permissions: contents: read`) | Run 85 T1. Lý do: advisory mongoose ra giữa hai lần push |
+| D-16 | plan X6 / D87.20 | Bootstrap production (resource `admin`, client `fe-admin` với redirect từ env, super_admin đầu tiên) | ❌ | `be/src/database/seed.ts` chỉ chạy dev/test; super_admin đầu tiên: CLI `admin-recover` (D-6) | **P1**. DEBT-164; phần resource/client đề xuất run 88, trước phần F |
 
 ## E — Triage các dòng 🟡 còn mở trong `backlog.md`
 
@@ -285,8 +288,8 @@ Phạm vi: IdP (`be/`) và fe-admin (BFF); V10.2/10.3/10.5 thêm fe-sso-test (RP
 | E-231 | backlog DEBT-231 | CodeQL action v3 deprecate 12/2026 | ⚠ | backlog.md DEBT-231 | P1 — hạn tháng sau; gộp run 85 với DEBT-553 |
 | E-234 | backlog DEBT-234 | `.vg-dot-*` sót trong `be/src/public/` | ⚠ | backlog.md DEBT-234 | P2 |
 | E-244 | backlog DEBT-244 | `rp-server.ts` TOCTOU cổng | ⚠ | backlog.md DEBT-244 | P2 — fail-fast |
-| E-252 | backlog DEBT-252 | Break-glass super_admin production | ⚠ | backlog.md DEBT-252 | P1 — đợt 3 (D-6) |
-| E-253 | backlog DEBT-253 | Chính sách backup production | ⚠ | backlog.md DEBT-253 | P1 — đợt 3 (D-5) |
+| E-252 | backlog DEBT-252 | Break-glass super_admin production | ✅ | `be/test/run87-admin-recover.int-spec.ts › AC2 a usable super_admin exists => refused super_admin_exists, nothing changed; forced => success forced:true N=1` | Run 87 T2 (D-6) |
+| E-253 | backlog DEBT-253 | Chính sách backup production | ✅ | runbook-ops §4 (D87.2–D87.9); `runs/87-X6-drills/evidence/backup-restore-20261112T071348Z.json` | Run 87 T1 (D-5) |
 | E-258 | backlog DEBT-258 | Runbook đặt URI có mật khẩu trên argv | ⚠ | backlog.md DEBT-258 | P1 — rò credential vào shell history |
 | E-272 | backlog DEBT-272 | Lockfile kéo peer `socks` khi `shadcn add` | ⚠ | backlog.md DEBT-272 | P2 — quy trình |
 | E-276 | backlog DEBT-276 | Ponytail fe-admin | ⚠ | backlog.md DEBT-276 | P2 |

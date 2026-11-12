@@ -8,13 +8,11 @@ export const UserSchema = new Schema(
     profile: { type: Schema.Types.Mixed, default: {} },
     mfaSecret: { type: String }, // placeholder, not enabled (spec §10)
     emailVerifiedAt: { type: Date },
-    failedLoginCount: { type: Number, default: 0 },
     lockedUntil: { type: Date },
     // Level of an admin lock (DEBT-153); absent with the admin sentinel => super_admin.
     adminLockLevel: { type: String, enum: ['tenant_admin', 'super_admin'] },
     // Per-user strictly increasing mark of admin lock/unlock writes = their audit timestamp (run 57).
     adminLockMarkAt: { type: Date },
-    lockTransitionNonce: { type: String, select: false },
   },
   { timestamps: true },
 );

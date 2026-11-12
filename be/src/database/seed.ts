@@ -228,7 +228,7 @@ export async function seedBootstrap(
     userModel
       .updateOne(
         { email },
-        { $setOnInsert: { passwordHash, emailVerifiedAt: now, failedLoginCount: 0 } },
+        { $setOnInsert: { passwordHash, emailVerifiedAt: now } },
         { upsert: true },
       )
       .exec(),

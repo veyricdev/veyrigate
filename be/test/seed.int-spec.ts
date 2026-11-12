@@ -178,7 +178,7 @@ describe('db:seed bootstrap (B6.4) on real Mongo', () => {
     await seedBootstrap(connection, ADMIN, ISSUER, 'test');
     const before = await adminUser();
     const lockedUntil = new Date(Date.now() + 3_600_000);
-    await users.updateOne({ _id: before!._id }, { $set: { lockedUntil, failedLoginCount: 7 } });
+    await users.updateOne({ _id: before!._id }, { $set: { lockedUntil } });
     await members.updateOne({ userId: before!._id }, { $set: { roles: [], status: 'suspended' } });
 
     await seedBootstrap(connection, { ...ADMIN, password: 'another-password-2' }, ISSUER, 'test');
@@ -186,7 +186,6 @@ describe('db:seed bootstrap (B6.4) on real Mongo', () => {
     expect(after!.passwordHash).toBe(before!.passwordHash);
     expect(await verifyPassword(after!.passwordHash as string, 'another-password-2')).toBe(false);
     expect((after!.lockedUntil as Date).getTime()).toBe(lockedUntil.getTime());
-    expect(after!.failedLoginCount).toBe(7);
     const member = await members.findOne({ userId: before!._id }).lean().exec();
     expect(member).toMatchObject({ status: 'active', roles: ['super_admin'] });
   });

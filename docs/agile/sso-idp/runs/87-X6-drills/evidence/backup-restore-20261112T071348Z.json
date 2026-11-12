@@ -1,0 +1,408 @@
+{
+  "drill": "backup-restore",
+  "startedAt": "2026-11-12T07:12:52.316Z",
+  "checks": [
+    {
+      "name": "db:seed exit 0",
+      "ok": true
+    },
+    {
+      "name": "fe-admin secret issued",
+      "ok": true
+    },
+    {
+      "name": "db:seed-dev exit 0",
+      "ok": true
+    },
+    {
+      "name": "source: GET /admin/keys 200",
+      "ok": true
+    },
+    {
+      "name": "mongo-backup.sh exit 0",
+      "ok": true,
+      "detail": 0
+    },
+    {
+      "name": "backup file has the standard name",
+      "ok": true
+    },
+    {
+      "name": "no .partial left",
+      "ok": true
+    },
+    {
+      "name": "metric written",
+      "ok": true
+    },
+    {
+      "name": "manifest totalDocuments = source document count",
+      "ok": true
+    },
+    {
+      "name": "AC3 MONGO_URI with credentials refused, not echoed",
+      "ok": true
+    },
+    {
+      "name": "AC4 failing mongodump: exit != 0, no new file, no .partial, metric unchanged",
+      "ok": true
+    },
+    {
+      "name": "AC1 restore into an existing db refused, db unchanged",
+      "ok": true
+    },
+    {
+      "name": "AC2 dst == src refused before connecting",
+      "ok": true
+    },
+    {
+      "name": "AC2 --drop refused before connecting",
+      "ok": true
+    },
+    {
+      "name": "AC2 one flipped byte => sha256 refused before connecting",
+      "ok": true
+    },
+    {
+      "name": "DEBT-617 archive signed by an unpinned key refused before mongorestore",
+      "ok": true
+    },
+    {
+      "name": "AC5 restored count != manifest => exit 1",
+      "ok": true
+    },
+    {
+      "name": "mongo-restore.sh exit 0",
+      "ok": true,
+      "detail": "gpg: Good signature from \"veyrigate drill signer <drill-signer@drill.invalid>\" [ultimate]"
+    },
+    {
+      "name": "every collection: same count, index specs and canonical EJSON sha256",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "name": "section 4c: active RT 0",
+      "ok": true
+    },
+    {
+      "name": "db:sync-indexes exit 0, every model synced, nothing dropped",
+      "ok": true
+    },
+    {
+      "name": "technical restore <= 10 min (D87.3 drill bound)",
+      "ok": true,
+      "detail": 12847
+    },
+    {
+      "name": "discovery 200",
+      "ok": true
+    },
+    {
+      "name": "jwks has >= 1 key",
+      "ok": true
+    },
+    {
+      "name": "RT_pre (rotated/revoked after restore by 4c) => 400 invalid_grant",
+      "ok": true
+    },
+    {
+      "name": "restored: admin login + GET /admin/keys 200",
+      "ok": true
+    },
+    {
+      "name": "a new RT refreshes => 200",
+      "ok": true
+    },
+    {
+      "name": "section 15 dry-run finds the seeded legacy users",
+      "ok": true,
+      "detail": {
+        "legacy": 200,
+        "expiredLocks": 50
+      }
+    },
+    {
+      "name": "section 15 apply modifies exactly them",
+      "ok": true
+    },
+    {
+      "name": "section 15 is idempotent (0, 0)",
+      "ok": true
+    },
+    {
+      "name": "section 15 leaves 0 0",
+      "ok": true
+    },
+    {
+      "name": "locked admin cannot sign in",
+      "ok": true
+    },
+    {
+      "name": "admin-recover --dry-run exit 0, no connection line",
+      "ok": true
+    },
+    {
+      "name": "admin-recover --unlock exit 0",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "admin-recover output has no email",
+      "ok": true
+    },
+    {
+      "name": "GET /admin/audit?action=ADMIN_RECOVERED shows the success event",
+      "ok": true
+    }
+  ],
+  "timings": {
+    "dumpEncryptMs": 1931,
+    "digestSrcMs": 492,
+    "decryptRestoreMs": 4992,
+    "digestRestoreMs": 378,
+    "revokeAllRtMs": 1163,
+    "syncIndexesMs": 1249,
+    "bootMs": 5443,
+    "technicalTotalMs": 12847,
+    "adminRecoverMs": 2796
+  },
+  "seeded": {
+    "users": 2000,
+    "legacy": 200,
+    "expiredLocks": 50,
+    "consents": 500,
+    "refreshTokens": 2000,
+    "audits": 5000
+  },
+  "backup": {
+    "file": "idp-vg-drill-src-20261112T071309Z.archive.gz.gpg",
+    "manifest": {
+      "db": "vg-drill-src",
+      "startedAt": "2026-11-12T07:13:09Z",
+      "finishedAt": "2026-11-12T07:13:10Z",
+      "toolVersion": "mongodump version: 100.20.1",
+      "collections": {
+        "usertenants": 2002,
+        "auditlogs": 5006,
+        "users": 2002,
+        "refreshtokens": 2001,
+        "clients": 2,
+        "consents": 501,
+        "clientcredentials": 1,
+        "resources": 3,
+        "federatedidentities": 0,
+        "tenants": 1,
+        "emailverificationtokens": 0,
+        "passwordresettokens": 0
+      },
+      "totalDocuments": 11519,
+      "bytes": 344539,
+      "sha256": "eb5f5b68de2e4383e3b6293cc7b363a72eb72474e5fc04bdff9567d37adf3a74"
+    }
+  },
+  "negativeCases": {
+    "credentialUriRefused": true,
+    "dumpFailure": true,
+    "existingDstRefused": true,
+    "sameDb": true,
+    "dropOption": true,
+    "tamperedSha": true,
+    "rogueSigner": true,
+    "countMismatch": true
+  },
+  "digest": {
+    "auditlogs": {
+      "count": 5006,
+      "sha256": "7a9ffdeca40009d7f06a232f69f317231b7b3c0fcb4f6f5db6a8bb3a25cedd21",
+      "indexes": [
+        "_id_",
+        "action_1",
+        "actorId_1",
+        "clientId_1",
+        "tenantId_1_timestamp_-1__id_-1",
+        "timestamp_1"
+      ]
+    },
+    "clientcredentials": {
+      "count": 1,
+      "sha256": "2a8e8efdc1b6ca453b3453659994e56be2209ddb7e4a29e834308006891bd13c",
+      "indexes": [
+        "_id_",
+        "clientId_1_version_1"
+      ]
+    },
+    "clients": {
+      "count": 2,
+      "sha256": "dbd6bd8368925f143aaf0849a016a8fb809dea0639a29981cfb1c3b26a22dbdc",
+      "indexes": [
+        "_id_",
+        "allowedCorsOrigins_1",
+        "clientId_1",
+        "tenantId_1_clientId_1"
+      ]
+    },
+    "consents": {
+      "count": 501,
+      "sha256": "6cb07c87a047a480e217b16e985a607b4bcb3452706efb80e12dfa4d5ba6a448",
+      "indexes": [
+        "_id_",
+        "userId_1_clientId_1_resource_1"
+      ]
+    },
+    "emailverificationtokens": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "indexes": [
+        "_id_",
+        "expiresAt_1",
+        "tokenHash_1"
+      ]
+    },
+    "federatedidentities": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "indexes": [
+        "_id_",
+        "provider_1_providerId_1",
+        "userId_1"
+      ]
+    },
+    "passwordresettokens": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "indexes": [
+        "_id_",
+        "expiresAt_1",
+        "tokenHash_1"
+      ]
+    },
+    "refreshtokens": {
+      "count": 2001,
+      "sha256": "5494e5ac021d1e6a18f6c9280a82b54e4f71b2297511206479cffaa43cff2704",
+      "indexes": [
+        "_id_",
+        "clientId_1",
+        "expiresAt_1",
+        "familyId_1",
+        "tokenHash_1",
+        "userId_1_clientId_1"
+      ]
+    },
+    "resources": {
+      "count": 3,
+      "sha256": "d6508fcb93a5ce368fe29f32e0d15dc515f53b09fd9a706b78f82aed623728d6",
+      "indexes": [
+        "_id_",
+        "identifier_1"
+      ]
+    },
+    "tenants": {
+      "count": 1,
+      "sha256": "8cff284571aff880e0f845df43ff6899e75257419488780f7915e8a6f2b67a8f",
+      "indexes": [
+        "_id_",
+        "id_1"
+      ]
+    },
+    "users": {
+      "count": 2002,
+      "sha256": "2e649ef6273ee55629b902d8885087458d84d3f563432c7b63020065433cf186",
+      "indexes": [
+        "_id_",
+        "email_1"
+      ]
+    },
+    "usertenants": {
+      "count": 2002,
+      "sha256": "908f9b405e5abc498c1025ffc8364edffd2d07a4dcba096372adecbecf91c7c6",
+      "indexes": [
+        "_id_",
+        "tenantId_1_roles_1",
+        "userId_1_tenantId_1"
+      ]
+    }
+  },
+  "revokeAll": {
+    "output": [
+      "DB: vg-drill-restore",
+      "active RT: 0",
+      "total RT: 2001"
+    ]
+  },
+  "syncIndexes": [
+    "User: synced",
+    "FederatedIdentity: synced",
+    "Tenant: synced",
+    "UserTenant: synced",
+    "Client: synced",
+    "ClientCredential: synced",
+    "Resource: synced",
+    "Consent: synced",
+    "RefreshToken: synced",
+    "PasswordResetToken: synced",
+    "EmailVerificationToken: synced",
+    "AuditLog: synced"
+  ],
+  "restoredApp": {
+    "health": 200,
+    "ready": 200,
+    "discovery": 200,
+    "jwksKids": [
+      "111d5316-f5c1-40dc-8e16-4d35aaf35048"
+    ],
+    "rtPre": {
+      "status": 400,
+      "error": "invalid_grant"
+    },
+    "rtNew": 200
+  },
+  "section15": {
+    "dryRun": {
+      "legacy": 200,
+      "expiredLocks": 50
+    },
+    "apply": [
+      200,
+      50
+    ],
+    "reapply": [
+      0,
+      0
+    ],
+    "after": {
+      "legacy": 0,
+      "expiredLocks": 0
+    }
+  },
+  "adminRecover": {
+    "cli": "external (--recover-cli, e.g. a pnpm deploy --prod layout)",
+    "planLines": [
+      "target: 127.0.0.1:27017/vg-drill-restore",
+      "target: 127.0.0.1:27017/vg-drill-restore",
+      "locked: yes (admin lock)",
+      "usable super_admins: 0",
+      "recovered: user <id>, audit event 3213ca02-5b73-4d65-be9f-82fa8d43c945"
+    ],
+    "auditStatus": 200,
+    "auditItems": 1
+  },
+  "tools": {
+    "gpg": "gpg (GnuPG) 2.4.8",
+    "mongodump": "mongodump version: 100.20.1",
+    "node": "v22.23.4",
+    "mongod": "7.0.48",
+    "head": "8855df0"
+  },
+  "limits": "BE runs NODE_ENV=development (production needs https Vault + Secure cookies, covered by docker-smoke.sh); gpg key without passphrase (production key has one, held by two people).",
+  "cleanupErrors": [],
+  "postCheck": {
+    "drillDbsLeft": [],
+    "redisDbSizes": {
+      "7": 0
+    },
+    "e2eUnchanged": true
+  },
+  "finishedAt": "2026-11-12T07:13:48.128Z",
+  "ok": true
+}

@@ -958,7 +958,8 @@
                 "ADMIN_USER_ROLES_CHANGED",
                 "OAUTH_CONSENT_REVOKED",
                 "AUTH_LOGIN_THROTTLED",
-                "AUTH_PASSWORD_CHANGED"
+                "AUTH_PASSWORD_CHANGED",
+                "ADMIN_RECOVERED"
               ]
             }
           },
@@ -1886,7 +1887,8 @@
               "ADMIN_USER_ROLES_CHANGED",
               "OAUTH_CONSENT_REVOKED",
               "AUTH_LOGIN_THROTTLED",
-              "AUTH_PASSWORD_CHANGED"
+              "AUTH_PASSWORD_CHANGED",
+              "ADMIN_RECOVERED"
             ]
           },
           "targetType": {

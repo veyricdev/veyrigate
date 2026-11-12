@@ -1636,7 +1636,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       expect(await contexts.peek(leg.requestId)).not.toBeNull();
       expect((await linkPage({ idp_link: leg.link, idp_fed: leg.fed })).statusCode).toBe(400);
       // Run 85 (DEBT-575, intentional): a wrong password no longer writes a failure counter/lock.
-      expect((await users.findById(local.sub))?.failedLoginCount ?? 0).toBe(0);
+      expect((await users.findById(local.sub))?.lockedUntil).toBeUndefined();
       await expectNotLinked(leg.sub, local.sub);
     });
 
@@ -2009,7 +2009,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
         });
         expect(viaLogin.statusCode).toBe(302);
         await expectNotLinked(leg.sub, local.sub);
-        expect((await users.findById(local.sub))?.failedLoginCount ?? 0).toBe(0);
+        expect((await users.findById(local.sub))?.lockedUntil).toBeUndefined();
       } finally {
         await redis.del(key);
       }

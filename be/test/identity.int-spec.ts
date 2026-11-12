@@ -101,19 +101,18 @@ describe('Identity services on real Mongo (B2.2)', () => {
     );
   });
 
-  it('updates status fields only (emailVerifiedAt, failedLoginCount, lockedUntil)', async () => {
+  it('updates status fields only (emailVerifiedAt, lockedUntil)', async () => {
     const u = await users.create({ email: 'carol@example.com' });
     const at = new Date('2026-01-01T00:00:00Z');
     const lock = new Date('2026-01-02T00:00:00Z');
     const updated = await users.updateStatus(u.sub, {
       emailVerifiedAt: at,
-      failedLoginCount: 3,
       lockedUntil: lock,
+      failedLoginCount: 3, // removed field (run 87, DEBT-589): never written
       email: 'hijack@example.com',
     } as never);
     expect(updated).toMatchObject({
       emailVerifiedAt: at,
-      failedLoginCount: 3,
       lockedUntil: lock,
       email: 'carol@example.com',
     });

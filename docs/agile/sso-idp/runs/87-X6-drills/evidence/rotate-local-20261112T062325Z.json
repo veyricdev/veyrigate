@@ -1,0 +1,149 @@
+{
+  "drill": "rotate-local",
+  "startedAt": "2026-11-12T06:23:14.793Z",
+  "checks": [
+    {
+      "name": "db:seed exit 0",
+      "ok": true
+    },
+    {
+      "name": "fe-admin secret issued",
+      "ok": true
+    },
+    {
+      "name": "one active key before",
+      "ok": true
+    },
+    {
+      "name": "AT_old: /userinfo 200",
+      "ok": true
+    },
+    {
+      "name": "AT_old: /introspect active",
+      "ok": true
+    },
+    {
+      "name": "RP verifier (warm cache) accepts AT_old",
+      "ok": true
+    },
+    {
+      "name": "POST /admin/keys/rotate emergency => 200",
+      "ok": true,
+      "detail": 200
+    },
+    {
+      "name": "new kid differs",
+      "ok": true
+    },
+    {
+      "name": "JWKS A = [newKid] at once",
+      "ok": true,
+      "detail": [
+        "67ea09e9-2197-484f-8b4a-635f7e13f8b3"
+      ]
+    },
+    {
+      "name": "JWKS cache-control no-cache",
+      "ok": true
+    },
+    {
+      "name": "AT_old: /userinfo 401",
+      "ok": true
+    },
+    {
+      "name": "AT_old: /introspect active:false",
+      "ok": true
+    },
+    {
+      "name": "AT_old: admin API 401",
+      "ok": true
+    },
+    {
+      "name": "KEY_LOCAL_DIR = keys.json + <newKid>.pem only (runbook-deploy section 6)",
+      "ok": true,
+      "detail": [
+        "67ea09e9-2197-484f-8b4a-635f7e13f8b3.pem",
+        "keys.json"
+      ]
+    },
+    {
+      "name": "refresh after emergency => 200",
+      "ok": true,
+      "detail": 200
+    },
+    {
+      "name": "new AT kid = newKid",
+      "ok": true
+    },
+    {
+      "name": "new RP verifier accepts the new AT",
+      "ok": true
+    },
+    {
+      "name": "new RP verifier rejects AT_old",
+      "ok": true
+    },
+    {
+      "name": "audit SIGNING_KEY_ROTATED success mode emergency",
+      "ok": true
+    },
+    {
+      "name": "sso_signing_key_rotations_total{mode=emergency,result=success} +1",
+      "ok": true,
+      "detail": {
+        "before": 0,
+        "after": 1
+      }
+    },
+    {
+      "name": "GET /admin/keys: exactly one active, the new kid",
+      "ok": true
+    },
+    {
+      "name": "normal rotation => 200 + one pending key",
+      "ok": true
+    },
+    {
+      "name": "second normal rotation while pending => 409 conflict",
+      "ok": true
+    }
+  ],
+  "timings": {
+    "rotateLatencyMs": 94,
+    "jwksAOnlyNewMs": 99
+  },
+  "keyDirFiles": [
+    "67ea09e9-2197-484f-8b4a-635f7e13f8b3.pem",
+    "keys.json"
+  ],
+  "warmVerifier": {
+    "acceptsAtOld": true,
+    "acceptsNewAtImmediately": false,
+    "msSinceRotate": 287
+  },
+  "metric": {
+    "before": 0,
+    "after": 1
+  },
+  "kids": {
+    "oldKid": "f0462013-a095-41a4-be89-25d944bbc58e",
+    "newKid": "67ea09e9-2197-484f-8b4a-635f7e13f8b3",
+    "pendingKid": "0b0a88ac-9df9-4ea4-a864-483323171825"
+  },
+  "tools": {
+    "node": "v22.23.4",
+    "head": "8855df0",
+    "dist": "<repo>\\be\\dist"
+  },
+  "limits": "BE runs NODE_ENV=development (production: https Vault + Secure cookies, covered by docker-smoke.sh); KEY_PREPUBLISH_SEC=600, ACCESS_TOKEN_TTL=900 as in production.",
+  "cleanupErrors": [],
+  "postCheck": {
+    "drillDbsLeft": [],
+    "redisDbSizes": {
+      "7": 0
+    },
+    "e2eUnchanged": true
+  },
+  "finishedAt": "2026-11-12T06:23:25.556Z",
+  "ok": true
+}
