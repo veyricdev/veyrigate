@@ -3,7 +3,7 @@
 - **Phạm vi**: T1 DEBT-577 — token một lần trong link email sang fragment `#token=` (một ô mã hiển thị, `/assets/token-fragment.js` điền rồi `replaceState`, thư in mã, GET bỏ qua `?token=`, D86.1–D86.3). T2/T3 DEBT-393 — pre-publish key: `KEY_PREPUBLISH_SEC` (0–86400, mặc định 3600), trạng thái pending/active/retiring suy ra theo thời gian (Local `activatesAt`, Vault `creation_time` + `key_version`), rotate normal khi đang pending ⇒ 409 `conflict` + audit `rotation_pending`, emergency gỡ cả pending; fe-admin nhãn Pending, khoá nút Rotate, tự đọc lại khi tới `activatesAt` (D86.8–D86.13). T4 DEBT-572 — POST `/logout` từ RP không `_csrf` ⇒ trang xác nhận, `LogoutCsrfGuard` (D86.4–D86.7). T5 DEBT-583/599 — CSP `base-uri 'none'`, `networkOf` qua ipaddr.js. T6 checklist + gate.
 - **Verify**: be 979, int FULL 2246/2246 (`vg-int-*` 0→0), vault 32/32 (orchestrator, container thử đã xoá), E2E 42/42, X3 42/42, fe-admin 1626. Gate cuối chạy trên hạ tầng dựng lại (`veyrigate-mongo`/`veyrigate-redis` dùng chung, tách DB).
 - **Checklist**: 201 dòng = 146 ✅ / 29 ⚠ / 7 ❌ / 19 N/A; **P0 ❌ = 0**.
-- **Commit**: `<hash>`.
+- **Commit**: `51818d6`.
 - **Vòng lặp**: tech-lead=1 (PASS, sửa chữ 4 quyết định cũ), BE dev=1 (+1 sửa 🟡 senior), FE dev=1 (+1 sửa 🟡, +1 áp lại DEBT-606 sau khi script dùng chung trong scratchpad ghi đè nhầm), senior=1 (PASS), tester=1 (PASS; gián đoạn khi Docker bị xoá, chạy lại trên hạ tầng mới).
 - **Debt**: đóng DEBT-393/572/577/583/599/605/606/607; mở DEBT-602–604, 608, 609. Quyết định D86.1–D86.15 chép vào `plan.md` §12.
 - **⚠ Deploy**: BE + fe-admin cùng bản; link gửi trước deploy không tự điền mã ⇒ xin link mới; `KEY_PREPUBLISH_SEC` ≥ thời gian cache JWKS của RP; POST `/logout` từ RP giờ 200 trang xác nhận.
