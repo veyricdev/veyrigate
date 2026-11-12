@@ -94,6 +94,9 @@ export function beEnv(): Record<string, string> {
     // so a relative "./keys" would resolve to be/keys and overwrite/prune the dev keyset. Use an
     // absolute dir under e2e/ (git-ignored) that LocalKeyProvider.init() auto-creates.
     KEY_LOCAL_DIR: resolve(dirname(fileURLToPath(import.meta.url)), "..", ".keys"),
+    // Run 86 (DEBT-393, D86.12): short pre-publish so `fe-admin-keys.spec.ts` sees a Pending key turn
+    // Active within the run; `e2e/.keys` survives between runs, so 3600 would 409 the next run.
+    KEY_PREPUBLISH_SEC: "20",
     SMTP_URL: "smtp://localhost:1025",
     // Run 32 (F4): federation providers are optional; empty = disabled. Set explicitly (not omitted)
     // so BE does not fall back to be/.env values (loaded non-overriding). E2E never calls real providers.

@@ -246,6 +246,9 @@ describe('security headers by response type (B7.4)', () => {
       expect(csp).toBe(buildCsp());
       expect(csp).toContain("frame-ancestors 'none'");
       expect(csp).toContain("form-action 'self'");
+      // DEBT-583 (D86.15): no page uses <base>, so nothing may set one.
+      expect(csp).toContain("base-uri 'none'");
+      expect(csp).not.toContain("base-uri 'self'");
       expect(csp).not.toMatch(/unsafe-inline|unsafe-eval/);
     });
 

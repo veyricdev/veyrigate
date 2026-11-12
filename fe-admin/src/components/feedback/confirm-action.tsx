@@ -77,10 +77,12 @@ interface ConfirmActionProps {
    * sensitive, not trimmed) is typed. The typed text is cleared whenever the dialog closes.
    */
   confirmText?: string;
+  /** The trigger is disabled (the dialog cannot be opened). */
+  disabled?: boolean;
 }
 
 /** A write behind a confirmation (Escape / Cancel close it; an outside click does not). */
-export function ConfirmAction({ trigger, triggerLabel, title, children, warning, confirmLabel, destructive, path, stepUpNote, run, onDone, confirmText }: ConfirmActionProps) {
+export function ConfirmAction({ trigger, triggerLabel, title, children, warning, confirmLabel, destructive, path, stepUpNote, run, onDone, confirmText, disabled }: ConfirmActionProps) {
   const [open, setOpen] = useState(false);
   const [typed, setTyped] = useState("");
   const textId = useId();
@@ -124,7 +126,7 @@ export function ConfirmAction({ trigger, triggerLabel, title, children, warning,
       }}
     >
       <AlertDialogTrigger asChild>
-        <Button type="button" variant={destructive ? "destructive" : "outline"} aria-label={triggerLabel}>
+        <Button type="button" variant={destructive ? "destructive" : "outline"} aria-label={triggerLabel} disabled={disabled}>
           {trigger}
         </Button>
       </AlertDialogTrigger>

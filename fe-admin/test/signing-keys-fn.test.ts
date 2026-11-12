@@ -59,9 +59,12 @@ const KEY = {
   alg: "RS256",
   status: "active",
   createdAt: "2026-10-23T01:02:03.004Z",
+  activatesAt: "2026-10-23T01:02:03.004Z",
   retireAt: null,
 };
 const RETIRING = { ...KEY, kid: "k-old", status: "retiring", retireAt: "2026-10-23T01:04:03.004Z" };
+const PENDING = { ...KEY, kid: "k-next", status: "pending", createdAt: "2026-10-23T01:03:00.000Z", activatesAt: "2026-10-23T02:03:00.000Z" };
+const AT = "2026-10-23T02:03:00.000Z";
 const MATERIAL = {
   kty: "RSA",
   n: "MATERIAL-n",
@@ -78,11 +81,11 @@ const MATERIAL = {
 };
 
 describe("listSigningKeys", () => {
-  it("GET /admin/keys; only the 5 allowlisted fields reach the caller (no key material)", async () => {
-    beFetch.mockResolvedValue(json(200, { items: [{ ...KEY, ...MATERIAL }, { ...RETIRING, ...MATERIAL }], nextCursor: null, extra: "MATERIAL" }));
+  it("GET /admin/keys; only the 6 allowlisted fields reach the caller (no key material)", async () => {
+    beFetch.mockResolvedValue(json(200, { items: [{ ...KEY, ...MATERIAL }, { ...PENDING, ...MATERIAL }, { ...RETIRING, ...MATERIAL }], nextCursor: null, extra: "MATERIAL" }));
     const out = await listSigningKeys();
     expect(listSigningKeys.method).toBe("GET");
-    expect(out).toEqual({ ok: true, data: { items: [KEY, RETIRING], nextCursor: null } });
+    expect(out).toEqual({ ok: true, data: { items: [KEY, PENDING, RETIRING], nextCursor: null } });
     expect(JSON.stringify(out)).not.toContain("MATERIAL");
     expect(beFetch).toHaveBeenCalledTimes(1);
     const [url, init] = beFetch.mock.calls[0]!;
@@ -99,14 +102,23 @@ describe("listSigningKeys", () => {
     beFetch.mockResolvedValue(json(status, body));
     expect(await listSigningKeys()).toEqual({ ok: false, error: { code, message: expect.any(String) } });
   });
+
+  it.each([
+    ["missing activatesAt", { ...KEY, activatesAt: undefined }],
+    ["unknown status", { ...KEY, status: "scheduled" }],
+  ])("200 with an item %s => schema error (the page shows its read error), sent once", async (_, item) => {
+    beFetch.mockResolvedValue(json(200, { items: [item], nextCursor: null }));
+    await expect(listSigningKeys()).rejects.toThrow(/schema mismatch/);
+    expect(beFetch).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("rotateSigningKey", () => {
   it.each(["normal", "emergency"] as const)("POST /admin/keys/rotate with exactly {mode:%s}; result stripped", async (mode) => {
-    beFetch.mockResolvedValue(json(200, { newKid: "k-new", oldKid: "k-old", mode, privateKey: "MATERIAL", d: "MATERIAL" }));
+    beFetch.mockResolvedValue(json(200, { newKid: "k-new", oldKid: "k-old", mode, activatesAt: AT, privateKey: "MATERIAL", d: "MATERIAL" }));
     const out = await rotateSigningKey({ data: { mode } });
     expect(rotateSigningKey.method).toBe("POST");
-    expect(out).toEqual({ ok: true, data: { newKid: "k-new", oldKid: "k-old", mode } });
+    expect(out).toEqual({ ok: true, data: { newKid: "k-new", oldKid: "k-old", mode, activatesAt: AT } });
     expect(JSON.stringify(out)).not.toContain("MATERIAL");
     expect(beFetch).toHaveBeenCalledTimes(1);
     const [url, init] = beFetch.mock.calls[0]!;
@@ -116,8 +128,8 @@ describe("rotateSigningKey", () => {
   });
 
   it("oldKid null (first key) is accepted", async () => {
-    beFetch.mockResolvedValue(json(200, { newKid: "k-new", oldKid: null, mode: "normal" }));
-    expect(await rotateSigningKey({ data: { mode: "normal" } })).toEqual({ ok: true, data: { newKid: "k-new", oldKid: null, mode: "normal" } });
+    beFetch.mockResolvedValue(json(200, { newKid: "k-new", oldKid: null, mode: "normal", activatesAt: AT }));
+    expect(await rotateSigningKey({ data: { mode: "normal" } })).toEqual({ ok: true, data: { newKid: "k-new", oldKid: null, mode: "normal", activatesAt: AT } });
   });
 
   it.each([
@@ -137,7 +149,8 @@ describe("rotateSigningKey", () => {
     ["network", () => Promise.reject(new TypeError("fetch failed"))],
     ["500", async () => json(500, { error: "server_error" })],
     ["200 off schema", async () => json(200, { newKid: "", oldKid: null, mode: "normal" })],
-    ["200 unknown mode", async () => json(200, { newKid: "k-new", oldKid: null, mode: "hard" })],
+    ["200 unknown mode", async () => json(200, { newKid: "k-new", oldKid: null, mode: "hard", activatesAt: AT })],
+    ["200 missing activatesAt", async () => json(200, { newKid: "k-new", oldKid: null, mode: "normal" })],
     ["200 not JSON", async () => new Response("<html>", { status: 200 })],
   ])("%s => unavailable + uncertain, sent exactly once", async (_, res) => {
     beFetch.mockImplementation(res);
@@ -152,6 +165,7 @@ describe("rotateSigningKey", () => {
     [403, { error: "step_up_required" }, "step_up_required"],
     [403, { error: "forbidden" }, "forbidden"],
     [400, { error: "invalid_request", error_description: "mode must be one of" }, "invalid_request"],
+    [409, { error: "conflict", error_description: "A newer signing key is already published and does not sign yet." }, "conflict"],
   ] as const)("%i %j => %s, not uncertain, sent once", async (status, body, code) => {
     beFetch.mockResolvedValue(json(status, body));
     const out = (await rotateSigningKey({ data: { mode: "normal" } })) as { ok: false; error: { code: string; uncertain?: true } };

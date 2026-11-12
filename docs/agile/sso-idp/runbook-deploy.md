@@ -305,6 +305,7 @@ vault policy write idp-signer /tmp/idp-signer.hcl
 | `VAULT_TRANSIT_KEY` | khi `vault` | `^[A-Za-z0-9_-]+$` |
 | `VAULT_TIMEOUT_MS` | không | Mặc định 2000, tối đa 10000; `sign`/đọc key retry 1 lần (mạng/timeout/5xx) |
 | `KEY_LOCAL_DIR` | khi `local` | Không dùng với `vault` |
+| `KEY_PREPUBLISH_SEC` | không | Pre-publish của rotate normal (run 86, DEBT-393): `0..86400`, trống ⇒ `3600`; production **≥ 600** (runbook-ops §1) |
 
 **Boot từ chối** (app không khởi động, log chỉ tên lỗi, không token/đường dẫn): token file thiếu/rỗng,
 key không tồn tại (404) hoặc không có quyền (403), key không phải `rsa-2048/3072/4096`, `exportable` hoặc
@@ -316,7 +317,9 @@ key không tồn tại (404) hoặc không có quyền (403), key không phải 
   key cũ ngay; instance khác ≤ 30 s. Vault từ chối ký bằng version cũ ngay với **mọi** instance (instance
   cache cũ tự refresh rồi ký lại bằng key mới). RP ngoài theo cache JWKS của họ (DEBT-157).
 - Token mang `kid` lạ (instance khác vừa rotate) ⇒ refresh metadata tối đa 1 lần / 5 s.
-- Rotate normal: version cũ còn trong JWKS tới `creation_time(mới) + ACCESS_TOKEN_TTL + 30 s`.
+- Rotate normal (run 86, pre-publish): version mới `pending` trong JWKS, ký từ `creation_time(mới) + KEY_PREPUBLISH_SEC`;
+  version cũ ký tới đó, rồi còn trong JWKS tới `activatesAt(mới) + ACCESS_TOKEN_TTL + 30 s`. Rotate normal khi còn
+  `pending` ⇒ `409 conflict` (audit `rotation_pending`).
 - **Vault down**: không cấp được token (`/token` 5xx, không phát token chưa ký). Verify (`/userinfo`,
   `/introspect`, admin API) chạy bằng cache tới khi hết hạn (≤ 30 s); sau đó trả **503
   `temporarily_unavailable` + `Retry-After: 5`** (run 53c, DEBT-394): vẫn fail-closed nhưng RS/RP phân biệt
@@ -369,7 +372,7 @@ Không push, không đăng nhập registry.
 | Bắt buộc | `MONGO_URI` + **một trong** `REDIS_SENTINELS` (+ `REDIS_SENTINEL_MASTER`, production, §10) / `REDIS_URL` (standalone) | Từ secret store (chứa mật khẩu); Redis `noeviction` (§3) |
 | Bắt buộc | `ACCESS_TOKEN_TTL`, `REFRESH_TOKEN_TTL`, `SESSION_IDLE_TTL`, `SESSION_ABSOLUTE_TTL` | Giây (Q6) |
 | Bắt buộc | `SMTP_URL`, `ADMIN_SEED_EMAIL`, `CSRF_SECRET`, `RATE_LIMIT_WINDOW`, `RATE_LIMIT_MAX` | `CSRF_SECRET` ngẫu nhiên dài, từ secret store |
-| Key ký | `KEY_PROVIDER=vault`, `VAULT_ADDR` (`https:`), `VAULT_TOKEN_FILE`, `VAULT_TRANSIT_KEY` (+ `VAULT_TRANSIT_MOUNT`, `VAULT_TIMEOUT_MS`) | Xem §8. `local` bị từ chối ở production |
+| Key ký | `KEY_PROVIDER=vault`, `VAULT_ADDR` (`https:`), `VAULT_TOKEN_FILE`, `VAULT_TRANSIT_KEY` (+ `VAULT_TRANSIT_MOUNT`, `VAULT_TIMEOUT_MS`, `KEY_PREPUBLISH_SEC` ≥ 600) | Xem §8. `local` bị từ chối ở production |
 | TLS Vault | `NODE_EXTRA_CA_CERTS=/path/ca.pem` | Chỉ khi Vault dùng CA riêng; file CA mount read-only |
 | Tuỳ chọn | `TRUST_PROXY` (§5), `METRICS_TOKEN` (≥ 32, không publish `/metrics` ra ngoài), `GOOGLE_*`/`GITHUB_*` (theo cặp), `CONSENT_*`, `CLIENT_*` | |
 

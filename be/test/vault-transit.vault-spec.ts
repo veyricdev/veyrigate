@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { VaultConfig } from '../src/config/configuration';
 import { DEFAULT_TENANT_ID } from '../src/modules/identity/tenant.service';
+import { RotationPendingError } from '../src/modules/keys/key-provider';
 import { TokenSigner } from '../src/modules/keys/token-signer';
 import { TokenVerifier } from '../src/modules/keys/token-verifier';
 import {
@@ -167,7 +168,7 @@ describe('VaultTransitKeyProvider against Vault (run 53)', () => {
 
   async function provider(
     k: { key: string; tokenFile: string },
-    opts: { ttl?: number; fetchFn?: typeof fetch; now?: () => number } = {},
+    opts: { ttl?: number; fetchFn?: typeof fetch; now?: () => number; prepublishSec?: number } = {},
   ): Promise<VaultTransitKeyProvider> {
     const p = new VaultTransitKeyProvider(cfgFor(k.key, k.tokenFile), opts.ttl ?? TTL, opts);
     await p.init();
@@ -309,6 +310,46 @@ describe('VaultTransitKeyProvider against Vault (run 53)', () => {
     const token = await new TokenSigner(b, config).sign({}, { audience: AUD, expiresInSec: 60 });
     expect(decodeProtectedHeader(token).kid).toBe(r.newKid);
     await expect(new TokenVerifier(a, config).verify(token, AUD)).resolves.toBeDefined();
+  });
+
+  it('V15 (run 86, DEBT-393): pre-publish — v2 pending, signs with key_version 1 until activatesAt, 409 while pending, emergency leaves one version', async () => {
+    const k = await newKey();
+    let offset = 0;
+    const p = await provider(k, { now: () => Date.now() + offset, prepublishSec: 3600 });
+    const b = await provider(k, { now: () => Date.now() + offset, prepublishSec: 3600 });
+    const signer = new TokenSigner(p, config);
+    const verifier = new TokenVerifier(p, config);
+
+    const r = await p.rotate('normal', TTL);
+    const md = await metadata(k.key);
+    const act = Date.parse(md.keys['2'].creation_time) + 3600_000;
+    expect(Date.parse(r.activatesAt)).toBe(act);
+    expect((await p.getPublicKeys()).map((x) => x.kid)).toEqual([r.oldKid, r.newKid]);
+    expect((await p.listKeys()).map((x) => [x.kid, x.status])).toEqual([
+      [r.oldKid, 'active'],
+      [r.newKid, 'pending'],
+    ]);
+    const before = await signer.sign({}, { audience: AUD, expiresInSec: 600 });
+    expect(decodeProtectedHeader(before).kid).toBe(r.oldKid);
+    await expect(verifier.verify(before, AUD)).resolves.toBeDefined();
+    await expect(p.rotate('normal', TTL)).rejects.toBeInstanceOf(RotationPendingError);
+    expect((await metadata(k.key)).latest_version).toBe(2);
+
+    offset = act - Date.now();
+    const after = await signer.sign({}, { audience: AUD, expiresInSec: 600 });
+    expect(decodeProtectedHeader(after).kid).toBe(r.newKid);
+    await expect(verifier.verify(after, AUD)).resolves.toBeDefined();
+
+    // A new pending v3, then an emergency elsewhere: one version left, b re-signs with it.
+    offset = act + 60_000 - Date.now();
+    await p.rotate('normal', TTL);
+    const e = await p.rotate('emergency', TTL);
+    expect((await p.listKeys()).map((x) => [x.kid, x.status])).toEqual([[e.newKid, 'active']]);
+    expect(e.activatesAt).toBe(
+      new Date(Date.parse((await metadata(k.key)).keys['4'].creation_time)).toISOString(),
+    );
+    const token = await new TokenSigner(b, config).sign({}, { audience: AUD, expiresInSec: 60 });
+    expect(decodeProtectedHeader(token).kid).toBe(e.newKid);
   });
 
   it('V6: the app token cannot export, make exportable, allow deletion, delete, or use another key', async () => {

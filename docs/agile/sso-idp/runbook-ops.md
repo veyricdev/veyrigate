@@ -60,25 +60,39 @@ lạ ký hợp lệ. Sau khi xoay: alert `SsoEmergencyKeyRotation`
 (`sso_signing_key_rotations_total{mode="emergency",result="success"}`) bắn — đó là xác nhận, không phải sự cố mới.
 
 **Quyết định**
-- Nghi lộ ⇒ **emergency** (key cũ rời JWKS ngay). Xoay định kỳ ⇒ `{"mode":"normal"}` (key cũ verify-only thêm `ACCESS_TOKEN_TTL`).
+- Nghi lộ ⇒ **emergency** (key cũ rời JWKS ngay, key mới ký ngay). Xoay định kỳ ⇒ `{"mode":"normal"}`: key mới
+  vào JWKS ngay với `status:"pending"` và chỉ ký từ `activatesAt` = lúc xoay + `KEY_PREPUBLISH_SEC` (pre-publish,
+  run 86, DEBT-393); key cũ ký tiếp tới đó rồi verify-only thêm `ACCESS_TOKEN_TTL`.
+- **`KEY_PREPUBLISH_SEC` ≥ 600 ở production** (mặc định 3600; RP cache JWKS ≤ 10'). Đổi biến này: Vault suy ra
+  `activatesAt` lúc đọc nên version đang pending dịch theo giá trị mới; Local đã ghi `activatesAt` vào `keys.json` nên không đổi.
 - Emergency **KHÔNG thu hồi session Redis và refresh token**. Nếu nghi lộ kèm xâm nhập host/đánh cắp
   phiên ⇒ người trực cân nhắc thêm các bước thu hồi ở §2 (theo user/client) hoặc §4(i) (toàn bộ RT,
   DEBT-251). Không mặc định.
 
 **Các bước** (super_admin + `admin.write` + step-up)
 1. Đăng nhập lại (`prompt=login`) lấy `ADMIN_AT` mới (auth_time ≤ 5').
-2. Ghi lại kid hiện tại: `GET /admin/keys` → `items[].{kid,status}` (`status:"active"` = kid sắp bị thay).
-3. `POST /admin/keys/rotate` body `{"mode":"emergency"}` → `200 {"newKid","oldKid","mode":"emergency"}`.
+2. Ghi lại **tập kid** hiện tại: `GET /admin/keys` → `items[].{kid,status,activatesAt}` (`status:"active"` = kid
+   đang ký; `pending` = đã publish, ký từ `activatesAt`).
+3. `POST /admin/keys/rotate` body `{"mode":"emergency"}` → `200 {"newKid","oldKid","mode":"emergency","activatesAt"}`
+   (`activatesAt` = lúc tạo: ký ngay; emergency gỡ cả key `pending`).
+   - Rotate **normal** → `200 {…,"activatesAt"}`: kiểm `GET /admin/keys` có `newKid` `status:"pending"` với đúng
+     `activatesAt`, key cũ vẫn `active`. **Không rotate normal lần hai khi còn `pending`**: IdP trả
+     `409 {"error":"conflict","error_description":"A newer signing key is already published and does not sign yet. …"}`,
+     không đổi gì, audit `SIGNING_KEY_ROTATED result:"failure" reason:"rotation_pending" metadata.pendingKid`. Chờ tới
+     `activatesAt`, hoặc dùng emergency nếu key lộ.
    - `403 step_up_required` ⇒ quay lại bước 1. `403 forbidden` ⇒ không phải super_admin.
    - **Không idempotent (DEBT-158)**: 5xx/timeout ⇒ **KHÔNG gọi lại mù**. Kiểm trước:
      `GET /admin/keys` (kid active đã khác kid ở bước 2 chưa?) và
      `GET /admin/audit?action=SIGNING_KEY_ROTATED` (event `result:"success"`, `targetId`=newKid,
      `metadata.mode`, `metadata.oldKid`). Quy tắc dừng (DEBT-389, run 58):
-     - **normal**: kid active khác bước 2 ⇒ đã xoay, dừng; chưa ⇒ mới gọi lại.
+     - **normal** (run 86): so **tập kid** với bước 2 — có kid mới (dù `pending` hay `active`) ⇒ đã xoay, dừng; không
+       có kid mới ⇒ mới gọi lại. Không so kid active: trong `KEY_PREPUBLISH_SEC` kid active **không đổi** sau rotate normal.
      - **emergency**: chỉ coi là xong khi `GET /admin/keys` có **đúng 1 item** (`status:"active"`, kid ≠ bước 2).
        Kid active đã đổi mà còn item `retiring` ⇒ emergency **dở** (Vault `config` lỗi sau `rotate`) ⇒ **gọi lại
        emergency**: lần chạy lại hội tụ (min_* = latest, trim), tạo thêm 1 version là chấp nhận được. Dấu hiệu trong
        audit: `SIGNING_KEY_ROTATED result:"failure" reason:"rotate_failed" metadata.mode:"emergency"`.
+       Với pre-publish (run 86, Vault): emergency dở thường hiện **kid cũ vẫn `active` + kid mới `pending`** (version mới
+       chưa thành sàn) ⇒ cũng là dở ⇒ gọi lại emergency.
      Một lần xoay thừa không phá gì nhưng làm AT mới ký bằng key vừa tạo cũng chết (DEBT-158, chấp nhận).
 4. Dev `LocalKeyProvider`: làm theo [runbook-deploy §6](runbook-deploy.md#6-sau-emergency-rotate--kiểm-key_local_dir-debt-163-dev-localkeyprovider)
    (PEM mồ côi; chỉ xoá đúng `<oldKid>.pem`).
@@ -95,9 +109,9 @@ lạ ký hợp lệ. Sau khi xoay: alert `SsoEmergencyKeyRotation`
    - (iii) fe-admin **không cần** restart: JWKS của nó chỉ verify ID token nhận qua back-channel `/token` (client đã
      xác thực, TLS tới chính IdP); sau emergency IdP không còn ký bằng key đã gỡ nên không token nào ký bằng key
      đó đi vào kênh này (D84.3).
-   - (iv) Rotate **normal** (không có key lộ): RP phải **refetch khi gặp `kid` lạ** (jose `createRemoteJWKSet` mặc định
-     đạt). Giới hạn còn lại: rotate normal ký ngay bằng key mới ⇒ RP còn cache JWKS cũ gặp kid lạ và phải refetch
-     (RP giới hạn tần suất refetch có thể từ chối AT mới trong thời gian ngắn) — tới khi có pre-publish (DEBT-393, run 85).
+   - (iv) Rotate **normal** (không có key lộ): key mới nằm trong JWKS `KEY_PREPUBLISH_SEC` trước khi ký (run 86,
+     DEBT-393) ⇒ RP cache JWKS ≤ `KEY_PREPUBLISH_SEC` đã có kid mới trước token đầu tiên. RP vẫn nên refetch khi gặp
+     `kid` lạ (jose `createRemoteJWKSet` mặc định đạt) cho trường hợp emergency.
 
 **Xác minh** (kỳ vọng cụ thể)
 - `ADMIN_AT` vừa dùng để xoay cũng ký bằng `oldKid` ⇒ giờ `401`. Đọc kiểm tra bằng AT mới: refresh RT
@@ -119,6 +133,12 @@ lạ ký hợp lệ. Sau khi xoay: alert `SsoEmergencyKeyRotation`
 
 **Rollback**: **KHÔNG có**. Key cũ đã bị xoá khỏi state, không đưa lại JWKS. Người dùng/RP chỉ cần
 đăng nhập lại hoặc refresh.
+
+**Pre-publish trên Vault (run 86)**: version mới của rotate normal ký từ `creation_time + KEY_PREPUBLISH_SEC` (suy ra
+lúc đọc, không có job nền); version sàn (đầu tiên / sau emergency) ký ngay. Hai instance rotate normal cùng lúc có thể tạo
+**hai** version `pending` (DEBT-603): vô hại (cả hai trong JWKS, active là version mới nhất đã tới `activatesAt`), rotate
+normal tiếp theo vẫn `409` tới khi hết pending. Tránh deploy trong `KEY_PREPUBLISH_SEC` sau một rotate normal: version vừa
+xoay có thể hiện `pending` trở lại với bản cũ hơn đang ký; vô hại nhưng gây bất ngờ.
 
 **Production (Vault Transit, run 53)** — cùng bước 1–3 và 5 ở trên (bước 4 chỉ cho dev). Emergency trên Vault gồm 3 bước
 trong một request: `rotate` → `config min_decryption_version = min_encryption_version = N` → `trim min_available_version = N`.

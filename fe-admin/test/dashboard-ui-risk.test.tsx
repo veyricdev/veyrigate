@@ -100,7 +100,7 @@ beforeEach(() => {
   health.mockResolvedValue(ok("up") as never);
   keys.mockResolvedValue(
     ok({
-      items: [{ kid: "kid-active-1", alg: "RS256", status: "active", createdAt: "2026-10-23T01:00:00.000Z", retireAt: null }],
+      items: [{ kid: "kid-active-1", alg: "RS256", status: "active", createdAt: "2026-10-23T01:00:00.000Z", activatesAt: "2026-10-23T01:00:00.000Z", retireAt: null }],
       nextCursor: null,
     }) as never,
   );

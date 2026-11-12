@@ -128,6 +128,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
       contentSecurityPolicy: {
         directives: {
           defaultSrc: ["'self'"],
+          baseUri: ["'none'"], // same as bootstrap.ts (DEBT-583)
           scriptSrc: ["'self'"],
           styleSrc: ["'self'"],
           formAction: ["'self'"],
@@ -497,7 +498,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
     ['/verify-email', { token: 'verification-token' }],
     ['/reset', { token: 'reset-token', password: 'correct password' }],
   ] as const)('shared message outcomes retain login action for POST %s', async (url, payload) => {
-    const page = await form(url === '/verify-email' || url === '/reset' ? `${url}?token=x` : url);
+    const page = await form(url);
     const response = await app.inject({
       method: 'POST',
       url,
@@ -569,7 +570,9 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
     },
   );
 
-  it.each(['/register', '/login', '/forgot', '/verify-email', '/reset', '/logout'])(
+  // `/logout` left this list in run 86 (DEBT-572, D86.4): a POST with no `_csrf` key renders the
+  // confirmation page (see "POST logout without `_csrf` renders the confirmation").
+  it.each(['/register', '/login', '/forgot', '/verify-email', '/reset'])(
     'rejects POST %s without CSRF before invoking the action',
     async (url) => {
       const response = await app.inject({ method: 'POST', url, payload: {} });
@@ -588,7 +591,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
   it.each(['/register', '/login', '/forgot', '/verify-email', '/reset', '/logout'])(
     'rejects POST %s with an invalid CSRF before invoking the action',
     async (url) => {
-      const page = await form(url === '/verify-email' || url === '/reset' ? `${url}?token=x` : url);
+      const page = await form(url);
       const response = await app.inject({
         method: 'POST',
         url,
@@ -607,16 +610,21 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
     },
   );
 
-  it('GET verify/reset only render hidden tokens and never consume them', async () => {
+  // DEBT-577 (D86.3): was "render hidden tokens" (the query token was echoed, escaped, into a hidden
+  // field). GET now ignores `?token=` entirely; the token rides in the fragment.
+  it('GET verify/reset never reflect a query token and never consume one', async () => {
     const verify = await app.inject({ method: 'GET', url: '/verify-email?token=%3Cx%3E' });
     const reset = await app.inject({ method: 'GET', url: '/reset?token=%3Cx%3E' });
-    expect(verify.body).toContain('value="&lt;x&gt;"');
-    expect(reset.body).toContain('value="&lt;x&gt;"');
+    for (const page of [verify, reset]) {
+      expect(page.body).not.toContain('&lt;x&gt;');
+      expect(page.body).not.toContain('<x>');
+      expect(page.body).toMatch(/<input[^>]*name="token"[^>]*value=""/);
+    }
     expect(auth.verifyEmail).not.toHaveBeenCalled();
     expect(auth.resetPassword).not.toHaveBeenCalled();
   });
 
-  it.each(['/forgot', '/verify-email?token=x', '/reset?token=x', '/logout'])(
+  it.each(['/forgot', '/verify-email', '/reset', '/logout'])(
     'leaves GET %s outside guest-route session classification',
     async (url) => {
       const response = await app.inject({
@@ -687,7 +695,10 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
     expect(sessionSetCookie(page.response.headers['set-cookie'])).toBeUndefined();
   });
 
-  it('POST logout without CSRF fails closed before session work', async () => {
+  // DEBT-572 (D86.4): was "POST logout without CSRF fails closed" (403). An RP may POST its logout
+  // request (RP-Initiated Logout 1.0 §2), which can never carry our `_csrf`; with no `_csrf` key the
+  // POST now renders the same confirmation as GET, still with no session work at all.
+  it('POST logout without `_csrf` renders the confirmation without session work', async () => {
     const response = await app.inject({
       method: 'POST',
       url: '/logout',
@@ -695,7 +706,10 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
       payload: {},
     });
 
-    expect(response.statusCode).toBe(403);
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.body).toContain('<form method="post" action="/logout">');
+    expect(response.headers['content-security-policy']).toBe(buildCsp());
     expect(sessions.get).not.toHaveBeenCalled();
     expect(sessions.revoke).not.toHaveBeenCalled();
     expect(audit.record).not.toHaveBeenCalled();
@@ -981,6 +995,178 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
       // The benign params (hint/state) still ride along for the POST to re-validate.
       expect(response.body).toContain('name="id_token_hint" value="HINT"');
       expect(response.body).toContain('name="state" value="xyz"');
+    });
+
+    // DEBT-572 (D86.4–D86.7): POST /logout from a relying party.
+    const noSessionWork = () => {
+      expect(sessions.get).not.toHaveBeenCalled();
+      expect(sessions.revoke).not.toHaveBeenCalled();
+      expect(refreshTokens.revokeForSession).not.toHaveBeenCalled();
+      expect(refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+    };
+    const anonCookieOf = (header: string | string[] | undefined) =>
+      (Array.isArray(header) ? header : [header])
+        .find((value) => value?.startsWith('idp_csrf='))
+        ?.split(';')[0];
+
+    it('AC1: POST without `_csrf` but with RP params renders the GET confirmation (validated origin)', async () => {
+      logoutRp.resolvePostLogoutRedirect.mockResolvedValue('https://rp.example/out?state=xyz');
+      const response = await app.inject({
+        method: 'POST',
+        url: '/logout',
+        headers: { cookie: 'idp_session=session-a' },
+        payload: {
+          id_token_hint: 'HINT',
+          post_logout_redirect_uri: 'https://rp.example/out',
+          state: 'xyz',
+          client_id: 'rp1',
+        },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['cache-control']).toBe('no-store');
+      expect(response.headers['content-security-policy']).toBe(
+        buildCsp({ formAction: ['https://rp.example'] }),
+      );
+      expect(response.body).toContain('name="id_token_hint" value="HINT"');
+      expect(response.body).toContain(
+        'name="post_logout_redirect_uri" value="https://rp.example/out"',
+      );
+      expect(response.body).toContain('name="state" value="xyz"');
+      expect(response.body).toContain('name="client_id" value="rp1"');
+      expect(response.body).toContain(`name="_csrf" value="${csrfFor('session-a')}"`);
+      expect(logoutRp.resolvePostLogoutRedirect).toHaveBeenCalledWith(
+        {
+          idTokenHint: 'HINT',
+          postLogoutRedirectUri: 'https://rp.example/out',
+          state: 'xyz',
+          clientId: 'rp1',
+        },
+        undefined,
+      );
+      expect(sessionSetCookie(response.headers['set-cookie'])).toBeUndefined();
+      noSessionWork();
+    });
+
+    it('AC2: POST without `_csrf` and without any body renders the confirmation', async () => {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/logout',
+        headers: { cookie: 'idp_session=session-a' },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toContain('<form method="post" action="/logout">');
+      noSessionWork();
+    });
+
+    it('AC3: POST without `_csrf` never reflects an invalid post_logout_redirect_uri', async () => {
+      logoutRp.resolvePostLogoutRedirect.mockResolvedValue('/login?loggedOut=1');
+      const response = await app.inject({
+        method: 'POST',
+        url: '/logout',
+        payload: { post_logout_redirect_uri: 'https://evil.example/steal', state: 'xyz' },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.body).not.toContain('evil.example');
+      expect(response.body).not.toContain('name="post_logout_redirect_uri"');
+      expect(response.headers['content-security-policy']).toBe(buildCsp());
+      noSessionWork();
+    });
+
+    it.each([
+      ['an empty string', ''],
+      ['a wrong token', 'forged'],
+    ])('AC4: POST with `_csrf` = %s => 403, no state change', async (_name, token) => {
+      sessions.get.mockResolvedValue(liveSession);
+      const response = await app.inject({
+        method: 'POST',
+        url: '/logout',
+        headers: { cookie: 'idp_session=session-a; idp_csrf=anon-a' },
+        payload: { _csrf: token },
+      });
+      expect(response.statusCode).toBe(403);
+      expect(sessionSetCookie(response.headers['set-cookie'])).toBeUndefined();
+      noSessionWork();
+    });
+
+    it('AC4: POST with an array `_csrf` => 400, no state change', async () => {
+      sessions.get.mockResolvedValue(liveSession);
+      const response = await app.inject({
+        method: 'POST',
+        url: '/logout',
+        headers: {
+          cookie: 'idp_session=session-a',
+          'content-type': 'application/json',
+        },
+        payload: JSON.stringify({ _csrf: [csrfFor('session-a'), csrfFor('session-a')] }),
+      });
+      expect(response.statusCode).toBe(400);
+      noSessionWork();
+    });
+
+    it('AC5: a confirmation rendered cross-site (no session cookie) is bound to the anonymous cookie; the same-site submit then logs out', async () => {
+      // Cross-site POST: the Lax session cookie is not sent, so the page mints an anonymous cookie.
+      const confirm = await app.inject({
+        method: 'POST',
+        url: '/logout',
+        payload: { client_id: 'rp1' },
+      });
+      expect(confirm.statusCode).toBe(200);
+      const anon = anonCookieOf(confirm.headers['set-cookie']);
+      expect(anon).toBeDefined();
+      const token = confirm.body.match(/name="_csrf" value="([^"]+)"/)![1];
+      expect(token).toBe(csrfFor(anon!.slice('idp_csrf='.length)));
+      noSessionWork();
+
+      // The user clicks "Sign out" (same-site POST: session + anonymous cookie both sent).
+      sessions.get.mockResolvedValue(liveSession);
+      const response = await app.inject({
+        method: 'POST',
+        url: '/logout',
+        headers: { cookie: `idp_session=session-a; ${anon}` },
+        payload: { _csrf: token, client_id: 'rp1' },
+      });
+      expect(response.statusCode).toBe(302);
+      expect(sessionSetCookie(response.headers['set-cookie'])).toContain('Max-Age=0');
+      expect(sessions.revoke).toHaveBeenCalledWith('session-a');
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({ action: AuditAction.SESSION_REVOKED, result: 'success' }),
+      );
+    });
+
+    it("AC6: a token bound to ANOTHER browser's anonymous cookie => 403", async () => {
+      sessions.get.mockResolvedValue(liveSession);
+      const response = await app.inject({
+        method: 'POST',
+        url: '/logout',
+        headers: { cookie: 'idp_session=session-a; idp_csrf=victim-anon' },
+        payload: { _csrf: csrfFor('attacker-anon') },
+      });
+      expect(response.statusCode).toBe(403);
+      noSessionWork();
+    });
+
+    it('AC6: an empty anonymous cookie never matches the token of the empty identity', async () => {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/logout',
+        headers: { cookie: 'idp_csrf=' },
+        payload: { _csrf: csrfFor('') },
+      });
+      expect(response.statusCode).toBe(403);
+      noSessionWork();
+    });
+
+    it('AC7: logout_hint and ui_locales are accepted (no 400) and never reflected', async () => {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/logout',
+        payload: { logout_hint: 'HINTMARK-r86', ui_locales: 'LOCMARK-r86' },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.body).not.toContain('HINTMARK-r86');
+      expect(response.body).not.toContain('LOCMARK-r86');
+      noSessionWork();
     });
 
     it('POST local logout revokes only this session family and audits TOKEN_REVOKED when > 0', async () => {

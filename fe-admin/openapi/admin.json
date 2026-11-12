@@ -1054,7 +1054,7 @@
     },
     "/admin/keys": {
       "get": {
-        "description": "super_admin only. Keys currently in JWKS (active + retiring).",
+        "description": "super_admin only. Keys currently in JWKS: active (signs), pending (published, signs from activatesAt), retiring (verify-only until retireAt).",
         "operationId": "AdminKeysController_list",
         "parameters": [],
         "responses": {
@@ -1082,7 +1082,7 @@
     },
     "/admin/keys/rotate": {
       "post": {
-        "description": "super_admin only. normal: old key stays verify-only for ACCESS_TOKEN_TTL. emergency: old key leaves JWKS at once (sessions/refresh tokens are not revoked). Not idempotent.",
+        "description": "super_admin only. normal: the new key is published at once and signs from activatesAt (KEY_PREPUBLISH_SEC later); the old key signs until then, then stays verify-only for ACCESS_TOKEN_TTL. emergency: the new key signs at once and every other key (pending included) leaves JWKS (sessions/refresh tokens are not revoked). Not idempotent.",
         "operationId": "AdminKeysController_rotate",
         "parameters": [],
         "requestBody": {
@@ -1105,6 +1105,9 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "rotation_pending: a normal rotation while a newer key is still pending. Body {\"error\":\"conflict\",\"error_description\":\"A newer signing key is already published and does not sign yet. Wait until it activates, or use an emergency rotation.\"}; nothing changed."
           }
         },
         "security": [
@@ -1592,11 +1595,11 @@
           },
           "expectedScopes": {
             "maxItems": 50,
+            "description": "The scopes the caller read (exact, ordered; [] also matches a resource without scopes). Present => written only if the stored scopes still equal it, otherwise 409 conflict. Absent => last write wins. Items follow the loose stored rule (non-empty, no whitespace), not the scope-token grammar of `scopes`, so a resource holding a legacy token can be repaired.",
             "type": "array",
             "items": {
               "type": "string"
-            },
-            "description": "The scopes the caller read (exact, ordered; [] also matches a resource without scopes). Present => written only if the stored scopes still equal it, otherwise 409 conflict. Absent => last write wins. Items follow the loose stored rule (non-empty, no whitespace), not the scope-token grammar of `scopes`, so a resource holding a legacy token can be repaired."
+            }
           }
         },
         "required": [
@@ -1977,18 +1980,26 @@
           "status": {
             "type": "string",
             "enum": [
+              "pending",
               "active",
               "retiring"
-            ]
+            ],
+            "description": "pending: in JWKS, signs from activatesAt (DEBT-393)."
           },
           "createdAt": {
             "type": "string",
             "format": "date-time"
           },
+          "activatesAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the key signs (or signed) from."
+          },
           "retireAt": {
             "type": "string",
             "format": "date-time",
-            "nullable": true
+            "nullable": true,
+            "description": "null for pending and active keys."
           }
         },
         "required": [
@@ -1996,6 +2007,7 @@
           "alg",
           "status",
           "createdAt",
+          "activatesAt",
           "retireAt"
         ]
       },
@@ -2049,12 +2061,18 @@
               "normal",
               "emergency"
             ]
+          },
+          "activatesAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When newKid starts signing (creation time for an emergency rotation)."
           }
         },
         "required": [
           "newKid",
           "oldKid",
-          "mode"
+          "mode",
+          "activatesAt"
         ]
       }
     }

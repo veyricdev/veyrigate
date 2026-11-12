@@ -31,6 +31,7 @@ import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.se
 import { LogoutService } from '../src/modules/oauth/logout/logout.service';
 import { AuthorizeRequestContextService } from '../src/modules/oauth/authorize/authorize-request-context.service';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
+import { tokenFromMailLink } from './helpers/mail-token';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -242,9 +243,9 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
     await new Promise((resolve) => setImmediate(resolve));
     const link = messages.find((message) => message.to === email)?.text.match(/https:\/\/\S+/)?.[0];
     expect(link).toBeDefined();
-    const token = new URL(link!).searchParams.get('token')!;
+    const token = tokenFromMailLink(link!);
 
-    page = await form(`/verify-email?token=${encodeURIComponent(token)}`);
+    page = await form('/verify-email');
     expect((await users.findByEmail(email))?.emailVerifiedAt).toBeUndefined();
     expect(
       (
@@ -500,7 +501,7 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
       await new Promise((resolve) => setImmediate(resolve));
       const link = messages.find((m) => m.to === email)?.text.match(/https:\/\/\S+/)?.[0];
       expect(link).toBeDefined();
-      return new URL(link!).searchParams.get('token')!;
+      return tokenFromMailLink(link!);
     };
 
     beforeAll(async () => {

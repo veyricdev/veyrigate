@@ -10,8 +10,8 @@ describe('Mailer templates (B1.10)', () => {
   const link = 'https://id.example.test/verify?t=abc&x="><script>alert(1)</script>';
 
   it.each([
-    ['verify', verifyEmailMessage(to, link, 30)],
-    ['reset', resetPasswordMessage(to, link, 15)],
+    ['verify', verifyEmailMessage(to, link, 30, 'code-1')],
+    ['reset', resetPasswordMessage(to, link, 15, 'code-1')],
   ])('%s: body has only the escaped link + expiry, no recipient data', (_name, msg) => {
     expect(msg.to).toBe(to);
     // No email/local-part in the body.
@@ -27,6 +27,27 @@ describe('Mailer templates (B1.10)', () => {
     expect(msg.text.split('t=abc').length - 1).toBe(1);
     expect(msg.html.split('t=abc').length - 1).toBe(2);
     expect(msg.text).toMatch(/expires in \d+ minutes/);
+  });
+
+  // DEBT-577 (D86.3): the mail also prints the code, for a link wrapper that drops the fragment.
+  const code = 'Abc_-0123456789abcdefghijklmnopqrstuvwxyzAB';
+  it.each([
+    ['verify', verifyEmailMessage(to, 'https://id.example.test/verify-email#token=x', 30, code)],
+    ['reset', resetPasswordMessage(to, 'https://id.example.test/reset#token=x', 15, code)],
+  ])('%s: text and html carry the code line below the link', (_name, msg) => {
+    expect(msg.text).toContain(
+      `If the link does not open the form, enter this code on the page: ${code}`,
+    );
+    expect(msg.text.indexOf(code)).toBeGreaterThan(msg.text.indexOf('#token=x'));
+    expect(msg.html).toContain(
+      `<p>If the link does not open the form, enter this code on the page: <code>${code}</code></p>`,
+    );
+  });
+
+  it('escapes the code in html', () => {
+    const msg = resetPasswordMessage(to, 'https://id.example.test/reset#token=x', 15, '<b>&');
+    expect(msg.html).toContain('<code>&lt;b&gt;&amp;</code>');
+    expect(msg.html).not.toContain('<b>');
   });
 });
 

@@ -13,12 +13,15 @@
  * `redirect_uri`/`returnTo`), relaxing only `form-action` for that one response (INV-084-1/2).
  *
  * The front-channel logout page (`renderFrontchannel`) likewise relaxes only `frame-src`.
+ *
+ * `base-uri 'none'` (DEBT-583, D86.15): no page uses `<base>`; helmet's default `'self'` is
+ * overridden in `bootstrap.ts` and here, and the byte-identity tests prove both moved together.
  */
 
-/** Ordered base directives, byte-identical to the global helmet CSP (helmet 8, `main.ts`). */
+/** Ordered base directives, byte-identical to the global helmet CSP (helmet 8, `bootstrap.ts`). */
 const BASE_DIRECTIVES: ReadonlyArray<readonly [name: string, value: string]> = [
   ['default-src', "'self'"],
-  ['base-uri', "'self'"],
+  ['base-uri', "'none'"],
   ['font-src', "'self' https: data:"],
   ['form-action', "'self'"],
   ['frame-ancestors', "'none'"],

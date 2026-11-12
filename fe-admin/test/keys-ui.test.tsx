@@ -25,9 +25,15 @@ const rotate = vi.mocked(rotateSigningKey);
 
 const K1 = "kid-one-2026";
 const K0 = "kid-zero-2026";
-const ACTIVE: SigningKey = { kid: K1, alg: "RS256", status: "active", createdAt: "2026-10-23T01:00:00.000Z", retireAt: null };
-const RETIRING_LATE: SigningKey = { kid: "kid-late", alg: "RS256", status: "retiring", createdAt: "2026-10-22T00:00:00.000Z", retireAt: "2026-10-23T01:05:00.000Z" };
-const RETIRING: SigningKey = { kid: K0, alg: "RS256", status: "retiring", createdAt: "2026-10-21T00:00:00.000Z", retireAt: "2026-10-23T01:02:00.000Z" };
+const ACTIVE: SigningKey = { kid: K1, alg: "RS256", status: "active", createdAt: "2026-10-23T01:00:00.000Z", activatesAt: "2026-10-23T01:00:00.000Z", retireAt: null };
+const RETIRING_LATE: SigningKey = { kid: "kid-late", alg: "RS256", status: "retiring", createdAt: "2026-10-22T00:00:00.000Z", activatesAt: "2026-10-22T00:00:00.000Z", retireAt: "2026-10-23T01:05:00.000Z" };
+const RETIRING: SigningKey = { kid: K0, alg: "RS256", status: "retiring", createdAt: "2026-10-21T00:00:00.000Z", activatesAt: "2026-10-21T00:00:00.000Z", retireAt: "2026-10-23T01:02:00.000Z" };
+// Two pending keys only happen after a Vault race (D86.10); listed by activatesAt (soonest first).
+const PENDING_LATE: SigningKey = { kid: "kid-next-late", alg: "RS256", status: "pending", createdAt: "2026-10-23T01:01:00.000Z", activatesAt: "2026-10-23T02:01:00.000Z", retireAt: null };
+const PENDING: SigningKey = { kid: "kid-next", alg: "RS256", status: "pending", createdAt: "2026-10-23T01:01:30.000Z", activatesAt: "2026-10-23T02:00:30.000Z", retireAt: null };
+const AT = "2026-10-23T02:00:00.000Z";
+const CONFLICT_TEXT = "A newer signing key is already published and does not sign yet. Wait until it activates, or use an emergency rotation.";
+const PENDING_HINT = "A new key is already published and does not sign yet. Rotate again after it activates, or use an emergency rotation.";
 const SUPER = { sub: "aaaaaaaaaaaaaaaaaaaaaaaa", email: "admin@example.com", roles: ["super_admin"], tenantId: "t1" };
 const TENANT_ADMIN = { ...SUPER, roles: ["tenant_admin"] };
 const ok = <T,>(data: T) => ({ ok: true as const, data });
@@ -109,6 +115,16 @@ describe("table", () => {
     expect(screen.getByRole("navigation", { name: "Main" }).querySelector('a[href="/keys"]')).not.toBeNull();
   });
 
+  it("pending (DEBT-393): active, then pending by activatesAt, then retiring by retireAt; label carries activatesAt", async () => {
+    list.mockResolvedValue(ok({ items: [RETIRING_LATE, PENDING_LATE, RETIRING, ACTIVE, PENDING], nextCursor: null }) as never);
+    await openPage();
+    const rows = within(screen.getByRole("table", { name: "Signing keys" })).getAllByRole("row").slice(1);
+    expect(rows.map((r) => within(r).getByRole("rowheader").textContent)).toEqual([K1, "kid-next", "kid-next-late", K0, "kid-late"]);
+    expect(within(rows[1]!).getByText(`Pending — published, signs from ${PENDING.activatesAt}`)).toBeTruthy();
+    expect(within(rows[2]!).getByText(`Pending — published, signs from ${PENDING_LATE.activatesAt}`)).toBeTruthy();
+    expect(within(rows[1]!).getByText("—")).toBeTruthy();
+  });
+
   it("a hostile kid is rendered as text (no element created)", async () => {
     const evil = '<img src=x onerror="window.__pwned=1">';
     list.mockResolvedValue(ok({ items: [{ ...ACTIVE, kid: evil }], nextCursor: null }) as never);
@@ -127,23 +143,164 @@ describe("table", () => {
 
 describe("normal rotation", () => {
   it("confirm => {mode:'normal'} once, result announced, list re-read", async () => {
-    rotate.mockResolvedValue(ok({ newKid: "kid-two", oldKid: K1, mode: "normal" }) as never);
+    rotate.mockResolvedValue(ok({ newKid: "kid-two", oldKid: K1, mode: "normal", activatesAt: AT }) as never);
     await openPage();
     const d = await open("Rotate key");
+    expect(d.textContent).toContain(
+      "The new key is published at once and starts signing after the pre-publish delay (KEY_PREPUBLISH_SEC, default 1 hour). Until then the current key keeps signing.",
+    );
     expect(d.textContent).toContain("Nobody is signed out.");
     fireEvent.click(within(d).getByRole("button", { name: "Rotate key" }));
     await noDialog();
     expect(rotate).toHaveBeenCalledTimes(1);
     expect(rotate).toHaveBeenCalledWith({ data: { mode: "normal" } });
-    await waitFor(() => expect(status().textContent).toBe(`Rotated. New active key kid-two; ${K1} is now verification only.`));
+    await waitFor(() =>
+      expect(status().textContent).toBe(
+        `Rotated. New key kid-two is published and signs from ${AT}. ${K1} keeps signing until then, then is verification only.`,
+      ),
+    );
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
   });
 
-  it("oldKid null: no second clause", async () => {
-    rotate.mockResolvedValue(ok({ newKid: "kid-two", oldKid: null, mode: "normal" }) as never);
+  it("oldKid null: no second sentence", async () => {
+    rotate.mockResolvedValue(ok({ newKid: "kid-two", oldKid: null, mode: "normal", activatesAt: AT }) as never);
     await openPage();
     fireEvent.click(within(await open("Rotate key")).getByRole("button", { name: "Rotate key" }));
-    await waitFor(() => expect(status().textContent).toBe("Rotated. New active key kid-two."));
+    await waitFor(() => expect(status().textContent).toBe(`Rotated. New key kid-two is published and signs from ${AT}.`));
+  });
+
+  it("a pending key: normal Rotate disabled with the reason, no call; emergency still opens", async () => {
+    list.mockResolvedValue(ok({ items: [ACTIVE, PENDING, RETIRING], nextCursor: null }) as never);
+    await openPage();
+    const button = screen.getByRole("button", { name: "Rotate key" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(within(screen.getByRole("region", { name: "Rotation" })).getByText(PENDING_HINT)).toBeTruthy();
+    fireEvent.click(button);
+    await settle();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(rotate).not.toHaveBeenCalled();
+    expect((screen.getByRole("button", { name: "Emergency rotation…" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(await open("Emergency rotation…")).toBeTruthy();
+  });
+
+  it("no pending key: normal Rotate enabled, no reason shown", async () => {
+    await openPage();
+    expect((screen.getByRole("button", { name: "Rotate key" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(screen.queryByText(PENDING_HINT)).toBeNull();
+  });
+
+  it("409 conflict (a race with another rotation): fixed text in the dialog, never re-sent, list re-read", async () => {
+    rotate.mockResolvedValue(fail("conflict") as never);
+    await openPage();
+    const d = await open("Rotate key");
+    list.mockResolvedValue(ok({ items: [ACTIVE, PENDING, RETIRING], nextCursor: null }) as never);
+    fireEvent.click(within(d).getByRole("button", { name: "Rotate key" }));
+    expect((await within(d).findByRole("alert")).textContent).toBe(CONFLICT_TEXT);
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    await settle();
+    expect(rotate).toHaveBeenCalledTimes(1);
+    expect(d.textContent).not.toContain("msg conflict");
+    expect(d.textContent).not.toContain("The result is unknown");
+  });
+
+  it.each([
+    ["uncertain", () => Promise.resolve(fail("unavailable", true))],
+    ["thrown (network / BFF)", () => Promise.reject(new Error("boom"))],
+  ])("%s: compares the set of kids (the active kid does not change), never re-sent, list re-read", async (_, impl) => {
+    rotate.mockImplementation(impl as never);
+    await openPage();
+    fireEvent.click(within(await open("Rotate key")).getByRole("button", { name: "Rotate key" }));
+    await noDialog();
+    await waitFor(() =>
+      expect(status().textContent).toBe(
+        `The result is unknown and the request was not sent again. The key list has been reloaded. Keys before the request: kid-late, ${K1}, ${K0}. If the list now has a key that was not there before (pending or active), the rotation was applied — do not rotate again.`,
+      ),
+    );
+    expect(status().textContent).not.toContain("if the active key is no longer");
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    await settle();
+    expect(rotate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("pending key activation (DEBT-606)", () => {
+  const ACTIVATED: SigningKey[] = [
+    { ...PENDING, status: "active" },
+    { ...ACTIVE, status: "retiring", retireAt: "2026-10-23T02:10:30.000Z" },
+  ];
+
+  it("the list is re-read once the earliest activatesAt passes: row Active, Rotate enabled, no reload", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, now: Date.parse(PENDING.activatesAt) - 60_000 });
+    try {
+      list
+        .mockResolvedValueOnce(ok({ items: [ACTIVE, PENDING_LATE, PENDING], nextCursor: null }) as never)
+        .mockResolvedValue(ok({ items: [...ACTIVATED, PENDING_LATE], nextCursor: null }) as never);
+      await openPage();
+      expect((screen.getByRole("button", { name: "Rotate key" }) as HTMLButtonElement).disabled).toBe(true);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(55_000);
+      });
+      expect(list).toHaveBeenCalledTimes(1); // not before the instant
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+      const row = within(screen.getByRole("table", { name: "Signing keys" }))
+        .getAllByRole("row")
+        .find((r) => r.querySelector("th")?.textContent === PENDING.kid)!;
+      expect(within(row).getByText("Active — signs new tokens")).toBeTruthy();
+      // PENDING_LATE still pending (a Vault race leftover): still disabled, next re-read at its instant.
+      expect((screen.getByRole("button", { name: "Rotate key" }) as HTMLButtonElement).disabled).toBe(true);
+      list.mockResolvedValue(ok({ items: [{ ...PENDING_LATE, status: "active" }, ...ACTIVATED], nextCursor: null }) as never);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(Date.parse(PENDING_LATE.activatesAt) - Date.parse(PENDING.activatesAt) + 5_000);
+      });
+      await waitFor(() => expect(list).toHaveBeenCalledTimes(3));
+      await waitFor(() => expect((screen.getByRole("button", { name: "Rotate key" }) as HTMLButtonElement).disabled).toBe(false));
+      expect(screen.queryByText(PENDING_HINT)).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10 * 60_000);
+      });
+      expect(list).toHaveBeenCalledTimes(3); // nothing pending: no polling
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("BE clock behind: still pending at the instant => re-read again shortly, then Active", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, now: Date.parse(PENDING.activatesAt) - 10_000 });
+    try {
+      const stillPending = ok({ items: [ACTIVE, PENDING], nextCursor: null });
+      list
+        .mockResolvedValueOnce(stillPending as never)
+        .mockResolvedValueOnce(stillPending as never)
+        .mockResolvedValue(ok({ items: ACTIVATED, nextCursor: null }) as never);
+      await openPage();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(12_500);
+      });
+      await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_000);
+      });
+      await waitFor(() => expect(list).toHaveBeenCalledTimes(3));
+      await waitFor(() => expect((screen.getByRole("button", { name: "Rotate key" }) as HTMLButtonElement).disabled).toBe(false));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("no pending key: read once, no timer", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await openPage();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2 * 60 * 60_000);
+      });
+      expect(list).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -166,7 +323,7 @@ describe("emergency rotation", () => {
   });
 
   it("confirm stays disabled until exactly EMERGENCY is typed; sends {mode:'emergency'} once on a double click", async () => {
-    rotate.mockResolvedValue(ok({ newKid: "kid-new", oldKid: K1, mode: "emergency" }) as never);
+    rotate.mockResolvedValue(ok({ newKid: "kid-new", oldKid: K1, mode: "emergency", activatesAt: AT }) as never);
     await openPage();
     const d = await open("Emergency rotation…");
     const confirm = within(d).getByRole("button", { name: "Rotate now" }) as HTMLButtonElement;

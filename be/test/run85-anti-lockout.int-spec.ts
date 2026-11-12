@@ -9,6 +9,7 @@ import { RateLimitService } from '../src/modules/security/rate-limit/rate-limit.
 import { RedisService } from '../src/database/redis/redis.service';
 import { bootFullApp, type FullApp, type InjectResponse } from './full-app';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
+import { tokenFromMailLink } from './helpers/mail-token';
 
 /**
  * Run 85 T4 (DEBT-575, closes DEBT-016; contract D85.2) on the REAL app over HTTP: the login form
@@ -243,7 +244,7 @@ describe('run 85 T4: anti-lockout login throttle (real app, http)', () => {
     await s.full.app.get(AuthenticationService).forgotPassword(victim.email);
     await new Promise((resolve) => setImmediate(resolve));
     const mail = s.full.outbox.filter((m) => m.to === victim.email).at(-1)!;
-    const token = new URL(mail.text.match(/https?:\/\/\S+/)![0]).searchParams.get('token')!;
+    const token = tokenFromMailLink(mail.text);
     const NEW = 'r85-new-password-after-reset';
     await s.full.app.get(AuthenticationService).resetPassword(token, NEW);
 

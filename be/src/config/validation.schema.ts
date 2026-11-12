@@ -102,6 +102,24 @@ export const envSchema = z
       z.string().regex(/^[A-Za-z0-9_-]+$/, 'VAULT_TRANSIT_KEY has an invalid format'),
     ),
     VAULT_TIMEOUT_MS: positiveInt.max(10000).default(2000),
+    // Pre-publish delay of a normal key rotation (run 86, DEBT-393, D86.11): the new key is in JWKS
+    // at once and only signs this many seconds later, so RP JWKS caches pick it up first. Unset or
+    // empty => 3600. Digits only (same reason as AUDIT_RETENTION_DAYS), then 0..86400. No production
+    // minimum here; runbook-ops §1 requires >= 600.
+    KEY_PREPUBLISH_SEC: z.preprocess(
+      (v) => (v === undefined || v === '' ? '3600' : v),
+      z
+        .string()
+        .regex(/^[0-9]+$/, 'KEY_PREPUBLISH_SEC must be a whole number of seconds')
+        .transform(Number)
+        .pipe(
+          z
+            .number()
+            .int()
+            .min(0, 'KEY_PREPUBLISH_SEC must be between 0 and 86400')
+            .max(86400, 'KEY_PREPUBLISH_SEC must be between 0 and 86400'),
+        ),
+    ),
 
     SMTP_URL: z.string().min(1),
 

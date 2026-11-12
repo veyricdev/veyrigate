@@ -12,12 +12,21 @@ export interface PublicJwk {
 
 export type RotationMode = 'normal' | 'emergency';
 
+/**
+ * Derived from time, never stored (run 86, DEBT-393, D86.11): `pending` = in JWKS, does not sign
+ * before `activatesAt`; `active` = signs; `retiring` = verify-only until `retireAt`.
+ */
+export type KeyStatus = 'pending' | 'active' | 'retiring';
+
 /** Signing key metadata for the admin API (B6.3c) — never any key material. */
 export interface KeyMetadata {
   kid: string;
   alg: 'RS256';
-  status: 'active' | 'retiring';
+  status: KeyStatus;
   createdAt: string;
+  /** When the key signs (or signed) from; `createdAt` for the first key and after an emergency. */
+  activatesAt: string;
+  /** `null` for pending and active keys. */
   retireAt: string | null;
 }
 
@@ -25,6 +34,22 @@ export interface RotationResult {
   newKid: string;
   oldKid: string | null;
   mode: RotationMode;
+  /** When `newKid` starts signing (= its creation for an emergency rotation). */
+  activatesAt: string;
+}
+
+/**
+ * A normal rotation while a newer key is still pending (D85.7/D86.8): refused, nothing changes.
+ * The Admin API answers a fixed 409 `conflict`; the audit records `rotation_pending`.
+ */
+export class RotationPendingError extends Error {
+  constructor(
+    readonly pendingKid: string,
+    readonly activatesAt: string,
+  ) {
+    super('A newer signing key is already published and does not sign yet.');
+    this.name = 'RotationPendingError';
+  }
 }
 
 /**
@@ -46,8 +71,10 @@ export interface KeyProvider {
   /** Metadata of the same key set as `getPublicKeys()` (read-only, no key material). */
   listKeys(): Promise<KeyMetadata[]>;
   /**
-   * normal: new active key; old key stays verify-only for `retainSec` seconds.
-   * emergency: new active key; old key is removed immediately.
+   * normal: new key published at once, signs from now + the provider's pre-publish delay; the old key
+   * keeps signing until then and stays verify-only for `retainSec` seconds after it. Refused with
+   * `RotationPendingError` while a key is pending.
+   * emergency: new key signs at once; every other key (pending included) is removed immediately.
    */
   rotate(mode: RotationMode, retainSec: number): Promise<RotationResult>;
 }

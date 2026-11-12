@@ -82,9 +82,9 @@ const FAKE_SID = 'd'.repeat(64);
 const TTL = 900;
 const MIN = 60_000;
 
-/** Exact key sets (fold: exposure budget). */
-const KEY_ITEM_KEYS = ['alg', 'createdAt', 'kid', 'retireAt', 'status'];
-const ROTATE_KEYS = ['mode', 'newKid', 'oldKid'];
+/** Exact key sets (fold: exposure budget). Run 86 (DEBT-393, D86.11) added `activatesAt` to both. */
+const KEY_ITEM_KEYS = ['activatesAt', 'alg', 'createdAt', 'kid', 'retireAt', 'status'];
+const ROTATE_KEYS = ['activatesAt', 'mode', 'newKid', 'oldKid'];
 const KEY_MATERIAL = /"(n|e|d|p|q|dp|dq|qi)"|PRIVATE KEY|\.pem|keys\.json/;
 
 describe('Admin API B6.3c (keys + tenants) on real Mongo + Redis', () => {
@@ -664,13 +664,14 @@ describe('Admin API B6.3c (keys + tenants) on real Mongo + Redis', () => {
   });
 
   describe('run 29 QA (tester) — keys/tenants risk matrix', () => {
+    // Run 86 (DEBT-393, D86.9): `keys.json` no longer stores `status` (it is derived from time), so
+    // the file gives the kids and `GET /admin/keys` gives their status.
     const stateKids = async () =>
       (
         JSON.parse(await readFile(join(keyDir, 'keys.json'), 'utf8')) as {
           kid: string;
-          status: string;
         }[]
-      ).map((e) => `${e.kid}:${e.status}`);
+      ).map((e) => e.kid);
     const pems = async () => (await readdir(keyDir)).filter((f) => f.endsWith('.pem')).sort();
     type KeyList = { items: { kid: string; status: string; retireAt: string | null }[] };
     const listKeys = async (t: string) => (await call('GET', '/admin/keys', t)).json() as KeyList;
@@ -796,9 +797,10 @@ describe('Admin API B6.3c (keys + tenants) on real Mongo + Redis', () => {
       } finally {
         spy.mockRestore();
       }
-      expect((await stateKids()).sort()).toEqual(
-        [`${kids[3]}:retiring`, `${kids[4]}:active`].sort(),
-      );
+      expect((await stateKids()).sort()).toEqual([kids[3], kids[4]].sort());
+      expect(
+        (await listKeys(await tok(superA))).items.map((k) => `${k.kid}:${k.status}`).sort(),
+      ).toEqual([`${kids[3]}:retiring`, `${kids[4]}:active`].sort());
       expect(await jwksKids()).toEqual([kids[3], kids[4]].sort());
       for (const at of ats.slice(0, 3)) {
         expect((await bearerGet('/admin/me', at)).statusCode).toBe(401);

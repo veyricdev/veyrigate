@@ -111,6 +111,9 @@ async function startFullApp(
     SESSION_COOKIE_SECURE: 'false',
     KEY_PROVIDER: 'local',
     KEY_LOCAL_DIR: keyDir,
+    // Run 86 (DEBT-393, D86.12): 0 keeps the old "a rotated key signs at once" contract every int spec
+    // before run 86 relies on; `run86-key-prepublish.int-spec.ts` uses 3600 with a controlled clock.
+    KEY_PREPUBLISH_SEC: '0',
     SMTP_URL: 'smtp://127.0.0.1:9', // never used: MAILER is the in-memory outbox below
     GOOGLE_CLIENT_ID: '',
     GOOGLE_CLIENT_SECRET: '',

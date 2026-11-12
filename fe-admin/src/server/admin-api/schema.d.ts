@@ -314,7 +314,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description super_admin only. Keys currently in JWKS (active + retiring). */
+        /** @description super_admin only. Keys currently in JWKS: active (signs), pending (published, signs from activatesAt), retiring (verify-only until retireAt). */
         get: operations["AdminKeysController_list"];
         put?: never;
         post?: never;
@@ -333,7 +333,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description super_admin only. normal: old key stays verify-only for ACCESS_TOKEN_TTL. emergency: old key leaves JWKS at once (sessions/refresh tokens are not revoked). Not idempotent. */
+        /** @description super_admin only. normal: the new key is published at once and signs from activatesAt (KEY_PREPUBLISH_SEC later); the old key signs until then, then stays verify-only for ACCESS_TOKEN_TTL. emergency: the new key signs at once and every other key (pending included) leaves JWKS (sessions/refresh tokens are not revoked). Not idempotent. */
         post: operations["AdminKeysController_rotate"];
         delete?: never;
         options?: never;
@@ -548,11 +548,22 @@ export interface components {
             kid: string;
             /** @enum {string} */
             alg: "RS256";
-            /** @enum {string} */
-            status: "active" | "retiring";
+            /**
+             * @description pending: in JWKS, signs from activatesAt (DEBT-393).
+             * @enum {string}
+             */
+            status: "pending" | "active" | "retiring";
             /** Format: date-time */
             createdAt: string;
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description When the key signs (or signed) from.
+             */
+            activatesAt: string;
+            /**
+             * Format: date-time
+             * @description null for pending and active keys.
+             */
             retireAt: string | null;
         };
         KeyListViewDto: {
@@ -568,6 +579,11 @@ export interface components {
             oldKid: string | null;
             /** @enum {string} */
             mode: "normal" | "emergency";
+            /**
+             * Format: date-time
+             * @description When newKid starts signing (creation time for an emergency rotation).
+             */
+            activatesAt: string;
         };
     };
     responses: never;
@@ -1137,6 +1153,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["RotateKeyResultViewDto"];
                 };
+            };
+            /** @description rotation_pending: a normal rotation while a newer key is still pending. Body {"error":"conflict","error_description":"A newer signing key is already published and does not sign yet. Wait until it activates, or use an emergency rotation."}; nothing changed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

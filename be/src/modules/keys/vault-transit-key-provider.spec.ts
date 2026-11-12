@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { inspect } from 'node:util';
 import { KeyProviderUnavailableError } from '../../common/errors/dependency-unavailable';
 import type { VaultConfig } from '../../config/configuration';
+import { RotationPendingError } from './key-provider';
 import { KEY_CACHE_TTL_MS, VaultTransitKeyProvider } from './vault-transit-key-provider';
 
 /**
@@ -744,6 +745,198 @@ describe('VaultTransitKeyProvider (run 53, unit V7–V12)', () => {
       expect(Date.now() - started).toBeLessThanOrEqual(2 * timeoutMs + 500);
       expect(err).toBeInstanceOf(KeyProviderUnavailableError); // DEBT-401: timeout ⇒ 503
       expect(String(err.cause)).toMatch(/vault sign failed: (TimeoutError|AbortError)/);
+    });
+  });
+
+  describe('DEBT-393 pre-publish (D86.10)', () => {
+    const PRE = 3600;
+    const pre = (fetchFn = vault.fetch) =>
+      new VaultTransitKeyProvider(cfg(), TTL, { fetchFn, now: () => clock, prepublishSec: PRE });
+    const created = (v: number) => Date.parse(vault.versions.get(v)!.created);
+    const signedKid = async (p: VaultTransitKeyProvider) =>
+      decodeProtectedHeader(await p.signJwt({ typ: 'JWT' }, {})).kid;
+
+    it('normal rotate: v2 pending (JWKS has both), signing stays on v1 with key_version 1 until activatesAt', async () => {
+      const versions: number[] = [];
+      const spy = async (url: string | URL | Request, init?: RequestInit) => {
+        if (String(url).includes('/sign/'))
+          versions.push(JSON.parse(String(init!.body)).key_version);
+        return vault.fetch(url, init);
+      };
+      const p = pre(spy);
+      await p.init();
+      const [{ kid: k1 }] = await p.listKeys();
+      const r = await p.rotate('normal', TTL);
+      const act = created(2) + PRE * 1000;
+      expect(r).toEqual({
+        newKid: r.newKid,
+        oldKid: k1,
+        mode: 'normal',
+        activatesAt: new Date(act).toISOString(),
+      });
+      const keys = await p.getPublicKeys();
+      expect(keys.map((k) => k.kid)).toEqual([k1, r.newKid]);
+      expect(await p.listKeys()).toEqual([
+        {
+          kid: k1,
+          alg: 'RS256',
+          status: 'active',
+          createdAt: new Date(created(1)).toISOString(),
+          activatesAt: new Date(created(1)).toISOString(),
+          retireAt: null,
+        },
+        {
+          kid: r.newKid,
+          alg: 'RS256',
+          status: 'pending',
+          createdAt: new Date(created(2)).toISOString(),
+          activatesAt: new Date(act).toISOString(),
+          retireAt: null,
+        },
+      ]);
+      const token = await p.signJwt({ typ: 'JWT' }, {});
+      expect(decodeProtectedHeader(token).kid).toBe(k1);
+      await expect(jwtVerify(token, createLocalJWKSet({ keys }))).resolves.toBeDefined();
+      expect(versions).toEqual([1]);
+
+      clock = act - 1;
+      expect(await signedKid(p)).toBe(k1);
+      clock = act;
+      expect(await signedKid(p)).toBe(r.newKid);
+      expect(versions.at(-1)).toBe(2);
+      const list = await p.listKeys();
+      expect(list.map((k) => [k.kid, k.status])).toEqual([
+        [k1, 'retiring'],
+        [r.newKid, 'active'],
+      ]);
+      expect(Date.parse(list[0].retireAt!)).toBe(act + TTL * 1000 + KEY_CACHE_TTL_MS);
+      clock = act + TTL * 1000 + KEY_CACHE_TTL_MS;
+      expect((await p.getPublicKeys()).map((k) => k.kid)).toEqual([r.newKid]);
+    });
+
+    it('normal rotate while a version is pending => RotationPendingError, Vault rotate never called', async () => {
+      const p = pre();
+      await p.init();
+      const r = await p.rotate('normal', TTL);
+      vault.calls = [];
+      const err = await p.rotate('normal', TTL).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(RotationPendingError);
+      expect(err).toMatchObject({ pendingKid: r.newKid, activatesAt: r.activatesAt });
+      expect(vault.calls).not.toContain('rotate');
+      expect(vault.latest).toBe(2);
+    });
+
+    it('emergency while a version is pending => one active version (the floor activates at createdAt)', async () => {
+      const p = pre();
+      await p.init();
+      await p.rotate('normal', TTL);
+      const e = await p.rotate('emergency', TTL);
+      expect(e.activatesAt).toBe(new Date(created(3)).toISOString());
+      expect([vault.minDec, vault.minEnc, vault.minAvail]).toEqual([3, 3, 3]);
+      expect(await p.listKeys()).toEqual([
+        expect.objectContaining({
+          kid: e.newKid,
+          status: 'active',
+          activatesAt: new Date(created(3)).toISOString(),
+          retireAt: null,
+        }),
+      ]);
+      expect(await signedKid(p)).toBe(e.newKid);
+    });
+
+    it('a refused sign is re-signed only when the ACTIVE version changed (not on a new pending latest)', async () => {
+      const a = pre();
+      const b = pre();
+      await a.init();
+      await b.init();
+      // b fails to sign twice (5xx + its one retry); meanwhile a publishes v2 as pending.
+      vault.fail.sign = [() => json(500, {}), () => json(500, {})];
+      vault.fail.read = [];
+      await a.rotate('normal', TTL);
+      vault.calls = [];
+      await expect(b.signJwt({ typ: 'JWT' }, {})).rejects.toThrow();
+      expect(vault.calls.filter((c) => c === 'sign')).toHaveLength(2);
+    });
+
+    it('DEBT-607: emergency failing after the new version exists (config 5xx) => rejects, ERROR says the old key still signs, the old version signs', async () => {
+      const p = pre();
+      await p.init();
+      const [{ kid: k1 }] = await p.listKeys();
+      vault.fail.config = [() => json(503, {})];
+      await expect(p.rotate('emergency', TTL)).rejects.toThrow('vault config failed: status=503');
+      const half = await p.listKeys();
+      const k2 = half.find((k) => k.kid !== k1)!.kid;
+      expect(half.map((k) => [k.kid, k.status])).toEqual([
+        [k1, 'active'],
+        [k2, 'pending'],
+      ]);
+      expect(logs).toContain(
+        `emergency rotation incomplete: previous key ${k1} is still signing (new kid ${k2} not active); re-run the emergency rotation`,
+      );
+      expect(await signedKid(p)).toBe(k1);
+      // Re-running converges to one active version.
+      const r = await p.rotate('emergency', TTL);
+      expect(await p.listKeys()).toEqual([
+        expect.objectContaining({ kid: r.newKid, status: 'active' }),
+      ]);
+    });
+
+    it('stale cache after an emergency elsewhere => refresh and re-sign once with the new active version', async () => {
+      const a = pre();
+      const b = pre();
+      await a.init();
+      await b.init();
+      await b.rotate('normal', TTL); // b's cache: v1 active, v2 pending
+      const { newKid } = await a.rotate('emergency', TTL);
+      expect(await signedKid(b)).toBe(newKid);
+    });
+
+    it('tester run 86: two pending versions (D86.10 race: two instances both passed the check) => active is the newest version whose activatesAt has come, later ones stay pending, JWKS has every kid, normal rotate => 409', async () => {
+      const a = pre();
+      await a.init();
+      const [{ kid: k1 }] = await a.listKeys();
+      const r2 = await a.rotate('normal', TTL);
+      // Instance B's rotate after its own (stale) pending check: Vault creates v3 as well.
+      vault.rotate();
+      vault.versions.get(3)!.created = new Date(created(2) + 5_000).toISOString();
+      const act2 = created(2) + PRE * 1000;
+      const act3 = created(3) + PRE * 1000;
+      const p = pre(); // fresh cache (another instance)
+      await p.init();
+      const kids = (await p.getPublicKeys()).map((k) => k.kid);
+      expect(kids).toHaveLength(3);
+      expect(kids[0]).toBe(k1);
+      expect(kids[1]).toBe(r2.newKid);
+      const k3 = kids[2];
+      expect((await p.listKeys()).map((k) => [k.kid, k.status])).toEqual([
+        [k1, 'active'],
+        [r2.newKid, 'pending'],
+        [k3, 'pending'],
+      ]);
+      expect(await signedKid(p)).toBe(k1);
+      await expect(p.rotate('normal', TTL)).rejects.toBeInstanceOf(RotationPendingError);
+      expect(vault.latest).toBe(3);
+
+      clock = act2;
+      expect(await signedKid(p)).toBe(r2.newKid);
+      expect((await p.listKeys()).map((k) => [k.kid, k.status])).toEqual([
+        [k1, 'retiring'],
+        [r2.newKid, 'active'],
+        [k3, 'pending'],
+      ]);
+      await expect(p.rotate('normal', TTL)).rejects.toBeInstanceOf(RotationPendingError);
+
+      clock = act3;
+      expect(await signedKid(p)).toBe(k3);
+      const list = await p.listKeys();
+      expect(list.map((k) => [k.kid, k.status])).toEqual([
+        [k1, 'retiring'],
+        [r2.newKid, 'retiring'],
+        [k3, 'active'],
+      ]);
+      // INV-K3: each old version stays until ttl (+ cache) after the NEXT version activated.
+      expect(Date.parse(list[0].retireAt!)).toBe(act2 + TTL * 1000 + KEY_CACHE_TTL_MS);
+      expect(Date.parse(list[1].retireAt!)).toBe(act3 + TTL * 1000 + KEY_CACHE_TTL_MS);
     });
   });
 });

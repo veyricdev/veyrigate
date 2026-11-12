@@ -6,12 +6,14 @@ import { z } from 'zod';
 import { KeyProviderUnavailableError } from '../../common/errors/dependency-unavailable';
 import type { VaultConfig } from '../../config/configuration';
 import { encodeCompactJws } from './jws';
-import type {
-  KeyMetadata,
-  KeyProvider,
-  PublicJwk,
-  RotationMode,
-  RotationResult,
+import {
+  RotationPendingError,
+  type KeyMetadata,
+  type KeyProvider,
+  type KeyStatus,
+  type PublicJwk,
+  type RotationMode,
+  type RotationResult,
 } from './key-provider';
 
 /**
@@ -82,6 +84,15 @@ class VaultNetworkError extends Error {
 export interface VaultProviderDeps {
   fetchFn?: typeof fetch;
   now?: () => number;
+  /** KEY_PREPUBLISH_SEC (run 86, D86.10); default 0 = the latest version signs at once. */
+  prepublishSec?: number;
+}
+
+interface LiveVersion {
+  entry: VersionEntry;
+  status: KeyStatus;
+  activatesAt: number;
+  retireAt: number | null;
 }
 
 /**
@@ -89,6 +100,12 @@ export interface VaultProviderDeps {
  * created by ops as `exportable=false` and never leaves Vault (INV-19); this class only asks Vault
  * to sign. All key state (versions, retiring window, emergency floor) is derived from Vault metadata
  * — no local state, so several instances and rotations need no mutex here (Vault serialises).
+ *
+ * Pre-publish (run 86, DEBT-393, D86.10): version v (above the floor) activates at its Vault
+ * `creation_time` + `prepublishSec`; the floor (first key, or the key of an emergency) at once.
+ * The active version — the highest one whose activation has come — is derived at every sign from the
+ * cached key set, so the 30 s cache never delays an activation (the pending version is cached long
+ * before). Two instances rotating at once may publish two pending versions (harmless, DEBT-603).
  */
 export class VaultTransitKeyProvider implements KeyProvider {
   private readonly logger = new Logger(VaultTransitKeyProvider.name);
@@ -105,6 +122,7 @@ export class VaultTransitKeyProvider implements KeyProvider {
   private seq = 0;
   private cachedSeq = 0;
   private lastHintRefresh = Number.NEGATIVE_INFINITY;
+  readonly prepublishSec: number;
 
   constructor(
     cfg: VaultConfig,
@@ -115,6 +133,7 @@ export class VaultTransitKeyProvider implements KeyProvider {
     this.#cfg = cfg;
     this.fetchFn = deps.fetchFn ?? fetch;
     this.now = deps.now ?? Date.now;
+    this.prepublishSec = deps.prepublishSec ?? 0;
     this.base = `${cfg.addr.replace(/\/+$/, '')}/v1/${cfg.mount}/`;
   }
 
@@ -140,13 +159,14 @@ export class VaultTransitKeyProvider implements KeyProvider {
     } catch (err) {
       // Vault refuses `key_version < min_encryption_version` (another instance did an emergency
       // rotation; Vault 2.1.2 answers 500, docs suggest 400). Refresh once and re-sign only when the
-      // latest version really changed — otherwise the original error stands. Shared (single-flight)
-      // refresh (DEBT-395): N concurrent refused signs cost one metadata read, not N, on a weak Vault.
+      // ACTIVE version really changed (a new pending latest is not a reason, D86.10) — otherwise the
+      // original error stands. Shared (single-flight) refresh (DEBT-395): N concurrent refused signs
+      // cost one metadata read, not N, on a weak Vault.
       if (!(err instanceof VaultStatusError) || !(err.status === 400 || err.status >= 500)) {
         throw err;
       }
       const fresh = await this.refresh(false);
-      if (fresh.latest === set.latest) throw err;
+      if (this.active(fresh).version === this.active(set).version) throw err;
       return this.signWith(fresh, header, payload);
     }
   }
@@ -180,11 +200,12 @@ export class VaultTransitKeyProvider implements KeyProvider {
     } catch (err) {
       throw asUnavailable(err);
     }
-    return this.live(set).map(({ entry, retireAt }) => ({
+    return this.live(set).map(({ entry, status, activatesAt, retireAt }) => ({
       kid: entry.kid,
       alg: 'RS256' as const,
-      status: retireAt === null ? ('active' as const) : ('retiring' as const),
+      status,
       createdAt: new Date(entry.createdAt).toISOString(),
+      activatesAt: new Date(activatesAt).toISOString(),
       retireAt: retireAt === null ? null : new Date(retireAt).toISOString(),
     }));
   }
@@ -195,7 +216,14 @@ export class VaultTransitKeyProvider implements KeyProvider {
    */
   async rotate(mode: RotationMode, _retainSec: number): Promise<RotationResult> {
     const before = await this.refresh(true);
-    const oldKid = before.versions.get(before.latest)!.kid;
+    const pending = this.live(before).find((v) => v.status === 'pending');
+    if (mode === 'normal' && pending) {
+      throw new RotationPendingError(
+        pending.entry.kid,
+        new Date(pending.activatesAt).toISOString(),
+      );
+    }
+    const oldKid = this.active(before).kid;
     await this.call('rotate', 'POST', `keys/${this.#cfg.key}/rotate`, undefined, false);
     this.invalidate();
     const after = await this.refresh(true);
@@ -205,13 +233,26 @@ export class VaultTransitKeyProvider implements KeyProvider {
       // Vault then refuses to sign with any older version (every instance) and this instance stops
       // accepting them at once; others within KEY_CACHE_TTL_MS. A failure here propagates (5xx +
       // audited failure); re-running the emergency rotation converges.
-      await this.call(
-        'config',
-        'POST',
-        `keys/${this.#cfg.key}/config`,
-        { min_decryption_version: n, min_encryption_version: n },
-        false,
-      );
+      try {
+        await this.call(
+          'config',
+          'POST',
+          `keys/${this.#cfg.key}/config`,
+          { min_decryption_version: n, min_encryption_version: n },
+          false,
+        );
+      } catch (err) {
+        // DEBT-607: the new version exists but is not the floor. With pre-publish it is pending and
+        // the (possibly compromised) previous key keeps signing; either way the old version is still
+        // in JWKS and signable in Vault. Say so loudly (kids only); the 5xx + audit follow.
+        const stillSigning = this.active(after).kid === oldKid;
+        this.logger.error(
+          stillSigning
+            ? `emergency rotation incomplete: previous key ${oldKid} is still signing (new kid ${newKid} not active); re-run the emergency rotation`
+            : `emergency rotation incomplete: previous key ${oldKid} is still in JWKS and signable in Vault; re-run the emergency rotation`,
+        );
+        throw err;
+      }
       this.invalidate();
       try {
         // Destroys the old key material (irreversible) — intended for a compromised key.
@@ -226,7 +267,9 @@ export class VaultTransitKeyProvider implements KeyProvider {
         this.logger.error(`trim failed after emergency rotation (new kid ${newKid})`);
       }
     }
-    return { newKid, oldKid, mode };
+    const createdAt = after.versions.get(n)!.createdAt;
+    const activatesAt = mode === 'emergency' ? createdAt : createdAt + this.prepublishSec * 1000;
+    return { newKid, oldKid, mode, activatesAt: new Date(activatesAt).toISOString() };
   }
 
   private async signWith(
@@ -234,7 +277,7 @@ export class VaultTransitKeyProvider implements KeyProvider {
     header: { typ: string },
     payload: JWTPayload,
   ): Promise<string> {
-    const entry = set.versions.get(set.latest)!;
+    const entry = this.active(set); // never a pending version (INV-K2)
     return encodeCompactJws(
       { alg: 'RS256', kid: entry.kid, typ: header.typ },
       payload,
@@ -267,19 +310,49 @@ export class VaultTransitKeyProvider implements KeyProvider {
     );
   }
 
-  /** Versions in JWKS: the latest (active) + older ones ≥ floor whose retiring window is open. */
-  private live(set: KeySet): Array<{ entry: VersionEntry; retireAt: number | null }> {
+  /** When version `v` signs from: the floor at once, any later version after the pre-publish delay. */
+  private activatesAt(set: KeySet, entry: VersionEntry): number {
+    return entry.version <= set.floor
+      ? entry.createdAt
+      : entry.createdAt + this.prepublishSec * 1000;
+  }
+
+  /**
+   * The signing version: the highest version ≥ floor whose activation has come (with no pre-publish,
+   * the latest, whatever the clocks say). Falls back to the lowest version ≥ floor (the floor
+   * version always exists: `load` requires the latest, and the floor never exceeds it).
+   */
+  private active(set: KeySet): VersionEntry {
     const now = this.now();
-    const out: Array<{ entry: VersionEntry; retireAt: number | null }> = [];
+    const usable = [...set.versions.values()]
+      .filter((v) => v.version >= set.floor)
+      .sort((a, b) => b.version - a.version);
+    return (
+      usable.find((v) => this.prepublishSec === 0 || this.activatesAt(set, v) <= now) ??
+      usable[usable.length - 1]
+    );
+  }
+
+  /**
+   * Versions in JWKS: the active one, the pending ones above it, and older ones ≥ floor whose
+   * retiring window is open (until the next version's activation + ACCESS_TOKEN_TTL + cache TTL).
+   */
+  private live(set: KeySet): LiveVersion[] {
+    const now = this.now();
+    const active = this.active(set).version;
+    const out: LiveVersion[] = [];
     for (const entry of [...set.versions.values()].sort((a, b) => a.version - b.version)) {
-      if (entry.version === set.latest) {
-        out.push({ entry, retireAt: null });
+      const activatesAt = this.activatesAt(set, entry);
+      if (entry.version >= active) {
+        const status = entry.version === active ? 'active' : 'pending';
+        out.push({ entry, status, activatesAt, retireAt: null });
         continue;
       }
       const next = set.versions.get(entry.version + 1);
       if (entry.version < set.floor || !next) continue;
-      const retireAt = next.createdAt + this.accessTokenTtlSec * 1000 + KEY_CACHE_TTL_MS;
-      if (retireAt > now) out.push({ entry, retireAt });
+      const retireAt =
+        this.activatesAt(set, next) + this.accessTokenTtlSec * 1000 + KEY_CACHE_TTL_MS;
+      if (retireAt > now) out.push({ entry, status: 'retiring', activatesAt, retireAt });
     }
     return out;
   }

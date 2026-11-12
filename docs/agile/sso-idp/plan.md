@@ -410,4 +410,79 @@ Mục tiêu app này: **kiểm chứng IdP từ phía RP** — vừa là demo, v
   - **D85.9 DEBT-571/584**: có `request` hoặc `request_uri` (kể cả rỗng hay lặp) ⇒ redirect lỗi sau khi redirect_uri đã được tin; discovery khai `request_parameter_supported: false`, `request_uri_parameter_supported: false`. `POST /userinfo` dùng chung handler với GET; token **chỉ** lấy từ header `Authorization: Bearer` (form body theo RFC 6750 §2.2 là tuỳ chọn; giữ bất biến "không bao giờ lấy từ query/body"); body bị bỏ qua.
   - **D85.10 Chốt P-level**: DEBT-572 P1 ⇒ run 86; DEBT-583 P2 ⇒ run 86 (rẻ); C-6.2c: 6.2.11 ✅ sau T3, 6.2.12 ⚠ (D85.4). Các dòng P1/P2 khác ở phần E giữ phân loại của tester (run 84).
   - **D85.11 Xoay device token (sửa D85.2)** — amends D85.2, decided by orchestrator under the user's production-readiness delegation; senior finding 1 (DEBT-596): mỗi lần đăng nhập mật khẩu thành công luôn cấp token thiết bị **mới** bằng `generateToken()`, không bao giờ dùng lại giá trị cookie gửi lên (chống cookie fixation ở chế độ không `__Host-`, và cookie từng lộ không được tin cậy lại sau reset); có cookie gửi lên thì `ZREM` hash cũ trong cùng `MULTI` với `ZADD`. Kèm DEBT-597: có cookie đúng dạng thì luôn `ZSCORE` (khoá `userId` hoặc `absent:` + sha256(email) cho email không tồn tại).
+  - **D86.1 (T1, sửa chữ D85.3) Một field mã duy nhất**: `reset.eta`/`verify.eta` có đúng **một** `<input name="token" id="token">`, mặc định hiện ra:
+    - Bọc trong `<label id="token-manual">Code from the email …</label>`.
+    - Thuộc tính: `required`, `maxlength="43"`, `pattern="[A-Za-z0-9_-]{43}"`, `autocomplete="one-time-code"`, `spellcheck="false"`, `value=""`.
+    - Script điền giá trị rồi đặt `hidden` cho label (field trong phần tử `hidden` vẫn được submit).
+    - Không dùng `<noscript>`, vì nó gây trùng field (xem phát hiện).
+    - Fragment sai hoặc thiếu ⇒ field vẫn hiện để nhập tay.
+    - Thẻ `<script src="/assets/token-fragment.js"></script>` đặt cuối form, không `async`/`defer`, CSP không đổi.
+    - `TokenDto.token`: thêm trim (`@Transform`) cho mã dán tay. Không thêm `@Matches`: sai mã ⇒ vẫn đi đường lỗi hiện có, không lộ thêm oracle.
+  - **D86.2 (T1) Script** `be/src/public/token-fragment.js`: IIFE ES5, không phụ thuộc gì.
+    - `var m = /^#token=([A-Za-z0-9_-]{43})$/.exec(location.hash)`. Khớp ⇒ `field.value = m[1]` (chỉ dùng `.value`, không `innerHTML`) và `label.hidden = true`.
+    - Khi `location.hash` bắt đầu bằng `#token=` (kể cả sai dạng) ⇒ luôn gọi `history.replaceState(null, '', location.pathname)`.
+  - **D86.3 (T1) Thư và link**:
+    - `link.hash = 'token=' + token`, không còn `searchParams`.
+    - `verifyEmailMessage`/`resetPasswordMessage` nhận thêm `code`. Text thêm dòng `If the link does not open the form, enter this code on the page: <code>`, HTML thêm `<p>…<code>${escapeHtml(code)}</code></p>`.
+    - GET bỏ hẳn `@Query('token')`: không đọc, không render, không redirect. Redirect để xoá query vô ích vì query đã vào log proxy.
+    - Link `?token=` gửi trước khi deploy ⇒ trang hiện field trống ⇒ người dùng xin link mới (TTL ngắn; chưa phát hành).
+  - **D86.4 (T4) POST `/logout` không có khoá `_csrf`** trong body (dù có tham số RP hay không):
+    - Render **đúng trang xác nhận của GET**: 200, `Cache-Control: no-store`, cùng nới `form-action` theo origin đã kiểm, cùng quy tắc chỉ phản chiếu `post_logout_redirect_uri` khi hợp lệ.
+    - Không `sessions.get`, không revoke, không xoá cookie, không audit.
+    - Có khoá `_csrf` (kể cả chuỗi rỗng) ⇒ kiểm như hiện tại; sai ⇒ 403, không đổi state.
+    - Tách helper `renderLogoutConfirm(req, reply, params)` dùng chung cho GET và POST.
+  - **D86.5 (T4) Bỏ `@UseGuards(CsrfGuard)` trên `POST /logout`**, kiểm trong handler (hoặc một `LogoutCsrfGuard` riêng) **trước** mọi thao tác session.
+  - **D86.6 (T4) CSRF hai identity, chỉ cho `POST /logout`**: `_csrf` hợp lệ khi bằng HMAC của cookie phiên đã gửi, **hoặc** HMAC của cookie CSRF ẩn danh (`csrfCookieName(secure)`) đã gửi và không rỗng.
+    - Lý do: trang xác nhận render từ POST cross-site không thấy cookie phiên `Lax`.
+    - Kẻ tấn công không đọc được cookie nào trong hai cookie đó (httpOnly, `__Host-` ở chế độ secure), và cũng không có secret HMAC ⇒ không giả được.
+    - Rủi ro còn lại chỉ ở chế độ không secure (cookie tossing từ subdomain anh em, giống mọi form ẩn danh hiện có) và hậu quả chỉ là bị đăng xuất.
+    - Các form khác giữ `CsrfGuard` một identity.
+  - **D86.7 (T4) `LogoutDto`** thêm `logout_hint` (`@IsOptional @IsString @Length(0, 4096)`) và `ui_locales` (`@Length(0, 256)`). Cả hai được chấp nhận rồi **bỏ qua**: không phản chiếu, không log.
+  - **D86.8 (T2, sửa chữ D85.7) Hình 409**: `409 {"error":"conflict","error_description":"A newer signing key is already published and does not sign yet. Wait until it activates, or use an emergency rotation."}` (câu cố định, không thời gian, không kid; dùng `AdminAuthError.conflict` sẵn có).
+    - Audit `SIGNING_KEY_ROTATED` `result:'failure'` `reason:'rotation_pending'` `metadata:{mode:'normal', pendingKid}`, ghi best-effort: audit lỗi vẫn trả 409.
+    - Lý do: cả Admin API chỉ dùng một mã 409 (`conflict`) và BFF đã map sẵn ⇒ không thêm `AdminApiErrorCode`, không đổi BFF.
+    - Mã nghiệp vụ `rotation_pending` nằm ở audit và OpenAPI description.
+  - **D86.9 (T2) Local `keys.json`**:
+    - Mỗi phần tử có `{kid, publicJwk, createdAt, activatesAt?, retireAt?}`.
+    - Rotate normal ghi `fresh.activatesAt = now + prepublishSec`, và ghi cho active trước đó `retireAt = fresh.activatesAt + retainSec`.
+    - Emergency/init ghi `activatesAt = createdAt`.
+    - **Không ghi `status` nữa; đọc thì bỏ qua `status`.**
+    - Suy ra theo thứ tự mảng (thứ tự tạo): **active** = phần tử cuối có `activatesAt ≤ now`, không có thì phần tử đầu; sau active là **pending**; trước active là **retiring** khi `retireAt > now`, thiếu `retireAt` thì coi như đã rời JWKS.
+    - Phần tử cũ không có `activatesAt` ⇒ `activatesAt = createdAt`; `retireAt` cũ được giữ.
+    - PEM: rotate normal **không** xoá PEM của active hiện tại (nó còn ký tới `fresh.activatesAt`). Mỗi rotate xoá best-effort PEM của mọi phần tử đang là retiring, rồi prune phần tử hết hạn như hiện tại. Emergency xoá mọi PEM cũ như hiện tại.
+    - `init` chỉ tạo key khi không còn phần tử live (không dựa vào `status`).
+    - Constructor `new LocalKeyProvider(dir, opts?: { prepublishSec?: number; now?: () => number })`, mặc định `prepublishSec: 0`, `now: Date.now`. `KeysModule` luôn truyền giá trị config.
+    - 409 kiểm **trong mutex** ⇒ hai rotate normal đồng thời cho đúng một 200 và một 409.
+  - **D86.10 (T2) Vault**:
+    - `VaultProviderDeps` thêm `prepublishSec` (mặc định 0; `KeysModule` truyền config).
+    - `activatesAt(v) = v === floor ? createdAt : createdAt + prepublishSec*1000`.
+    - Active = version lớn nhất ≥ floor có `activatesAt ≤ now()`, tính ở **mỗi** lần ký từ key set đã cache. Cache 30 s không làm trễ kích hoạt, vì version pending đã nằm trong cache từ lâu trước đó.
+    - `signWith` dùng `key_version = active.version`. `signOnce` retry khi active version đổi (không còn so `latest`).
+    - `live()`: version > active ⇒ pending (`retireAt null`); version < active và ≥ floor ⇒ retiring tới `activatesAt(v+1) + ttl + KEY_CACHE_TTL_MS`.
+    - Rotate normal: `refresh(true)`, có pending ⇒ ném `RotationPendingError`, không gọi Vault.
+    - Hai instance rotate cùng lúc có thể tạo hai version pending (Vault tuần tự hoá `rotate`, không tuần tự hoá phần kiểm của ta). Cả hai đều nằm trong JWKS, không gây hại ⇒ chấp nhận, ghi runbook (DEBT-603).
+  - **D86.11 (T2) Hợp đồng chung**:
+    - `KeyMetadata` thêm `activatesAt: string` và `status: 'pending'|'active'|'retiring'`; `retireAt` của pending/active là `null`.
+    - `RotationResult` thêm `activatesAt`; emergency thì bằng `createdAt`.
+    - `RotationPendingError {pendingKid, activatesAt}` đặt ở `key-provider.ts`.
+    - Config: `KEY_PREPUBLISH_SEC` nằm trong `KeysConfig.prepublishSec`, validation số nguyên `0..86400`, mặc định `3600`, mọi môi trường. Không ép mức tối thiểu ở production; runbook bắt buộc ≥ 600.
+  - **D86.12 (T2) Env test**:
+    - `be/test/full-app.ts` đặt `KEY_PREPUBLISH_SEC: '0'` (giữ hợp đồng của các int cũ, có comment).
+    - Spec mới `run86-key-prepublish.int-spec.ts` dùng 3600 và đồng hồ điều khiển được.
+    - `e2e/config/env.ts` đặt `KEY_PREPUBLISH_SEC: "20"`. Spec E2E keys chờ không còn pending lúc bắt đầu (poll ≤ 40 s, vì lần chạy trước có thể bị ngắt), rồi rotate, thấy hàng Pending, thử rotate lần hai ⇒ thông điệp 409, poll tới khi K2 Active (≤ 40 s), rồi context B đăng nhập như hiện tại (vẫn kiểm refetch JWKS của DEBT-349).
+  - **D86.13 (T3) fe-admin**:
+    - Zod: `status` thêm `pending`, `activatesAt: z.string()` bắt buộc ở cả item lẫn kết quả rotate.
+    - Nhãn: `pending: "Pending — published, signs from <activatesAt>"`.
+    - Thứ tự: active → pending (theo `activatesAt` tăng) → retiring (theo `retireAt` tăng).
+    - Nút "Rotate key" (normal) bị **disabled** khi có pending, kèm câu giải thích. 409 vẫn được xử lý cho trường hợp race: `BY_CODE.conflict` = câu cố định, không retry.
+    - Text sau rotate normal: `Rotated. New key <newKid> is published and signs from <activatesAt>. <oldKid> keeps signing until then, then is verification only.`
+    - `uncertainText` cho normal dựa vào **tập kid** trước lúc xác nhận: "if the list now has a key that was not there before (pending or active), the rotation was applied — do not rotate again". Emergency giữ câu so kid active.
+    - Hộp xác nhận normal: "The new key is published at once and starts signing after the pre-publish delay (KEY_PREPUBLISH_SEC, default 1 hour). Until then the current key keeps signing."
+    - Dashboard: thêm dòng "Pending keys".
+  - **D86.14 (T5) `networkOf`**:
+    - Giữ cổng `isIP(raw)` của Node trước: `ipaddr.parse` nhận cả dạng `127.1`, hex hay octal mà `req.ip` không bao giờ có.
+    - Bỏ `%zone`, rồi `ipaddr.process(raw)`. IPv4 ⇒ `toString()`. IPv6 ⇒ `toFixedLengthString().split(':').slice(0,4).join(':')`.
+    - Lý do giữ đúng định dạng 4 nhóm đệm 0 như hiện nay: key bucket Redis giữ nguyên byte, deploy không reset đếm.
+    - Không dùng `toNormalizedString()` như backlog gợi ý, vì nó bỏ đệm 0 ⇒ key đổi.
+  - **D86.15 (T5) CSP**: `baseUri: ["'none'"]` trong helmet (`bootstrap.ts`) **và** `['base-uri', "'none'"]` trong `csp.ts`. Vị trí directive giữ nguyên (thứ tự mặc định helmet), test byte-identity sẽ chứng minh.
 - **Không tự quyết (cần người dùng)**: push lên remote; cài Node 22.23.4 trên máy dev (Q62.2); xoá image Docker cũ; xoá DB test/dev; sửa `be/.env`.

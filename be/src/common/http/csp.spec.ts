@@ -5,7 +5,7 @@ import { buildCsp, safeCspOrigin } from './csp';
  * MUST equal this byte-for-byte (acceptance #8 cross-checks it against a live app response too).
  */
 const GLOBAL_CSP =
-  "default-src 'self';base-uri 'self';font-src 'self' https: data:;form-action 'self';" +
+  "default-src 'self';base-uri 'none';font-src 'self' https: data:;form-action 'self';" +
   "frame-ancestors 'none';img-src 'self' data:;object-src 'none';script-src 'self';" +
   "script-src-attr 'none';style-src 'self';upgrade-insecure-requests";
 

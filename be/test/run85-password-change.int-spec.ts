@@ -19,6 +19,7 @@ import {
 } from './full-app';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 import { seedConsent } from './oauth-fixtures';
+import { tokenFromMailLink } from './helpers/mail-token';
 
 /**
  * Run 85 T5 (DEBT-573, contract D85.6) on the REAL app over HTTP: `GET/POST /account/password`.
@@ -431,7 +432,7 @@ describe('run 85 T5: change password /account/password (real app)', () => {
     await full.app.get(AuthenticationService).forgotPassword(u.email);
     await flushMail();
     const link = full.outbox.filter((m) => m.to === u.email).at(-1)!;
-    const token = new URL(link.text.match(/https?:\/\/\S+/)![0]).searchParams.get('token')!;
+    const token = tokenFromMailLink(link.text);
     const mails = full.outbox.length;
     await full.app.get(AuthenticationService).resetPassword(token, NEW_PASSWORD);
     await flushMail();

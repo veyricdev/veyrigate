@@ -58,6 +58,7 @@ import { SessionCookie, SESSION_COOKIE } from '../src/modules/sessions/session.c
 import { SessionService } from '../src/modules/sessions/session.service';
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
+import { tokenFromMailLink } from './helpers/mail-token';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -281,7 +282,7 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
     await auth.forgotPassword(await emailOf(id));
     const link = send.mock.calls[0][0].text.match(/https?:\S+/)![0];
     send.mockRestore();
-    return new URL(link).searchParams.get('token')!;
+    return tokenFromMailLink(link);
   };
   const lockedUntilOf = async (id: string) =>
     ((await userModel.findById(id).lean())?.lockedUntil as Date | undefined) ?? null;

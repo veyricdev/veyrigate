@@ -98,7 +98,7 @@ export default async function intPreflight() {
     throw new Error(
       `Integration test dependencies not reachable: ${missing}.\n` +
         `Start the test containers first:\n\n` +
-        `  docker start vg-test-mongo vg-test-redis\n`,
+        `  docker start veyrigate-mongo veyrigate-redis  # 27117/6479 = second host ports of the shared containers\n`,
     );
   }
   await acquireLock();
@@ -118,7 +118,7 @@ async function acquireLock() {
       const [holder, ttl] = await Promise.all([redis.get(LOCK_KEY), redis.pttl(LOCK_KEY)]);
       throw new Error(
         `another test:int is running (holder=${holder}, ttl=${ttl}ms); ` +
-          `if stale: docker exec vg-test-redis redis-cli DEL ${LOCK_KEY}`,
+          `if stale: docker exec veyrigate-redis redis-cli DEL ${LOCK_KEY}`,
       );
     }
   } catch (err) {

@@ -4,6 +4,7 @@ import { AuthenticationService } from '../src/modules/authentication/authenticat
 import { UserService } from '../src/modules/identity/user.service';
 import { bootFullApp, type FullApp, type InjectResponse } from './full-app';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
+import { tokenFromMailLink } from './helpers/mail-token';
 
 /**
  * Run 85 T3 (DEBT-574, D85.4) on the REAL app over HTTP: `/register` and `/reset` refuse a password
@@ -81,7 +82,7 @@ describe('run 85 T3: common-password policy on register/reset (real app)', () =>
     await full.app.get(AuthenticationService).forgotPassword(email);
     await flushMail();
     const mail = full.outbox.filter((m) => m.to === email).at(-1)!;
-    const token = new URL(mail.text.match(/https?:\/\/\S+/)![0]).searchParams.get('token')!;
+    const token = tokenFromMailLink(mail.text);
 
     const refused = await submit('/forgot', '/reset', { token, password: COMMON });
     expect(refused.statusCode).toBe(400);

@@ -182,13 +182,15 @@ export type AuditPage = z.infer<typeof AuditPageSchema>;
 export const SigningKeySchema = z.object({
   kid: z.string().min(1).max(128),
   alg: z.string(),
-  status: z.enum(["active", "retiring"]),
+  status: z.enum(["pending", "active", "retiring"]),
   createdAt: z.string(),
+  /** When the key signs (or signed) from; a pending key is in JWKS before it (DEBT-393). */
+  activatesAt: z.string(),
   retireAt: z.string().nullable(),
 });
 export type SigningKey = z.infer<typeof SigningKeySchema>;
 
-/** Every key in the JWKS (one active + the retiring ones); never paged (`nextCursor` always null). */
+/** Every key in the JWKS (one active + the pending and retiring ones); never paged (`nextCursor` always null). */
 export const SigningKeyListSchema = z.object({
   items: z.array(SigningKeySchema),
   nextCursor: z.null(),
@@ -200,5 +202,6 @@ export const RotateKeyResultSchema = z.object({
   newKid: z.string().min(1).max(128),
   oldKid: z.string().nullable(),
   mode: z.enum(["normal", "emergency"]),
+  activatesAt: z.string(),
 });
 export type RotateKeyResult = z.infer<typeof RotateKeyResultSchema>;

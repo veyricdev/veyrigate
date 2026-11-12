@@ -278,32 +278,51 @@ for (const label of ["alpha", "beta"] as X3Label[]) {
       await context.close();
     });
 
+    // DEBT-572 (run 86, D86.4/D86.6): was `403` ("state change refused"). A POST from the RP without
+    // `_csrf` now renders the logout confirmation (200) and still changes nothing; the user's click
+    // on "Sign out" there is what logs out, also cross-site where the page could only bind its token
+    // to the anonymous CSRF cookie (the Lax session cookie was not sent).
     test(`4 POST from RP to IdP without _csrf — ${rp.topology}`, async ({ browser }, testInfo) => {
       const c = cell("4-post", rp.topology);
       const { context, page } = await fresh(browser);
       await login(page, rp);
       const idp = trackIdp(page);
-      const res = page.waitForResponse(
-        (r) => new URL(r.url()).hostname === X3_IDP_HOST && r.request().method() === "POST",
-      );
-      await page.evaluate((action) => {
-        const f = document.createElement("form");
-        f.method = "POST";
-        f.action = action;
-        document.body.append(f);
-        f.submit();
-      }, `${X3_ISSUER}/logout`);
-      const status = (await res).status();
-      await page.waitForURL((u) => u.hostname === X3_IDP_HOST && u.pathname === "/logout", { waitUntil: "load" });
+      const postFromRp = async (): Promise<number> => {
+        const res = page.waitForResponse(
+          (r) => new URL(r.url()).hostname === X3_IDP_HOST && r.request().method() === "POST",
+        );
+        await page.evaluate((action) => {
+          const f = document.createElement("form");
+          f.method = "POST";
+          f.action = action;
+          document.body.append(f);
+          f.submit();
+        }, `${X3_ISSUER}/logout`);
+        const status = (await res).status();
+        await page.waitForURL((u) => u.hostname === X3_IDP_HOST && u.pathname === "/logout", { waitUntil: "load" });
+        return status;
+      };
+      const status = await postFromRp();
       c.cookieNames = (await idp.find("POST", "/logout"))[0]?.names ?? [];
       c.outcome = `HTTP ${status}`;
-      expect(status, "state change refused").toBe(403);
+      expect(status, "confirmation page, no state change").toBe(200);
+      const signOut = page.locator('form[action="/logout"]').getByRole("button", { name: "Sign out", exact: true });
+      await expect(signOut).toBeVisible();
       if (rp.topology === "cross-site" && enforcesSameSite(testInfo.project.name)) {
         expect(c.cookieNames, "Lax not sent on a cross-site POST").not.toContain(SESSION);
       }
       // Session survived: still one cookie, and SSO stays silent.
       expect(await idpCookies(context)).toHaveLength(1);
       expect(await signInFlow(page, rp)).toBe("claims");
+      if (rp.topology === "cross-site") {
+        // The confirmation rendered from a cross-site POST still logs out when the user confirms.
+        await page.goto(rp.origin);
+        expect(await postFromRp()).toBe(200);
+        await signOut.click();
+        await page.waitForURL((u) => u.hostname === X3_IDP_HOST && u.pathname === "/login");
+        expect(await idpCookies(context), "session cookie cleared").toHaveLength(0);
+        expect(await signInFlow(page, rp)).toBe("login");
+      }
       await context.close();
     });
 

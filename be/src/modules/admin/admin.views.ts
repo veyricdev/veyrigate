@@ -307,13 +307,19 @@ export class AdminKeyViewDto implements KeyMetadata {
   @ApiProperty({ enum: ['RS256'] })
   alg!: KeyMetadata['alg'];
 
-  @ApiProperty({ enum: ['active', 'retiring'] })
+  @ApiProperty({
+    enum: ['pending', 'active', 'retiring'],
+    description: 'pending: in JWKS, signs from activatesAt (DEBT-393).',
+  })
   status!: KeyMetadata['status'];
 
   @ApiProperty(DATE)
   createdAt!: string;
 
-  @ApiProperty(NULLABLE_DATE)
+  @ApiProperty({ ...DATE, description: 'When the key signs (or signed) from.' })
+  activatesAt!: string;
+
+  @ApiProperty({ ...NULLABLE_DATE, description: 'null for pending and active keys.' })
   retireAt!: string | null;
 }
 
@@ -335,4 +341,10 @@ export class RotateKeyResultViewDto {
 
   @ApiProperty({ enum: ['normal', 'emergency'] })
   mode!: RotationMode;
+
+  @ApiProperty({
+    ...DATE,
+    description: 'When newKid starts signing (creation time for an emergency rotation).',
+  })
+  activatesAt!: string;
 }

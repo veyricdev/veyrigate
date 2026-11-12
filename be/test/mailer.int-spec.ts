@@ -10,7 +10,9 @@ describe('SmtpMailer → Mailpit (B1.10)', () => {
     const tag = randomUUID();
     const to = `int-${tag}@example.test`;
     const link = `http://localhost:4000/verify?t=${tag}`;
-    await new SmtpMailer(SMTP_URL, 'no-reply@localhost').send(verifyEmailMessage(to, link, 30));
+    await new SmtpMailer(SMTP_URL, 'no-reply@localhost').send(
+      verifyEmailMessage(to, link, 30, tag),
+    );
 
     const search = await fetch(
       `${MAILPIT_API}/api/v1/search?query=${encodeURIComponent(`to:${to}`)}`,

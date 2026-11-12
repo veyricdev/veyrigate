@@ -22,6 +22,7 @@ import {
 } from './full-app';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 import { seedConsent } from './oauth-fixtures';
+import { tokenFromMailLink } from './helpers/mail-token';
 
 /**
  * Application log review (B7.4 Task 4, INV-20). The real app (`configureApp` + nestjs-pino with
@@ -92,10 +93,7 @@ describe('application logs never carry secrets (B7.4)', () => {
     );
     expect(reg.statusCode).toBeLessThan(300);
     const link = full.outbox.find((m) => m.to === EMAIL)?.text.match(/https?:\/\/\S+/)?.[0];
-    const verifyToken = keep(
-      'verify token',
-      new URL(link ?? 'http://x/').searchParams.get('token') ?? '',
-    );
+    const verifyToken = keep('verify token', tokenFromMailLink(link ?? ''));
     expect(
       (await full.app.inject({ method: 'GET', url: `/verify-email?token=${verifyToken}` }))
         .statusCode,

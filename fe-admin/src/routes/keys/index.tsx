@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { PagePending } from "@/components/feedback/route-states";
@@ -11,38 +12,65 @@ import type { RotateKeyResult, SigningKey } from "@/server/admin-api/schemas";
  * Signing keys of the IdP (run 49 A6.5): metadata only (kid, status, ISO times as text), normal and
  * emergency rotation. super_admin only: anyone else gets a fixed text and no server call (the BE
  * refuses reads too). A rotation is never re-sent: an unknown outcome re-reads the list and says
- * how to tell whether it was applied (compare the active `kid`).
+ * how to tell whether it was applied (normal: a kid that was not listed before; emergency: the
+ * active `kid`). A normal rotation publishes a pending key first (DEBT-393, D86.13): while one is
+ * listed the normal rotation is disabled, and a 409 from a race gets a fixed text.
  */
 export const Route = createFileRoute("/keys/")({ component: KeysPage });
 
 const PATH = "/keys";
 
-const STATUS_TEXT: Record<SigningKey["status"], string> = {
-  active: "Active — signs new tokens",
-  retiring: "Retiring — verification only",
-};
+const statusText = (k: SigningKey): string =>
+  k.status === "active"
+    ? "Active — signs new tokens"
+    : k.status === "pending"
+      ? `Pending — published, signs from ${k.activatesAt}`
+      : "Retiring — verification only";
 
-/** Active first, then the retiring keys by `retireAt` (soonest first). */
+const RANK: Record<SigningKey["status"], number> = { active: 0, pending: 1, retiring: 2 };
+
+/** Active, then pending by `activatesAt`, then retiring by `retireAt` (soonest first; ISO text sorts as time). */
 const ordered = (items: SigningKey[]) =>
-  [...items].sort((a, b) =>
-    a.status !== b.status ? (a.status === "active" ? -1 : 1) : (a.retireAt ?? "").localeCompare(b.retireAt ?? ""),
+  [...items].sort(
+    (a, b) =>
+      RANK[a.status] - RANK[b.status] ||
+      (a.status === "pending" ? a.activatesAt.localeCompare(b.activatesAt) : (a.retireAt ?? "").localeCompare(b.retireAt ?? "")),
   );
 
 function rotatedText(r: RotateKeyResult): string {
   if (r.mode === "emergency") {
     return `Emergency rotation done. New active key ${r.newKid}. Previous keys were removed from JWKS. Tell relying parties to refetch JWKS.`;
   }
-  return `Rotated. New active key ${r.newKid}${r.oldKid ? `; ${r.oldKid} is now verification only` : ""}.`;
+  const head = `Rotated. New key ${r.newKid} is published and signs from ${r.activatesAt}.`;
+  return r.oldKid ? `${head} ${r.oldKid} keeps signing until then, then is verification only.` : head;
 }
 
-function uncertainText(kidBefore: string | undefined): string {
-  const head = "The result is unknown and the request was not sent again. The key list has been reloaded";
+const UNCERTAIN_HEAD = "The result is unknown and the request was not sent again. The key list has been reloaded";
+
+/** Normal: the active kid does not change until the new key activates, so compare the set of kids (D86.13). */
+function uncertainNormalText(kidsBefore: string[] | undefined): string {
+  return kidsBefore?.length
+    ? `${UNCERTAIN_HEAD}. Keys before the request: ${kidsBefore.join(", ")}. If the list now has a key that was not there before (pending or active), the rotation was applied — do not rotate again.`
+    : `${UNCERTAIN_HEAD}.`;
+}
+
+/** Emergency: the new key signs at once, so the active kid tells. */
+function uncertainEmergencyText(kidBefore: string | undefined): string {
   return kidBefore
-    ? `${head}: if the active key is no longer ${kidBefore}, the rotation was applied — do not rotate again.`
-    : `${head}.`;
+    ? `${UNCERTAIN_HEAD}: if the active key is no longer ${kidBefore}, the rotation was applied — do not rotate again.`
+    : `${UNCERTAIN_HEAD}.`;
 }
 
-const BY_CODE = { forbidden: "Only a super_admin can rotate signing keys." };
+/** Read a little after `activatesAt`: the BE decides by its own clock. */
+const ACTIVATION_MARGIN_MS = 2_000;
+
+const PENDING_HINT = "A new key is already published and does not sign yet. Rotate again after it activates, or use an emergency rotation.";
+
+const BY_CODE = {
+  forbidden: "Only a super_admin can rotate signing keys.",
+  // 409 from a race with another rotation (D86.8): a fixed text, not the BE description.
+  conflict: "A newer signing key is already published and does not sign yet. Wait until it activates, or use an emergency rotation.",
+};
 
 function KeysPage() {
   const { viewer } = Route.useRouteContext();
@@ -66,16 +94,31 @@ function Keys() {
   const query = useSigningKeys();
   const rotate = useRotateSigningKey();
   const { notice, headingRef, announce } = useActionNotice();
-  const activeKid = query.data?.items.find((k) => k.status === "active")?.kid;
+  const items = query.data?.items;
+  const activeKid = items?.find((k) => k.status === "active")?.kid;
+  const hasPending = items?.some((k) => k.status === "pending") ?? false;
+  const firstActivation = Math.min(...(items ?? []).filter((k) => k.status === "pending").map((k) => Date.parse(k.activatesAt)));
+  const { refetch, dataUpdatedAt } = query;
+
+  // DEBT-606: re-read once the earliest pending key activates (row and Rotate update without a reload).
+  // Each read re-arms it (`dataUpdatedAt`), so a BE clock behind ours just retries ACTIVATION_MARGIN_MS later.
+  useEffect(() => {
+    if (!Number.isFinite(firstActivation)) return;
+    const timer = setTimeout(() => void refetch(), Math.max(firstActivation - Date.now(), 0) + ACTIVATION_MARGIN_MS);
+    return () => clearTimeout(timer);
+  }, [firstActivation, dataUpdatedAt, refetch]);
 
   async function run(mode: RotateKeyParams["mode"]): Promise<ActionOutcome> {
-    const kidBefore = activeKid; // the key shown when the admin confirmed
+    // built from the list shown when the admin confirmed
+    const uncertain = mode === "normal" ? uncertainNormalText(items?.map((k) => k.kid)) : uncertainEmergencyText(activeKid);
     try {
       return { done: rotatedText(await rotate.mutateAsync({ mode })) };
     } catch (err) {
       // Unknown outcome (it may have rotated): close, announce, never re-send (DEBT-339 pattern).
-      if (!(err instanceof AdminRequestError) || err.uncertain) return { done: uncertainText(kidBefore) };
-      return outcomeOf(err, uncertainText(kidBefore), BY_CODE);
+      if (!(err instanceof AdminRequestError) || err.uncertain) return { done: uncertain };
+      // Another rotation won the race: show its pending key (the hook skips a re-read on a known refusal).
+      if (err.code === "conflict") void query.refetch();
+      return outcomeOf(err, uncertain, BY_CODE);
     }
   }
 
@@ -99,10 +142,12 @@ function Keys() {
             path={PATH}
             run={() => run("normal")}
             onDone={announce}
+            disabled={hasPending}
           >
             <p>
-              A new key signs new tokens. The current key stays in JWKS for verification until the tokens it signed
-              expire (access-token lifetime). Nobody is signed out.
+              The new key is published at once and starts signing after the pre-publish delay (KEY_PREPUBLISH_SEC,
+              default 1 hour). Until then the current key keeps signing. After that it stays in JWKS for verification
+              until the tokens it signed expire (access-token lifetime). Nobody is signed out.
             </p>
           </ConfirmAction>
           <ConfirmAction
@@ -117,11 +162,12 @@ function Keys() {
             warning={<EmergencyWarning />}
           >
             <p>
-              Use this only when a signing key may be compromised. Every previous key (active and retiring) is removed from
-              JWKS at once and its private key is deleted; a new key signs from now on.
+              Use this only when a signing key may be compromised. Every previous key (active, pending and retiring) is removed
+              from JWKS at once and its private key is deleted; a new key signs from now on.
             </p>
           </ConfirmAction>
         </div>
+        {hasPending && <p className="text-sm text-muted-foreground">{PENDING_HINT}</p>}
       </section>
       {query.isPending ? (
         <PagePending />
@@ -154,7 +200,7 @@ function Keys() {
                     {k.kid}
                   </th>
                   <td className="py-2 pr-4">{k.alg}</td>
-                  <td className="py-2 pr-4">{STATUS_TEXT[k.status]}</td>
+                  <td className="py-2 pr-4">{statusText(k)}</td>
                   <td className="py-2 pr-4 font-mono">{k.createdAt}</td>
                   <td className="py-2 font-mono">{k.retireAt ?? "—"}</td>
                 </tr>

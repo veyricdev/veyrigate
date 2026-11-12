@@ -1,4 +1,10 @@
-import { CanActivate, ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  CanActivate,
+  ExecutionContext,
+  ForbiddenException,
+  Injectable,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createHmac } from 'node:crypto';
 import { constantTimeEqual, generateToken } from '../../common/crypto/crypto.util';
@@ -66,6 +72,38 @@ export class CsrfGuard implements CanActivate {
     if (!identity || typeof body?._csrf !== 'string' || !this.csrf.verify(identity, body._csrf)) {
       throw new ForbiddenException('Invalid form submission.');
     }
+    return true;
+  }
+}
+
+/**
+ * CSRF for `POST /logout` only (DEBT-572, D86.4–D86.6):
+ * - no `_csrf` key in the body => pass; the handler renders the confirmation page and does no
+ *   session work (an RP-initiated POST can never carry our token);
+ * - `_csrf` not a string => 400;
+ * - otherwise the token must be the HMAC of the session cookie sent, OR of the non-empty anonymous
+ *   CSRF cookie sent. A confirmation rendered from a cross-site POST never sees the `Lax` session
+ *   cookie, so its token is bound to the anonymous cookie; the same-site "Sign out" click then sends
+ *   both cookies. Neither cookie is readable by an attacker (httpOnly) and the HMAC needs the secret.
+ */
+@Injectable()
+export class LogoutCsrfGuard implements CanActivate {
+  constructor(
+    private readonly csrf: CsrfService,
+    private readonly sessionCookie: SessionCookie,
+  ) {}
+
+  canActivate(context: ExecutionContext): boolean {
+    const request = context.switchToHttp().getRequest<CsrfRequest>();
+    const body: unknown = request.body;
+    if (typeof body !== 'object' || body === null || !('_csrf' in body)) return true;
+    const token = (body as { _csrf?: unknown })._csrf;
+    if (typeof token !== 'string') throw new BadRequestException('Invalid form submission.');
+    const session = this.sessionCookie.read(request);
+    const anon = request.cookies?.[csrfCookieName(this.sessionCookie.secure)];
+    const ok =
+      (!!session && this.csrf.verify(session, token)) || (!!anon && this.csrf.verify(anon, token));
+    if (!ok) throw new ForbiddenException('Invalid form submission.');
     return true;
   }
 }

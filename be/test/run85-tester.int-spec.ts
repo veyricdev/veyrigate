@@ -27,6 +27,7 @@ import {
 } from './full-app';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 import { seedConsent } from './oauth-fixtures';
+import { tokenFromMailLink } from './helpers/mail-token';
 
 /**
  * Run 85 T6 — tester probes on the REAL app that the dev specs (run85-*.int-spec.ts) do not cover.
@@ -151,7 +152,7 @@ describe('run 85 T6 tester probes (real app, http)', () => {
     await full.app.get(AuthenticationService).forgotPassword(email);
     await flushMail();
     const link = full.outbox.filter((m) => m.to === email).at(-1)!;
-    return new URL(link.text.match(/https?:\/\/\S+/)![0]).searchParams.get('token')!;
+    return tokenFromMailLink(link.text);
   };
   const trustKey = (sub: string) => `dc:{u:${sha256(sub)}}`;
   const zscoreSpy = () => jest.spyOn(full.app.get(RedisService).client, 'zscore');

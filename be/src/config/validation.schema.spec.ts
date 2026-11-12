@@ -325,6 +325,7 @@ describe('KEY_PROVIDER / Vault Transit env (run 53, V13)', () => {
     expect(cfg).toEqual({
       provider: 'vault',
       localDir: undefined,
+      prepublishSec: 3600, // run 86 (DEBT-393): KEY_PREPUBLISH_SEC default
       vault: {
         addr: 'https://vault.internal:8200',
         tokenFile: '/run/vault/token',
@@ -507,6 +508,29 @@ describe('AUDIT_RETENTION_DAYS (run 71, DEBT-344)', () => {
       }
       expect(msg).toMatch(/AUDIT_RETENTION_DAYS/);
       expect(msg).not.toContain('canary-csrf-71');
+    },
+  );
+});
+
+describe('KEY_PREPUBLISH_SEC (run 86, DEBT-393, D86.11)', () => {
+  const sec = (v?: string) =>
+    validateEnv(v === undefined ? BASE : { ...BASE, KEY_PREPUBLISH_SEC: v }).KEY_PREPUBLISH_SEC;
+
+  it('unset or empty ⇒ 3600; bounds 0 and 86400 accepted; reaches config.keys.prepublishSec', () => {
+    expect(sec()).toBe(3600);
+    expect(sec('')).toBe(3600);
+    expect(sec('0')).toBe(0);
+    expect(sec('86400')).toBe(86400);
+    expect(
+      buildConfig(validateEnv({ ...BASE, KEY_PREPUBLISH_SEC: '600' })).keys.prepublishSec,
+    ).toBe(600);
+    expect(buildConfig(validateEnv(BASE)).keys.prepublishSec).toBe(3600);
+  });
+
+  it.each(['-1', '86401', '1.5', 'abc', '1e3', ' 60', '0x10'])(
+    '%j ⇒ boot fails naming the variable',
+    (v) => {
+      expect(() => validateEnv({ ...BASE, KEY_PREPUBLISH_SEC: v })).toThrow(/KEY_PREPUBLISH_SEC/);
     },
   );
 });

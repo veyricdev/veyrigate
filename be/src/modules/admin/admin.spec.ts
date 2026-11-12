@@ -7,7 +7,7 @@ import { InvalidClientConfigError, validateCorsOrigin } from '../clients/client.
 import { DuplicateError } from '../identity/identity.errors';
 import { AdminAuthError } from '../identity/tenant-context/admin-auth.errors';
 import { AdminTokenGuard } from '../identity/tenant-context/tenant-context';
-import type { KeyMetadata, RotationMode } from '../keys/key-provider';
+import { RotationPendingError, type KeyMetadata, type RotationMode } from '../keys/key-provider';
 import { AuditAction } from '../security/audit/audit-action.enum';
 import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
@@ -544,12 +544,18 @@ describe('admin OpenAPI response schemas (DEBT-290/294)', () => {
       alg: 'RS256',
       status: 'retiring',
       createdAt: '2026-01-01T00:00:00.000Z',
+      activatesAt: '2026-01-01T00:00:00.000Z', // run 86 (DEBT-393, D86.11)
       retireAt: '2026-01-01T00:02:00.000Z',
     } as const;
     const rotation = {
       // Key material on the provider side must never reach the view (controller allowlist).
       list: async () => [{ ...meta, n: 'n', e: 'AQAB', d: 'd', pem: 'PEM', path: '/k' }],
-      rotate: async () => ({ newKid: 'k2', oldKid: 'k1', mode: 'normal' as const }),
+      rotate: async () => ({
+        newKid: 'k2',
+        oldKid: 'k1',
+        mode: 'normal' as const,
+        activatesAt: '2026-01-01T01:00:00.000Z',
+      }),
     };
     const ctl = new AdminKeysController(rotation as never);
     const actor = { roles: ['super_admin'] } as never;
@@ -560,17 +566,19 @@ describe('admin OpenAPI response schemas (DEBT-290/294)', () => {
     expect(keys('AdminKeyViewDto')).toEqual(Object.keys(meta).sort());
     const rotated = await ctl.rotate({} as never, actor, { mode: 'normal' }, { headers: {} });
     expect(Object.keys(rotated).sort()).toEqual(keys('RotateKeyResultViewDto'));
-    expect(keys('RotateKeyResultViewDto')).toEqual(['mode', 'newKid', 'oldKid']);
+    expect(keys('RotateKeyResultViewDto')).toEqual(['activatesAt', 'mode', 'newKid', 'oldKid']);
 
     const k = schema('AdminKeyViewDto') as Schema & { required?: string[] };
     const kp = k.properties as Record<string, Schema & { enum?: string[] }>;
     expect([...(k.required ?? [])].sort()).toEqual(Object.keys(meta).sort());
     expect(kp.kid).toMatchObject({ type: 'string' });
     expect(kp.alg.enum).toEqual(['RS256' satisfies KeyMetadata['alg']]);
-    const statuses: KeyMetadata['status'][] = ['active', 'retiring'];
+    const statuses: KeyMetadata['status'][] = ['pending', 'active', 'retiring'];
     expect(kp.status.enum).toEqual(statuses);
     expect(kp.createdAt).toMatchObject({ type: 'string', format: 'date-time' });
     expect(kp.createdAt.nullable).toBeUndefined();
+    expect(kp.activatesAt).toMatchObject({ type: 'string', format: 'date-time' });
+    expect(kp.activatesAt.nullable).toBeUndefined();
     expect(kp.retireAt).toMatchObject({ type: 'string', format: 'date-time', nullable: true });
     expect(schema('KeyListViewDto').properties!.items).toMatchObject({
       type: 'array',
@@ -583,7 +591,8 @@ describe('admin OpenAPI response schemas (DEBT-290/294)', () => {
 
     const r = schema('RotateKeyResultViewDto') as Schema & { required?: string[] };
     const rp = r.properties as Record<string, Schema & { enum?: string[] }>;
-    expect([...(r.required ?? [])].sort()).toEqual(['mode', 'newKid', 'oldKid']);
+    expect([...(r.required ?? [])].sort()).toEqual(['activatesAt', 'mode', 'newKid', 'oldKid']);
+    expect(rp.activatesAt).toMatchObject({ type: 'string', format: 'date-time' });
     expect(rp.newKid).toMatchObject({ type: 'string' });
     expect(rp.newKid.nullable).toBeUndefined();
     expect(rp.oldKid).toMatchObject({ type: 'string', nullable: true });
@@ -593,5 +602,35 @@ describe('admin OpenAPI response schemas (DEBT-290/294)', () => {
     expect(ref('/admin/keys/rotate', 'post', '200')).toBe(
       '#/components/schemas/RotateKeyResultViewDto',
     );
+    // DEBT-393 (D86.8): the 409 of a normal rotation while a key is pending is documented.
+    const rotate409 = (
+      doc.paths['/admin/keys/rotate'] as Record<
+        string,
+        { responses: Record<string, { description?: string }> }
+      >
+    ).post.responses['409'];
+    expect(rotate409?.description).toContain('rotation_pending');
+  });
+
+  it('keys: rotate while a key is pending => 409 conflict, one fixed sentence (D86.8)', async () => {
+    const rotation = {
+      rotate: async () => {
+        throw new RotationPendingError('k2', '2026-01-01T01:00:00.000Z');
+      },
+    };
+    const ctl = new AdminKeysController(rotation as never);
+    const err = await ctl
+      .rotate({} as never, { roles: ['super_admin'] } as never, { mode: 'normal' }, {
+        headers: {},
+      } as never)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AdminAuthError);
+    expect((err as AdminAuthError).status).toBe(409);
+    expect((err as AdminAuthError).body).toEqual({
+      error: 'conflict',
+      error_description:
+        'A newer signing key is already published and does not sign yet. Wait until it activates, or use an emergency rotation.',
+    });
+    expect(JSON.stringify((err as AdminAuthError).body)).not.toMatch(/k2|2026/);
   });
 });

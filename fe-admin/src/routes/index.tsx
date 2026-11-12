@@ -141,11 +141,14 @@ function SigningKeysCard() {
     body = <BlockError text={errorText(query.error, "The signing keys could not be loaded.")} onRetry={() => void query.refetch()} />;
   else {
     const active = query.data.items.find((k) => k.status === "active");
+    const pending = query.data.items.filter((k) => k.status === "pending").length;
     const retiring = query.data.items.filter((k) => k.status === "retiring").length;
     body = (
       <dl className="space-y-1 text-sm">
         <dt className="text-muted-foreground">Active key</dt>
         <dd className="font-mono break-all">{active?.kid ?? "None"}</dd>
+        <dt className="text-muted-foreground">Pending keys</dt>
+        <dd>{pending}</dd>
         <dt className="text-muted-foreground">Retiring keys</dt>
         <dd>{retiring}</dd>
       </dl>

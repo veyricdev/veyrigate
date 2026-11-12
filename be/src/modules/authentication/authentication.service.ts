@@ -451,11 +451,13 @@ export class AuthenticationService {
       expiresAt: new Date(Date.now() + ttlMs),
       usedAt: null,
     });
+    // DEBT-577 (D86.3): the token rides in the fragment, which the browser never sends, so it never
+    // reaches a request line, access log or Referer. `token-fragment.js` moves it into the form.
     const link = new URL(path, this.issuer);
-    link.searchParams.set('token', token);
+    link.hash = `token=${token}`;
     const message = verify
-      ? verifyEmailMessage(email, link.href, ttlMs / 60000)
-      : resetPasswordMessage(email, link.href, ttlMs / 60000);
+      ? verifyEmailMessage(email, link.href, ttlMs / 60000, token)
+      : resetPasswordMessage(email, link.href, ttlMs / 60000, token);
     void this.mailer
       .send(message)
       .catch(() => this.logger.error('Authentication email delivery failed'));

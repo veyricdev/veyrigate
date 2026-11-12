@@ -14,6 +14,7 @@ import {
   UseFilters,
   UseGuards,
 } from '@nestjs/common';
+import { Transform } from 'class-transformer';
 import { IsEmail, IsOptional, IsString, Length } from 'class-validator';
 import { ConfigService } from '@nestjs/config';
 import { buildCsp, safeCspOrigin } from '../../common/http/csp';
@@ -36,7 +37,13 @@ import {
   FEDERATION_PROVIDERS,
   type FederationProviders,
 } from '../federation/providers';
-import { CsrfGuard, CsrfService, csrfCookieName, formCsrfIdentity } from './csrf.service';
+import {
+  CsrfGuard,
+  CsrfService,
+  LogoutCsrfGuard,
+  csrfCookieName,
+  formCsrfIdentity,
+} from './csrf.service';
 import { HtmlExceptionFilter } from './html-exception.filter';
 import { requestIdFromReturnTo, safeReturnTo } from './return-to';
 
@@ -59,7 +66,11 @@ class EmailDto extends FormDto {
   @IsEmail() @IsDeliverableEmail() email!: string;
 }
 class TokenDto extends FormDto {
-  @IsString() token!: string;
+  // A code pasted by hand may carry spaces (DEBT-577, D86.1). No `@Matches`: a wrong code takes the
+  // existing invalid-link path, no extra oracle.
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  token!: string;
 }
 class ResetDto extends TokenDto {
   @IsString() @Length(8, 128) password!: string;
@@ -77,6 +88,10 @@ class LogoutDto extends FormDto {
   // @Length(0, 4096) only keeps the request body sane (pino truncates query, not body).
   @IsOptional() @IsString() @Length(0, 4096) state?: string;
   @IsOptional() @IsString() @Length(0, 256) client_id?: string;
+  // RP-Initiated Logout 1.0 §2 parameters an RP may POST (DEBT-572, D86.7): accepted so the request
+  // does not 400, then ignored (never reflected, never logged).
+  @IsOptional() @IsString() @Length(0, 4096) logout_hint?: string;
+  @IsOptional() @IsString() @Length(0, 256) ui_locales?: string;
 }
 
 type UiRequest = HttpRequest;
@@ -218,19 +233,13 @@ export class UiController {
   @Get('/forgot') forgot(@Req() req: UiRequest, @Res() reply: UiReply) {
     return this.form(req, reply, 'forgot.eta', { title: 'Reset password' });
   }
-  @Get('/verify-email') verifyForm(
-    @Req() req: UiRequest,
-    @Res() reply: UiReply,
-    @Query('token') token = '',
-  ) {
-    return this.form(req, reply, 'verify.eta', { title: 'Verify email', token });
+  // DEBT-577 (D86.3): the token rides in the link's fragment; GET never reads, renders or redirects
+  // a `?token=` (a query token already sits in proxy logs). `token-fragment.js` fills the field.
+  @Get('/verify-email') verifyForm(@Req() req: UiRequest, @Res() reply: UiReply) {
+    return this.form(req, reply, 'verify.eta', { title: 'Verify email' });
   }
-  @Get('/reset') resetForm(
-    @Req() req: UiRequest,
-    @Res() reply: UiReply,
-    @Query('token') token = '',
-  ) {
-    return this.form(req, reply, 'reset.eta', { title: 'Choose a new password', token });
+  @Get('/reset') resetForm(@Req() req: UiRequest, @Res() reply: UiReply) {
+    return this.form(req, reply, 'reset.eta', { title: 'Choose a new password' });
   }
   @Get('/logout') async logoutForm(
     @Req() req: UiRequest,
@@ -240,9 +249,23 @@ export class UiController {
     @Query('state') state?: string,
     @Query('client_id') clientId?: string,
   ) {
-    // GET NEVER destroys state (spec §9.8, anti-CSRF): render the confirmation form only. The raw
-    // RP-initiated params ride along as hidden fields; the POST re-validates them (never trusted).
-    // The page carries a JWT hint (user PII) and a CSRF token, so it must never be cached.
+    // GET NEVER destroys state (spec §9.8, anti-CSRF): render the confirmation form only.
+    return this.renderLogoutConfirm(req, reply, {
+      idTokenHint,
+      postLogoutRedirectUri,
+      state,
+      clientId,
+    });
+  }
+
+  /**
+   * The logout confirmation (GET `/logout`, and POST `/logout` without a `_csrf` key, DEBT-572
+   * D86.4). The raw RP-initiated params ride along as hidden fields; the POST re-validates them
+   * (never trusted). No session read, no revoke, no audit. The page carries a JWT hint (user PII)
+   * and a CSRF token, so it must never be cached.
+   */
+  private async renderLogoutConfirm(req: UiRequest, reply: UiReply, params: LogoutParams) {
+    const { idTokenHint, postLogoutRedirectUri, state, clientId } = params;
     reply.header('Cache-Control', 'no-store');
 
     // Do NOT reflect a `post_logout_redirect_uri` that would not survive validation into the form
@@ -401,13 +424,21 @@ export class UiController {
     }
   }
   @Post('/logout')
-  @UseGuards(CsrfGuard)
+  @UseGuards(LogoutCsrfGuard)
   async logout(
+    // Typed `LogoutDto` (not a union: that would emit `Object` metadata and skip validation); a
+    // POST with no body reaches the handler as `undefined`.
     @Body() body: LogoutDto,
     @Req() req: UiRequest,
     @Res() reply: UiReply,
     @Query('scope') scope?: string,
   ) {
+    // No `_csrf` key (an RP POSTing its logout request, DEBT-572 D86.4): the same confirmation as
+    // GET, no session work. `LogoutCsrfGuard` already verified any `_csrf` that IS present.
+    if (body?._csrf === undefined) {
+      reply.status(HttpStatus.OK); // same page and status as GET, not Nest's POST 201
+      return this.renderLogoutConfirm(req, reply, this.logoutParams(body ?? {}));
+    }
     const id = this.sessionCookie.read(req);
     const global = scope === 'all';
     const session = id ? await this.sessions.get(id) : null;

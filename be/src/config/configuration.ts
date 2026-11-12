@@ -70,6 +70,8 @@ export interface KeysConfig {
   localDir: string | undefined;
   /** Set iff provider = vault (validated). */
   vault: VaultConfig | undefined;
+  /** KEY_PREPUBLISH_SEC (run 86, DEBT-393): delay before a normally rotated key signs. */
+  prepublishSec: number;
 }
 
 /** Federation credentials (B5.1): optional; a provider is enabled only when both are set. */
@@ -181,6 +183,7 @@ export function buildConfig(env: Env): Config {
               timeoutMs: env.VAULT_TIMEOUT_MS,
             }
           : undefined,
+      prepublishSec: env.KEY_PREPUBLISH_SEC,
     },
     federation: {
       googleClientId: env.GOOGLE_CLIENT_ID,

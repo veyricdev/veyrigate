@@ -1,8 +1,8 @@
 import type { MailMessage } from './mailer';
 
 /**
- * Email templates (B1.10). Deliberately minimal: only the action link and
- * its expiry. No email address, name, or bare token in the body.
+ * Email templates (B1.10). Deliberately minimal: only the action link, the code for a link wrapper
+ * that drops the fragment (DEBT-577, D86.3) and the expiry. No email address or name in the body.
  */
 
 function escapeHtml(value: string): string {
@@ -20,14 +20,18 @@ function render(
   intro: string,
   link: string,
   expiresInMinutes: number,
+  code: string,
 ): MailMessage {
   const outro = `This link expires in ${expiresInMinutes} minutes. If you did not request this, ignore this email.`;
+  const codeLine = 'If the link does not open the form, enter this code on the page:';
   const safeLink = escapeHtml(link);
   return {
     to,
     subject,
-    text: `${intro}\n\n${link}\n\n${outro}\n`,
-    html: `<p>${intro}</p><p><a href="${safeLink}">${safeLink}</a></p><p>${outro}</p>`,
+    text: `${intro}\n\n${link}\n\n${codeLine} ${code}\n\n${outro}\n`,
+    html:
+      `<p>${intro}</p><p><a href="${safeLink}">${safeLink}</a></p>` +
+      `<p>${codeLine} <code>${escapeHtml(code)}</code></p><p>${outro}</p>`,
   };
 }
 
@@ -35,16 +39,25 @@ export function verifyEmailMessage(
   to: string,
   link: string,
   expiresInMinutes: number,
+  code: string,
 ): MailMessage {
-  return render(to, 'Verify your email', 'Confirm your email address:', link, expiresInMinutes);
+  return render(
+    to,
+    'Verify your email',
+    'Confirm your email address:',
+    link,
+    expiresInMinutes,
+    code,
+  );
 }
 
 export function resetPasswordMessage(
   to: string,
   link: string,
   expiresInMinutes: number,
+  code: string,
 ): MailMessage {
-  return render(to, 'Reset your password', 'Reset your password:', link, expiresInMinutes);
+  return render(to, 'Reset your password', 'Reset your password:', link, expiresInMinutes, code);
 }
 
 /**

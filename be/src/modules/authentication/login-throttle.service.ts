@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { CookieSerializeOptions } from '@fastify/cookie';
 import { isIP } from 'node:net';
+import ipaddr from 'ipaddr.js';
 import { generateToken, sha256 } from '../../common/crypto/crypto.util';
 import type { SessionConfig } from '../../config/configuration';
 import { RedisService } from '../../database/redis/redis.service';
@@ -44,35 +45,28 @@ interface CookieReply {
 }
 
 /**
- * The network of a client address (D85.2): IPv4 as is, IPv4-mapped IPv6 as its IPv4, IPv6 as its
- * /64 (first four hextets of the expanded form). Empty or unparsable => `unknown` (one shared bucket).
+ * The network of a client address (D85.2): IPv4 as is, IPv4-mapped IPv6 (any spelling) as its IPv4,
+ * IPv6 as its /64 = first four zero-padded hextets (D86.14: that exact shape keeps the Redis bucket
+ * keys byte-identical across the ipaddr.js switch, unlike `toNormalizedString()`). Node's `isIP` gates first because
+ * `ipaddr.parse` also accepts `127.1`/hex/octal IPv4, which `req.ip` never carries. Empty or
+ * unparsable => `unknown` (one shared bucket).
  */
 export function networkOf(ip: string | undefined): string {
   const raw = (ip ?? '').trim();
-  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(raw);
-  if (mapped && isIP(mapped[1]) === 4) return mapped[1];
-  const kind = isIP(raw);
-  if (kind === 4) return raw;
-  if (kind !== 6) return 'unknown';
-  const v6 = raw.toLowerCase().split('%')[0];
-  let groups = v6.split(':');
-  if (v6.includes('::')) {
-    const [l, r] = v6.split('::');
-    const left = l ? l.split(':') : [];
-    const right = r ? r.split(':') : [];
-    groups = [...left, ...Array<string>(8 - left.length - right.length).fill('0'), ...right];
+  if (isIP(raw) === 0) return 'unknown';
+  let addr: ipaddr.IPv4 | ipaddr.IPv6;
+  try {
+    addr = ipaddr.process(raw.split('%')[0]);
+  } catch {
+    return 'unknown'; // Node accepted it, ipaddr.js did not: same bucket as any unparsable input
   }
-  groups = groups.map((g) => g.padStart(4, '0'));
-  // `::ffff:cb00:7107` is the hex spelling of the IPv4-mapped `::ffff:203.0.113.7`.
-  if (
-    groups.length === 8 &&
-    groups.slice(0, 5).every((g) => g === '0000') &&
-    groups[5] === 'ffff'
-  ) {
-    const n = parseInt(groups[6] + groups[7], 16);
-    return [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
-  }
-  return groups.slice(0, 4).join(':');
+  if (addr.kind() === 'ipv4') return addr.toString();
+  // Same output as `toFixedLengthString()` cut to four hextets (that method is missing from the
+  // package's typings).
+  return (addr as ipaddr.IPv6).parts
+    .slice(0, 4)
+    .map((part) => part.toString(16).padStart(4, '0'))
+    .join(':');
 }
 
 /**

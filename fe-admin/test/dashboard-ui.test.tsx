@@ -94,8 +94,11 @@ beforeEach(() => {
   keys.mockResolvedValue(
     ok({
       items: [
-        { kid: "kid-active-1", alg: "RS256", status: "active", createdAt: "2026-10-23T01:00:00.000Z", retireAt: null },
-        { kid: "kid-old-1", alg: "RS256", status: "retiring", createdAt: "2026-10-22T01:00:00.000Z", retireAt: "2026-10-23T02:00:00.000Z" },
+        { kid: "kid-active-1", alg: "RS256", status: "active", createdAt: "2026-10-23T01:00:00.000Z", activatesAt: "2026-10-23T01:00:00.000Z", retireAt: null },
+        { kid: "kid-old-1", alg: "RS256", status: "retiring", createdAt: "2026-10-22T01:00:00.000Z", activatesAt: "2026-10-22T01:00:00.000Z", retireAt: "2026-10-23T02:00:00.000Z" },
+        // two pending keys only after a Vault race (D86.10): distinct counts per line
+        { kid: "kid-next-1", alg: "RS256", status: "pending", createdAt: "2026-10-23T01:10:00.000Z", activatesAt: "2026-10-23T02:10:00.000Z", retireAt: null },
+        { kid: "kid-next-2", alg: "RS256", status: "pending", createdAt: "2026-10-23T01:11:00.000Z", activatesAt: "2026-10-23T02:11:00.000Z", retireAt: null },
       ],
       nextCursor: null,
     }) as never,
@@ -171,12 +174,18 @@ describe("counts", () => {
 });
 
 describe("signing keys card", () => {
-  it("super_admin: active kid as text, retiring count, link to /keys", async () => {
+  it("super_admin: active kid as text, pending and retiring counts (DEBT-393), link to /keys", async () => {
     renderDashboard();
     const k = await region("Signing keys");
     await waitFor(() => expect(within(k).getByText("kid-active-1")).toBeTruthy());
-    expect(within(k).getByText("1")).toBeTruthy();
+    const pairs = [...k.querySelectorAll("dt")].map((dt) => [dt.textContent, dt.nextElementSibling?.textContent]);
+    expect(pairs).toEqual([
+      ["Active key", "kid-active-1"],
+      ["Pending keys", "2"],
+      ["Retiring keys", "1"],
+    ]);
     expect(within(k).queryByText("kid-old-1")).toBeNull();
+    expect(within(k).queryByText("kid-next-1")).toBeNull();
     expect(within(k).getByRole("link", { name: "Open signing keys" }).getAttribute("href")).toBe("/keys");
   });
 

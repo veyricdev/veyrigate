@@ -81,11 +81,12 @@ test("fe-admin users: filter by email, lock blocks refresh + sign-in, unlock, re
     await page.reload();
     const families = page.getByRole("region", { name: "Refresh token families" });
     const revoke = families.getByRole("button", { name: "Revoke family of fe-admin" });
-    // Families are sorted by id (revoked ones of older runs too): page until the active one.
+    // Families are sorted by id (revoked ones of older runs too): page until the active one. The
+    // bound grows with the persisted E2E DB (493 families = 25 pages at run 86; DEBT-608).
     for (let i = 0; ; i++) {
       await expect(families.getByRole("table").or(families.getByText(/^No (more families|refresh token family)\.$/))).toBeVisible();
       if ((await revoke.count()) > 0) break;
-      expect(i < 20, "an active family within 20 pages").toBe(true);
+      expect(i < 100, "an active family within 100 pages").toBe(true);
       await Promise.all([
         page.waitForResponse((r) => r.url().includes("/_serverFn/")),
         families.getByRole("button", { name: "Next page" }).click(),

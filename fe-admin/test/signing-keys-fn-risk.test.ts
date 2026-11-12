@@ -60,6 +60,7 @@ const KEY = {
   alg: "RS256",
   status: "active",
   createdAt: "2026-10-23T01:02:03.004Z",
+  activatesAt: "2026-10-23T01:02:03.004Z",
   retireAt: null,
 };
 const MATERIAL = {

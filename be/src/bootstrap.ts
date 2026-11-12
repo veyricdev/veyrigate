@@ -30,6 +30,8 @@ export async function configureApp(app: NestFastifyApplication): Promise<void> {
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
+        // DEBT-583 (D86.15): no page uses <base>; must match `csp.ts` (byte-identity tests).
+        baseUri: ["'none'"],
         scriptSrc: ["'self'"],
         styleSrc: ["'self'"],
         formAction: ["'self'"],

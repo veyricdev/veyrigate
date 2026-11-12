@@ -11,30 +11,51 @@ import { join } from 'node:path';
 import type { KeyObject } from 'node:crypto';
 import type { JWTPayload } from 'jose';
 import { encodeCompactJws } from './jws';
-import type {
-  KeyMetadata,
-  KeyProvider,
-  PublicJwk,
-  RotationMode,
-  RotationResult,
+import {
+  RotationPendingError,
+  type KeyMetadata,
+  type KeyProvider,
+  type KeyStatus,
+  type PublicJwk,
+  type RotationMode,
+  type RotationResult,
 } from './key-provider';
 
+/**
+ * One key in `keys.json`, in creation order (D86.9). The status is derived from the order and the
+ * time, never stored; a legacy `status` field (before run 86) is ignored on read and not written.
+ */
 interface KeyEntry {
   kid: string;
-  status: 'active' | 'retiring';
   publicJwk: PublicJwk;
   createdAt: string;
-  /** For retiring keys: when the key leaves JWKS. */
+  /** When the key signs from. Missing on a legacy entry => `createdAt`. */
+  activatesAt?: string;
+  /** Set when a newer key took over: the key leaves JWKS then. Missing => gone once superseded. */
   retireAt?: string;
+}
+
+interface LiveEntry {
+  entry: KeyEntry;
+  status: KeyStatus;
+  activatesAt: number;
+}
+
+export interface LocalKeyProviderOptions {
+  /** KEY_PREPUBLISH_SEC (D86.9); default 0 = the new key signs at once. */
+  prepublishSec?: number;
+  now?: () => number;
 }
 
 const STATE_FILE = 'keys.json';
 
 /**
  * DEV-ONLY key provider (plan D9). RSA-2048 private keys live as PKCS8 PEM files
- * in `KEY_LOCAL_DIR` (git-ignored, mode 0600); state (kid/status/public JWK) in
- * `keys.json`. Private keys never go to MongoDB (INV-19). A retiring key's
- * private file is deleted at rotation time — only its public JWK is kept.
+ * in `KEY_LOCAL_DIR` (git-ignored, mode 0600); state (kid/times/public JWK) in
+ * `keys.json`. Private keys never go to MongoDB (INV-19). A key's private file is
+ * deleted by the first rotation after it stopped signing — only its public JWK is
+ * kept. Pre-publish (run 86, D86.9): a normal rotation's key is pending for
+ * `prepublishSec`, the old key keeps signing (and its PEM) until then.
  *
  * Concurrency (DEBT-145): only `init` and `rotate` write `keys.json`; every `rotate` runs inside an
  * in-process promise-chain mutex, and the read paths (`getPublicKeys`, `listKeys`, `getSigningKey`)
@@ -47,14 +68,25 @@ export class LocalKeyProvider implements KeyProvider {
   /** Tail of the rotate mutex; a failed rotate must not block the next one. */
   private chain: Promise<unknown> = Promise.resolve();
 
-  constructor(private readonly dir: string) {}
+  readonly prepublishSec: number;
+  private readonly now: () => number;
 
-  /** Create the directory and a first active key if none exists. */
+  constructor(
+    private readonly dir: string,
+    opts: LocalKeyProviderOptions = {},
+  ) {
+    this.prepublishSec = opts.prepublishSec ?? 0;
+    // Read at every call (not bound at construction), so a test spying on `Date.now` is honoured.
+    this.now = opts.now ?? (() => Date.now());
+  }
+
+  /** Create the directory and a first key (signs at once) if no key is live. */
   async init(): Promise<void> {
     await mkdir(this.dir, { recursive: true });
     const entries = await this.readState();
-    if (!entries.some((e) => e.status === 'active')) {
-      entries.push(await this.createKey());
+    if (LocalKeyProvider.live(entries, this.now()).length === 0) {
+      const now = this.now();
+      entries.push(await this.createKey(now, now));
       await this.writeState(entries);
     }
     await this.warnOrphanPems(entries);
@@ -112,7 +144,7 @@ export class LocalKeyProvider implements KeyProvider {
   }
 
   private async loadSigningKey(): Promise<{ kid: string; privateKey: KeyObject }> {
-    const active = (await this.readState()).find((e) => e.status === 'active');
+    const active = (await this.liveEntries()).find((e) => e.status === 'active')?.entry;
     if (!active) {
       throw new Error('No active signing key');
     }
@@ -122,25 +154,44 @@ export class LocalKeyProvider implements KeyProvider {
 
   /** Read-only (DEBT-145): expired retiring keys are filtered here and pruned by `rotate`. */
   async getPublicKeys(): Promise<PublicJwk[]> {
-    return (await this.liveEntries()).map((e) => e.publicJwk);
+    return (await this.liveEntries()).map((e) => e.entry.publicJwk);
   }
 
   async listKeys(): Promise<KeyMetadata[]> {
-    return (await this.liveEntries()).map((e) => ({
-      kid: e.kid,
-      alg: e.publicJwk.alg,
-      status: e.status,
-      createdAt: e.createdAt,
-      retireAt: e.retireAt ?? null,
+    return (await this.liveEntries()).map(({ entry, status, activatesAt }) => ({
+      kid: entry.kid,
+      alg: entry.publicJwk.alg,
+      status,
+      createdAt: entry.createdAt,
+      activatesAt: new Date(activatesAt).toISOString(),
+      retireAt: status === 'retiring' ? entry.retireAt! : null,
     }));
   }
 
-  private async liveEntries(): Promise<KeyEntry[]> {
-    return LocalKeyProvider.live(await this.readState(), Date.now());
+  private async liveEntries(): Promise<LiveEntry[]> {
+    return LocalKeyProvider.live(await this.readState(), this.now());
   }
 
-  private static live(entries: KeyEntry[], now: number): KeyEntry[] {
-    return entries.filter((e) => e.status === 'active' || Date.parse(e.retireAt ?? '') > now);
+  /**
+   * Keys in JWKS at `now`, in creation order (D86.9): active = the last key whose `activatesAt` has
+   * come (none yet => the first key); later keys are pending; earlier keys are retiring while
+   * `retireAt` is in the future, otherwise gone. A key that activates at its creation (init,
+   * emergency, `prepublishSec` 0, legacy) counts as activated whatever the clock says, like the
+   * Vault floor: a clock stepping back must never revive the previous key, whose PEM may be gone.
+   */
+  private static live(entries: KeyEntry[], now: number): LiveEntry[] {
+    const activatesAt = (e: KeyEntry) => Date.parse(e.activatesAt ?? e.createdAt);
+    let active = 0;
+    entries.forEach((e, i) => {
+      if (activatesAt(e) <= now || activatesAt(e) === Date.parse(e.createdAt)) active = i;
+    });
+    const out: LiveEntry[] = [];
+    entries.forEach((entry, i) => {
+      const status: KeyStatus = i > active ? 'pending' : i === active ? 'active' : 'retiring';
+      if (status === 'retiring' && !(Date.parse(entry.retireAt ?? '') > now)) return;
+      out.push({ entry, status, activatesAt: activatesAt(entry) });
+    });
+    return out;
   }
 
   /** Serialised (DEBT-145): every rotation sees the state the previous one wrote. */
@@ -151,9 +202,22 @@ export class LocalKeyProvider implements KeyProvider {
   }
 
   private async rotateExclusive(mode: RotationMode, retainSec: number): Promise<RotationResult> {
+    const now = this.now();
     const entries = await this.readState();
-    const old = entries.find((e) => e.status === 'active');
-    const fresh = await this.createKey();
+    const live = LocalKeyProvider.live(entries, now);
+    const old = live.find((e) => e.status === 'active')?.entry;
+    // D86.9: checked inside the mutex, so two concurrent normal rotations give one 200 and one 409.
+    const pending = live.find((e) => e.status === 'pending');
+    if (mode === 'normal' && pending) {
+      throw new RotationPendingError(
+        pending.entry.kid,
+        new Date(pending.activatesAt).toISOString(),
+      );
+    }
+    const fresh = await this.createKey(
+      now,
+      mode === 'emergency' ? now : now + this.prepublishSec * 1000,
+    );
 
     // DEBT-007: PERSIST the new state (atomically) BEFORE deleting any old private PEM. If the
     // write fails, `rotate` rejects but the OLD key is still active in `keys.json` AND its PEM is
@@ -164,14 +228,19 @@ export class LocalKeyProvider implements KeyProvider {
     // just-created PEM before the state write (re-creating the very bug this fixes).
     let next: KeyEntry[];
     if (mode === 'emergency') {
-      next = [fresh]; // drop the old key and every retiring key (spec §6.4)
+      next = [fresh]; // drop the old key, every retiring and every pending key (spec §6.4, D85.7)
     } else {
-      const retireAt = new Date(Date.now() + retainSec * 1000).toISOString();
-      // Prune expired retiring keys here, inside the mutex (their PEMs are already gone).
+      // The old key signs until the new one activates, then stays verify-only for `retainSec`.
+      const retireAt = new Date(Date.parse(fresh.activatesAt!) + retainSec * 1000).toISOString();
+      // Prune expired retiring keys here, inside the mutex. Written without `status` (D86.9).
       next = [
-        ...LocalKeyProvider.live(entries, Date.now()).map((e) =>
-          e === old ? { ...e, status: 'retiring' as const, retireAt } : e,
-        ),
+        ...live.map(({ entry: { kid, publicJwk, createdAt, retireAt: r }, activatesAt }) => ({
+          kid,
+          publicJwk,
+          createdAt,
+          activatesAt: new Date(activatesAt).toISOString(),
+          ...(kid === old?.kid ? { retireAt } : r ? { retireAt: r } : {}),
+        })),
         fresh,
       ];
     }
@@ -183,11 +252,20 @@ export class LocalKeyProvider implements KeyProvider {
     // normal rotation it is a WARN. Only the kid is logged, never the PEM path contents.
     if (mode === 'emergency') {
       await Promise.all(entries.map((e) => this.removePem(e.kid, 'emergency')));
-    } else if (old) {
-      await this.removePem(old.kid, 'normal'); // verify-only from now on
+    } else {
+      // D86.9: keep the PEM of every key that still signs or will sign (the old active key keeps
+      // signing until `fresh.activatesAt`); drop the rest (retiring, pruned).
+      const signing = new Set(
+        LocalKeyProvider.live(next, now)
+          .filter((e) => e.status !== 'retiring')
+          .map((e) => e.entry.kid),
+      );
+      await Promise.all(
+        entries.filter((e) => !signing.has(e.kid)).map((e) => this.removePem(e.kid, 'normal')),
+      );
     }
 
-    return { newKid: fresh.kid, oldKid: old?.kid ?? null, mode };
+    return { newKid: fresh.kid, oldKid: old?.kid ?? null, mode, activatesAt: fresh.activatesAt! };
   }
 
   /** Delete a private PEM best-effort; log (never throw) on failure so rotation stays successful. */
@@ -204,7 +282,7 @@ export class LocalKeyProvider implements KeyProvider {
     }
   }
 
-  private async createKey(): Promise<KeyEntry> {
+  private async createKey(createdAt: number, activatesAt: number): Promise<KeyEntry> {
     const kid = randomUUID();
     const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
     const pem = privateKey.export({ type: 'pkcs8', format: 'pem' }) as string;
@@ -213,9 +291,9 @@ export class LocalKeyProvider implements KeyProvider {
     const { n, e } = createPublicKey(privateKey).export({ format: 'jwk' });
     return {
       kid,
-      status: 'active',
       publicJwk: { kty: 'RSA', kid, alg: 'RS256', use: 'sig', n: n as string, e: e as string },
-      createdAt: new Date().toISOString(),
+      createdAt: new Date(createdAt).toISOString(),
+      activatesAt: new Date(activatesAt).toISOString(),
     };
   }
 

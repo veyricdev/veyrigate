@@ -19,6 +19,7 @@ import { RateLimitService } from '../src/modules/security/rate-limit/rate-limit.
 import { SessionService } from '../src/modules/sessions/session.service';
 import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
+import { tokenFromMailLink } from './helpers/mail-token';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -161,7 +162,7 @@ describe('Authentication races on real Mongo (B2.4, C2-C6, C13)', () => {
     await auth.register(email, 'correct password');
     await new Promise((resolve) => setImmediate(resolve));
     const link = messages.find((m) => m.to === email)?.text.match(/https:\/\/\S+/)?.[0];
-    const token = new URL(link!).searchParams.get('token')!;
+    const token = tokenFromMailLink(link!);
     const spy = jest.spyOn(users, 'verifyEmail');
 
     const results = await Promise.allSettled(
@@ -186,7 +187,9 @@ describe('Authentication races on real Mongo (B2.4, C2-C6, C13)', () => {
   it('builds mail links from ISSUER and never from request-controlled hosts', async () => {
     await auth.register('host@example.com', 'correct password');
     await new Promise((resolve) => setImmediate(resolve));
-    expect(messages.at(-1)?.text).toContain('https://issuer.example/verify-email?token=');
+    // DEBT-577 (D86.3): the token rides in the fragment, never in the query.
+    expect(messages.at(-1)?.text).toContain('https://issuer.example/verify-email#token=');
+    expect(messages.at(-1)?.text).not.toMatch(/\?token=/);
     expect(messages.at(-1)?.text).not.toContain('evil.example');
   });
 });

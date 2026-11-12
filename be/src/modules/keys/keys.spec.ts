@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { AuditAction } from '../security/audit/audit-action.enum';
 import type { AuditService } from '../security/audit/audit.service';
 import { encodeCompactJws } from './jws';
-import { KEY_PROVIDER } from './key-provider';
+import { KEY_PROVIDER, RotationPendingError } from './key-provider';
 import { KeyProviderUnavailableError } from '../../common/errors/dependency-unavailable';
 import { KeyRotationService } from './key-rotation.service';
 import { KeysController } from './keys.controller';
@@ -730,7 +730,15 @@ describe('Keys (B1.9, INV-19)', () => {
       const r = await gated.rotate('normal', 900);
       const items = await gated.listKeys();
       for (const item of items) {
-        expect(Object.keys(item).sort()).toEqual(['alg', 'createdAt', 'kid', 'retireAt', 'status']);
+        // Run 86 (DEBT-393, D86.11): `activatesAt` joined the metadata.
+        expect(Object.keys(item).sort()).toEqual([
+          'activatesAt',
+          'alg',
+          'createdAt',
+          'kid',
+          'retireAt',
+          'status',
+        ]);
       }
       const old = items.find((k) => k.kid === r.oldKid)!;
       expect(old.status).toBe('retiring');
@@ -747,6 +755,9 @@ describe('Keys (B1.9, INV-19)', () => {
       const stale = await readFile(stateFile, 'utf8');
       const r = await gated.rotate('normal', 60);
       const fresh = await readFile(stateFile, 'utf8');
+      // Run 86 (D86.9): rotate removes a PEM only once its key no longer signs (with pre-publish, a
+      // rotate later); remove it here so the stale read meets ENOENT whatever that timing is.
+      await rm(join(dir, `${oldKid}.pem`), { force: true });
       // First read sees the pre-rotate state (old PEM already deleted), second sees the new state.
       let reads = 0;
       jest
@@ -789,10 +800,13 @@ describe('Keys (B1.9, INV-19)', () => {
           .spyOn(p as unknown as { listDir: () => Promise<string[]> }, 'listDir')
           .mockRejectedValueOnce(new Error('EACCES'));
         await expect(p.init()).resolves.toBeUndefined();
+        // Run 86 (D86.9): `keys.json` no longer stores `status`; one key, derived active.
         const state = JSON.parse(await readFile(join(fresh, 'keys.json'), 'utf8')) as {
-          status: string;
+          status?: string;
         }[];
-        expect(state.filter((e) => e.status === 'active')).toHaveLength(1);
+        expect(state).toHaveLength(1);
+        expect(state[0].status).toBeUndefined();
+        expect((await p.listKeys()).map((k) => k.status)).toEqual(['active']);
         expect(warn).toHaveBeenCalledTimes(1);
         const msg = String(warn.mock.calls[0][0]);
         expect(msg).toBe('Could not list the key directory to check for orphan private keys');
@@ -814,6 +828,225 @@ describe('Keys (B1.9, INV-19)', () => {
         await rm(fresh, { recursive: true, force: true });
       }
       expect(warn).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('DEBT-393 pre-publish (Local, D86.9/D86.11)', () => {
+    const T0 = Date.parse('2026-11-11T10:00:00.000Z');
+    const PRE = 3600;
+    const RETAIN = 900;
+    const iso = (ms: number) => new Date(ms).toISOString();
+    let clock: number;
+    let pdir: string;
+    let p: LocalKeyProvider;
+    let pSigner: TokenSigner;
+    let pVerifier: TokenVerifier;
+    const make = (d = pdir) => new LocalKeyProvider(d, { prepublishSec: PRE, now: () => clock });
+    const signedKid = async () =>
+      decodeProtectedHeader(await pSigner.sign({}, { audience: AUD, expiresInSec: 60 })).kid;
+    const pems = async () => (await readdir(pdir)).filter((f) => f.endsWith('.pem')).sort();
+
+    beforeEach(async () => {
+      clock = T0;
+      pdir = await mkdtemp(join(tmpdir(), 'vg-keys86-'));
+      p = make();
+      await p.init();
+      pSigner = new TokenSigner(p, config);
+      pVerifier = new TokenVerifier(p, config);
+    });
+    afterEach(async () => {
+      await rm(pdir, { recursive: true, force: true });
+    });
+
+    it('AC2: normal rotate publishes the new key as pending; the old key keeps signing', async () => {
+      const [{ kid: a }] = await p.getPublicKeys();
+      const r = await p.rotate('normal', RETAIN);
+      expect(r).toEqual({
+        newKid: r.newKid,
+        oldKid: a,
+        mode: 'normal',
+        activatesAt: iso(T0 + PRE * 1000),
+      });
+      expect((await p.getPublicKeys()).map((k) => k.kid)).toEqual([a, r.newKid]);
+      expect(await signedKid()).toBe(a);
+      expect(await p.listKeys()).toEqual([
+        {
+          kid: a,
+          alg: 'RS256',
+          status: 'active',
+          createdAt: iso(T0),
+          activatesAt: iso(T0),
+          retireAt: null,
+        },
+        {
+          kid: r.newKid,
+          alg: 'RS256',
+          status: 'pending',
+          createdAt: iso(T0),
+          activatesAt: iso(T0 + PRE * 1000),
+          retireAt: null,
+        },
+      ]);
+    });
+
+    it('AC3: at activatesAt (inclusive) the new key signs; the old one retires activatesAt + retain, then leaves JWKS', async () => {
+      const [{ kid: a }] = await p.getPublicKeys();
+      const r = await p.rotate('normal', RETAIN);
+      const oldToken = await pSigner.sign({}, { audience: AUD, expiresInSec: 600 });
+      const act = T0 + PRE * 1000;
+
+      clock = act - 1;
+      expect(await signedKid()).toBe(a);
+      clock = act;
+      expect(await signedKid()).toBe(r.newKid);
+      const list = await p.listKeys();
+      expect(list.map((k) => [k.kid, k.status, k.retireAt])).toEqual([
+        [a, 'retiring', iso(act + RETAIN * 1000)],
+        [r.newKid, 'active', null],
+      ]);
+      await expect(pVerifier.verify(oldToken, AUD)).resolves.toBeDefined();
+
+      clock = act + RETAIN * 1000;
+      expect((await p.getPublicKeys()).map((k) => k.kid)).toEqual([r.newKid]);
+      await expect(pVerifier.verify(oldToken, AUD)).rejects.toThrow();
+    });
+
+    it('AC4: a normal rotate while a key is pending => RotationPendingError, keys.json and PEMs unchanged', async () => {
+      const r = await p.rotate('normal', RETAIN);
+      const state = join(pdir, 'keys.json');
+      const before = await readFile(state, 'utf8');
+      const pemsBefore = await pems();
+      clock = T0 + PRE * 1000 - 1;
+      const err = await p.rotate('normal', RETAIN).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(RotationPendingError);
+      expect(err).toMatchObject({ pendingKid: r.newKid, activatesAt: r.activatesAt });
+      expect(await readFile(state, 'utf8')).toBe(before);
+      expect(await pems()).toEqual(pemsBefore);
+    });
+
+    it('AC5: two concurrent normal rotates => exactly one succeeds, one RotationPendingError', async () => {
+      const results = await Promise.allSettled([
+        p.rotate('normal', RETAIN),
+        p.rotate('normal', RETAIN),
+      ]);
+      expect(results.filter((x) => x.status === 'fulfilled')).toHaveLength(1);
+      const rejected = results.filter((x): x is PromiseRejectedResult => x.status === 'rejected');
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0].reason).toBeInstanceOf(RotationPendingError);
+      expect(await p.listKeys()).toHaveLength(2);
+    });
+
+    it('AC6: emergency while a key is pending => one active key (activatesAt = createdAt), every old PEM gone', async () => {
+      await p.rotate('normal', RETAIN);
+      clock = T0 + 60_000;
+      const e = await p.rotate('emergency', RETAIN);
+      expect(e.activatesAt).toBe(iso(T0 + 60_000));
+      expect((await p.getPublicKeys()).map((k) => k.kid)).toEqual([e.newKid]);
+      expect(await p.listKeys()).toEqual([
+        expect.objectContaining({
+          kid: e.newKid,
+          status: 'active',
+          createdAt: iso(T0 + 60_000),
+          activatesAt: iso(T0 + 60_000),
+          retireAt: null,
+        }),
+      ]);
+      expect(await pems()).toEqual([`${e.newKid}.pem`]);
+      expect(await signedKid()).toBe(e.newKid);
+    });
+
+    it('AC7: a legacy keys.json (status, no activatesAt) is derived by order and time, never by `status`, and not rewritten on read', async () => {
+      // Build real keys with the old shape: [A retiring (retireAt future), B active].
+      const legacy = await mkdtemp(join(tmpdir(), 'vg-keys86-legacy-'));
+      try {
+        const seed = new LocalKeyProvider(legacy, { now: () => clock });
+        await seed.init();
+        const r = await seed.rotate('normal', RETAIN);
+        const file = join(legacy, 'keys.json');
+        const cur = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>[];
+        const asLegacy = (statuses: string[]) =>
+          JSON.stringify(
+            cur.map(({ activatesAt: _a, ...e }, i) => ({ ...e, status: statuses[i] })),
+            null,
+            2,
+          );
+        await writeFile(file, asLegacy(['retiring', 'active']));
+        const before = await readFile(file, 'utf8');
+        const reader = new LocalKeyProvider(legacy, { prepublishSec: PRE, now: () => clock });
+        const list = await reader.listKeys();
+        expect(list.map((k) => [k.kid, k.status, k.activatesAt, k.retireAt])).toEqual([
+          [r.oldKid, 'retiring', iso(T0), iso(T0 + RETAIN * 1000)],
+          [r.newKid, 'active', iso(T0), null],
+        ]);
+        expect((await reader.getSigningKey()).kid).toBe(r.newKid);
+        expect(await readFile(file, 'utf8')).toBe(before);
+
+        // A `status` that contradicts the order/time is ignored.
+        await writeFile(file, asLegacy(['active', 'retiring']));
+        expect((await reader.getSigningKey()).kid).toBe(r.newKid);
+        expect((await reader.listKeys()).find((k) => k.kid === r.newKid)?.status).toBe('active');
+
+        // One legacy element => active.
+        await writeFile(file, JSON.stringify([{ ...JSON.parse(asLegacy(['x', 'active']))[1] }]));
+        expect((await reader.listKeys()).map((k) => [k.kid, k.status])).toEqual([
+          [r.newKid, 'active'],
+        ]);
+      } finally {
+        await rm(legacy, { recursive: true, force: true });
+      }
+    });
+
+    it('AC8: the old active PEM stays while it still signs (no ENOENT); the next rotate after activation removes it', async () => {
+      const [{ kid: a }] = await p.getPublicKeys();
+      const r = await p.rotate('normal', RETAIN);
+      expect(await pems()).toEqual([`${a}.pem`, `${r.newKid}.pem`].sort());
+      for (const t of [T0 + 1, T0 + PRE * 500, T0 + PRE * 1000 - 1]) {
+        clock = t;
+        expect(await signedKid()).toBe(a);
+      }
+      clock = T0 + PRE * 1000;
+      const r2 = await p.rotate('normal', RETAIN);
+      expect(await pems()).toEqual([`${r.newKid}.pem`, `${r2.newKid}.pem`].sort());
+      expect(await signedKid()).toBe(r.newKid);
+    });
+
+    it('a key that activates at creation stays active if the clock steps back (no revived old key, no ENOENT)', async () => {
+      const zero = new LocalKeyProvider(pdir, { now: () => clock }); // prepublishSec 0
+      const [{ kid: a }] = await zero.getPublicKeys();
+      const r = await zero.rotate('normal', RETAIN);
+      expect(await pems()).not.toContain(`${a}.pem`);
+      clock = T0 - 60_000;
+      expect((await zero.getSigningKey()).kid).toBe(r.newKid);
+      expect((await zero.listKeys()).find((k) => k.kid === r.newKid)?.status).toBe('active');
+    });
+
+    it('init creates a key only when no key is live (status is not read)', async () => {
+      const before = await readFile(join(pdir, 'keys.json'), 'utf8');
+      await make().init();
+      expect(await readFile(join(pdir, 'keys.json'), 'utf8')).toBe(before);
+    });
+
+    it('KeyRotationService: a pending key => RotationPendingError + failure audit `rotation_pending` (best-effort)', async () => {
+      const svc = new KeyRotationService(p, audit as unknown as AuditService, config);
+      const r = await svc.rotate('normal', { actorType: 'admin', actorId: 'admin_1' });
+      audit.record.mockClear();
+      await expect(
+        svc.rotate('normal', { actorType: 'admin', actorId: 'admin_1' }),
+      ).rejects.toBeInstanceOf(RotationPendingError);
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: AuditAction.SIGNING_KEY_ROTATED,
+          actorId: 'admin_1',
+          result: 'failure',
+          reason: 'rotation_pending',
+          metadata: { mode: 'normal', pendingKid: r.newKid },
+        }),
+      );
+      audit.record.mockRejectedValueOnce(new Error('audit down'));
+      await expect(svc.rotate('normal', { actorType: 'admin' })).rejects.toBeInstanceOf(
+        RotationPendingError,
+      );
     });
   });
 });

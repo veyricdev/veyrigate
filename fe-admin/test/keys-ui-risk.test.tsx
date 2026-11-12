@@ -27,7 +27,8 @@ const rotate = vi.mocked(rotateSigningKey);
 
 const K1 = "kid-one-2026";
 const K2 = "kid-two-2026";
-const ACTIVE: SigningKey = { kid: K1, alg: "RS256", status: "active", createdAt: "2026-10-23T01:00:00.000Z", retireAt: null };
+const ACTIVE: SigningKey = { kid: K1, alg: "RS256", status: "active", createdAt: "2026-10-23T01:00:00.000Z", activatesAt: "2026-10-23T01:00:00.000Z", retireAt: null };
+const AT = "2026-10-23T02:00:00.000Z";
 const SUPER = { sub: "aaaaaaaaaaaaaaaaaaaaaaaa", email: "admin@example.com", roles: ["super_admin"], tenantId: "t1" };
 const MATERIAL = {
   kty: "RSA",
@@ -121,7 +122,7 @@ describe("EMERGENCY gate — look-alikes and input paths", () => {
   });
 
   it("paste (user-event): ' EMERGENCY' stays disabled; pasting exactly EMERGENCY enables; Enter in the box never submits", async () => {
-    rotate.mockResolvedValue(ok({ newKid: K2, oldKid: K1, mode: "emergency" }) as never);
+    rotate.mockResolvedValue(ok({ newKid: K2, oldKid: K1, mode: "emergency", activatesAt: AT }) as never);
     const user = userEvent.setup({ delay: null });
     await openPage();
     const d = await open("Emergency rotation…");
@@ -139,7 +140,7 @@ describe("EMERGENCY gate — look-alikes and input paths", () => {
   });
 
   it("typed keystroke by keystroke: disabled until the last letter, then one explicit click sends once", async () => {
-    rotate.mockResolvedValue(ok({ newKid: K2, oldKid: K1, mode: "emergency" }) as never);
+    rotate.mockResolvedValue(ok({ newKid: K2, oldKid: K1, mode: "emergency", activatesAt: AT }) as never);
     const user = userEvent.setup({ delay: null });
     await openPage();
     const d = await open("Emergency rotation…");
@@ -171,13 +172,13 @@ describe("EMERGENCY gate — look-alikes and input paths", () => {
     await settle();
     expect(screen.getByRole("alertdialog")).toBeTruthy();
     expect(rotate).toHaveBeenCalledTimes(1);
-    await act(async () => release(ok({ newKid: K2, oldKid: K1, mode: "emergency" })));
+    await act(async () => release(ok({ newKid: K2, oldKid: K1, mode: "emergency", activatesAt: AT })));
     await noDialog();
     expect(rotate).toHaveBeenCalledTimes(1);
   });
 
   it("the normal rotation dialog has no typed step (one click confirms) and never sends emergency", async () => {
-    rotate.mockResolvedValue(ok({ newKid: K2, oldKid: K1, mode: "normal" }) as never);
+    rotate.mockResolvedValue(ok({ newKid: K2, oldKid: K1, mode: "normal", activatesAt: AT }) as never);
     await openPage();
     const d = await open("Rotate key");
     expect(within(d).queryByLabelText("Type EMERGENCY to confirm")).toBeNull();
@@ -220,7 +221,7 @@ describe("role gate — variants and in-app navigation", () => {
 });
 
 describe("key material — defence in depth", () => {
-  it("a BFF regression passing extra members through: DOM shows only the 5 metadata fields", async () => {
+  it("a BFF regression passing extra members through: DOM shows only the 6 metadata fields", async () => {
     list.mockResolvedValue(ok({ items: [{ ...ACTIVE, ...MATERIAL }], nextCursor: null }) as never);
     await openPage();
     expect(document.body.textContent).not.toMatch(/MATERIAL|BEGIN|AQAB/);
@@ -230,7 +231,7 @@ describe("key material — defence in depth", () => {
   it("real response schemas between a material-carrying BE and the UI: query cache and DOM hold no material", async () => {
     // The server fn returns what the BFF schema keeps (`call` parses with these exact schemas).
     list.mockImplementation((async () => ok(SigningKeyListSchema.parse({ items: [{ ...ACTIVE, ...MATERIAL }], nextCursor: null }))) as never);
-    rotate.mockImplementation((async () => ok(RotateKeyResultSchema.parse({ newKid: K2, oldKid: K1, mode: "normal", ...MATERIAL }))) as never);
+    rotate.mockImplementation((async () => ok(RotateKeyResultSchema.parse({ newKid: K2, oldKid: K1, mode: "normal", activatesAt: AT, ...MATERIAL }))) as never);
     const { queryClient } = await openPage();
     fireEvent.click(within(await open("Rotate key")).getByRole("button", { name: "Rotate key" }));
     await waitFor(() => expect(status().textContent).toContain(K2));
@@ -245,10 +246,10 @@ describe("key material — defence in depth", () => {
   });
 
   it("a regressed rotate result with extra members: the notice shows only newKid/oldKid", async () => {
-    rotate.mockResolvedValue(ok({ newKid: K2, oldKid: K1, mode: "normal", ...MATERIAL }) as never);
+    rotate.mockResolvedValue(ok({ newKid: K2, oldKid: K1, mode: "normal", activatesAt: AT, ...MATERIAL }) as never);
     await openPage();
     fireEvent.click(within(await open("Rotate key")).getByRole("button", { name: "Rotate key" }));
-    await waitFor(() => expect(status().textContent).toBe(`Rotated. New active key ${K2}; ${K1} is now verification only.`));
+    await waitFor(() => expect(status().textContent).toBe(`Rotated. New key ${K2} is published and signs from ${AT}. ${K1} keeps signing until then, then is verification only.`));
     expect(document.body.textContent).not.toMatch(/MATERIAL|BEGIN/);
   });
 });
@@ -303,7 +304,7 @@ describe("uncertain outcome", () => {
       .mockResolvedValue(
         ok({
           items: [
-            { kid: K2, alg: "RS256", status: "active", createdAt: "2026-10-23T01:01:00.000Z", retireAt: null },
+            { kid: K2, alg: "RS256", status: "active", createdAt: "2026-10-23T01:01:00.000Z", activatesAt: "2026-10-23T01:01:00.000Z", retireAt: null },
             { ...ACTIVE, status: "retiring", retireAt: "2026-10-23T01:03:00.000Z" },
           ],
           nextCursor: null,

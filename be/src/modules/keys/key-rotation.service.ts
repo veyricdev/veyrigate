@@ -6,6 +6,7 @@ import { AuditService } from '../security/audit/audit.service';
 import type { AuditEventInput } from '../security/audit/audit.types';
 import {
   KEY_PROVIDER,
+  RotationPendingError,
   type KeyMetadata,
   type KeyProvider,
   type RotationMode,
@@ -46,7 +47,8 @@ export class KeyRotationService {
    * Failure semantics (B6.3c fold): a failed state write rejects with the old key still active and
    * a best-effort `failure` audit; a rotation that succeeded but could not be audited is NOT rolled
    * back (it is already in effect) — the error propagates (5xx) and is logged with the new kid only.
-   * Not idempotent: a retry rotates again (DEBT-158).
+   * Not idempotent: a retry rotates again (DEBT-158) — except that a normal rotation while a key is
+   * pending is refused with `RotationPendingError` (DEBT-393).
    */
   async rotate(mode: RotationMode, base: RotationAuditBase): Promise<RotationResult> {
     const event = {
@@ -58,8 +60,16 @@ export class KeyRotationService {
     try {
       result = await this.keys.rotate(mode, this.retainSec);
     } catch (err) {
+      // D86.8: a pending key refuses a normal rotation; audited best-effort (an audit fault never
+      // turns the refusal into a 5xx).
+      const pending = err instanceof RotationPendingError;
       await this.audit
-        .record({ ...event, result: 'failure', reason: 'rotate_failed', metadata: { mode } })
+        .record({
+          ...event,
+          result: 'failure',
+          reason: pending ? 'rotation_pending' : 'rotate_failed',
+          metadata: pending ? { mode, pendingKid: err.pendingKid } : { mode },
+        })
         .catch(() => undefined);
       throw err;
     }
