@@ -137,6 +137,41 @@ export class ConsentService {
   }
 
   /**
+   * The user's OWN active consents (run 88, `/account/apps`, D88.22): every tenant (a consent belongs
+   * to the user), newest update first, at most `limit`. `userId` comes from the session.
+   */
+  async listOwn(userId: string, limit: number): Promise<(Consent & { _id: Types.ObjectId })[]> {
+    return this.consents
+      .find({ userId: new Types.ObjectId(userId), revokedAt: null })
+      .sort({ updatedAt: -1, _id: -1 })
+      .limit(limit)
+      .lean<(Consent & { _id: Types.ObjectId })[]>()
+      .exec();
+  }
+
+  /**
+   * Self-service revoke (run 88, D88.22): same idempotent before-image stamp as `revokeById`, but the
+   * only scoping is the owner (`userId` from the session), no tenant filter. Null when nothing
+   * matched (unknown id, another user's consent).
+   */
+  async revokeOwn(
+    id: string,
+    userId: string,
+    now: Date,
+  ): Promise<{ consent: Consent; alreadyRevoked: boolean } | null> {
+    const before = await this.consents
+      .findOneAndUpdate(
+        { _id: new Types.ObjectId(id), userId: new Types.ObjectId(userId) },
+        [{ $set: { revokedAt: { $ifNull: ['$revokedAt', now] } } }],
+        { returnDocument: 'before', updatePipeline: true },
+      )
+      .lean<Consent>()
+      .exec();
+    if (!before) return null;
+    return { consent: before, alreadyRevoked: before.revokedAt != null };
+  }
+
+  /**
    * True only when `consent` covers every requested scope AND matches the current versions.
    * A null consent, a missing scope, or any version drift returns false (fail-closed).
    */

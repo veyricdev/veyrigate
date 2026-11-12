@@ -534,3 +534,33 @@ describe('KEY_PREPUBLISH_SEC (run 86, DEBT-393, D86.11)', () => {
     },
   );
 });
+
+describe('ADMIN_SEED_EMAIL is optional for the app (run 88, DEBT-165, D88.13)', () => {
+  const PROD = { ...BASE, ...VAULT, NODE_ENV: 'production', ISSUER: 'https://idp.example.com' };
+  const withoutSeedEmail = (env: Record<string, string>) => {
+    const copy = { ...env };
+    delete copy.ADMIN_SEED_EMAIL;
+    return copy;
+  };
+
+  it('production env without ADMIN_SEED_EMAIL => valid, adminSeed undefined', () => {
+    const env = validateEnv(withoutSeedEmail(PROD));
+    expect(env.ADMIN_SEED_EMAIL).toBeUndefined();
+    expect(buildConfig(env).adminSeed).toBeUndefined();
+  });
+
+  it('present but malformed => still fails naming the variable (value not echoed)', () => {
+    expect(() => validateEnv({ ...PROD, ADMIN_SEED_EMAIL: 'not-an-email-xyz' })).toThrow(
+      /ADMIN_SEED_EMAIL/,
+    );
+    try {
+      validateEnv({ ...PROD, ADMIN_SEED_EMAIL: 'not-an-email-xyz' });
+    } catch (err) {
+      expect((err as Error).message).not.toContain('not-an-email-xyz');
+    }
+  });
+
+  it('present and valid => kept in config', () => {
+    expect(buildConfig(validateEnv(PROD)).adminSeed).toEqual({ email: 'a@example.com' });
+  });
+});

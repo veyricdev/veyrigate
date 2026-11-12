@@ -246,6 +246,17 @@ export class SessionService {
     return true;
   }
 
+  /**
+   * One of the user's own live sessions by `ref` (run 88, `/account/sessions`), read-only: index
+   * membership AND stored userId (IDOR). A dangling index entry is pruned. Redis errors propagate.
+   */
+  async findOwned(userId: string, ref: string): Promise<Session | null> {
+    if (!(await this.redis.client.sismember(userKey(userId), ref))) return null;
+    const data = await this.read(ref);
+    if (!data) await this.redis.client.srem(userKey(userId), ref);
+    return data && data.userId === userId ? { ref, ...data } : null;
+  }
+
   /** Revoke every session of a user (password change, account lock, "log out everywhere"). */
   async revokeAllForUser(userId: string): Promise<number> {
     return (this.redis.client as unknown as SessionRedis).sessionRevokeAll(

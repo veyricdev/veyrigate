@@ -371,6 +371,29 @@ export class AuthenticationService {
     return { kind: 'changed' };
   }
 
+  /**
+   * Re-authentication with the current password (run 88, D88.18, ASVS 5.0 7.5.2) through the SAME
+   * 5/900 s bucket as `/account/password` (reserved before Argon2, refunded on success), so the
+   * form is not a second password-guessing oracle. Redis/Mongo errors propagate (fail-closed).
+   */
+  async verifyCurrentPassword(
+    userId: string,
+    password: string,
+  ): Promise<
+    { kind: 'ok' | 'invalid' | 'no_password' } | { kind: 'throttled'; retryAfterSec: number }
+  > {
+    const reserved = await this.throttle.reservePasswordChange(userId);
+    if (reserved.blocked) return { kind: 'throttled', retryAfterSec: reserved.retryAfterSec };
+    const user = await this.users.findByIdForAuthentication(userId);
+    if (!user?.passwordHash) {
+      await this.throttle.refundPasswordChange(userId);
+      return { kind: 'no_password' };
+    }
+    if (!(await this.passwordMatches(user.passwordHash, password))) return { kind: 'invalid' };
+    await this.throttle.refundPasswordChange(userId);
+    return { kind: 'ok' };
+  }
+
   /** Whether the user can sign in with a password (a federation-only account cannot). */
   async hasPassword(userId: string): Promise<boolean> {
     return !!(await this.users.findByIdForAuthentication(userId))?.passwordHash;

@@ -959,7 +959,9 @@
                 "OAUTH_CONSENT_REVOKED",
                 "AUTH_LOGIN_THROTTLED",
                 "AUTH_PASSWORD_CHANGED",
-                "ADMIN_RECOVERED"
+                "ADMIN_RECOVERED",
+                "ADMIN_BOOTSTRAPPED",
+                "TRUSTED_DEVICE_REVOKED"
               ]
             }
           },
@@ -1888,7 +1890,9 @@
               "OAUTH_CONSENT_REVOKED",
               "AUTH_LOGIN_THROTTLED",
               "AUTH_PASSWORD_CHANGED",
-              "ADMIN_RECOVERED"
+              "ADMIN_RECOVERED",
+              "ADMIN_BOOTSTRAPPED",
+              "TRUSTED_DEVICE_REVOKED"
             ]
           },
           "targetType": {

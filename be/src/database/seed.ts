@@ -1,4 +1,4 @@
-import mongoose, { type Connection, type Model, type Types } from 'mongoose';
+import mongoose, { type ClientSession, type Connection, type Model, type Types } from 'mongoose';
 import type { ConfigService } from '@nestjs/config';
 import { z } from 'zod';
 import { validateEnv } from '../config/validation.schema';
@@ -35,12 +35,13 @@ import { adminResourceIdentifier } from '../modules/oauth/token/token.service';
  *   5. a `fe-admin` secret ONLY when it has no active credential. The raw secret is RETURNED to the
  *      caller (the CLI prints it once on stdout) — never logged, audited or written to a file.
  *
- * Two concurrent runs may both create (and print) a secret: accepted (sequential CLI, one operator;
- * DEBT-164).
+ * Two concurrent runs may both create (and print) a secret: accepted for this dev/test tool (one
+ * operator). Production uses `db:bootstrap` (run 88, `bootstrap.ts`), which shares steps 0, 1, 2 and
+ * 4 through `ensureAdminPlane` and runs them in one transaction (DEBT-164).
  */
 
-const ADMIN_RESOURCE_ID = 'admin';
-const FE_ADMIN_CLIENT_ID = 'fe-admin';
+export const ADMIN_RESOURCE_ID = 'admin';
+export const FE_ADMIN_CLIENT_ID = 'fe-admin';
 
 /**
  * Admin seed config, read only here (zod, before any DB connection). The password bound (12–128)
@@ -71,14 +72,25 @@ export function readAdminSeedConfig(env: Record<string, unknown>): AdminSeedConf
   return { email: parsed.data.ADMIN_SEED_EMAIL, password: parsed.data.ADMIN_SEED_PASSWORD };
 }
 
-export function buildFeAdminClient(): Omit<Client, 'frontchannelLogoutUri'> {
+export interface FeAdminUris {
+  redirectUris: string[];
+  postLogoutRedirectUris: string[];
+}
+
+/** Dev/test default (`db:seed`); `db:bootstrap` passes the URIs of its env (D88.4). */
+export function buildFeAdminClient(
+  uris: FeAdminUris = {
+    redirectUris: ['http://localhost:3000/auth/callback'],
+    postLogoutRedirectUris: ['http://localhost:3000/'],
+  },
+): Omit<Client, 'frontchannelLogoutUri'> {
   return {
     clientId: FE_ADMIN_CLIENT_ID,
     clientType: 'confidential',
     tokenEndpointAuthMethod: 'client_secret_basic',
     grantTypes: ['authorization_code', 'refresh_token'],
-    redirectUris: ['http://localhost:3000/auth/callback'],
-    postLogoutRedirectUris: ['http://localhost:3000/'],
+    redirectUris: [...uris.redirectUris],
+    postLogoutRedirectUris: [...uris.postLogoutRedirectUris],
     allowedCorsOrigins: [], // BFF: token calls are server-side
     allowedResources: [ADMIN_RESOURCE_ID],
     scopes: ['openid', 'profile', 'email', 'offline_access', 'admin.read', 'admin.write'],
@@ -88,6 +100,127 @@ export function buildFeAdminClient(): Omit<Client, 'frontchannelLogoutUri'> {
 
 function model<T>(connection: Connection, name: string): Model<T> {
   return (connection.models[name] as Model<T> | undefined) ?? connection.model<T>(name);
+}
+
+export interface AdminPlaneCreated {
+  tenant: boolean;
+  resource: boolean;
+  client: boolean;
+}
+
+/**
+ * Steps 0, 1, 2 and 4 of the seed, shared with `db:bootstrap` (run 88, D88.3): re-point guards,
+ * tenant, resource `admin` (+ post-check) and client `feAdmin`, all insert-only. Without `session`
+ * (seed) an E11000 of a concurrent upsert is swallowed (`upsert`); with one (bootstrap transaction)
+ * every error propagates so the transaction aborts. Returns what this call inserted.
+ */
+export async function ensureAdminPlane(
+  connection: Connection,
+  opts: { issuer: string; feAdmin: Omit<Client, 'frontchannelLogoutUri'>; label: string },
+  session?: ClientSession,
+): Promise<AdminPlaneCreated> {
+  const { feAdmin, label } = opts;
+  const adminIdentifier = adminResourceIdentifier(opts.issuer);
+  const tenantModel = model<unknown>(connection, 'Tenant');
+  const resourceModel = model<Resource>(connection, 'Resource');
+  const clientModel = model<Client>(connection, 'Client');
+  const write = async (run: () => Promise<{ upsertedCount: number }>): Promise<boolean> => {
+    if (session) return (await run()).upsertedCount === 1;
+    let inserted = false;
+    await upsert(async () => (inserted = (await run()).upsertedCount === 1));
+    return inserted;
+  };
+
+  // 0. Guard, BEFORE any write (DEBT-137/173 via seed). The seed NEVER re-points `admin` (step 2 is
+  // insert-only), so:
+  //  (i) `admin` exists with another identifier (created via the API, or seeded under another
+  //      ISSUER) => refuse, whoever references it — no exception: the operator fixes or deletes
+  //      the record, then re-runs;
+  // (ii) `admin` does not exist but a client already references it => refuse (the insert would make
+  //      that client admin-capable without rule A / rule B).
+  // No check-then-write race with the API: while `admin` is absent, tenant_admin cannot attach it
+  // (`assertAllowedResources` needs the resource), and an existing `admin` is never rewritten here.
+  const admins = await resourceModel
+    .find({ resourceId: ADMIN_RESOURCE_ID })
+    .select('identifier')
+    .session(session ?? null)
+    .lean<Pick<Resource, 'identifier'>[]>()
+    .exec();
+  const foreign = admins.find((r) => r.identifier !== adminIdentifier);
+  if (foreign) {
+    throw new Error(
+      `${label}: refusing to point resource '${ADMIN_RESOURCE_ID}' at ${adminIdentifier}: it already ` +
+        `exists with identifier ${foreign.identifier} (the ${label} never re-points it) — fix or ` +
+        'delete that resource (and the clients referencing it) first',
+    );
+  }
+  if (admins.length === 0) {
+    const referrer = await clientModel
+      .findOne({ allowedResources: ADMIN_RESOURCE_ID })
+      .select('clientId')
+      .session(session ?? null)
+      .lean<Pick<Client, 'clientId'>>()
+      .exec();
+    if (referrer) {
+      throw new Error(
+        `${label}: refusing to point resource '${ADMIN_RESOURCE_ID}' at ${adminIdentifier}: client ` +
+          `${referrer.clientId} already references it and would become admin-capable without the ` +
+          'DEBT-137 checks — remove the reference (or the client) first',
+      );
+    }
+  }
+
+  // 1. Tenant.
+  const tenant = await write(() =>
+    tenantModel
+      .updateOne(
+        { id: DEFAULT_TENANT_ID },
+        { $setOnInsert: { id: DEFAULT_TENANT_ID, name: 'Default' } },
+        { upsert: true, session },
+      )
+      .exec(),
+  );
+
+  // 2. Resource `admin`, then a MANDATORY post-check: `upsert` swallows E11000 and `resourceId` is
+  // not unique (DEBT-127), so an admin identifier already registered under another `resourceId`
+  // would silently leave `fe-admin` pointing at a resource that does not exist.
+  const resource = await write(() =>
+    resourceModel
+      .updateOne(
+        { resourceId: ADMIN_RESOURCE_ID },
+        {
+          $setOnInsert: {
+            resourceId: ADMIN_RESOURCE_ID,
+            identifier: adminIdentifier,
+            scopes: ['admin.read', 'admin.write'],
+          },
+        },
+        { upsert: true, session },
+      )
+      .exec(),
+  );
+  const adminResource = await resourceModel
+    .exists({ resourceId: ADMIN_RESOURCE_ID, identifier: adminIdentifier })
+    .session(session ?? null)
+    .exec();
+  if (!adminResource) {
+    throw new Error(
+      `${label}: resource '${ADMIN_RESOURCE_ID}' with identifier ${adminIdentifier} could not be ensured ` +
+        '(identifier already registered under another resourceId?) — fix the resources collection first',
+    );
+  }
+
+  // 4. Client `fe-admin` (insert-only: never overwrites config edited via the API, never re-enables).
+  const client = await write(() =>
+    clientModel
+      .updateOne(
+        { clientId: feAdmin.clientId },
+        { $setOnInsert: feAdmin },
+        { upsert: true, session },
+      )
+      .exec(),
+  );
+  return { tenant, resource, client };
 }
 
 export async function seedBootstrap(
@@ -107,11 +240,8 @@ export async function seedBootstrap(
   validateResourceIdentifier(adminIdentifier);
   const email = normalizeEmail(cfg.email);
 
-  const tenantModel = model<unknown>(connection, 'Tenant');
-  const resourceModel = model<Resource>(connection, 'Resource');
   const userModel = model<unknown>(connection, 'User');
   const userTenantModel = model<unknown>(connection, 'UserTenant');
-  const clientModel = model<Client>(connection, 'Client');
   const credentialModel = model<ClientCredential>(connection, 'ClientCredential');
 
   // Unique indexes BEFORE any write (DEBT-176): on a DB never synced, two concurrent runs would
@@ -144,81 +274,7 @@ export async function seedBootstrap(
     }
   }
 
-  // 0. Guard, BEFORE any write (DEBT-137/173 via seed). The seed NEVER re-points `admin` (step 2 is
-  // insert-only), so:
-  //  (i) `admin` exists with another identifier (created via the API, or seeded under another
-  //      ISSUER) => refuse, whoever references it — no exception: the operator fixes or deletes
-  //      the record, then re-runs;
-  // (ii) `admin` does not exist but a client already references it => refuse (the insert would make
-  //      that client admin-capable without rule A / rule B).
-  // No check-then-write race with the API: while `admin` is absent, tenant_admin cannot attach it
-  // (`assertAllowedResources` needs the resource), and an existing `admin` is never rewritten here.
-  const admins = await resourceModel
-    .find({ resourceId: ADMIN_RESOURCE_ID })
-    .select('identifier')
-    .lean<Pick<Resource, 'identifier'>[]>()
-    .exec();
-  const foreign = admins.find((r) => r.identifier !== adminIdentifier);
-  if (foreign) {
-    throw new Error(
-      `seed: refusing to point resource '${ADMIN_RESOURCE_ID}' at ${adminIdentifier}: it already ` +
-        `exists with identifier ${foreign.identifier} (the seed never re-points it) — fix or ` +
-        'delete that resource (and the clients referencing it) first',
-    );
-  }
-  if (admins.length === 0) {
-    const referrer = await clientModel
-      .findOne({ allowedResources: ADMIN_RESOURCE_ID })
-      .select('clientId')
-      .lean<Pick<Client, 'clientId'>>()
-      .exec();
-    if (referrer) {
-      throw new Error(
-        `seed: refusing to point resource '${ADMIN_RESOURCE_ID}' at ${adminIdentifier}: client ` +
-          `${referrer.clientId} already references it and would become admin-capable without the ` +
-          'DEBT-137 checks — remove the reference (or the client) first',
-      );
-    }
-  }
-
-  // 1. Tenant.
-  await upsert(() =>
-    tenantModel
-      .updateOne(
-        { id: DEFAULT_TENANT_ID },
-        { $setOnInsert: { id: DEFAULT_TENANT_ID, name: 'Default' } },
-        { upsert: true },
-      )
-      .exec(),
-  );
-
-  // 2. Resource `admin`, then a MANDATORY post-check: `upsert` swallows E11000 and `resourceId` is
-  // not unique (DEBT-127), so an admin identifier already registered under another `resourceId`
-  // would silently leave `fe-admin` pointing at a resource that does not exist.
-  await upsert(() =>
-    resourceModel
-      .updateOne(
-        { resourceId: ADMIN_RESOURCE_ID },
-        {
-          $setOnInsert: {
-            resourceId: ADMIN_RESOURCE_ID,
-            identifier: adminIdentifier,
-            scopes: ['admin.read', 'admin.write'],
-          },
-        },
-        { upsert: true },
-      )
-      .exec(),
-  );
-  const adminResource = await resourceModel
-    .exists({ resourceId: ADMIN_RESOURCE_ID, identifier: adminIdentifier })
-    .exec();
-  if (!adminResource) {
-    throw new Error(
-      `seed: resource '${ADMIN_RESOURCE_ID}' with identifier ${adminIdentifier} could not be ensured ` +
-        '(identifier already registered under another resourceId?) — fix the resources collection first',
-    );
-  }
+  await ensureAdminPlane(connection, { issuer, feAdmin, label: 'seed' });
   console.log(`seed: ensured resource ${ADMIN_RESOURCE_ID}`);
   await seedDev(connection, issuer, nodeEnv);
 
@@ -254,12 +310,7 @@ export async function seedBootstrap(
   );
   console.log(`seed: ensured super_admin ${userId.toString()} <${email}>`);
 
-  // 4. Client `fe-admin` (insert-only).
-  await upsert(() =>
-    clientModel
-      .updateOne({ clientId: feAdmin.clientId }, { $setOnInsert: feAdmin }, { upsert: true })
-      .exec(),
-  );
+  // 4. Client `fe-admin`: inserted (insert-only) by `ensureAdminPlane` above.
   console.log(`seed: ensured client ${feAdmin.clientId}`);
 
   // 5. Secret only when none is active; never rotated by a re-run.

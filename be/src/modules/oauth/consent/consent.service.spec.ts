@@ -72,3 +72,51 @@ describe('ConsentService.grant (DEBT-060 retry-once on E11000)', () => {
     expect(findOneAndUpdate).toHaveBeenCalledTimes(1);
   });
 });
+
+/** Run 88 T3 (DEBT-581, D88.22): the user's own consents, no tenant filter, owner always filtered. */
+describe('ConsentService.listOwn / revokeOwn (run 88)', () => {
+  const USER = new Types.ObjectId().toHexString();
+  const ID = new Types.ObjectId().toHexString();
+  let exec: jest.Mock<() => Promise<unknown>>;
+  let query: Record<string, jest.Mock>;
+  let model: Record<string, jest.Mock>;
+  let service: ConsentService;
+
+  beforeEach(() => {
+    exec = jest.fn<() => Promise<unknown>>();
+    query = {} as Record<string, jest.Mock>;
+    for (const m of ['sort', 'limit', 'lean']) query[m] = jest.fn(() => query);
+    query.exec = exec as unknown as jest.Mock;
+    model = { find: jest.fn(() => query), findOneAndUpdate: jest.fn(() => query) };
+    service = new ConsentService(model as never, { getOrThrow: () => ({}) } as never);
+  });
+
+  it('listOwn: active consents of userId only (every tenant), newest update first, capped', async () => {
+    exec.mockResolvedValue([]);
+    await service.listOwn(USER, 100);
+    expect(model.find).toHaveBeenCalledWith({ userId: new Types.ObjectId(USER), revokedAt: null });
+    expect(query.sort).toHaveBeenCalledWith({ updatedAt: -1, _id: -1 });
+    expect(query.limit).toHaveBeenCalledWith(100);
+  });
+
+  it('revokeOwn: one findOneAndUpdate filtered by _id AND userId, $ifNull keeps the first revokedAt', async () => {
+    const now = new Date();
+    exec.mockResolvedValue({ clientId: 'c', resource: '', revokedAt: null });
+    expect(await service.revokeOwn(ID, USER, now)).toEqual({
+      consent: { clientId: 'c', resource: '', revokedAt: null },
+      alreadyRevoked: false,
+    });
+    expect(model.findOneAndUpdate).toHaveBeenCalledWith(
+      { _id: new Types.ObjectId(ID), userId: new Types.ObjectId(USER) },
+      [{ $set: { revokedAt: { $ifNull: ['$revokedAt', now] } } }],
+      { returnDocument: 'before', updatePipeline: true },
+    );
+  });
+
+  it('revokeOwn: already revoked => alreadyRevoked true; nothing matched => null', async () => {
+    exec.mockResolvedValueOnce({ clientId: 'c', resource: '', revokedAt: new Date(0) });
+    expect((await service.revokeOwn(ID, USER, new Date()))?.alreadyRevoked).toBe(true);
+    exec.mockResolvedValueOnce(null);
+    expect(await service.revokeOwn(ID, USER, new Date())).toBeNull();
+  });
+});

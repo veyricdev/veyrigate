@@ -21,13 +21,14 @@ import { buildCsp, safeCspOrigin } from '../../common/http/csp';
 import type { HttpReply, HttpRequest } from '../../common/http/http.types';
 import { IsDeliverableEmail } from '../../common/validation/email-address';
 import type { AppConfig, SessionConfig } from '../../config/configuration';
-import { AuthenticationService, type RevokeStep } from '../authentication/authentication.service';
+import { AuthenticationService } from '../authentication/authentication.service';
 import { LoginThrottleService } from '../authentication/login-throttle.service';
 import { normalizeEmail } from '../identity/user.service';
 import { AuditAction } from '../security/audit/audit-action.enum';
 import { AuditService } from '../security/audit/audit.service';
 import { RateLimitService } from '../security/rate-limit/rate-limit.service';
 import { SessionCookie } from '../sessions/session.cookie';
+import { deviceLabelFromUserAgent } from '../sessions/device-label';
 import { SessionService } from '../sessions/session.service';
 import { RefreshTokenService } from '../oauth/token/refresh-token.service';
 import { LogoutService, type LogoutParams } from '../oauth/logout/logout.service';
@@ -46,6 +47,7 @@ import {
 } from './csrf.service';
 import { HtmlExceptionFilter } from './html-exception.filter';
 import { requestIdFromReturnTo, safeReturnTo } from './return-to';
+import { revokeOneSession } from './session-revoke';
 
 class FormDto {
   @IsOptional() @IsString() _csrf?: string;
@@ -129,6 +131,10 @@ export class UiController {
       message: 'You are signed in.',
       secondaryUrl: '/account/password',
       secondaryLabel: 'Change password',
+      links: [
+        { url: '/account/sessions', label: 'Your sessions' },
+        { url: '/account/apps', label: 'Connected apps' },
+      ],
       actionUrl: '/logout',
       actionLabel: 'Sign out',
     });
@@ -318,6 +324,7 @@ export class UiController {
       ip: req.ip,
       userAgent: String(req.headers['user-agent'] ?? ''),
       requestId: req.id,
+      deviceLabel: deviceLabelFromUserAgent(req.headers['user-agent']),
       deviceToken: this.loginThrottle.readDeviceToken(req),
       trustDevice: true,
     });
@@ -496,18 +503,14 @@ export class UiController {
     } else {
       // DEBT-526: stop at the first fault (a token fault leaves the session alive, so a retry redoes
       // every step) and audit it with failedStep only; an audit fault never masks the original error.
-      let step: RevokeStep = 'pre_revoke';
-      try {
-        tokenCount = await this.refreshTokens.revokeForSession(session.userId, session.ref, now);
-        step = 'sessions';
-        await this.sessions.revoke(id!);
-        // SWEEP (DEBT-051, §15 inv. 29): revoke again AFTER the MARK, catching a family a racing
-        // `/token` exchange inserted meanwhile; its count is added so the audit reflects it. Idempotent.
-        step = 'sweep';
-        tokenCount += await this.refreshTokens.revokeForSession(session.userId, session.ref, now);
-      } catch (err) {
-        await this.audit
-          .record({
+      // Same sequence as `/account/sessions` (one helper, run 88 D88.19).
+      tokenCount = await revokeOneSession(
+        this.refreshTokens,
+        session,
+        now,
+        () => this.sessions.revoke(id!),
+        (failedStep) =>
+          this.audit.record({
             actorType: 'user',
             actorId: session.userId,
             action: AuditAction.SESSION_REVOKED,
@@ -515,11 +518,9 @@ export class UiController {
             targetId: session.ref,
             result: 'failure',
             reason: 'revoke_failed',
-            metadata: { scope: 'session', failedStep: step },
-          })
-          .catch(() => undefined);
-        throw err;
-      }
+            metadata: { scope: 'session', failedStep },
+          }),
+      );
     }
 
     await this.audit.record({

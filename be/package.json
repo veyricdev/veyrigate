@@ -19,7 +19,8 @@
     "db:sync-indexes": "node --env-file-if-exists=.env dist/database/mongo/sync-indexes.js",
     "db:seed-dev": "node --env-file-if-exists=.env dist/database/seed-dev.js",
     "db:seed": "node --env-file-if-exists=.env dist/database/seed.js",
-    "db:admin-recover": "node --env-file-if-exists=.env dist/database/admin-recover.js"
+    "db:admin-recover": "node --env-file-if-exists=.env dist/database/admin-recover.js",
+    "db:bootstrap": "node --env-file-if-exists=.env dist/database/bootstrap.js"
   },
   "dependencies": {
     "@fastify/cookie": "11.1.2",

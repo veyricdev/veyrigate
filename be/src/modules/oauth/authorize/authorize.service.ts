@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type { AppConfig } from '../../../config/configuration';
+import type { AppConfig, TokenConfig } from '../../../config/configuration';
 import { AuditAction } from '../../security/audit/audit-action.enum';
 import { AuditService } from '../../security/audit/audit.service';
 import { ClientService, type Client, mintedBeforeDisable } from '../../clients/client.service';
@@ -73,9 +73,14 @@ export type AuthorizeOutcome =
       /**
        * Already-validated (exact-matched) redirect URI (DEBT-084). Used ONLY to derive the consent
        * page's per-response CSP `form-action` origin — it is NEVER passed to the template and the
-       * redirect is always rebuilt from the stored context on the POST.
+       * redirect is always rebuilt from the stored context on the POST. Since run 88 (D88.21) its
+       * ORIGIN is also shown on the consent screen (anti-phishing): still never the raw query.
        */
       redirectUri: string;
+      /** Access token lifetime (s) shown on the consent screen (D88.21). */
+      accessTtlSec: number;
+      /** Refresh lifetime (s), only when `offline_access` is requested AND the client may refresh. */
+      refreshTtlSec?: number;
     }
   /** Consent already satisfied (or just granted): a code was issued, redirect it to the RP. */
   | { kind: 'code_issued'; redirectUri: string; code: string; state?: string };
@@ -141,11 +146,25 @@ export class AuthorizeService {
     private readonly consents: ConsentService,
     private readonly codes: AuthorizationCodeService,
     private readonly sessions: SessionService,
-    config: ConfigService,
+    private readonly config: ConfigService,
     private readonly memberships: UserTenantService,
   ) {
     this.issuer = config.getOrThrow<AppConfig>('app').issuer;
     this.adminAud = adminResourceIdentifier(this.issuer);
+  }
+
+  /** D88.21: lifetimes for the consent screen, read from config (never hard-coded). */
+  private consentDurations(
+    client: Pick<Client, 'grantTypes'>,
+    scopes: string[],
+  ): { accessTtlSec: number; refreshTtlSec?: number } {
+    const ttl = this.config.getOrThrow<TokenConfig>('token');
+    const refresh =
+      scopes.includes('offline_access') && client.grantTypes?.includes('refresh_token');
+    return {
+      accessTtlSec: ttl.accessTokenTtl,
+      ...(refresh ? { refreshTtlSec: ttl.refreshTokenTtl } : {}),
+    };
   }
 
   get issuerUrl(): string {
@@ -351,6 +370,7 @@ export class AuthorizeService {
         scopes: requestedScopes,
         resource: ConsentService.normalizeResource(resource),
         redirectUri,
+        ...this.consentDurations(client, requestedScopes),
       };
     } catch (err) {
       if (err instanceof AuthorizeRedirectError) {

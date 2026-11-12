@@ -36,6 +36,10 @@ export enum AuditAction {
   AUTH_PASSWORD_CHANGED = 'AUTH_PASSWORD_CHANGED',
   /** Run 87 (DEBT-252): super_admin restored by the `admin-recover` CLI (break-glass). */
   ADMIN_RECOVERED = 'ADMIN_RECOVERED',
+  /** Run 88 (DEBT-164): admin control plane ensured by the `db:bootstrap` CLI. */
+  ADMIN_BOOTSTRAPPED = 'ADMIN_BOOTSTRAPPED',
+  /** Run 88 (DEBT-582): a trusted device forgotten from `/account/sessions`. */
+  TRUSTED_DEVICE_REVOKED = 'TRUSTED_DEVICE_REVOKED',
 }
 
 /** Actions that must raise a separate alert (spec §10: reuse, key rotation, admin control-plane). */
@@ -57,4 +61,6 @@ export const ALERT_ACTIONS: ReadonlySet<AuditAction> = new Set([
   // Written by the `admin-recover` CLI, where no app listener runs: that path alerts through the JSON log line
   // it prints (`{alert:true,...}`), which runbook-ops section 3d requires pasting into the incident channel.
   AuditAction.ADMIN_RECOVERED,
+  // Same as ADMIN_RECOVERED: written by the `db:bootstrap` CLI, alerting through its `{alert:true,...}` line.
+  AuditAction.ADMIN_BOOTSTRAPPED,
 ]);

@@ -27,6 +27,7 @@ import {
   type FederationProviders,
   type ProviderName,
 } from './providers';
+import { deviceLabelFromUserAgent } from '../sessions/device-label';
 
 /**
  * Session `authTime` from the provider's own `auth_time` (DEBT-189 F3), clamped to
@@ -190,6 +191,7 @@ export class FederationService {
     const established = await this.sessions.establish(cookies.session, userId, DEFAULT_TENANT_ID, {
       amr: ['fed'],
       authTime: upstreamAuthTime(identity, record.reauthAfter),
+      deviceLabel: deviceLabelFromUserAgent(audit.userAgent),
     });
     // DEBT-187 (run 36 G5): a lock landing after `loginExisting` but before the session exists
     // must still win (lock writes state first, sweeps second). Re-read now; locked/gone => kill
@@ -287,7 +289,10 @@ export class FederationService {
     }
     let established: Awaited<ReturnType<AuthenticationService['login']>>;
     try {
-      established = await this.auth.login(pending.email, password, ctx);
+      established = await this.auth.login(pending.email, password, {
+        ...ctx,
+        deviceLabel: deviceLabelFromUserAgent(ctx.userAgent),
+      });
     } catch (err) {
       if (!(err instanceof UnauthorizedException)) throw err;
       return this.linkFailed('credentials', loginUrl);

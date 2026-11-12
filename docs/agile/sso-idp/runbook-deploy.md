@@ -652,3 +652,56 @@ printjson(d.users.updateMany(EXPIRED, { $unset: { lockedUntil: 1 } }));
 
 - Số của (ii) có thể lớn hơn (i) một chút với `EXPIRED` (khoá hết hạn giữa hai lần chạy) — chấp nhận; không bao giờ nhỏ
   hơn cho `LEGACY` (không còn code ghi field này). Diễn tập: `runs/87-X6-drills/drill-report.md` (AC5 của T4).
+
+## 16. Lần triển khai đầu tiên — `db:bootstrap` (run 88, DEBT-164/165, D88.2–D88.14)
+
+`db:bootstrap` tạo control-plane admin trên DB production **rỗng**: tenant `default-tenant`, resource `admin`
+(`identifier = <ISSUER>/admin/`, scopes `admin.read admin.write`), client `fe-admin` (confidential,
+`client_secret_basic`, grant `authorization_code refresh_token`, CORS rỗng) và **1** secret. Không bao giờ tạo/sửa user,
+membership, Redis hay key ký. Mọi ghi + audit `ADMIN_BOOTSTRAPPED` nằm trong **một transaction** (cần replica set/mongos);
+chạy song song hai lượt ⇒ tối đa một secret được cấp và in. Env của app (`validateEnv` đầy đủ; `ADMIN_SEED_EMAIL` không
+cần ở production) + hai biến riêng (không vào env app):
+
+- `BOOTSTRAP_FE_ADMIN_REDIRECT_URIS` — 1–10 URI cách nhau dấu phẩy, production chỉ `https` (vd.
+  `https://admin.example.com/auth/callback`);
+- `BOOTSTRAP_FE_ADMIN_POST_LOGOUT_REDIRECT_URIS` — tương tự (vd. `https://admin.example.com/`).
+
+Tham số (allowlist, lạ ⇒ exit 1 không echo): `--operator <id>` (bắt buộc, `[a-z0-9._-]{2,64}`), `--ticket <ref>` (bắt buộc
+với `--update-uris`/`--rotate-secret`), `--update-uris`, `--rotate-secret`, `--dry-run`. Exit: 0 = xong, 1 = lỗi/từ chối
+(không ghi gì), 2 = URI của `fe-admin` đã lưu khác env (không ghi gì).
+
+Chạy từ image BE production (cùng cách `admin-recover`), env app ở `<env app>` (file trong secret store, không commit):
+
+```bash
+IMG=<image BE đã deploy>
+# 1. index trước (dry-run rồi chạy thật, runbook-ops §0)
+docker run --rm --env-file <env app> "$IMG" node dist/database/mongo/sync-indexes.js --dry-run
+docker run --rm --env-file <env app> "$IMG" node dist/database/mongo/sync-indexes.js
+# 2. kiểm tham số + env, KHÔNG kết nối: người chứng kiến đọc to dòng `target:` và hai danh sách URI
+docker run --rm --env-file <env app> -e BOOTSTRAP_FE_ADMIN_REDIRECT_URIS -e BOOTSTRAP_FE_ADMIN_POST_LOGOUT_REDIRECT_URIS \
+  "$IMG" node dist/database/bootstrap.js --operator <id> --dry-run
+# 3. chạy thật — `--log-driver none`: stdout có secret, KHÔNG để log driver của daemon (journald/awslogs/gelf/fluentd) chuyển đi
+docker run --rm --log-driver none --env-file <env app> -e BOOTSTRAP_FE_ADMIN_REDIRECT_URIS -e BOOTSTRAP_FE_ADMIN_POST_LOGOUT_REDIRECT_URIS \
+  "$IMG" node dist/database/bootstrap.js --operator <id>
+```
+
+- Bước 3 in **một lần** `OIDC_CLIENT_SECRET=<secret>` + "shown once…": chép ngay vào secret store của fe-admin (biến
+  `OIDC_CLIENT_SECRET`), không dán vào ticket/chat; terminal không ghi log. Dòng JSON `{"alert":true,"action":"ADMIN_BOOTSTRAPPED",…}`
+  dán vào kênh sự cố/thay đổi (CLI không có listener cảnh báo của app).
+- Chạy lại cùng env ⇒ `fe-admin secret: unchanged (active credential exists)`, không in secret (an toàn để kiểm).
+- Từ chối (exit 1): resource `admin` trỏ identifier khác; client khác tham chiếu `admin` khi chưa có resource; `fe-admin`
+  có sẵn mà không admin-capable; thiếu index unique (⇒ làm lại bước 1); Mongo standalone.
+4. Khởi động BE + fe-admin (fe-admin với `OIDC_CLIENT_SECRET` vừa chép).
+5. Người quản trị đầu tiên tự `/register` + xác minh email (bootstrap in `usable super_admins: 0` + hướng dẫn).
+6. Cấp `super_admin` bằng `db:admin-recover --email … --requested-by … --approved-by … --ticket …` (runbook-ops §3d, hai
+   người).
+7. Đăng nhập console (fe-admin luôn `prompt=login`); kiểm `GET /admin/audit?action=ADMIN_BOOTSTRAPPED` có sự kiện bước 3.
+
+Xử lý sự cố:
+
+- **Exit 2 (URI khác)**: CLI in danh sách đã lưu và danh sách env. Nếu env đúng (vd. domain đặt sai lần đầu, không đăng nhập
+  console để sửa được): chạy lại bước 3 với `--update-uris --ticket <ref>` ⇒ thay cả hai danh sách + audit
+  `REDIRECT_URI_CHANGED`. Nếu DB đúng: sửa env.
+- **Mất/lộ secret lần đầu** (hoặc CLI báo "committed but could not be printed"): bước 3 với `--rotate-secret --ticket <ref>`
+  ⇒ mọi secret cũ của `fe-admin` bị thu hồi **ngay** (không grace), một secret mới in một lần; deploy lại fe-admin với secret
+  mới. Khi console đã chạy, ưu tiên xoay secret qua admin API (có grace).

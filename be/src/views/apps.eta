@@ -1,0 +1,7 @@
+<h1><%= it.title %></h1><% if (it.notice) { %><p role="status"><%= it.notice %></p><% } %>
+<p>Apps you allowed to access your account. Revoking stops new access at once; access already given to an app can last up to its expiry (a few minutes).</p>
+<% if (it.apps.length === 0) { %><p>No app has access to your account.</p><% } %>
+<ul>
+<% it.apps.forEach(function (a) { %><li><strong><%= a.status === 'removed' ? 'Removed application' : a.clientId %></strong><% if (a.status === 'disabled') { %> (disabled)<% } %> · <% if (a.resource) { %><code><%= a.resource %></code><% } else { %>Sign-in only<% } %> · <code><%= a.scopes %></code> · granted <%= a.grantedAt %> · updated <%= a.updatedAt %><form method="post" action="/account/apps/revoke"><input type="hidden" name="_csrf" value="<%= it.csrf %>"><input type="hidden" name="consent_id" value="<%= a.id %>"><button type="submit">Revoke access</button></form></li><% }) %>
+</ul>
+<p><a href="/">Back</a></p>

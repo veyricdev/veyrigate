@@ -36,6 +36,14 @@ class ConsentDto {
   @IsOptional() @IsString() approve?: string;
 }
 
+/** Fixed descriptions of the OIDC scopes on the consent screen (D88.21); resource scopes stay as code. */
+const SCOPE_DESCRIPTIONS: Record<string, string> = {
+  openid: 'Confirm your identity',
+  profile: 'See your basic profile',
+  email: 'See your email address',
+  offline_access: 'Stay signed in when you are not using it',
+};
+
 /**
  * `/authorize` + consent (B4.1/B4.2, spec Â§9.2/Â§9.4).
  *
@@ -205,8 +213,22 @@ export class AuthorizeController {
         csrf: this.csrf.token(identity),
         requestId: outcome.requestId,
         clientId: outcome.clientId,
-        scopes: outcome.scopes,
+        scopes: outcome.scopes.map((scope) => ({
+          scope,
+          // Own keys only: a requested scope named `constructor` must not read the prototype.
+          description: Object.hasOwn(SCOPE_DESCRIPTIONS, scope)
+            ? SCOPE_DESCRIPTIONS[scope]
+            : undefined,
+        })),
         resource: outcome.resource,
+        // D88.21: the origin of the exact-matched stored redirect URI (never the query); none when
+        // it does not yield a clean origin.
+        origin,
+        accessMinutes: Math.round(outcome.accessTtlSec / 60),
+        refreshDays:
+          outcome.refreshTtlSec !== undefined
+            ? Math.round(outcome.refreshTtlSec / 86400)
+            : undefined,
       });
     }
     // kind === 'code_issued': 302 to the RP with code/state/iss (spec Â§9.2, RFC 9207).

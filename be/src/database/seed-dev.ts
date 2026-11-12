@@ -274,6 +274,8 @@ async function main(): Promise<void> {
   // Read dev-user config BEFORE opening a DB connection, so a missing/invalid DEV_SEED_* variable
   // fails fast (naming the variable) without touching the database. DEV_SEED_* is NOT part of the
   // app `envSchema` — it is read here only.
+  // Optional for the app since run 88 (DEBT-165), still required here.
+  if (!env.ADMIN_SEED_EMAIL) throw new Error('seed-dev: ADMIN_SEED_EMAIL is required');
   const devUser = readDevSeedUserConfig(process.env, env.ADMIN_SEED_EMAIL);
   console.log(mongoTarget(env.MONGO_URI));
   if (dryRun) {

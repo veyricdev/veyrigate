@@ -250,6 +250,47 @@ export class LoginThrottleService {
     await this.redis.client.del(trustKey(userId));
   }
 
+  /** sha256 of the request's well-formed device cookie (the ZSET member), or undefined. */
+  deviceHash(req: CookieRequest): string | undefined {
+    const token = this.readDeviceToken(req);
+    return token ? sha256(token) : undefined;
+  }
+
+  /**
+   * Trusted devices of the user still inside the trust window (run 88, `/account/sessions`), newest
+   * first: `device` = the ZSET member (sha256 of the cookie, one-way). Redis error => throws.
+   */
+  async listTrusted(userId: string): Promise<{ device: string; trustedAt: number }[]> {
+    const flat = await this.redis.client.zrevrangebyscore(
+      trustKey(userId),
+      '+inf',
+      String(Date.now() - TRUST_TTL_MS),
+      'WITHSCORES',
+    );
+    const out: { device: string; trustedAt: number }[] = [];
+    for (let i = 0; i + 1 < flat.length; i += 2) {
+      out.push({ device: flat[i], trustedAt: Number(flat[i + 1]) });
+    }
+    return out;
+  }
+
+  /**
+   * Forget trusted devices of THIS user only (the key is derived from `userId`): one `device`, or
+   * every device but `keep` (none kept when `keep` is undefined). Returns how many were removed.
+   * Redis error => throws (fail-closed, D88.19). It never signs a session out.
+   */
+  async forgetTrusted(
+    userId: string,
+    which: { device: string } | { allBut?: string },
+  ): Promise<number> {
+    const key = trustKey(userId);
+    if ('device' in which) return this.redis.client.zrem(key, which.device);
+    const members = (await this.redis.client.zrange(key, '0', '-1')).filter(
+      (m) => m !== which.allBut,
+    );
+    return members.length ? this.redis.client.zrem(key, ...members) : 0;
+  }
+
   /** Drop the per-email account bucket (password reset: the owner proved control). */
   async clearAccount(email: string): Promise<void> {
     await this.redis.client.del(`${emailTag(email)}:a`);

@@ -130,7 +130,8 @@ export const envSchema = z
     GITHUB_CLIENT_ID: optionalCredential,
     GITHUB_CLIENT_SECRET: optionalCredential,
 
-    ADMIN_SEED_EMAIL: z.string().email(),
+    // Run 88 (DEBT-165): optional for the app; `db:seed` / `db:seed-dev` still require it (own checks).
+    ADMIN_SEED_EMAIL: z.string().email().optional(),
     // DEBT-169: ADMIN_SEED_PASSWORD is NOT an app variable: only `db:seed` reads it (own zod,
     // 12..128), so a fresh copy of `.env.example` (empty password) still boots the app.
 

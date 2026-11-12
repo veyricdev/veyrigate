@@ -238,6 +238,19 @@ export class ClientService {
     return { ...client, grantTypes: client.grantTypes ?? ['authorization_code'] };
   }
 
+  /**
+   * `/account/apps` (run 88, D88.22): for each of `clientIds` that still exists, whether it is
+   * disabled. No tenant filter: the list comes from the user's OWN consents. Absent => removed.
+   */
+  async disabledStates(clientIds: string[]): Promise<Map<string, boolean>> {
+    if (clientIds.length === 0) return new Map();
+    const rows = await this.clients
+      .find({ clientId: { $in: clientIds } }, { clientId: 1, disabledAt: 1 })
+      .lean<Pick<Client, 'clientId' | 'disabledAt'>[]>()
+      .exec();
+    return new Map(rows.map((c) => [c.clientId, c.disabledAt != null]));
+  }
+
   /** Admin create (B6.3a, D-27.b): server-generated `clientId`; never issues a secret (Q-27.3). */
   async createForTenant(
     ctx: TenantContext,

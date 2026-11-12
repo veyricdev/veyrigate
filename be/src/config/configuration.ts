@@ -124,7 +124,8 @@ export interface Config {
   keys: KeysConfig;
   federation: FederationConfig;
   security: SecurityConfig;
-  adminSeed: AdminSeedConfig;
+  /** Dev/test seed only; absent in production (run 88, DEBT-165). */
+  adminSeed?: AdminSeedConfig;
   mailer: MailerConfig;
   client: ClientConfig;
   consent: ConsentConfig;
@@ -198,9 +199,7 @@ export function buildConfig(env: Env): Config {
       clientAuthFailIpMax: env.CLIENT_AUTH_FAIL_IP_MAX,
       clientAuthFailClientMax: env.CLIENT_AUTH_FAIL_CLIENT_MAX,
     },
-    adminSeed: {
-      email: env.ADMIN_SEED_EMAIL,
-    },
+    adminSeed: env.ADMIN_SEED_EMAIL ? { email: env.ADMIN_SEED_EMAIL } : undefined,
     mailer: {
       smtpUrl: env.SMTP_URL,
     },

@@ -620,6 +620,8 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       const live = await sessions.get(sessionId);
       expect(live?.amr).toEqual(['fed']);
       expect(live?.tenantId).toBe(DEFAULT_TENANT_ID);
+      // Run 88 (D88.17): the federated session carries an allowlisted device label, never the raw UA.
+      expect(live?.device).toEqual({ label: 'Other on Other' });
 
       const user = await userModel.findOne({ email: `${sub}@example.com` }).lean();
       expect(user?.emailVerifiedAt).toBeInstanceOf(Date);

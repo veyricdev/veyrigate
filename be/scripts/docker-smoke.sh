@@ -6,7 +6,7 @@
 # Used locally and by the CI job `be-image`. Creates only the network vg-b73b-net, the containers
 # vg-b73b-mongo, vg-b73b-redis, vg-b73b-vault (throwaway dev Vault with TLS) and vg-be-smoke-ok,
 # vg-be-smoke-noenv, vg-be-smoke-local (all removed on exit) + one `--rm --network none` run of the
-# admin-recover CLI (check 12), publishes 127.0.0.1:4400 only, never
+# admin-recover CLI (check 12) and of the bootstrap CLI (check 13), publishes 127.0.0.1:4400 only, never
 # touches the image itself or any other container. Secrets (Vault root token, Mongo password, CSRF
 # secret, Vault app token) are generated per run, passed with `-e NAME` or stdin (never on a command
 # line, never in a host file) and never printed. Vault container logs are never printed (dev mode logs
@@ -239,4 +239,22 @@ printf '%s\n' "$out" | grep -qx 'dry-run: no connection made' || fail 12 "admin-
 if printf '%s' "$out" | grep -qF -e "$MONGO_PASSWORD" -e recover@example.invalid; then fail 12 "admin-recover echoed a secret or the email"; fi
 pass 12 "admin-recover --dry-run in the image => exit 0, target printed, no connection"
 
-echo "docker-smoke: 12/12 passed for $IMAGE"
+# 13. production bootstrap CLI from the image (run 88, DEBT-164/165, D88.14b): --dry-run with the app env
+# WITHOUT ADMIN_SEED_EMAIL (optional since DEBT-165) and https fe-admin URIs, no network => exit 0, prints
+# the target and the URI plan, never connects nor echoes the password
+out="$(
+  unset ADMIN_SEED_EMAIL # `-e NAME` of an unset variable passes nothing
+  export BOOTSTRAP_FE_ADMIN_REDIRECT_URIS=https://admin.example.invalid/auth/callback
+  export BOOTSTRAP_FE_ADMIN_POST_LOGOUT_REDIRECT_URIS=https://admin.example.invalid/
+  docker run --rm --network none "${HARDEN[@]}" "${ENV_ARGS[@]}" -e CSRF_SECRET \
+    -e BOOTSTRAP_FE_ADMIN_REDIRECT_URIS -e BOOTSTRAP_FE_ADMIN_POST_LOGOUT_REDIRECT_URIS "$IMAGE" \
+    node dist/database/bootstrap.js --dry-run --operator smoke-ops 2>&1
+)" || fail 13 "bootstrap --dry-run exited != 0"
+printf '%s\n' "$out" | grep -qx 'target: vg-b73b-mongo:27017/sso-idp' || fail 13 "bootstrap printed no target line"
+printf '%s\n' "$out" | grep -qx 'fe-admin redirectUris: https://admin.example.invalid/auth/callback' ||
+  fail 13 "bootstrap printed no URI plan"
+printf '%s\n' "$out" | grep -qx 'dry-run: no connection made' || fail 13 "bootstrap printed no dry-run line"
+if printf '%s' "$out" | grep -qF -e "$MONGO_PASSWORD"; then fail 13 "bootstrap echoed a secret"; fi
+pass 13 "bootstrap --dry-run in the image (no ADMIN_SEED_EMAIL) => exit 0, target + plan, no connection"
+
+echo "docker-smoke: 13/13 passed for $IMAGE"

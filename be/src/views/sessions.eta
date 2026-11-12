@@ -1,0 +1,16 @@
+<h1><%= it.title %></h1><% if (it.notice) { %><p role="status"><%= it.notice %></p><% } %><% if (it.error) { %><p role="alert"><%= it.error %></p><% } %>
+<% const confirm = () => it.reauth === 'password' ? '<label>Current password<input name="current_password" type="password" maxlength="128" autocomplete="current-password" required></label>' : ''; %>
+<% if (it.reauth === 'impossible') { %><p><%= it.noPasswordMessage %></p><% } else if (it.reauth === 'password') { %><p>Enter your current password to sign out a session or forget a device.</p><% } %>
+<h2>Signed-in sessions</h2>
+<ul>
+<% it.sessions.forEach(function (s) { %><li><strong><%= s.label %></strong> · <%= s.method %> · signed in <%= s.createdAt %> · last active <%= s.lastSeenAt %><% if (s.current) { %> · <em>This browser</em><% } else if (it.reauth !== 'impossible') { %><form method="post" action="/account/sessions/revoke"><input type="hidden" name="_csrf" value="<%= it.csrf %>"><input type="hidden" name="ref" value="<%= s.ref %>"><%~ confirm() %><button type="submit">Sign out this session</button></form><% } %></li><% }) %>
+</ul>
+<% if (it.reauth !== 'impossible' && it.sessions.length > 1) { %><form method="post" action="/account/sessions/revoke-others"><input type="hidden" name="_csrf" value="<%= it.csrf %>"><%~ confirm() %><button type="submit">Sign out every other session</button></form><% } %>
+<form method="post" action="/logout?scope=all"><input type="hidden" name="_csrf" value="<%= it.csrf %>"><button type="submit">Sign out everywhere</button></form>
+<h2>Trusted devices</h2>
+<p>A trusted device only skips the per-network sign-in limit. Forgetting it does not sign it out.</p>
+<ul>
+<% it.devices.forEach(function (d) { %><li>Trusted since <%= d.since %><% if (d.current) { %> · <em>This browser</em><% } %><% if (it.reauth !== 'impossible') { %><form method="post" action="/account/devices/forget"><input type="hidden" name="_csrf" value="<%= it.csrf %>"><input type="hidden" name="device" value="<%= d.device %>"><%~ confirm() %><button type="submit">Forget this device</button></form><% } %></li><% }) %>
+</ul>
+<% if (it.reauth !== 'impossible' && it.devices.length > 0) { %><form method="post" action="/account/devices/forget-others"><input type="hidden" name="_csrf" value="<%= it.csrf %>"><%~ confirm() %><button type="submit">Forget every other device</button></form><% } %>
+<p><a href="/">Back</a></p>

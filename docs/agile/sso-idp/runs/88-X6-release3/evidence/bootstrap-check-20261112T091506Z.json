@@ -1,0 +1,843 @@
+{
+  "generatedAt": "2026-11-12T09:13:54.269Z",
+  "db": "vg-bootstrap-check",
+  "failures": 0,
+  "steps": [
+    {
+      "title": "precondition",
+      "checks": [
+        {
+          "name": "vg-bootstrap-check absent at start",
+          "pass": true
+        },
+        {
+          "name": "vg-int-* count (info)",
+          "pass": true,
+          "detail": "0"
+        }
+      ]
+    },
+    {
+      "title": "1a sync-indexes --dry-run",
+      "cmd": "node dist/database/mongo/sync-indexes.js --dry-run",
+      "exit": 0,
+      "ms": 1191,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\ndry-run: no connection made",
+      "stderr": "",
+      "checks": [
+        {
+          "name": "exit 0",
+          "pass": true
+        },
+        {
+          "name": "target printed",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "1b sync-indexes",
+      "cmd": "node dist/database/mongo/sync-indexes.js ",
+      "exit": 0,
+      "ms": 3025,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nUser: synced\nFederatedIdentity: synced\nTenant: synced\nUserTenant: synced\nClient: synced\nClientCredential: synced\nResource: synced\nConsent: synced\nRefreshToken: synced\nPasswordResetToken: synced\nEmailVerificationToken: synced\nAuditLog: synced",
+      "stderr": "",
+      "checks": [
+        {
+          "name": "exit 0",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "2 bootstrap --dry-run",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88 --dry-run",
+      "exit": 0,
+      "ms": 2758,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nfe-admin redirectUris: https://admin.example.com/auth/callback\nfe-admin postLogoutRedirectUris: https://admin.example.com/\nplan: operator=ops.t88 update-uris=false rotate-secret=false\ndry-run: no connection made",
+      "stderr": "",
+      "checks": [
+        {
+          "name": "exit 0",
+          "pass": true
+        },
+        {
+          "name": "target + both URI lists + dry-run line",
+          "pass": true
+        },
+        {
+          "name": "duration (info, machine under E2E load)",
+          "pass": true,
+          "detail": "2758 ms"
+        },
+        {
+          "name": "DB still has no clients",
+          "pass": true
+        },
+        {
+          "name": "dry-run: no argon2 hash / email / Mongo URI in output, secret only on its line",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "2b bootstrap --dry-run, MONGO_URI = counting listener",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88 --dry-run",
+      "exit": 0,
+      "ms": 2791,
+      "stdout": "target: 127.0.0.1:52513/vg-bootstrap-check\nfe-admin redirectUris: https://admin.example.com/auth/callback\nfe-admin postLogoutRedirectUris: https://admin.example.com/\nplan: operator=ops.t88 update-uris=false rotate-secret=false\ndry-run: no connection made",
+      "stderr": "",
+      "checks": [
+        {
+          "name": "exit 0",
+          "pass": true
+        },
+        {
+          "name": "0 TCP connections to MONGO_URI",
+          "pass": true,
+          "detail": "accepted=0"
+        }
+      ]
+    },
+    {
+      "title": "3 bootstrap (real)",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88",
+      "exit": 0,
+      "ms": 3102,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nfe-admin redirectUris: https://admin.example.com/auth/callback\nfe-admin postLogoutRedirectUris: https://admin.example.com/\nplan: operator=ops.t88 update-uris=false rotate-secret=false\ntarget: 127.0.0.1:27117/vg-bootstrap-check\ntenant default-tenant: created\nresource admin: created\nclient fe-admin: created\nOIDC_CLIENT_SECRET=<masked: 43 chars, base64url>\nfe-admin secret: shown once, store it in the fe-admin secret store now\n{\"alert\":true,\"action\":\"ADMIN_BOOTSTRAPPED\",\"eventId\":\"85741987-f482-4421-882e-4c57a1ab346e\"}\nusable super_admins: 0\nnext: the first administrator registers at /register and verifies the email, then run db:admin-recover --email <email> --requested-by <a> --approved-by <b> --ticket <ref>",
+      "stderr": "",
+      "checks": [
+        {
+          "name": "exit 0",
+          "pass": true
+        },
+        {
+          "name": "exactly one OIDC_CLIENT_SECRET line, format ^[A-Za-z0-9_-]{43}$",
+          "pass": true
+        },
+        {
+          "name": "\"shown once\" sentence",
+          "pass": true
+        },
+        {
+          "name": "secret verifies against the stored active hash (argon2)",
+          "pass": true
+        },
+        {
+          "name": "1 active credential",
+          "pass": true
+        },
+        {
+          "name": "resource admin identifier = ISSUER/admin/",
+          "pass": true
+        },
+        {
+          "name": "fe-admin confidential, client_secret_basic, URIs from env, CORS empty",
+          "pass": true,
+          "detail": "auth=client_secret_basic grants=authorization_code refresh_token"
+        },
+        {
+          "name": "1 tenant created",
+          "pass": true,
+          "detail": "{\"name\":\"Default\"}"
+        },
+        {
+          "name": "1 ADMIN_BOOTSTRAPPED audit, actorType system, actorId operator, credentialIssued true",
+          "pass": true,
+          "detail": "{\"result\":\"success\",\"targetId\":\"fe-admin\",\"metadata\":{\"createdTenant\":true,\"createdResource\":true,\"createdClient\":true,\"credentialIssued\":true,\"credentialRotated\":false,\"urisUpdated\":false,\"host\":\"DESKTOP-VEYRIC\"}}"
+        },
+        {
+          "name": "audit has no secret / hash",
+          "pass": true
+        },
+        {
+          "name": "alert JSON line on stdout",
+          "pass": true
+        },
+        {
+          "name": "usable super_admins: 0 + admin-recover hint",
+          "pass": true
+        },
+        {
+          "name": "users/usertenants unchanged",
+          "pass": true
+        },
+        {
+          "name": "real run: no argon2 hash / email / Mongo URI in output, secret only on its line",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "4 bootstrap rerun",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88",
+      "exit": 0,
+      "ms": 2992,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nfe-admin redirectUris: https://admin.example.com/auth/callback\nfe-admin postLogoutRedirectUris: https://admin.example.com/\nplan: operator=ops.t88 update-uris=false rotate-secret=false\ntarget: 127.0.0.1:27117/vg-bootstrap-check\ntenant default-tenant: exists\nresource admin: exists\nclient fe-admin: exists\nfe-admin secret: unchanged (active credential exists)\n{\"alert\":true,\"action\":\"ADMIN_BOOTSTRAPPED\",\"eventId\":\"6465f587-6273-43d8-a881-e3ecc09398de\"}\nusable super_admins: 0\nnext: the first administrator registers at /register and verifies the email, then run db:admin-recover --email <email> --requested-by <a> --approved-by <b> --ticket <ref>",
+      "stderr": "",
+      "checks": [
+        {
+          "name": "exit 0",
+          "pass": true
+        },
+        {
+          "name": "no secret line, \"unchanged\"",
+          "pass": true
+        },
+        {
+          "name": "credential count unchanged",
+          "pass": true
+        },
+        {
+          "name": "2nd audit credentialIssued false",
+          "pass": true
+        },
+        {
+          "name": "first secret still verifies",
+          "pass": true
+        },
+        {
+          "name": "rerun: no argon2 hash / email / Mongo URI in output, secret only on its line",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "5a unknown flag",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88 --force-SECRETVALUE",
+      "exit": 1,
+      "ms": 2658,
+      "stdout": "",
+      "stderr": "bootstrap failed: unknown argument (allowed: --operator --ticket --update-uris --rotate-secret --dry-run)",
+      "checks": [
+        {
+          "name": "exit 1",
+          "pass": true
+        },
+        {
+          "name": "no echo of the offending value",
+          "pass": true
+        },
+        {
+          "name": "0 TCP connections to MONGO_URI (refused before connecting)",
+          "pass": true,
+          "detail": "accepted=0, 2658 ms"
+        },
+        {
+          "name": "DB unchanged",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "5b bad operator",
+      "cmd": "node dist/database/bootstrap.js --operator Bad Operator!",
+      "exit": 1,
+      "ms": 2821,
+      "stdout": "",
+      "stderr": "bootstrap failed: --operator is required and must match [a-z0-9._-]{2,64}",
+      "checks": [
+        {
+          "name": "exit 1",
+          "pass": true
+        },
+        {
+          "name": "no echo of the offending value",
+          "pass": true
+        },
+        {
+          "name": "0 TCP connections to MONGO_URI (refused before connecting)",
+          "pass": true,
+          "detail": "accepted=0, 2821 ms"
+        },
+        {
+          "name": "DB unchanged",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "5c missing --operator",
+      "cmd": "node dist/database/bootstrap.js ",
+      "exit": 1,
+      "ms": 2632,
+      "stdout": "",
+      "stderr": "bootstrap failed: --operator is required and must match [a-z0-9._-]{2,64}",
+      "checks": [
+        {
+          "name": "exit 1",
+          "pass": true
+        },
+        {
+          "name": "no echo of the offending value",
+          "pass": true
+        },
+        {
+          "name": "0 TCP connections to MONGO_URI (refused before connecting)",
+          "pass": true,
+          "detail": "accepted=0, 2632 ms"
+        },
+        {
+          "name": "DB unchanged",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "5d --update-uris without --ticket",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88 --update-uris",
+      "exit": 1,
+      "ms": 2955,
+      "stdout": "",
+      "stderr": "bootstrap failed: --update-uris and --rotate-secret require --ticket",
+      "checks": [
+        {
+          "name": "exit 1",
+          "pass": true
+        },
+        {
+          "name": "no echo of the offending value",
+          "pass": true
+        },
+        {
+          "name": "0 TCP connections to MONGO_URI (refused before connecting)",
+          "pass": true,
+          "detail": "accepted=0, 2955 ms"
+        },
+        {
+          "name": "DB unchanged",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "5e --rotate-secret without --ticket",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88 --rotate-secret",
+      "exit": 1,
+      "ms": 2910,
+      "stdout": "",
+      "stderr": "bootstrap failed: --update-uris and --rotate-secret require --ticket",
+      "checks": [
+        {
+          "name": "exit 1",
+          "pass": true
+        },
+        {
+          "name": "no echo of the offending value",
+          "pass": true
+        },
+        {
+          "name": "0 TCP connections to MONGO_URI (refused before connecting)",
+          "pass": true,
+          "detail": "accepted=0, 2910 ms"
+        },
+        {
+          "name": "DB unchanged",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "5f production http://localhost URI",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88",
+      "exit": 1,
+      "ms": 2901,
+      "stdout": "",
+      "stderr": "bootstrap failed: BOOTSTRAP_FE_ADMIN_REDIRECT_URIS entry 1 is invalid: redirect_uri must use https (http://localhost only allowed outside production)",
+      "checks": [
+        {
+          "name": "exit 1",
+          "pass": true
+        },
+        {
+          "name": "no echo of the offending value",
+          "pass": true
+        },
+        {
+          "name": "0 TCP connections to MONGO_URI (refused before connecting)",
+          "pass": true,
+          "detail": "accepted=0, 2901 ms"
+        },
+        {
+          "name": "DB unchanged",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "5g wildcard URI",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88",
+      "exit": 1,
+      "ms": 3109,
+      "stdout": "",
+      "stderr": "bootstrap failed: BOOTSTRAP_FE_ADMIN_REDIRECT_URIS entry 1 is invalid: redirect_uri must not contain a wildcard",
+      "checks": [
+        {
+          "name": "exit 1",
+          "pass": true
+        },
+        {
+          "name": "no echo of the offending value",
+          "pass": true
+        },
+        {
+          "name": "0 TCP connections to MONGO_URI (refused before connecting)",
+          "pass": true,
+          "detail": "accepted=0, 3109 ms"
+        },
+        {
+          "name": "DB unchanged",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "5h fragment URI",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88",
+      "exit": 1,
+      "ms": 2674,
+      "stdout": "",
+      "stderr": "bootstrap failed: BOOTSTRAP_FE_ADMIN_REDIRECT_URIS entry 1 is invalid: redirect_uri must not contain a fragment",
+      "checks": [
+        {
+          "name": "exit 1",
+          "pass": true
+        },
+        {
+          "name": "no echo of the offending value",
+          "pass": true
+        },
+        {
+          "name": "0 TCP connections to MONGO_URI (refused before connecting)",
+          "pass": true,
+          "detail": "accepted=0, 2674 ms"
+        },
+        {
+          "name": "DB unchanged",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "5i missing BOOTSTRAP env",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88",
+      "exit": 1,
+      "ms": 2882,
+      "stdout": "",
+      "stderr": "bootstrap failed: BOOTSTRAP_FE_ADMIN_REDIRECT_URIS must list 1 to 10 comma-separated URIs",
+      "checks": [
+        {
+          "name": "exit 1",
+          "pass": true
+        },
+        {
+          "name": "no echo of the offending value",
+          "pass": true
+        },
+        {
+          "name": "0 TCP connections to MONGO_URI (refused before connecting)",
+          "pass": true,
+          "detail": "accepted=0, 2882 ms"
+        },
+        {
+          "name": "DB unchanged",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "6a drift (env URIs differ)",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88",
+      "exit": 2,
+      "ms": 2968,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nfe-admin redirectUris: https://console.example.com/auth/callback\nfe-admin postLogoutRedirectUris: https://console.example.com/\nplan: operator=ops.t88 update-uris=false rotate-secret=false\ntarget: 127.0.0.1:27117/vg-bootstrap-check\nfe-admin URIs differ from the environment (nothing written):\n  stored redirectUris: https://admin.example.com/auth/callback\n  env    redirectUris: https://console.example.com/auth/callback\n  stored postLogoutRedirectUris: https://admin.example.com/\n  env    postLogoutRedirectUris: https://console.example.com/\nre-run with --update-uris --ticket <ref> to replace the stored lists",
+      "stderr": "",
+      "checks": [
+        {
+          "name": "exit 2",
+          "pass": true
+        },
+        {
+          "name": "both lists printed",
+          "pass": true
+        },
+        {
+          "name": "DB unchanged",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "6b --update-uris --ticket",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88 --update-uris --ticket CHG-88-1",
+      "exit": 0,
+      "ms": 3031,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nfe-admin redirectUris: https://console.example.com/auth/callback\nfe-admin postLogoutRedirectUris: https://console.example.com/\nplan: operator=ops.t88 update-uris=true rotate-secret=false\ntarget: 127.0.0.1:27117/vg-bootstrap-check\ntenant default-tenant: exists\nresource admin: exists\nclient fe-admin: exists\nclient fe-admin: redirect URIs updated\nfe-admin secret: unchanged (active credential exists)\n{\"alert\":true,\"action\":\"ADMIN_BOOTSTRAPPED\",\"eventId\":\"8bf95eac-4088-417f-b05c-1f8f4f0c8b81\"}\nusable super_admins: 0\nnext: the first administrator registers at /register and verifies the email, then run db:admin-recover --email <email> --requested-by <a> --approved-by <b> --ticket <ref>",
+      "stderr": "",
+      "checks": [
+        {
+          "name": "exit 0",
+          "pass": true
+        },
+        {
+          "name": "both lists replaced",
+          "pass": true
+        },
+        {
+          "name": "REDIRECT_URI_CHANGED audit",
+          "pass": true
+        },
+        {
+          "name": "ADMIN_BOOTSTRAPPED urisUpdated true + ticket",
+          "pass": true
+        },
+        {
+          "name": "no secret line",
+          "pass": true
+        },
+        {
+          "name": "update-uris: no argon2 hash / email / Mongo URI in output, secret only on its line",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "7 --rotate-secret --ticket",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88 --rotate-secret --ticket CHG-88-2",
+      "exit": 0,
+      "ms": 3003,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nfe-admin redirectUris: https://console.example.com/auth/callback\nfe-admin postLogoutRedirectUris: https://console.example.com/\nplan: operator=ops.t88 update-uris=false rotate-secret=true\ntarget: 127.0.0.1:27117/vg-bootstrap-check\ntenant default-tenant: exists\nresource admin: exists\nclient fe-admin: exists\nOIDC_CLIENT_SECRET=<masked: 43 chars, base64url>\nfe-admin secret (rotated, every older one revoked): shown once, store it in the fe-admin secret store now\n{\"alert\":true,\"action\":\"ADMIN_BOOTSTRAPPED\",\"eventId\":\"4a2dc1a8-6395-475b-8859-ccbf98e2cd3c\"}\nusable super_admins: 0\nnext: the first administrator registers at /register and verifies the email, then run db:admin-recover --email <email> --requested-by <a> --approved-by <b> --ticket <ref>",
+      "stderr": "",
+      "checks": [
+        {
+          "name": "exit 0",
+          "pass": true
+        },
+        {
+          "name": "exactly one new secret line",
+          "pass": true
+        },
+        {
+          "name": "old secret no longer verifies (revoked, no grace)",
+          "pass": true
+        },
+        {
+          "name": "new secret verifies",
+          "pass": true
+        },
+        {
+          "name": "1 active / 2 total credentials",
+          "pass": true
+        },
+        {
+          "name": "audit credentialRotated true",
+          "pass": true
+        },
+        {
+          "name": "rotate: no argon2 hash / email / Mongo URI in output, secret only on its line",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "8a resource admin re-pointed",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88",
+      "exit": 1,
+      "ms": 2993,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nfe-admin redirectUris: https://console.example.com/auth/callback\nfe-admin postLogoutRedirectUris: https://console.example.com/\nplan: operator=ops.t88 update-uris=false rotate-secret=false\ntarget: 127.0.0.1:27117/vg-bootstrap-check",
+      "stderr": "bootstrap failed: bootstrap: refusing to point resource 'admin' at https://idp.example.com/admin/: it already exists with identifier https://evil.example.com/admin/ (the bootstrap never re-points it) — fix or delete that resource (and the clients referencing it) first",
+      "checks": [
+        {
+          "name": "exit 1",
+          "pass": true
+        },
+        {
+          "name": "DB unchanged",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "8b fe-admin public (none)",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88",
+      "exit": 1,
+      "ms": 2928,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nfe-admin redirectUris: https://console.example.com/auth/callback\nfe-admin postLogoutRedirectUris: https://console.example.com/\nplan: operator=ops.t88 update-uris=false rotate-secret=false\ntarget: 127.0.0.1:27117/vg-bootstrap-check",
+      "stderr": "bootstrap failed: client fe-admin exists but is not admin-capable (confidential + client_secret_basic/post): fix or delete it first; nothing was written",
+      "checks": [
+        {
+          "name": "exit 1",
+          "pass": true
+        },
+        {
+          "name": "DB unchanged",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "8c Mongo unreachable",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88",
+      "exit": 1,
+      "ms": 7774,
+      "stdout": "target: 127.0.0.1:1/vg-bootstrap-check\nfe-admin redirectUris: https://console.example.com/auth/callback\nfe-admin postLogoutRedirectUris: https://console.example.com/\nplan: operator=ops.t88 update-uris=false rotate-secret=false",
+      "stderr": "bootstrap failed: connect ECONNREFUSED 127.0.0.1:1",
+      "checks": [
+        {
+          "name": "exit 1",
+          "pass": true
+        },
+        {
+          "name": "password of MONGO_URI not echoed",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "9.1 sync-indexes (fresh DB)",
+      "cmd": "node dist/database/mongo/sync-indexes.js ",
+      "exit": 0,
+      "ms": 3614,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nUser: synced\nFederatedIdentity: synced\nTenant: synced\nUserTenant: synced\nClient: synced\nClientCredential: synced\nResource: synced\nConsent: synced\nRefreshToken: synced\nPasswordResetToken: synced\nEmailVerificationToken: synced\nAuditLog: synced",
+      "stderr": "",
+      "checks": [
+        {
+          "name": "exit 0",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "9.1 bootstrap A (parallel)",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88a",
+      "exit": 0,
+      "ms": 3264,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nfe-admin redirectUris: https://admin.example.com/auth/callback\nfe-admin postLogoutRedirectUris: https://admin.example.com/\nplan: operator=ops.t88a update-uris=false rotate-secret=false\ntarget: 127.0.0.1:27117/vg-bootstrap-check\ntenant default-tenant: created\nresource admin: created\nclient fe-admin: created\nOIDC_CLIENT_SECRET=<masked: 43 chars, base64url>\nfe-admin secret: shown once, store it in the fe-admin secret store now\n{\"alert\":true,\"action\":\"ADMIN_BOOTSTRAPPED\",\"eventId\":\"7cdf42e3-03b8-4e51-ad50-bee4b745d68f\"}\nusable super_admins: 0\nnext: the first administrator registers at /register and verifies the email, then run db:admin-recover --email <email> --requested-by <a> --approved-by <b> --ticket <ref>",
+      "stderr": "",
+      "checks": []
+    },
+    {
+      "title": "9.1 bootstrap B (parallel)",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88b",
+      "exit": 0,
+      "ms": 3301,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nfe-admin redirectUris: https://admin.example.com/auth/callback\nfe-admin postLogoutRedirectUris: https://admin.example.com/\nplan: operator=ops.t88b update-uris=false rotate-secret=false\ntarget: 127.0.0.1:27117/vg-bootstrap-check\ntenant default-tenant: exists\nresource admin: exists\nclient fe-admin: exists\nfe-admin secret: unchanged (active credential exists)\n{\"alert\":true,\"action\":\"ADMIN_BOOTSTRAPPED\",\"eventId\":\"40e347a3-5a2d-444a-8413-6a21c9b7ba90\"}\nusable super_admins: 0\nnext: the first administrator registers at /register and verifies the email, then run db:admin-recover --email <email> --requested-by <a> --approved-by <b> --ticket <ref>",
+      "stderr": "",
+      "checks": [
+        {
+          "name": "parallel 1: both exit 0, exactly 1 secret line total, 1 credential/client/resource",
+          "pass": true,
+          "detail": "exit 0/0 lines=1 creds=1 clients=1 resources=1"
+        },
+        {
+          "name": "parallel 1: printed secret verifies",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "9.2 sync-indexes (fresh DB)",
+      "cmd": "node dist/database/mongo/sync-indexes.js ",
+      "exit": 0,
+      "ms": 3204,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nUser: synced\nFederatedIdentity: synced\nTenant: synced\nUserTenant: synced\nClient: synced\nClientCredential: synced\nResource: synced\nConsent: synced\nRefreshToken: synced\nPasswordResetToken: synced\nEmailVerificationToken: synced\nAuditLog: synced",
+      "stderr": "",
+      "checks": [
+        {
+          "name": "exit 0",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "9.2 bootstrap A (parallel)",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88a",
+      "exit": 0,
+      "ms": 3066,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nfe-admin redirectUris: https://admin.example.com/auth/callback\nfe-admin postLogoutRedirectUris: https://admin.example.com/\nplan: operator=ops.t88a update-uris=false rotate-secret=false\ntarget: 127.0.0.1:27117/vg-bootstrap-check\ntenant default-tenant: created\nresource admin: created\nclient fe-admin: created\nOIDC_CLIENT_SECRET=<masked: 43 chars, base64url>\nfe-admin secret: shown once, store it in the fe-admin secret store now\n{\"alert\":true,\"action\":\"ADMIN_BOOTSTRAPPED\",\"eventId\":\"d2ab75f6-863a-43e2-a3ca-77e6c21db432\"}\nusable super_admins: 0\nnext: the first administrator registers at /register and verifies the email, then run db:admin-recover --email <email> --requested-by <a> --approved-by <b> --ticket <ref>",
+      "stderr": "",
+      "checks": []
+    },
+    {
+      "title": "9.2 bootstrap B (parallel)",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88b",
+      "exit": 0,
+      "ms": 3186,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nfe-admin redirectUris: https://admin.example.com/auth/callback\nfe-admin postLogoutRedirectUris: https://admin.example.com/\nplan: operator=ops.t88b update-uris=false rotate-secret=false\ntarget: 127.0.0.1:27117/vg-bootstrap-check\ntenant default-tenant: exists\nresource admin: exists\nclient fe-admin: exists\nfe-admin secret: unchanged (active credential exists)\n{\"alert\":true,\"action\":\"ADMIN_BOOTSTRAPPED\",\"eventId\":\"ddf930ec-43af-4829-af83-1c59e597c49f\"}\nusable super_admins: 0\nnext: the first administrator registers at /register and verifies the email, then run db:admin-recover --email <email> --requested-by <a> --approved-by <b> --ticket <ref>",
+      "stderr": "",
+      "checks": [
+        {
+          "name": "parallel 2: both exit 0, exactly 1 secret line total, 1 credential/client/resource",
+          "pass": true,
+          "detail": "exit 0/0 lines=1 creds=1 clients=1 resources=1"
+        },
+        {
+          "name": "parallel 2: printed secret verifies",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "9.3 sync-indexes (fresh DB)",
+      "cmd": "node dist/database/mongo/sync-indexes.js ",
+      "exit": 0,
+      "ms": 3053,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nUser: synced\nFederatedIdentity: synced\nTenant: synced\nUserTenant: synced\nClient: synced\nClientCredential: synced\nResource: synced\nConsent: synced\nRefreshToken: synced\nPasswordResetToken: synced\nEmailVerificationToken: synced\nAuditLog: synced",
+      "stderr": "",
+      "checks": [
+        {
+          "name": "exit 0",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "9.3 bootstrap A (parallel)",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88a",
+      "exit": 0,
+      "ms": 3017,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nfe-admin redirectUris: https://admin.example.com/auth/callback\nfe-admin postLogoutRedirectUris: https://admin.example.com/\nplan: operator=ops.t88a update-uris=false rotate-secret=false\ntarget: 127.0.0.1:27117/vg-bootstrap-check\ntenant default-tenant: created\nresource admin: created\nclient fe-admin: created\nOIDC_CLIENT_SECRET=<masked: 43 chars, base64url>\nfe-admin secret: shown once, store it in the fe-admin secret store now\n{\"alert\":true,\"action\":\"ADMIN_BOOTSTRAPPED\",\"eventId\":\"bc35532d-3974-4092-b1ad-3c1a9e0117f8\"}\nusable super_admins: 0\nnext: the first administrator registers at /register and verifies the email, then run db:admin-recover --email <email> --requested-by <a> --approved-by <b> --ticket <ref>",
+      "stderr": "",
+      "checks": []
+    },
+    {
+      "title": "9.3 bootstrap B (parallel)",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88b",
+      "exit": 0,
+      "ms": 3134,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nfe-admin redirectUris: https://admin.example.com/auth/callback\nfe-admin postLogoutRedirectUris: https://admin.example.com/\nplan: operator=ops.t88b update-uris=false rotate-secret=false\ntarget: 127.0.0.1:27117/vg-bootstrap-check\ntenant default-tenant: exists\nresource admin: exists\nclient fe-admin: exists\nfe-admin secret: unchanged (active credential exists)\n{\"alert\":true,\"action\":\"ADMIN_BOOTSTRAPPED\",\"eventId\":\"c8a8fcbf-b834-4922-a9b2-3ab762d5a8f8\"}\nusable super_admins: 0\nnext: the first administrator registers at /register and verifies the email, then run db:admin-recover --email <email> --requested-by <a> --approved-by <b> --ticket <ref>",
+      "stderr": "",
+      "checks": [
+        {
+          "name": "parallel 3: both exit 0, exactly 1 secret line total, 1 credential/client/resource",
+          "pass": true,
+          "detail": "exit 0/0 lines=1 creds=1 clients=1 resources=1"
+        },
+        {
+          "name": "parallel 3: printed secret verifies",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "9.4 sync-indexes (fresh DB)",
+      "cmd": "node dist/database/mongo/sync-indexes.js ",
+      "exit": 0,
+      "ms": 3090,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nUser: synced\nFederatedIdentity: synced\nTenant: synced\nUserTenant: synced\nClient: synced\nClientCredential: synced\nResource: synced\nConsent: synced\nRefreshToken: synced\nPasswordResetToken: synced\nEmailVerificationToken: synced\nAuditLog: synced",
+      "stderr": "",
+      "checks": [
+        {
+          "name": "exit 0",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "9.4 bootstrap B (parallel)",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88b",
+      "exit": 0,
+      "ms": 3062,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nfe-admin redirectUris: https://admin.example.com/auth/callback\nfe-admin postLogoutRedirectUris: https://admin.example.com/\nplan: operator=ops.t88b update-uris=false rotate-secret=false\ntarget: 127.0.0.1:27117/vg-bootstrap-check\ntenant default-tenant: created\nresource admin: created\nclient fe-admin: created\nOIDC_CLIENT_SECRET=<masked: 43 chars, base64url>\nfe-admin secret: shown once, store it in the fe-admin secret store now\n{\"alert\":true,\"action\":\"ADMIN_BOOTSTRAPPED\",\"eventId\":\"63b180bf-389d-46c1-9fe3-3ee56790b50f\"}\nusable super_admins: 0\nnext: the first administrator registers at /register and verifies the email, then run db:admin-recover --email <email> --requested-by <a> --approved-by <b> --ticket <ref>",
+      "stderr": "",
+      "checks": []
+    },
+    {
+      "title": "9.4 bootstrap A (parallel)",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88a",
+      "exit": 0,
+      "ms": 3135,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nfe-admin redirectUris: https://admin.example.com/auth/callback\nfe-admin postLogoutRedirectUris: https://admin.example.com/\nplan: operator=ops.t88a update-uris=false rotate-secret=false\ntarget: 127.0.0.1:27117/vg-bootstrap-check\ntenant default-tenant: exists\nresource admin: exists\nclient fe-admin: exists\nfe-admin secret: unchanged (active credential exists)\n{\"alert\":true,\"action\":\"ADMIN_BOOTSTRAPPED\",\"eventId\":\"97152a16-5153-43fc-a2a8-afa5e86ee940\"}\nusable super_admins: 0\nnext: the first administrator registers at /register and verifies the email, then run db:admin-recover --email <email> --requested-by <a> --approved-by <b> --ticket <ref>",
+      "stderr": "",
+      "checks": [
+        {
+          "name": "parallel 4: both exit 0, exactly 1 secret line total, 1 credential/client/resource",
+          "pass": true,
+          "detail": "exit 0/0 lines=1 creds=1 clients=1 resources=1"
+        },
+        {
+          "name": "parallel 4: printed secret verifies",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "9.5 sync-indexes (fresh DB)",
+      "cmd": "node dist/database/mongo/sync-indexes.js ",
+      "exit": 0,
+      "ms": 3091,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nUser: synced\nFederatedIdentity: synced\nTenant: synced\nUserTenant: synced\nClient: synced\nClientCredential: synced\nResource: synced\nConsent: synced\nRefreshToken: synced\nPasswordResetToken: synced\nEmailVerificationToken: synced\nAuditLog: synced",
+      "stderr": "",
+      "checks": [
+        {
+          "name": "exit 0",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "9.5 bootstrap A (parallel)",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88a",
+      "exit": 0,
+      "ms": 3034,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nfe-admin redirectUris: https://admin.example.com/auth/callback\nfe-admin postLogoutRedirectUris: https://admin.example.com/\nplan: operator=ops.t88a update-uris=false rotate-secret=false\ntarget: 127.0.0.1:27117/vg-bootstrap-check\ntenant default-tenant: created\nresource admin: created\nclient fe-admin: created\nOIDC_CLIENT_SECRET=<masked: 43 chars, base64url>\nfe-admin secret: shown once, store it in the fe-admin secret store now\n{\"alert\":true,\"action\":\"ADMIN_BOOTSTRAPPED\",\"eventId\":\"3ccbb51b-1a40-4443-9136-7abf2506439e\"}\nusable super_admins: 0\nnext: the first administrator registers at /register and verifies the email, then run db:admin-recover --email <email> --requested-by <a> --approved-by <b> --ticket <ref>",
+      "stderr": "",
+      "checks": []
+    },
+    {
+      "title": "9.5 bootstrap B (parallel)",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88b",
+      "exit": 0,
+      "ms": 3083,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nfe-admin redirectUris: https://admin.example.com/auth/callback\nfe-admin postLogoutRedirectUris: https://admin.example.com/\nplan: operator=ops.t88b update-uris=false rotate-secret=false\ntarget: 127.0.0.1:27117/vg-bootstrap-check\ntenant default-tenant: exists\nresource admin: exists\nclient fe-admin: exists\nfe-admin secret: unchanged (active credential exists)\n{\"alert\":true,\"action\":\"ADMIN_BOOTSTRAPPED\",\"eventId\":\"21f57884-731f-420a-80be-0b8a17912524\"}\nusable super_admins: 0\nnext: the first administrator registers at /register and verifies the email, then run db:admin-recover --email <email> --requested-by <a> --approved-by <b> --ticket <ref>",
+      "stderr": "",
+      "checks": [
+        {
+          "name": "parallel 5: both exit 0, exactly 1 secret line total, 1 credential/client/resource",
+          "pass": true,
+          "detail": "exit 0/0 lines=1 creds=1 clients=1 resources=1"
+        },
+        {
+          "name": "parallel 5: printed secret verifies",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "10 no indexes (sync-indexes not run)",
+      "cmd": "node dist/database/bootstrap.js --operator ops.t88",
+      "exit": 1,
+      "ms": 2811,
+      "stdout": "target: 127.0.0.1:27117/vg-bootstrap-check\nfe-admin redirectUris: https://admin.example.com/auth/callback\nfe-admin postLogoutRedirectUris: https://admin.example.com/\nplan: operator=ops.t88 update-uris=false rotate-secret=false\ntarget: 127.0.0.1:27117/vg-bootstrap-check",
+      "stderr": "bootstrap failed: missing unique index clients {\"clientId\":1}: run db:sync-indexes first (nothing was written)",
+      "checks": [
+        {
+          "name": "exit 1",
+          "pass": true
+        },
+        {
+          "name": "\"db:sync-indexes\" hint",
+          "pass": true
+        },
+        {
+          "name": "DB unchanged",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "title": "cleanup",
+      "checks": [
+        {
+          "name": "vg-bootstrap-check dropped",
+          "pass": true
+        },
+        {
+          "name": "vg-int-* count after (info)",
+          "pass": true,
+          "detail": "0"
+        }
+      ]
+    }
+  ]
+}
