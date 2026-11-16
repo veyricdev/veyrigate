@@ -61,6 +61,27 @@ export function resetPasswordMessage(
 }
 
 /**
+ * Run 91 (DEBT-665, D91.4): `/register` for an email whose account exists but was never verified. A
+ * RESET link (the mailbox owner chooses the password), never a verify link: the existing password
+ * may have been chosen by someone else (account pre-hijacking). The old password is not mentioned.
+ */
+export function completeRegistrationMessage(
+  to: string,
+  link: string,
+  expiresInMinutes: number,
+  code: string,
+): MailMessage {
+  return render(
+    to,
+    'Finish creating your account',
+    'Someone, maybe you, tried to create an account with this email address. To finish creating it, choose your password:',
+    link,
+    expiresInMinutes,
+    code,
+  );
+}
+
+/**
  * Notice after a password change or reset (run 85, DEBT-573): no token, no one-time link; only the
  * time (UTC) and where to recover if the user did not do it.
  */

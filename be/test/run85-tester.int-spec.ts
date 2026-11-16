@@ -149,7 +149,7 @@ describe('run 85 T6 tester probes (real app, http)', () => {
     )?.passwordHash;
   // Run 90 C2 (DEBT-659/660): register/forgot write their token + mail detached; wait for them too.
   const flushMail = async () => {
-    await full.app.get(AuthenticationService).settled();
+    await full.app.get(AuthenticationService).drainBackgroundWrites();
     await new Promise((resolve) => setImmediate(resolve));
   };
   const resetTokenFor = async (email: string): Promise<string> => {

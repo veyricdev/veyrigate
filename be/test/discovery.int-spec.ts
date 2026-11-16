@@ -116,6 +116,7 @@ describe('/.well-known/openid-configuration discovery (B4.6 Task 1)', () => {
       introspection_endpoint: `${ISSUER}/introspect`,
       end_session_endpoint: `${ISSUER}/logout`,
       response_types_supported: ['code'],
+      response_modes_supported: ['query'], // run 91, DEBT-662
       grant_types_supported: ['authorization_code', 'refresh_token'],
       subject_types_supported: ['public'],
       id_token_signing_alg_values_supported: ['RS256'],

@@ -73,7 +73,10 @@ describe('StepUpGuard (B6.2) behind AdminTokenGuard (unit, stubbed collaborators
           },
         },
         { provide: ResourceService, useValue: { identifiersFor: async () => [ADMIN_AUD] } },
-        { provide: SessionService, useValue: { isEnded: async () => false } },
+        {
+          provide: SessionService,
+          useValue: { isEnded: async () => false, isAccessTokenRevoked: async () => false },
+        },
         { provide: UserTenantService, useValue: { activeRoles: async () => roles } },
         { provide: getModelToken('User'), useValue: { exists: async () => ({ _id: SUB }) } },
         { provide: ConfigService, useValue: { getOrThrow: () => ({ issuer: ISSUER }) } },

@@ -286,7 +286,7 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
       'send',
     );
     await auth.forgotPassword(await emailOf(id));
-    await auth.settled(); // run 90 C2: the reset token + mail are written detached
+    await auth.drainBackgroundWrites(); // run 90 C2: the reset token + mail are written detached
     const link = send.mock.calls[0][0].text.match(/https?:\S+/)![0];
     send.mockRestore();
     return tokenFromMailLink(link);

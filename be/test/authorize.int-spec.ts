@@ -115,7 +115,7 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
     contexts = new AuthorizeRequestContextService(rs, () => ctxClock);
     const consentModel = connection.model<Consent>('Consent');
     consents = new ConsentService(consentModel, config());
-    codes = new AuthorizationCodeService(rs);
+    codes = new AuthorizationCodeService(rs, config());
     sessionsRp = new SessionService(rs, config());
     service = new AuthorizeService(
       clients,

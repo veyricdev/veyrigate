@@ -1,5 +1,11 @@
 import { AuditAction } from '../../modules/security/audit/audit-action.enum';
-import { observeAuditEvent, observeTokenError, registry } from './metrics';
+import {
+  observeAuditEvent,
+  observeBackgroundWriteFailure,
+  observeTokenError,
+  registry,
+  type BackgroundWrite,
+} from './metrics';
 
 /** Current value of one series (undefined when the series does not exist). */
 async function value(name: string, labels: Record<string, string>): Promise<number | undefined> {
@@ -91,6 +97,20 @@ describe('metrics (B7.2 Task 2)', () => {
     expect(await value('sso_token_endpoint_errors_total', ig)).toBe(ig0 + 1);
     expect(await value('sso_token_endpoint_errors_total', se)).toBe(se0 + 1);
     expect(await registry.metrics()).not.toContain('made_up_code');
+  });
+
+  it('DEBT-666: the 4 background write failure series start at 0; +1 per call; an unknown what adds nothing', async () => {
+    for (const what of ['register', 'forgot', 'resend_verify', 'auth_mail']) {
+      expect(await value('sso_background_write_failures_total', { what })).toBe(0);
+    }
+    const before = await registry.metrics();
+    expect(() => observeBackgroundWriteFailure('made_up' as BackgroundWrite)).not.toThrow();
+    const after = await registry.metrics();
+    expect(after).not.toContain('made_up');
+    expect(after.split('\n').length).toBe(before.split('\n').length);
+    observeBackgroundWriteFailure('forgot');
+    expect(await value('sso_background_write_failures_total', { what: 'forgot' })).toBe(1);
+    expect(await value('sso_background_write_failures_total', { what: 'register' })).toBe(0);
   });
 
   it('never touches the client library global registry', async () => {

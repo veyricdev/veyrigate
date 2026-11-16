@@ -18,6 +18,7 @@ import { buildPinoHttpOptions, LoggerModule } from '../src/common/logger/logger.
 import { ConfigModule } from '../src/config/config.module';
 import { deriveS256Challenge } from '../src/common/crypto/pkce.util';
 import { buildConfig } from '../src/config/configuration';
+import { parseTrustProxy } from '../src/config/trust-proxy';
 import { validateEnv } from '../src/config/validation.schema';
 import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
 import { REDIS_CLIENT } from '../src/database/redis/redis.constants';
@@ -178,9 +179,13 @@ async function startFullApp(
   const moduleRef = await builder.compile();
   started.ctx = moduleRef;
 
-  const app = moduleRef.createNestApplication<NestFastifyApplication>(createFastifyAdapter(), {
-    bufferLogs: true,
-  });
+  const app = moduleRef.createNestApplication<NestFastifyApplication>(
+    // Like `main.ts` (run 91, D91.10: the request id trusts only `TRUST_PROXY` peers).
+    createFastifyAdapter(parseTrustProxy(env.TRUST_PROXY)),
+    {
+      bufferLogs: true,
+    },
+  );
   started.ctx = app;
   // `configureApp` resolves `public/` + `views/` from `__dirname` (CJS in `dist/`). Jest runs the TS
   // sources as native ESM where `__dirname` does not exist, so expose `be/src` as that free

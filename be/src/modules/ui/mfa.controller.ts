@@ -99,6 +99,7 @@ export class MfaController {
 
   @Get('/login/mfa')
   async loginMfaPage(@Req() req: HttpRequest, @Res() reply: HttpReply) {
+    reply.header('Cache-Control', 'no-store'); // DEBT-663: depends on the MFA ticket (both exits)
     const ticket = this.mfaLogin.readTicket(req);
     if (!(await this.mfaLogin.exists(ticket))) return this.backToLogin(reply);
     return this.loginForm(reply, ticket!, HttpStatus.OK);

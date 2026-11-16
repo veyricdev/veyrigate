@@ -69,6 +69,10 @@ class TokenDto extends FormDto {
   @IsString()
   token!: string;
 }
+/** DEBT-671 (D91.14): verifying the email also proves the account password. */
+class VerifyDto extends TokenDto {
+  @IsString() @Length(1, 128) password!: string;
+}
 class ResetDto extends TokenDto {
   @IsString() @Length(8, 128) password!: string;
 }
@@ -320,8 +324,8 @@ export class UiController {
   }
   @Post('/verify-email')
   @UseGuards(CsrfGuard)
-  async verifyPost(@Body() body: TokenDto, @Res() reply: UiReply) {
-    await this.auth.verifyEmail(body.token);
+  async verifyPost(@Body() body: VerifyDto, @Res() reply: UiReply) {
+    await this.auth.verifyEmail(body.token, body.password);
     return reply.view('message.eta', {
       title: 'Email verified',
       message: 'Your email has been verified.',

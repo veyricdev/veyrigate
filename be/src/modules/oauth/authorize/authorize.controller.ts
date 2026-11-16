@@ -77,6 +77,9 @@ export class AuthorizeController {
     @Res() reply: HttpReply,
     @Query() params: AuthorizeParams,
   ): Promise<unknown> {
+    // Run 91 (DEBT-663, senior lot C): every answer of /authorize (error/expired page, consent, 302
+    // with a code or an error, 302 to /login) depends on the session or carries a code: never cached.
+    reply.header('Cache-Control', 'no-store');
     const session = await this.liveSession(req);
     const audit = { ip: req.ip, requestId: req.id };
     // DEBT-413: browser binding of the login context. Reused when present (never rotated, several
@@ -126,6 +129,7 @@ export class AuthorizeController {
     @Req() req: HttpRequest,
     @Res() reply: HttpReply,
   ): Promise<unknown> {
+    reply.header('Cache-Control', 'no-store'); // DEBT-663: as GET /authorize
     // Re-verify the session on POST: it may have expired between render and submit. No session =>
     // never issue a code; send the user back to login (resumable).
     const session = await this.liveSession(req);

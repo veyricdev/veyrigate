@@ -50,7 +50,9 @@ const cfg = {
 // Session-end lookup double (DEBT-037): spy-able so a test can assert call counts and drive
 // specific outcomes (tombstone present/absent, Redis fault). Only `isEnded` is used by /userinfo.
 const isEnded = jest.fn<(ref: string) => Promise<boolean>>().mockResolvedValue(false);
-const sessionsStub = { isEnded } as unknown as SessionService;
+// Run 91 (D91.8): the revoked-`jti` denylist shares the Redis lookup; nothing is denied here.
+const isAccessTokenRevoked = jest.fn<(jti: string) => Promise<boolean>>().mockResolvedValue(false);
+const sessionsStub = { isEnded, isAccessTokenRevoked } as unknown as SessionService;
 
 describe('/userinfo (B4.6 Task 2) on real Mongo', () => {
   let app: NestFastifyApplication;

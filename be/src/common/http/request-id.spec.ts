@@ -1,5 +1,5 @@
 import { createFastifyAdapter } from './framework-errors';
-import { requestIdFrom } from './request-id';
+import { requestIdFrom, trustedProxies } from './request-id';
 
 /**
  * DEBT-095 (run 90 C1, D90.10): one request id source. Fastify `genReqId` (built by the single adapter
@@ -7,12 +7,18 @@ import { requestIdFrom } from './request-id';
  * every response echoes the chosen id; `req.id` (audit `requestId`, pino `req.id`) is that same id.
  */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+/** A request from a trusted proxy (run 91, D91.10): `TRUST_PROXY` lists 10.0.0.0/8. */
+const PROXY = trustedProxies(['10.0.0.0/8']);
+const viaProxy = (headers: Record<string, string | string[] | undefined>) => ({
+  headers,
+  socket: { remoteAddress: '10.1.2.3' },
+});
 
 describe('requestIdFrom', () => {
   it.each([['abc'], ['pt-req-123'], ['A.b_c:d-9'], ['x'.repeat(64)]])(
     'keeps the safe id %p',
     (id) => {
-      expect(requestIdFrom({ headers: { 'x-request-id': id } })).toBe(id);
+      expect(requestIdFrom(viaProxy({ 'x-request-id': id }), PROXY)).toBe(id);
     },
   );
 
@@ -28,7 +34,46 @@ describe('requestIdFrom', () => {
     ['array', ['a', 'b']],
     ['non-ASCII', 'idé'],
   ])('replaces the %s value by a fresh UUID', (_name, value) => {
-    expect(requestIdFrom({ headers: { 'x-request-id': value } })).toMatch(UUID);
+    expect(requestIdFrom(viaProxy({ 'x-request-id': value }), PROXY)).toMatch(UUID);
+  });
+
+  describe('DEBT-667 (d), D91.10: a client id only from a TRUST_PROXY address', () => {
+    const header = { 'x-request-id': 'pt-req-123' };
+    it('no TRUST_PROXY: a valid header is ignored (fresh UUID)', () => {
+      expect(requestIdFrom({ headers: header, socket: { remoteAddress: '10.1.2.3' } })).toMatch(
+        UUID,
+      );
+      expect(
+        requestIdFrom(
+          { headers: header, socket: { remoteAddress: '10.1.2.3' } },
+          trustedProxies(false),
+        ),
+      ).toMatch(UUID);
+    });
+    it.each([
+      ['10.1.2.3', 'pt-req-123'],
+      ['::ffff:10.1.2.3', 'pt-req-123'],
+    ])('TRUST_PROXY=10.0.0.0/8, socket %s => keeps the header', (remoteAddress, want) => {
+      expect(requestIdFrom({ headers: header, socket: { remoteAddress } }, PROXY)).toBe(want);
+    });
+    it.each([['203.0.113.5'], ['::ffff:203.0.113.5'], ['2001:db8::1'], [undefined]])(
+      'TRUST_PROXY=10.0.0.0/8, socket %s => fresh UUID',
+      (remoteAddress) => {
+        expect(requestIdFrom({ headers: header, socket: { remoteAddress } }, PROXY)).toMatch(UUID);
+      },
+    );
+    it('single addresses and IPv6 subnets are honoured too', () => {
+      const list = trustedProxies(['192.0.2.7', 'fd00::/8']);
+      expect(requestIdFrom({ headers: header, socket: { remoteAddress: '192.0.2.7' } }, list)).toBe(
+        'pt-req-123',
+      );
+      expect(requestIdFrom({ headers: header, socket: { remoteAddress: 'fd00::5' } }, list)).toBe(
+        'pt-req-123',
+      );
+      expect(
+        requestIdFrom({ headers: header, socket: { remoteAddress: '192.0.2.8' } }, list),
+      ).toMatch(UUID);
+    });
   });
 
   it('two requests without a header get two different UUIDs (no req-N counter)', () => {
@@ -41,7 +86,8 @@ describe('requestIdFrom', () => {
 });
 
 describe('createFastifyAdapter request id', () => {
-  const adapter = createFastifyAdapter(false);
+  // `inject` comes from 127.0.0.1: trusted here, so a client id is honoured (D91.10).
+  const adapter = createFastifyAdapter(['127.0.0.1']);
   const fastify = adapter.getInstance();
   fastify.get('/rid', async (req) => ({ id: req.id }));
 
@@ -69,6 +115,14 @@ describe('createFastifyAdapter request id', () => {
     },
   );
 
+  it('DEBT-667 (e): a `request-id` header (requestIdHeader stays false) is never the request id', async () => {
+    const res = await fastify.inject({ url: '/rid', headers: { 'request-id': 'pt-other-123' } });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['x-request-id']).not.toBe('pt-other-123');
+    expect(res.headers['x-request-id']).toMatch(UUID);
+    expect(res.json()).toEqual({ id: res.headers['x-request-id'] });
+  });
+
   it('no header: each response echoes its own UUID', async () => {
     const [a, b] = await Promise.all([
       fastify.inject({ url: '/rid' }),
@@ -77,5 +131,17 @@ describe('createFastifyAdapter request id', () => {
     expect(a.headers['x-request-id']).toMatch(UUID);
     expect(b.headers['x-request-id']).toMatch(UUID);
     expect(a.headers['x-request-id']).not.toBe(b.headers['x-request-id']);
+  });
+});
+
+describe('createFastifyAdapter request id without TRUST_PROXY (run 91, D91.10)', () => {
+  const fastify = createFastifyAdapter(false).getInstance();
+  fastify.get('/rid', async (req) => ({ id: req.id }));
+  afterAll(() => fastify.close());
+
+  it('a valid client id is NOT used: a fresh UUID is echoed and is req.id', async () => {
+    const res = await fastify.inject({ url: '/rid', headers: { 'x-request-id': 'pt-req-123' } });
+    expect(res.headers['x-request-id']).toMatch(UUID);
+    expect(res.json()).toEqual({ id: res.headers['x-request-id'] });
   });
 });

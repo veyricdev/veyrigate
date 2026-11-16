@@ -243,7 +243,7 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
         })
       ).statusCode,
     ).toBe(201);
-    await moduleRef.get(AuthenticationService).settled(); // run 90 C2: user + mail are detached
+    await moduleRef.get(AuthenticationService).drainBackgroundWrites(); // run 90 C2: user + mail are detached
     const link = messages.find((message) => message.to === email)?.text.match(/https:\/\/\S+/)?.[0];
     expect(link).toBeDefined();
     const token = tokenFromMailLink(link!);
@@ -256,7 +256,7 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
           method: 'POST',
           url: '/verify-email',
           headers: { cookie: page.cookie },
-          payload: { _csrf: page.csrf, token },
+          payload: { _csrf: page.csrf, token, password: 'correct password' },
         })
       ).statusCode,
     ).toBe(201);
@@ -500,7 +500,7 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
     /** Register over HTTP and return the verification token from the captured mail. */
     const registerAndToken = async (email: string) => {
       expect((await submit('/register', { email, password: PASSWORD })).statusCode).toBe(201);
-      await moduleRef.get(AuthenticationService).settled(); // run 90 C2: user + mail are detached
+      await moduleRef.get(AuthenticationService).drainBackgroundWrites(); // run 90 C2: user + mail are detached
       const link = messages.find((m) => m.to === email)?.text.match(/https:\/\/\S+/)?.[0];
       expect(link).toBeDefined();
       return tokenFromMailLink(link!);
@@ -556,10 +556,10 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
 
     it('AE6: POST /verify-email with an unknown vs an already-used token is byte-identical', async () => {
       const token = await registerAndToken(fresh());
-      expect((await submit('/verify-email', { token })).statusCode).toBe(201);
-      const used = observable(await submit('/verify-email', { token }));
+      expect((await submit('/verify-email', { token, password: PASSWORD })).statusCode).toBe(201);
+      const used = observable(await submit('/verify-email', { token, password: PASSWORD }));
       const unknown = observable(
-        await submit('/verify-email', { token: 'x'.repeat(token.length) }),
+        await submit('/verify-email', { token: 'x'.repeat(token.length), password: PASSWORD }),
       );
       expect(used.status).toBe(400);
       expect(unknown).toEqual(used);
@@ -587,7 +587,7 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
         }),
       ).toBe(2);
 
-      expect((await submit('/verify-email', { token })).statusCode).toBe(201);
+      expect((await submit('/verify-email', { token, password: PASSWORD })).statusCode).toBe(201);
       const after = await submit('/login', { email, password: PASSWORD, returnTo: '/' });
       expect(after.statusCode).toBe(302);
       expect(observable(after).setCookies).toContain('idp_session');

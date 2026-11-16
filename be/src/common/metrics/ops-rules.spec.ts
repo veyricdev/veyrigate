@@ -102,6 +102,8 @@ describe('ops/prometheus + ops/grafana vs the exported metrics (B7.2 Task 3)', (
   it('alerts.yml: one group sso-idp; every rule has alert, expr, labels.severity, annotations.summary', () => {
     expect(alerts.groups.map((g) => g.name)).toEqual(['sso-idp']);
     expect(rules.map((r) => r.alert).sort()).toEqual([
+      'SsoAuthMailFailed',
+      'SsoBackgroundWriteFailed',
       'SsoEmergencyKeyRotation',
       'SsoHttp5xxRatioHigh',
       'SsoMongoBackupStale',
@@ -114,8 +116,9 @@ describe('ops/prometheus + ops/grafana vs the exported metrics (B7.2 Task 3)', (
       expect(r.annotations?.summary).toEqual(expect.any(String));
       // No label templating in annotations (nothing identifying can leak into a notification).
       expect(JSON.stringify(r.annotations)).not.toMatch(/\{\{|\$labels|\$value/);
-      // Multi-instance safe: every selector is aggregated (a backup age: the oldest db, `max`).
-      expect(r.expr).toMatch(isExternal(r.expr) ? /^max\(/ : /^sum\(/);
+      // Multi-instance safe: every selector is aggregated (a backup age: the oldest db, `max`); a
+      // `sum by (<finite label>)` keeps one alert per label value (run 91, DEBT-666).
+      expect(r.expr).toMatch(isExternal(r.expr) ? /^max\(/ : /^sum(\s+by\s*\([\w,\s]+\))?\s*\(/);
     }
   });
 
@@ -163,8 +166,16 @@ describe('ops/prometheus + ops/grafana vs the exported metrics (B7.2 Task 3)', (
         const rule = byName.get(a.alertname);
         expect(rule).toBeDefined();
         tested.add(a.alertname);
+        // A `sum by (...)` rule also carries its grouping labels (run 91, DEBT-666).
+        const byLabels = (/^sum\s+by\s*\(([^)]*)\)/.exec(rule!.expr)?.[1] ?? '')
+          .split(',')
+          .map((l) => l.trim())
+          .filter(Boolean);
         for (const exp of a.exp_alerts) {
-          expect(exp.exp_labels).toEqual(rule!.labels);
+          expect(Object.keys(exp.exp_labels).sort()).toEqual(
+            [...Object.keys(rule!.labels ?? {}), ...byLabels].sort(),
+          );
+          expect(exp.exp_labels).toEqual(expect.objectContaining(rule!.labels));
           expect(exp.exp_annotations).toEqual(rule!.annotations);
         }
       }

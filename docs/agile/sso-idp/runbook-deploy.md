@@ -164,6 +164,9 @@ fail-closed (thao tác ghi phiên/code lỗi rõ ràng) thay vì âm thầm mấ
 5'. Từ run 82: chạy truy vấn chỉ đọc `runbook-ops.md` §8 (scope ngoài RFC 6749 §3.3) — khác rỗng ⇒ dọn qua admin API trước, hoặc chấp nhận lần sửa kế tiếp của bản ghi đó sẽ `400`.
 5''. Từ run 84: chạy truy vấn chỉ đọc `runbook-ops.md` §10 (email ngoài ngữ pháp D84.1), ghi `count` vào ticket deploy — xem §13.
 6. Rollout tiến trình ứng dụng.
+7. Từ run 91 (DEBT-666, điều kiện go-live (2)): trước khi mở đăng ký công khai, nạp `ops/prometheus/alerts.yml` vào Prometheus thật (có `SsoBackgroundWriteFailed` + `SsoAuthMailFailed`) và route tới receiver có người trực (Alertmanager do môi trường quyết định, DEBT-670); xử lý theo `runbook-ops.md` §13.
+8. Từ run 91 (DEBT-671, D91.14): `/verify-email` đòi thêm mật khẩu tài khoản (sai 5 lần ⇒ link bị huỷ). Link xác minh gửi trước deploy vẫn dùng được, chỉ phải nhập mật khẩu; người không nhớ mật khẩu dùng `/forgot` (cũng xác minh email). Báo trước cho bộ phận hỗ trợ.
+9. Từ run 91 (DEBT-651, D91.6): key Redis của authorization code đổi sang `authz_code:{<sha256>}` (hash tag, kèm dấu `authz_code_used:{…}` và denylist `at_revoked:<jti>`) ⇒ code đang bay lúc rollout (≤ 60 s) không đổi được, RP nhận `invalid_grant` và người dùng đăng nhập lại một lần. Không cần thao tác dữ liệu. AT thu hồi do code bị dùng lại chỉ bị từ chối ở IdP (`/introspect`, `/userinfo`, admin API); RS tự verify JWT cục bộ vẫn nhận tới `exp` (DEBT-669) ⇒ RS nhạy cảm nên introspect. **Hướng dẫn RP**: đổi mỗi code **đúng một lần**, không retry và không gửi song song cùng một code — lần đổi thứ hai (kể cả do RP tự retry) bị coi là dùng lại và thu hồi luôn token của lần đầu.
 
 ## 5. `TRUST_PROXY` khi chạy sau reverse proxy (DEBT-006)
 
@@ -181,6 +184,10 @@ khoá được client hợp lệ.
 - Thiếu/rỗng/`false` ⇒ mặc định TẮT (dùng IP socket). Chỉ dùng khi KHÔNG có proxy trước app.
 - **TUYỆT ĐỐI không** `TRUST_PROXY=true` — tin mọi `X-Forwarded-For` ⇒ client spoof IP vượt
   bucket. App **từ chối khởi động** nếu gặp `true`, một số, hoặc IP/CIDR sai (`parseTrustProxy`).
+- **`X-Request-ID` (run 91, DEBT-667 d, D91.10)**: app chỉ dùng `x-request-id` của request khi socket
+  đến từ một địa chỉ thuộc `TRUST_PROXY`; mọi nguồn khác ⇒ sinh UUID mới. Reverse proxy phải **ghi đè**
+  header, không chuyển tiếp nguyên header của client (nginx: `proxy_set_header X-Request-ID $request_id;`),
+  nếu không client tự đặt được id tương quan trong audit/log.
 
 ## 6. Sau emergency rotate — kiểm `KEY_LOCAL_DIR` (DEBT-163, dev `LocalKeyProvider`)
 

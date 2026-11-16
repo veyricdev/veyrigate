@@ -499,7 +499,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
   it.each([
     ['/register', { email: 'new@example.com', password: 'correct password' }],
     ['/forgot', { email: 'user@example.com' }],
-    ['/verify-email', { token: 'verification-token' }],
+    ['/verify-email', { token: 'verification-token', password: 'correct password' }],
     ['/reset', { token: 'reset-token', password: 'correct password' }],
   ] as const)('shared message outcomes retain login action for POST %s', async (url, payload) => {
     const page = await form(url);

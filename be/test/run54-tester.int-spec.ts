@@ -187,7 +187,7 @@ describe('run 54 tester: DEBT-388 sign-before-commit risk tests', () => {
     return { ...c, rt: res.json().refresh_token as string };
   }
 
-  const codeKey = (code: string) => `authz_code:${sha256(code)}`;
+  const codeKey = (code: string) => `authz_code:{${sha256(code)}}`;
   const issuedAudits = (userId: string) =>
     auditModel.find({ action: AuditAction.TOKEN_ISSUED, actorId: userId }).lean<AuditEvent[]>();
   const refreshedAudits = (userId: string) =>
@@ -364,19 +364,25 @@ describe('run 54 tester: DEBT-388 sign-before-commit risk tests', () => {
       expect((await issuedAudits(userId)).filter((e) => e.result === 'success')).toHaveLength(0);
     });
 
-    it('T2: 8 concurrent exchanges of one code, all signed and held, released together ⇒ exactly 1×200, 7×invalid_grant, 1 family, 1 success audit', async () => {
+    // Run 91 (DEBT-651, D91.6): the 7 losers are same-client replays, so the winner's family is
+    // revoked too (RFC 6749 §4.1.2): at most one 200, the rest invalid_grant, one family, dead.
+    it('T2: 8 concurrent exchanges of one code, all signed and held, released together ⇒ ≤ 1×200, the rest invalid_grant, 1 family revoked, ≤ 1 success audit', async () => {
       const { clientId, userId, code } = await issueCode();
       const gate = holdSigns();
       const reqs = Array.from({ length: 8 }, () => exchange(clientId, code));
       await gate.arrived(8);
       for (const release of gate.held) release();
       const results = await Promise.all(reqs);
-      expect(results.filter((r) => r.statusCode === 200)).toHaveLength(1);
+      expect(results.filter((r) => r.statusCode === 200).length).toBeLessThanOrEqual(1);
       const lost = results.filter((r) => r.statusCode !== 200);
-      expect(lost).toHaveLength(7);
+      expect(lost.length).toBeGreaterThanOrEqual(7);
       for (const r of lost) expectInvalidGrant(r);
-      expect(await familyDocs(userId)).toHaveLength(1);
-      expect((await issuedAudits(userId)).filter((e) => e.result === 'success')).toHaveLength(1);
+      const fams = (await familyDocs(userId)) as { revokedAt?: Date }[];
+      expect(fams).toHaveLength(1);
+      expect(fams[0].revokedAt).toBeInstanceOf(Date);
+      expect(
+        (await issuedAudits(userId)).filter((e) => e.result === 'success').length,
+      ).toBeLessThanOrEqual(1);
     });
 
     it('T3: 6 concurrent exchanges released one at a time in reverse arrival order ⇒ first released wins, the 5 later ones invalid_grant', async () => {

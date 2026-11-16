@@ -185,7 +185,7 @@ describe('DEBT-388: sign before commit (/token code + refresh grants)', () => {
     return { clientId, userId, rt: res.json().refresh_token as string };
   }
 
-  const codeKey = (code: string) => `authz_code:${sha256(code)}`;
+  const codeKey = (code: string) => `authz_code:{${sha256(code)}}`;
   const issuedAudits = (userId: string) =>
     auditModel.find({ action: AuditAction.TOKEN_ISSUED, actorId: userId }).lean<AuditEvent[]>();
   const refreshedAudits = (userId: string) =>
@@ -368,7 +368,9 @@ describe('DEBT-388: sign before commit (/token code + refresh grants)', () => {
       expect(await familyDocs(userId)).toHaveLength(1);
     });
 
-    it('C3: two requests with the same code, both signed before consume ⇒ exactly one 200, one invalid_grant, one family', async () => {
+    // Run 91 (DEBT-651, D91.6): the loser is a same-client replay, so the winner's tokens are revoked
+    // too. Still: at most one 200, the loser gets invalid_grant, one family at most, and it is dead.
+    it('C3: two requests with the same code, both signed before consume ⇒ at most one 200, one family at most, revoked', async () => {
       const { clientId, userId, code } = await issueCode();
       const gate = holdSigns();
       const a = exchange(clientId, code);
@@ -378,11 +380,15 @@ describe('DEBT-388: sign before commit (/token code + refresh grants)', () => {
       const results = await Promise.all([a, b]);
       const ok = results.filter((r) => r.statusCode === 200);
       const lost = results.filter((r) => r.statusCode !== 200);
-      expect(ok).toHaveLength(1);
-      expect(lost).toHaveLength(1);
-      expectInvalidGrant(lost[0]);
-      expect(await familyDocs(userId)).toHaveLength(1);
-      expect((await issuedAudits(userId)).map((e) => e.result)).toEqual(['success']);
+      expect(ok.length).toBeLessThanOrEqual(1);
+      expect(lost.length).toBeGreaterThanOrEqual(1);
+      for (const r of lost) expectInvalidGrant(r);
+      const fams = (await familyDocs(userId)) as { revokedAt?: Date }[];
+      expect(fams.length).toBeLessThanOrEqual(1);
+      for (const f of fams) expect(f.revokedAt).toBeInstanceOf(Date);
+      expect(
+        (await issuedAudits(userId)).filter((e) => e.result === 'success').length,
+      ).toBeLessThanOrEqual(1);
     });
 
     it('C4: A fails to sign while B succeeds ⇒ A 503, B 200; A retry ⇒ invalid_grant; one family', async () => {

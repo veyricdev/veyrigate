@@ -286,6 +286,7 @@ describe('run 53c tester: Redis / key provider down — wider surface, families,
       const ve = await form('/verify-email', anonCookie, {
         _csrf: csrf.token(anon),
         token: randomBytes(32).toString('base64url'),
+        password: 'any password 1',
       });
       expect(ve.statusCode).toBe(400);
       // Redis-free endpoints keep answering (no blanket 503).

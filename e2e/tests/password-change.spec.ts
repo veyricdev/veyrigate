@@ -102,6 +102,8 @@ test("password change: CSRF and wrong current refused; success kills every sessi
   await reg.getByRole("button", { name: "Create account" }).click();
   await expect(setup.getByText("a verification email has been sent")).toBeVisible();
   await setup.goto(await verificationLink(email));
+  // Run 91 (DEBT-671, D91.14): verifying the email also proves the password.
+  await setup.getByLabel("Password of the account").fill(OLD);
   await setup.getByRole("button", { name: "Verify email" }).click();
   await expect(setup.getByRole("heading", { name: "Email verified" })).toBeVisible();
   await setup.context().close();

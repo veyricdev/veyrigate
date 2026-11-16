@@ -189,6 +189,17 @@ export class UserService {
     return out;
   }
 
+  /**
+   * Whether the account is still unverified AND has a password (run 91, DEBT-665): an `exists` on the
+   * filter, the hash itself is never read. Mongo errors propagate.
+   */
+  async isUnverifiedWithPassword(sub: string): Promise<boolean> {
+    if (!isValidObjectId(sub)) return false;
+    return !!(await this.users
+      .exists({ _id: sub, emailVerifiedAt: null, passwordHash: { $type: 'string' } })
+      .exec());
+  }
+
   /** By id, with `passwordHash` (password change, DEBT-573). */
   async findByIdForAuthentication(sub: string): Promise<UserWithPassword | null> {
     if (!isValidObjectId(sub)) return null;
@@ -264,6 +275,8 @@ export class UserService {
   /**
    * New password (reset): clears a temporary lock (B2.4), but NEVER an admin lock
    * (`ADMIN_LOCKED_UNTIL`) - self-service must not undo an admin decision. One atomic pipeline.
+   * The reset mail proved control of the mailbox, so an unverified email becomes verified; an
+   * already verified one keeps its first `emailVerifiedAt` (run 91, DEBT-665, D91.5).
    */
   async setPassword(sub: string, passwordHash: string): Promise<UserView | null> {
     if (!isValidObjectId(sub)) return null;
@@ -274,7 +287,7 @@ export class UserService {
           {
             $set: {
               passwordHash: { $literal: passwordHash }, // a hash starts with `$`: not a field path
-              emailVerifiedAt: new Date(),
+              emailVerifiedAt: { $ifNull: ['$emailVerifiedAt', new Date()] },
               lockedUntil: {
                 $cond: [{ $eq: ['$lockedUntil', ADMIN_LOCKED_UNTIL] }, '$lockedUntil', '$$REMOVE'],
               },

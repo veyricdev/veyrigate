@@ -58,6 +58,8 @@ export class UiSessionHelper {
 
   /** The live session of the cookie, or null (a dead cookie is cleared). Redis errors propagate. */
   async liveSession(req: HttpRequest, reply: HttpReply): Promise<Session | null> {
+    // DEBT-663 (D91.12): every response that depends on the session is never cached (`/` too).
+    reply.header('Cache-Control', 'no-store');
     const id = this.sessionCookie.read(req);
     if (!id) return null;
     const session = await this.sessions.get(id);
@@ -69,6 +71,7 @@ export class UiSessionHelper {
 
   /** CSRF identity of a form page: the session cookie, else the anonymous CSRF cookie. */
   identity(req: HttpRequest, reply: HttpReply): string {
+    reply.header('Cache-Control', 'no-store'); // DEBT-663: a page carrying a CSRF token
     return formCsrfIdentity(this.sessionCookie.read(req), req, reply, this.secure);
   }
 

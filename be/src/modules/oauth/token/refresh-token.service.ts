@@ -634,7 +634,7 @@ export class RefreshTokenService {
     familyId: string,
     clientId: string,
     now: Date,
-    opts: { reuse?: boolean; audit?: AuditCtx } = {},
+    opts: { reuse?: boolean; audit?: AuditCtx; kind?: 'authorization_code' } = {},
   ): Promise<number> {
     const modified = await this.revokeWhere({ familyId, clientId }, now, { reuse: opts.reuse });
 
@@ -649,7 +649,8 @@ export class RefreshTokenService {
         ip: opts.audit?.ip,
         userAgent: opts.audit?.userAgent,
         requestId: opts.audit?.requestId,
-        metadata: { familyId, count: modified },
+        // `kind` (run 91, DEBT-651): a replayed authorization code, not a replayed refresh token.
+        metadata: { familyId, count: modified, ...(opts.kind ? { kind: opts.kind } : {}) },
       });
     }
     return modified;

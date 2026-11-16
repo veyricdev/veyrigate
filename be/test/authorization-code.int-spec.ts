@@ -1,3 +1,4 @@
+import type { ConfigService } from '@nestjs/config';
 import IORedis from 'ioredis';
 import { sha256 } from '../src/common/crypto/crypto.util';
 import { RedisService } from '../src/database/redis/redis.service';
@@ -29,7 +30,9 @@ describe('AuthorizationCodeService on real Redis (B4.3, spec §9.1 step 3 / §9.
 
   beforeAll(() => {
     redis = new IORedis(REDIS_URL, { maxRetriesPerRequest: 1 });
-    svc = new AuthorizationCodeService(new RedisService(redis));
+    svc = new AuthorizationCodeService(new RedisService(redis), {
+      getOrThrow: () => ({ accessTokenTtl: 900 }),
+    } as unknown as ConfigService);
   });
 
   afterAll(async () => {
@@ -48,12 +51,12 @@ describe('AuthorizationCodeService on real Redis (B4.3, spec §9.1 step 3 / §9.
     expect(data).toEqual(stamped(d));
 
     expect(await redis.exists(`authz_code:${code}`)).toBe(0);
-    const raw = await redis.get(`authz_code:${sha256(code)}`);
+    const raw = await redis.get(`authz_code:{${sha256(code)}}`);
     expect(raw).not.toBeNull();
     expect(raw).not.toContain(code);
     expect(JSON.parse(raw!)).toEqual(stamped(d));
 
-    const pttl = await redis.pttl(`authz_code:${sha256(code)}`);
+    const pttl = await redis.pttl(`authz_code:{${sha256(code)}}`);
     expect(pttl).toBeGreaterThan(0);
     expect(pttl).toBeLessThanOrEqual(60_000);
 
@@ -68,7 +71,7 @@ describe('AuthorizationCodeService on real Redis (B4.3, spec §9.1 step 3 / §9.
     const { code } = await svc.create(d);
 
     expect(await svc.consume(code, 'wrong-client', d.redirectUri, d.codeChallenge)).toBeNull();
-    expect(await redis.exists(`authz_code:${sha256(code)}`)).toBe(1);
+    expect(await redis.exists(`authz_code:{${sha256(code)}}`)).toBe(1);
 
     const consumed = await svc.consume(code, d.clientId, d.redirectUri, d.codeChallenge);
     expect(consumed).toEqual(stamped(d));
@@ -81,7 +84,7 @@ describe('AuthorizationCodeService on real Redis (B4.3, spec §9.1 step 3 / §9.
     expect(
       await svc.consume(code, d.clientId, 'https://evil.example.com/cb', d.codeChallenge),
     ).toBeNull();
-    expect(await redis.exists(`authz_code:${sha256(code)}`)).toBe(1);
+    expect(await redis.exists(`authz_code:{${sha256(code)}}`)).toBe(1);
 
     const consumed = await svc.consume(code, d.clientId, d.redirectUri, d.codeChallenge);
     expect(consumed).toEqual(stamped(d));
@@ -98,13 +101,13 @@ describe('AuthorizationCodeService on real Redis (B4.3, spec §9.1 step 3 / §9.
     const wins = [a, b].filter((x) => x !== null);
     expect(wins).toHaveLength(1);
     expect(wins[0]).toEqual(stamped(d));
-    expect(await redis.exists(`authz_code:${sha256(code)}`)).toBe(0);
+    expect(await redis.exists(`authz_code:{${sha256(code)}}`)).toBe(0);
   });
 
   it('C5(c): TTL is fixed at 60s (real PTTL on Redis, no sliding)', async () => {
     const d = dataFor(`${RUN}-user-e`);
     const { code } = await svc.create(d);
-    const pttl = await redis.pttl(`authz_code:${sha256(code)}`);
+    const pttl = await redis.pttl(`authz_code:{${sha256(code)}}`);
     expect(pttl).toBeGreaterThan(59_000);
     expect(pttl).toBeLessThanOrEqual(60_000);
     await svc.consume(code, d.clientId, d.redirectUri, d.codeChallenge);
@@ -114,9 +117,9 @@ describe('AuthorizationCodeService on real Redis (B4.3, spec §9.1 step 3 / §9.
     const d = dataFor(`${RUN}-user-f`);
     const { code } = await svc.create(d);
     // Force-expire instead of sleeping 60s: real Redis TTL mechanics, not a mocked clock.
-    await redis.pexpire(`authz_code:${sha256(code)}`, 1);
+    await redis.pexpire(`authz_code:{${sha256(code)}}`, 1);
     await new Promise((r) => setTimeout(r, 50));
-    expect(await redis.exists(`authz_code:${sha256(code)}`)).toBe(0);
+    expect(await redis.exists(`authz_code:{${sha256(code)}}`)).toBe(0);
     expect(await svc.consume(code, d.clientId, d.redirectUri, d.codeChallenge)).toBeNull();
   });
 
@@ -194,6 +197,6 @@ describe('AuthorizationCodeService on real Redis (B4.3, spec §9.1 step 3 / §9.
     const wins = results.filter((x) => x !== null);
     expect(wins).toHaveLength(1);
     expect(wins[0]).toEqual(stamped(d));
-    expect(await redis.exists(`authz_code:${sha256(code)}`)).toBe(0);
+    expect(await redis.exists(`authz_code:{${sha256(code)}}`)).toBe(0);
   });
 });

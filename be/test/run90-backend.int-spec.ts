@@ -29,7 +29,12 @@ describe('run 90 lot C (request id, detached register/forgot writes)', () => {
   beforeAll(
     () =>
       (setup = (async () => {
-        full = await bootFullApp({ name: 'run90', logStream: stream });
+        // Run 91 (D91.10): `inject` comes from 127.0.0.1, trusted here, so C1 exercises the client id.
+        full = await bootFullApp({
+          name: 'run90',
+          logStream: stream,
+          env: { TRUST_PROXY: '127.0.0.1' },
+        });
       })()),
     INT_SETUP_TIMEOUT_MS,
   );
@@ -74,7 +79,7 @@ describe('run 90 lot C (request id, detached register/forgot writes)', () => {
       .map((l) => JSON.parse(l) as { msg?: string; req?: { id?: string } })
       .find((e) => e.msg === 'request completed' && e.req?.id === id);
   const flushLogs = () => new Promise((r) => setTimeout(r, 50));
-  const drain = () => full.app.get(AuthenticationService).settled();
+  const drain = () => full.app.get(AuthenticationService).drainBackgroundWrites();
 
   describe('C1 request id (DEBT-095)', () => {
     it('a valid client id is echoed and is the audit requestId + access-log req.id of that request', async () => {
@@ -173,7 +178,9 @@ describe('run 90 lot C (request id, detached register/forgot writes)', () => {
       expect(full.outbox.filter((m) => m.to === addr)).toHaveLength(1);
     });
 
-    it('/register for an existing email: identical page, no new token or mail', async () => {
+    // Run 91 (DEBT-665, D91.4 retry 1): an existing UNVERIFIED account gets no new verify token, only one
+    // "finish creating your account" reset link (verified accounts get nothing: run91-background-writes).
+    it('/register for an existing unverified email: identical page, no new verify token, one finish mail', async () => {
       const addr = email('dup');
       const first = await post('/register', { email: addr, password: PASSWORD });
       await drain();
@@ -181,9 +188,18 @@ describe('run 90 lot C (request id, detached register/forgot writes)', () => {
       await drain();
       expect(again.statusCode).toBe(201);
       expect(again.body).toBe(first.body);
-      expect(await full.conn.model('User').countDocuments({ email: addr })).toBe(1);
-      expect(await full.conn.model('EmailVerificationToken').countDocuments({})).toBeGreaterThan(0);
-      expect(full.outbox.filter((m) => m.to === addr)).toHaveLength(1);
+      const user = (await full.conn.model('User').find({ email: addr }).lean()) as {
+        _id: unknown;
+      }[];
+      expect(user).toHaveLength(1);
+      expect(
+        await full.conn.model('EmailVerificationToken').countDocuments({ userId: user[0]._id }),
+      ).toBe(1);
+      const mails = full.outbox.filter((m) => m.to === addr);
+      expect(mails).toHaveLength(2);
+      expect(mails[1].subject).toBe('Finish creating your account');
+      expect(tokenFromMailLink(mails[1].text)).toBeTruthy();
+      expect(mails[1].text).toContain('/reset#token=');
     });
 
     it('/forgot: known email gets one reset token + mail once settled, unknown gets the same page and nothing', async () => {

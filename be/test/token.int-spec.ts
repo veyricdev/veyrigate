@@ -347,7 +347,7 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
     );
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('unauthorized_client');
-    expect(await redis.exists(`authz_code:${sha256(code)}`)).toBe(1);
+    expect(await redis.exists(`authz_code:{${sha256(code)}}`)).toBe(1);
   });
 
   it('wrong code_verifier => 400 invalid_grant and code INTACT (INV-13), then correct verifier => 200', async () => {
@@ -364,7 +364,7 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
     );
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('invalid_grant');
-    expect(await redis.exists(`authz_code:${sha256(code)}`)).toBe(1);
+    expect(await redis.exists(`authz_code:{${sha256(code)}}`)).toBe(1);
 
     const ok = await post(
       form({
@@ -391,7 +391,7 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
     );
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('invalid_grant');
-    expect(await redis.exists(`authz_code:${sha256(code)}`)).toBe(1);
+    expect(await redis.exists(`authz_code:{${sha256(code)}}`)).toBe(1);
     await codes.consume(code, `${RUN}-public`, REDIRECT, CHALLENGE);
   });
 
@@ -408,7 +408,7 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
     );
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('invalid_grant');
-    expect(await redis.exists(`authz_code:${sha256(code)}`)).toBe(1);
+    expect(await redis.exists(`authz_code:{${sha256(code)}}`)).toBe(1);
     await codes.consume(code, `${RUN}-public`, REDIRECT, CHALLENGE);
   });
 
@@ -622,7 +622,10 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
     expect((events[0].metadata as { refresh?: boolean }).refresh).toBe(false);
   });
 
-  it('two concurrent exchanges of the same code => exactly one 200, one DB refresh doc', async () => {
+  // Run 91 (DEBT-651, D91.6): the second redemption by the SAME client is a replay, so nothing the
+  // code issued survives: at most one 200 (when the replay lands after issuance), one family at most,
+  // and that family is revoked either way (RFC 6749 §4.1.2).
+  it('two concurrent exchanges of the same code => at most one 200, one family at most, revoked', async () => {
     const { code } = await mintCode({ scope: 'openid offline_access' });
     const payload = form({
       grant_type: 'authorization_code',
@@ -631,13 +634,18 @@ describe('/token grant authorization_code on real Mongo + Redis (B4.4)', () => {
       client_id: `${RUN}-public`,
       code_verifier: VERIFIER,
     });
+    const t0 = new Date();
     const [a, b] = await Promise.all([post(payload), post(payload)]);
     const statuses = [a.statusCode, b.statusCode].sort();
-    expect(statuses).toEqual([200, 400]);
-    const docs = await refreshModel.find({ tokenHash: { $exists: true } }).lean();
-    const winner = a.statusCode === 200 ? a : b;
-    const mine = docs.filter((d) => d.tokenHash === sha256(winner.json().refresh_token));
-    expect(mine).toHaveLength(1);
+    expect([
+      [200, 400],
+      [400, 400],
+    ]).toContainEqual(statuses);
+    const fams = await refreshModel
+      .find({ clientId: `${RUN}-public`, issuedAt: { $gte: t0 } })
+      .lean();
+    expect(fams.length).toBeLessThanOrEqual(1);
+    for (const f of fams) expect(f.revokedAt).toBeInstanceOf(Date);
   });
 
   it('malformed percent-encoding in Basic credentials => 401 invalid_client + WWW-Authenticate', async () => {

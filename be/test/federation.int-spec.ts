@@ -2091,7 +2091,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       const local = await localUser({ password: null });
       mails.length = 0;
       await moduleRef.get(AuthenticationService).forgotPassword(local.email);
-      await moduleRef.get(AuthenticationService).settled(); // run 90 C2
+      await moduleRef.get(AuthenticationService).drainBackgroundWrites(); // run 90 C2
       const token = mails[0]?.text.match(/token=([A-Za-z0-9_-]+)/)?.[1];
       expect(token).toBeTruthy();
       await moduleRef.get(AuthenticationService).resetPassword(token!, 'brand new password 1');

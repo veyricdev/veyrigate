@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import { createServer, get as httpGet, type Server } from 'node:http';
 import { Writable } from 'node:stream';
 import { pinoHttp } from 'pino-http';
-import { requestIdFrom } from '../http/request-id';
+import { requestIdFrom, trustedProxies } from '../http/request-id';
 import { buildPinoHttpOptions, serializeRequest, serializeResponse } from './logger.module';
 
 describe('request log serializer', () => {
@@ -104,7 +104,8 @@ describe('pino-http wiring (no DB)', () => {
     server = createServer((req, res) => {
       // Under Fastify, middie hands pino-http the raw request with `id` already set by the adapter's
       // `genReqId` (DEBT-095): pino-http keeps it and never reads the header itself.
-      (req as { id?: string }).id = requestIdFrom(req);
+      // The local test client is a trusted proxy here (run 91, D91.10: only then is the header used).
+      (req as { id?: string }).id = requestIdFrom(req, trustedProxies(['127.0.0.1', '::1']));
       logger(req, res);
       // The adapter's echo (DEBT-095). A header set before `writeHead` also makes node keep the
       // `writeHead` headers in `getHeaders()`, which is what the response serializer reads.

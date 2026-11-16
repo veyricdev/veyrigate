@@ -80,6 +80,8 @@ async function registerAccount(browser: Browser, tag: string): Promise<Account> 
   await reg.getByRole("button", { name: "Create account" }).click();
   await expect(page.getByText("a verification email has been sent")).toBeVisible();
   await page.goto(await verificationLink(account.email));
+  // Run 91 (DEBT-671, D91.14): verifying the email also proves the password.
+  await page.getByLabel("Password of the account").fill(account.password);
   await page.getByRole("button", { name: "Verify email" }).click();
   await expect(page.getByRole("heading", { name: "Email verified" })).toBeVisible();
   await context.close();

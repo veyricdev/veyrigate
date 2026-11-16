@@ -670,3 +670,36 @@ Seed TOTP mã hoá AES-256-GCM bằng khoá trong env (`kid:base64`, phần tử
    Sau đó thu hồi phiên (`POST /admin/users/{id}/sessions/revoke` hoặc xoay `sess:*` theo §5) và báo user enroll lại.
    Khoá bị lộ (không mất) ⇒ thêm khoá mới lên đầu (bước 2), chờ đăng nhập mã hoá lại, cân nhắc reset hàng loạt vì backup
    cũ + khoá lộ vẫn giải được seed cũ.
+
+## 13. Lỗi ghi nền đăng ký / quên mật khẩu / gửi thư (run 91, DEBT-666)
+
+Từ run 90 (DEBT-659/660) `/register` và `/forgot` luôn trả trang thành công chung; việc ghi phụ thuộc tài khoản chạy tách rời
+sau phản hồi. Lỗi ở đó không thành 5xx: người dùng thấy "đã gửi" nhưng không có tài khoản/token/thư.
+
+**Dấu hiệu**: alert `SsoBackgroundWriteFailed` (critical) hoặc `SsoAuthMailFailed` (warning), nhãn `what`; counter
+`sso_background_write_failures_total{what}`; log app ERROR `<what> background write failed: <lớp lỗi + frame>` hoặc
+`Authentication email delivery failed`.
+
+| `what` | Việc hỏng | Hệ quả cho người dùng |
+|---|---|---|
+| `register` | tạo user / membership / token xác minh của email mới | không có tài khoản (hoặc có nhưng thiếu token/thư) |
+| `forgot` | ghi token đặt lại mật khẩu | không nhận thư đặt lại |
+| `resend_verify` | phục hồi đăng ký chưa xác minh qua `/register` lặp lại: ghi token **đặt lại** + thư "Finish creating your account" (DEBT-665, D91.4) | không nhận thư hoàn tất đăng ký |
+| `auth_mail` | SMTP từ chối/không tới được khi gửi thư xác minh hoặc đặt lại (token đã ghi) | thư không tới |
+
+**Tra cứu**: lọc log app theo khoảng thời gian alert, chuỗi `background write failed` / `Authentication email delivery failed`.
+Log **không** có email (cố ý, không lộ PII, không dò được tồn tại) ⇒ không tra được người dùng cụ thể; chỉ biết số lượng và thời điểm.
+
+**Thao tác**:
+1. Kiểm phụ thuộc: `GET /ready` (Mongo/Redis), §5 nếu Redis; SMTP (kết nối, hạn mức, thông tin đăng nhập) nếu `auth_mail`.
+2. Sửa phụ thuộc; xác nhận counter ngừng tăng (alert tự hết sau 15 phút không có sự kiện mới).
+3. Người dùng bị ảnh hưởng tự phục hồi, **không** có thao tác DB nào. Hướng dẫn theo `what`:
+   - `register` ⇒ đăng ký lại cùng email. Tài khoản chưa được tạo ⇒ thành đăng ký mới; đã tạo mà chưa xác minh ⇒ nhận thư
+     "Finish creating your account" (link đặt mật khẩu) và đặt mật khẩu qua link đó.
+   - `forgot` ⇒ dùng `/forgot` lại.
+   - `resend_verify` ⇒ đăng ký lại sau 30 phút (token đặt lại cũ hết hạn), hoặc dùng `/forgot`.
+   - `auth_mail` ⇒ token đã ghi nhưng thư không tới. Hướng dẫn dùng **`/forgot`** (luôn phát token mới; đặt lại mật khẩu
+     thành công cũng xác minh email, D91.5). Đăng ký lại cũng được: tài khoản chưa xác minh nhận thư "Finish creating your
+     account" ngay, trừ khi còn token đặt lại sống (30 phút) — không gửi lại thư **xác minh**.
+   Từ run 91 (D91.14) trang `/verify-email` đòi cả mật khẩu tài khoản; ai không biết mật khẩu (kể cả tài khoản do người khác
+   tạo bằng email của mình) dùng `/forgot`.

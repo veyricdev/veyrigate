@@ -155,12 +155,12 @@ describe('run 84 tester: D84.1 raw-string grammar, type confusion, federation or
     const before = await totals();
     const reg = await post('/register', { email: typed, password: PASSWORD });
     expect(reg.statusCode).toBe(201);
-    await full.app.get(AuthenticationService).settled(); // run 90 C2
+    await full.app.get(AuthenticationService).drainBackgroundWrites(); // run 90 C2
     expect(await userModel.countDocuments({ email: stored })).toBe(1);
     expect(full.outbox.at(-1)!.to).toBe(stored);
     const forgot = await post('/forgot', { email: `RUN84T.MIXED+TAG${stamp}@sub.example.com` });
     expect(forgot.statusCode).toBe(201);
-    await full.app.get(AuthenticationService).settled(); // run 90 C2
+    await full.app.get(AuthenticationService).drainBackgroundWrites(); // run 90 C2
     expect(full.outbox.at(-1)!.to).toBe(stored);
     expect(await totals()).toEqual({
       users: before.users + 1,

@@ -15,6 +15,9 @@ const ROTATION_MODES = ['normal', 'emergency'] as const;
 export const TOKEN_ENDPOINTS = ['token', 'revoke'] as const;
 export type TokenEndpoint = (typeof TOKEN_ENDPOINTS)[number];
 export const HTTP_LABELS = ['method', 'route', 'status_class'] as const;
+/** Detached writes whose failure the caller never sees (DEBT-666, D91.2/D91.3). */
+export const BACKGROUND_WRITES = ['register', 'forgot', 'resend_verify', 'auth_mail'] as const;
+export type BackgroundWrite = (typeof BACKGROUND_WRITES)[number];
 
 const auditEvents = new Counter({
   name: 'sso_audit_events_total',
@@ -34,6 +37,13 @@ const tokenErrors = new Counter({
   name: 'sso_token_endpoint_errors_total',
   help: 'OAuth error responses of /token and /revoke, by endpoint and error code.',
   labelNames: ['endpoint', 'error'] as const,
+  registers: [registry],
+});
+
+const backgroundWriteFailures = new Counter({
+  name: 'sso_background_write_failures_total',
+  help: 'Failed detached writes (registration, password reset, verify mail resend) and auth mail sends, by what.',
+  labelNames: ['what'] as const,
   registers: [registry],
 });
 
@@ -60,6 +70,7 @@ for (const mode of ROTATION_MODES) {
 for (const endpoint of TOKEN_ENDPOINTS) {
   for (const error of TOKEN_ERROR_CODES) tokenErrors.inc({ endpoint, error }, 0);
 }
+for (const what of BACKGROUND_WRITES) backgroundWriteFailures.inc({ what }, 0);
 
 /**
  * Count one PERSISTED audit event (called by `AuditService.record` after the write). Unknown
@@ -78,4 +89,9 @@ export function observeAuditEvent(event: Pick<AuditEvent, 'action' | 'result' | 
 export function observeTokenError(endpoint: TokenEndpoint, code: string): void {
   if (!isOneOf(TOKEN_ENDPOINTS, endpoint)) return;
   tokenErrors.inc({ endpoint, error: isOneOf(TOKEN_ERROR_CODES, code) ? code : 'server_error' });
+}
+
+/** Count one failed detached write or auth mail send (DEBT-666); an unknown `what` is ignored. */
+export function observeBackgroundWriteFailure(what: BackgroundWrite): void {
+  if (isOneOf(BACKGROUND_WRITES, what)) backgroundWriteFailures.inc({ what });
 }

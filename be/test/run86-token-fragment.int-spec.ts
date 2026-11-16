@@ -34,7 +34,7 @@ describe('run 86 T1: one-time token in the URL fragment (real app)', () => {
 
   // Run 90 C2 (DEBT-659/660): register/forgot write their token + mail detached; wait for them too.
   const flushMail = async () => {
-    await full.app.get(AuthenticationService).settled();
+    await full.app.get(AuthenticationService).drainBackgroundWrites();
     await new Promise((resolve) => setImmediate(resolve));
   };
   const get = (url: string) => full.app.inject({ method: 'GET', url }) as Promise<InjectResponse>;
@@ -136,7 +136,7 @@ describe('run 86 T1: one-time token in the URL fragment (real app)', () => {
     await full.app.get(AuthenticationService).register(email, GOOD);
     await flushMail();
     const code = tokenFromMailLink(full.outbox.filter((m) => m.to === email).at(-1)!.text);
-    const ok = await submit('/verify-email', { token: ` ${code} ` });
+    const ok = await submit('/verify-email', { token: ` ${code} `, password: GOOD });
     expect(ok.statusCode).toBe(201);
     expect((await full.app.get(UserService).findByEmail(email))?.emailVerifiedAt).toBeInstanceOf(
       Date,

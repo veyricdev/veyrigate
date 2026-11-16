@@ -154,7 +154,7 @@ describe('run 86 tester (T6): token fragment, POST /logout, key pre-publish edge
       full.app.inject({ method: 'GET', url, headers }) as Promise<InjectResponse>;
     // Run 90 C2 (DEBT-659/660): register/forgot write their token + mail detached; wait for them too.
     const flushMail = async () => {
-      await full.app.get(AuthenticationService).settled();
+      await full.app.get(AuthenticationService).drainBackgroundWrites();
       await new Promise((resolve) => setImmediate(resolve));
     };
     const newSession = async () =>
@@ -356,12 +356,12 @@ describe('run 86 tester (T6): token fragment, POST /logout, key pre-publish edge
         await full.app.get(AuthenticationService).register(email, PASSWORD);
         await flushMail();
         const code = tokenFromMailLink(full.outbox.filter((m) => m.to === email).at(-1)!.text);
-        const bad = await submit('/verify-email', { token: `\u200b${code}` });
+        const bad = await submit('/verify-email', { token: `\u200b${code}`, password: PASSWORD });
         expect(bad.statusCode).toBeGreaterThanOrEqual(400);
         expect(
           (await full.app.get(UserService).findByEmail(email))?.emailVerifiedAt ?? null,
         ).toBeNull();
-        const ok = await submit('/verify-email', { token: code });
+        const ok = await submit('/verify-email', { token: code, password: PASSWORD });
         expect(ok.statusCode).toBe(201);
       });
     });

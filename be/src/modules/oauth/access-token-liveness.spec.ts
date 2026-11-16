@@ -29,7 +29,10 @@ describe('isAccessTokenLive — resource mapping (Task 0)', () => {
     }),
   };
   const users: UserExistence = { exists: async () => true };
-  const sessions: SessionEndLookup = { isEnded: async () => false };
+  const sessions: SessionEndLookup = {
+    isEnded: async () => false,
+    isAccessTokenRevoked: async () => false,
+  };
 
   it('live when aud is the identifier of an allowed resourceId', async () => {
     const resources: ResourceLookup = { identifiersFor: async () => [AUD] };
@@ -100,7 +103,10 @@ describe('isAccessTokenLive — admin-capable client invariant (DEBT-177)', () =
   const ADMIN_AUD = 'https://idp.example.com/admin/';
   const API_AUD = 'https://api.example.com/';
   const users: UserExistence = { exists: async () => true };
-  const sessions: SessionEndLookup = { isEnded: async () => false };
+  const sessions: SessionEndLookup = {
+    isEnded: async () => false,
+    isAccessTokenRevoked: async () => false,
+  };
   const resources: ResourceLookup = { identifiersFor: async () => [ADMIN_AUD, API_AUD] };
 
   const shapes: Array<[string, Record<string, unknown>, boolean]> = [
@@ -176,7 +182,10 @@ describe('isAccessTokenLive / mintedBeforeDisable — last disable epoch (DEBT-2
   const SUB = new Types.ObjectId().toHexString();
   const AUD = 'https://api.example.com/';
   const users: UserExistence = { exists: async () => true };
-  const sessions: SessionEndLookup = { isEnded: async () => false };
+  const sessions: SessionEndLookup = {
+    isEnded: async () => false,
+    isAccessTokenRevoked: async () => false,
+  };
   const resources: ResourceLookup = { identifiersFor: async () => [AUD] };
   const DISABLED = new Date('2026-10-26T10:00:00.000Z');
   const client = (lastDisabledAt?: Date): ClientLookup => ({
@@ -217,5 +226,65 @@ describe('isAccessTokenLive / mintedBeforeDisable — last disable epoch (DEBT-2
     expect(await live(t + 4_000, DISABLED)).toBe(false); // in-flight inside the margin
     expect(await live(t + 6_000, DISABLED)).toBe(true);
     expect(await live(t - 60_000)).toBe(true);
+  });
+});
+
+describe('isAccessTokenLive — revoked jti denylist (run 91, DEBT-651, D91.8)', () => {
+  const SUB = new Types.ObjectId().toHexString();
+  const AUD = 'https://api.example.com/';
+  const ADMIN_AUD = 'https://idp.example.com/admin/';
+  const clients: ClientLookup = {
+    findByClientId: async () => ({
+      allowedResources: ['res-api'],
+      clientType: 'confidential',
+      tokenEndpointAuthMethod: 'client_secret_basic',
+    }),
+  };
+  const users: UserExistence = { exists: async () => true };
+  const resources: ResourceLookup = { identifiersFor: async () => [AUD] };
+
+  it('a jti in the denylist is not live (no Mongo lookup)', async () => {
+    const isAccessTokenRevoked = jest.fn(async (jti: string) => jti === 'jti-revoked');
+    const findByClientId = jest.fn(clients.findByClientId);
+    const sessions: SessionEndLookup = { isEnded: async () => false, isAccessTokenRevoked };
+    const claims = { sub: SUB, client_id: 'c', aud: AUD, iat: 1, jti: 'jti-revoked' };
+    expect(
+      await isAccessTokenLive(claims, { findByClientId }, users, sessions, resources, ADMIN_AUD),
+    ).toBe(false);
+    expect(isAccessTokenRevoked).toHaveBeenCalledWith('jti-revoked');
+    expect(findByClientId).not.toHaveBeenCalled();
+    expect(
+      await isAccessTokenLive(
+        { ...claims, jti: 'jti-other' },
+        clients,
+        users,
+        sessions,
+        resources,
+        ADMIN_AUD,
+      ),
+    ).toBe(true);
+  });
+
+  it('no jti claim => the denylist is not queried', async () => {
+    const isAccessTokenRevoked = jest.fn(async () => true);
+    const sessions: SessionEndLookup = { isEnded: async () => false, isAccessTokenRevoked };
+    const claims = { sub: SUB, client_id: 'c', aud: AUD, iat: 1 };
+    expect(await isAccessTokenLive(claims, clients, users, sessions, resources, ADMIN_AUD)).toBe(
+      true,
+    );
+    expect(isAccessTokenRevoked).not.toHaveBeenCalled();
+  });
+
+  it('a denylist error propagates (fail-closed)', async () => {
+    const sessions: SessionEndLookup = {
+      isEnded: async () => false,
+      isAccessTokenRevoked: async () => {
+        throw new Error('redis down');
+      },
+    };
+    const claims = { sub: SUB, client_id: 'c', aud: AUD, iat: 1, jti: 'j' };
+    await expect(
+      isAccessTokenLive(claims, clients, users, sessions, resources, ADMIN_AUD),
+    ).rejects.toThrow('redis down');
   });
 });

@@ -41,6 +41,8 @@ export interface ResourceLookup {
  */
 export interface SessionEndLookup {
   isEnded(ref: string): Promise<boolean>;
+  /** Run 91 (D91.8): the access token `jti` was denied (replayed authorization code). */
+  isAccessTokenRevoked(jti: string): Promise<boolean>;
 }
 
 /** A session `ref`/`sid` is sha256 hex (64 lowercase hex chars). Anything else is malformed. */
@@ -73,7 +75,7 @@ const SESSION_REF_RE = /^[0-9a-f]{64}$/;
  * fail-closed), never be swallowed into `false`/`true` here.
  */
 export async function isAccessTokenLive(
-  claims: Pick<AccessTokenClaims, 'sub' | 'client_id' | 'aud' | 'sid' | 'iat'>,
+  claims: Pick<AccessTokenClaims, 'sub' | 'client_id' | 'aud' | 'sid' | 'iat'> & { jti?: string },
   clients: ClientLookup,
   users: UserExistence,
   sessions: SessionEndLookup,
@@ -96,6 +98,11 @@ export async function isAccessTokenLive(
     if (await sessions.isEnded(claims.sid)) {
       return false;
     }
+  }
+  // Run 91 (DEBT-651, D91.8): a token issued from a replayed authorization code is denied by `jti`
+  // until its `exp`. Same Redis, before the Mongo lookups; an error propagates (fail-closed).
+  if (claims.jti !== undefined && (await sessions.isAccessTokenRevoked(claims.jti))) {
+    return false;
   }
   const client = await clients.findByClientId(claims.client_id);
   if (!client) {

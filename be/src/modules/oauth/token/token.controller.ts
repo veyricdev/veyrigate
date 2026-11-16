@@ -180,8 +180,11 @@ export class TokenController {
     // leaves the code usable for the client's retry. `peek` reads with the same binding as the
     // consume script (a wrong verifier/redirect never reaches the signer; code intact, INV-13).
     const challenge = deriveS256Challenge(verifier);
+    const audit = { ip: req.ip, requestId: req.id };
     const peeked = await this.codes.peek(code, client.clientId, redirectUri, challenge);
     if (!peeked) {
+      // DEBT-651: maybe an already-redeemed code (whatever the verifier/redirect, D91.7).
+      await this.revokeReplayedCode(code, client, audit);
       throw new TokenError('invalid_grant');
     }
     // Pure gate (no I/O), same predicates as the refusals below: a code those refuse is NOT
@@ -208,6 +211,7 @@ export class TokenController {
       peeked.raw,
     );
     if (!data) {
+      await this.revokeReplayedCode(code, client, audit);
       throw new TokenError('invalid_grant');
     }
 
@@ -230,7 +234,6 @@ export class TokenController {
       throw new TokenError('invalid_grant');
     }
 
-    const audit = { ip: req.ip, requestId: req.id };
     // DEBT-209: a code minted before the client's last disable (+ margin) stays dead after a
     // re-enable. Same predicate as the pre-sign gate (nothing was signed); the code is consumed.
     if (mintedBeforeDisable(client, data.issuedAt ?? 0)) {
@@ -242,6 +245,21 @@ export class TokenController {
       audit,
       signed,
     );
+
+    // DEBT-651 (D91.6 step 2): record what this code issued on its used-mark, then read whether a
+    // same-client replay flagged it while we were issuing (the replay could not revoke a family it
+    // did not know yet). Flagged ⇒ revoke the new family, no token leaves. A Redis error ⇒ revoke
+    // best-effort and fail closed (500), like `session_check_failed`.
+    let replayed: boolean;
+    try {
+      const at = accessTokenIds(response.access_token);
+      replayed = await this.codes.markIssued(code, { ...at, ...(familyId ? { familyId } : {}) });
+    } catch (err) {
+      return this.failClosed(client, data, familyId, 'code_mark_failed', audit, err);
+    }
+    if (replayed) {
+      return this.refuseGrant(client, data, familyId, 'code_replayed', audit);
+    }
 
     // DEBT-051 / INV-29: the `exists` check above is a fail-fast read; a logout can still slip in
     // between it and the family insert (TOCTOU). Re-check AFTER the insert for EVERY code grant —
@@ -307,6 +325,33 @@ export class TokenController {
       throw err;
     }
     return reply.status(HttpStatus.OK).send(response);
+  }
+
+  /**
+   * DEBT-651 (RFC 6749 §4.1.2, D91.6–D91.8): a code that could not be redeemed. Only when its
+   * used-mark belongs to the AUTHENTICATED client of this request (D91.7, no confused deputy):
+   * deny the access token it issued (`jti` until `exp`) and revoke its refresh family as a reuse
+   * (`TOKEN_REUSE_DETECTED`, `kind:'authorization_code'`). Another client's replay touches nothing.
+   * The caller still answers `invalid_grant`; a Redis/Mongo error propagates (500, fail-closed).
+   */
+  private async revokeReplayedCode(
+    code: string,
+    client: Client,
+    audit: { ip?: string; requestId?: string },
+  ): Promise<void> {
+    const issued = await this.codes.markReplayed(code, client.clientId);
+    if (!issued) return;
+    const now = new Date();
+    if (issued.jti && issued.atExp) {
+      await this.sessions.revokeAccessToken(issued.jti, issued.atExp * 1000 - now.getTime());
+    }
+    if (issued.familyId) {
+      await this.refresh.revokeFamily(issued.familyId, client.clientId, now, {
+        reuse: true,
+        kind: 'authorization_code',
+        audit: { ...audit, tenantId: client.tenantId },
+      });
+    }
   }
 
   /**
@@ -631,4 +676,15 @@ function descriptionFor(code: string): string {
 /** Mark a response as uncacheable (RFC 6749 ?5.1 / ?5.2). */
 function noStore(reply: TokenReply): void {
   reply.header('Cache-Control', 'no-store').header('Pragma', 'no-cache');
+}
+
+/** `jti` + `exp` of an access token this server just signed (its own JWT; payload only). */
+function accessTokenIds(accessToken: string): { jti: string; atExp: number } {
+  const payload = JSON.parse(
+    Buffer.from(accessToken.split('.')[1] ?? '', 'base64url').toString('utf8'),
+  ) as { jti?: unknown; exp?: unknown };
+  if (typeof payload.jti !== 'string' || typeof payload.exp !== 'number') {
+    throw new Error('signed access token without jti/exp');
+  }
+  return { jti: payload.jti, atExp: payload.exp };
 }

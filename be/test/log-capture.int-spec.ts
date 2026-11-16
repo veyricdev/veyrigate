@@ -92,7 +92,7 @@ describe('application logs never carry secrets (B7.4)', () => {
       { _csrf: csrf, email: EMAIL, password: PASSWORD },
     );
     expect(reg.statusCode).toBeLessThan(300);
-    await full.app.get(AuthenticationService).settled(); // run 90 C2: user + verify mail are detached
+    await full.app.get(AuthenticationService).drainBackgroundWrites(); // run 90 C2: user + verify mail are detached
     const link = full.outbox.find((m) => m.to === EMAIL)?.text.match(/https?:\/\/\S+/)?.[0];
     const verifyToken = keep('verify token', tokenFromMailLink(link ?? ''));
     expect(
@@ -102,7 +102,7 @@ describe('application logs never carry secrets (B7.4)', () => {
     const verified = await form(
       '/verify-email',
       { idp_csrf: anon },
-      { _csrf: csrf, token: verifyToken },
+      { _csrf: csrf, token: verifyToken, password: PASSWORD }, // run 91 D91.14
     );
     expect(verified.statusCode).toBeLessThan(300);
     const login = await form(

@@ -42,6 +42,8 @@ export interface AuthorizeParams {
   /** OIDC request object / reference (Core §6): never processed, only refused (DEBT-571). */
   request?: unknown;
   request_uri?: unknown;
+  /** Only absent or `query` is accepted (run 91, DEBT-662); kept `unknown` (may be an array). */
+  response_mode?: unknown;
 }
 
 /** The minimal view of the current session the flow needs (null when not signed in). */
@@ -279,6 +281,15 @@ export class AuthorizeService {
         throw new AuthorizeRedirectError(
           'request_uri_not_supported',
           'The request_uri parameter is not supported.',
+        );
+      }
+      // DEBT-662: the response always goes in the query; any other mode (form_post, fragment, JARM,
+      // empty or repeated) is refused instead of silently ignored. Fixed text: the value is never
+      // reflected.
+      if (params.response_mode !== undefined && params.response_mode !== 'query') {
+        throw new AuthorizeRedirectError(
+          'invalid_request',
+          'Only response_mode=query is supported.',
         );
       }
       // DEBT-204/205: any other recognised parameter repeated => invalid_request to the trusted

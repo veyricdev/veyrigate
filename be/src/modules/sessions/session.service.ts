@@ -56,6 +56,8 @@ const userKey = (userId: string): string => `user_sess:${userId}`;
 // every access token that could still carry that `sid`, with a small race/skew margin. Same ref →
 // same Cluster slot as `sess:{ref}` (DEBT-013, no worse than today).
 const sessEndKey = (ref: string): string => `sess_end:${ref}`;
+/** Denied access token `jti` (run 91, DEBT-651, D91.8). */
+const atRevokedKey = (jti: string): string => `at_revoked:${jti}`;
 // Set of client ids that received an authorization code during this session (B4.7 front-channel):
 // used to pick which RPs to notify on logout. Lives on the same node as `sess:{ref}` (same ref →
 // same Cluster slot) so DEL in the revoke paths is Cluster-safe (DEBT-013, no worse than today).
@@ -303,6 +305,20 @@ export class SessionService {
    */
   async isEnded(ref: string): Promise<boolean> {
     return (await this.redis.client.exists(sessEndKey(ref))) === 1;
+  }
+
+  /**
+   * Run 91 (DEBT-651, D91.8): deny one access token by `jti` until it expires anyway (`ttlMs` = its
+   * `exp` − now; nothing to do when ≤ 0). Read by `isAccessTokenLive`. Redis errors propagate.
+   */
+  async revokeAccessToken(jti: string, ttlMs: number): Promise<void> {
+    if (ttlMs <= 0) return;
+    await this.redis.client.set(atRevokedKey(jti), '1', 'PX', Math.ceil(ttlMs));
+  }
+
+  /** Whether `jti` was denied by {@link revokeAccessToken}. Redis errors propagate (fail-closed). */
+  async isAccessTokenRevoked(jti: string): Promise<boolean> {
+    return (await this.redis.client.exists(atRevokedKey(jti))) === 1;
   }
 
   private async read(ref: string): Promise<SessionData | null> {

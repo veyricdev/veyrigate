@@ -51,7 +51,7 @@ describe('run 85 T3: common-password policy on register/reset (real app)', () =>
   };
   // Run 90 C2 (DEBT-659/660): register/forgot write their token + mail detached; wait for them too.
   const flushMail = async () => {
-    await full.app.get(AuthenticationService).settled();
+    await full.app.get(AuthenticationService).drainBackgroundWrites();
     await new Promise((resolve) => setImmediate(resolve));
   };
 

@@ -567,7 +567,7 @@ describe('/token code grant re-check after the family insert (run 35 Task 3)', (
 
     it('(f) a code without issuedAt (pre-run-56) on a client that has a lastDisabledAt => invalid_grant; never disabled => 200', async () => {
       const stripIssuedAt = async (code: string) => {
-        const key = `authz_code:${sha256(code)}`;
+        const key = `authz_code:{${sha256(code)}}`;
         const data = JSON.parse((await redis.get(key))!) as Record<string, unknown>;
         expect(typeof data.issuedAt).toBe('number');
         delete data.issuedAt;

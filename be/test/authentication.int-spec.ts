@@ -108,7 +108,7 @@ describe('Authentication races on real Mongo (B2.4, C2-C6, C13)', () => {
       auth.register('race@example.com', 'correct password'),
     ]);
     expect(results.map((result) => result.status)).toEqual(['fulfilled', 'fulfilled']);
-    await auth.settled(); // run 90 C2: the account is created detached
+    await auth.drainBackgroundWrites(); // run 90 C2: the account is created detached
     expect(await userModel.countDocuments({ email: 'race@example.com' })).toBe(1);
   });
 
@@ -160,19 +160,21 @@ describe('Authentication races on real Mongo (B2.4, C2-C6, C13)', () => {
   it('B7.1 AE8: five concurrent verifyEmail with one token => exactly one success, one verification, one audit', async () => {
     const email = 'verify-race@example.com';
     await auth.register(email, 'correct password');
-    await auth.settled(); // run 90 C2: user, token and mail are written detached
+    await auth.drainBackgroundWrites(); // run 90 C2: user, token and mail are written detached
     const link = messages.find((m) => m.to === email)?.text.match(/https:\/\/\S+/)?.[0];
     const token = tokenFromMailLink(link!);
     const spy = jest.spyOn(users, 'verifyEmail');
 
     const results = await Promise.allSettled(
-      Array.from({ length: 5 }, () => auth.verifyEmail(token)),
+      Array.from({ length: 5 }, () => auth.verifyEmail(token, 'correct password')),
     );
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
     const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
     expect(rejected).toHaveLength(4);
     for (const r of rejected) {
-      expect((r.reason as Error).message).toBe('This link is invalid or expired.');
+      expect((r.reason as Error).message).toBe(
+        'This link is invalid or expired, or the password is wrong.',
+      );
     }
     expect(spy).toHaveBeenCalledTimes(1); // emailVerifiedAt written by exactly one caller
     expect((await users.findByEmail(email))?.emailVerifiedAt).toBeInstanceOf(Date);
@@ -186,7 +188,7 @@ describe('Authentication races on real Mongo (B2.4, C2-C6, C13)', () => {
 
   it('builds mail links from ISSUER and never from request-controlled hosts', async () => {
     await auth.register('host@example.com', 'correct password');
-    await auth.settled(); // run 90 C2: user, token and mail are written detached
+    await auth.drainBackgroundWrites(); // run 90 C2: user, token and mail are written detached
     // DEBT-577 (D86.3): the token rides in the fragment, never in the query.
     expect(messages.at(-1)?.text).toContain('https://issuer.example/verify-email#token=');
     expect(messages.at(-1)?.text).not.toMatch(/\?token=/);

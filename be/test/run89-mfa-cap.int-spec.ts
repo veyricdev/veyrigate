@@ -150,7 +150,7 @@ describe('run 89 DEBT-640: consecutive second-factor failure cap (real app)', ()
     const auth = full.app.get(AuthenticationService);
     const before = full.outbox.length;
     await auth.forgotPassword(u.email);
-    await auth.settled(); // run 90 C2
+    await auth.drainBackgroundWrites(); // run 90 C2
     const mail = full.outbox.slice(before).find((m) => m.to === u.email)!;
     await auth.resetPassword(tokenFromMailLink(mail.text), 'r89c-New#Pass-2');
     expect(await failuresOf(u.sub)).toBe(MFA_FAILURE_CAP);

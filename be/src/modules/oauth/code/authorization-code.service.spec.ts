@@ -1,3 +1,4 @@
+import type { ConfigService } from '@nestjs/config';
 import type { RedisService } from '../../../database/redis/redis.service';
 import { AuthorizationCodeService, type AuthorizationCodeData } from './authorization-code.service';
 
@@ -19,7 +20,11 @@ function service(getRaw: string | null, consumeRaw: string | null) {
     get: async () => (calls.push('get'), getRaw),
     consumeAuthCode: async () => (calls.push('consume'), consumeRaw),
   };
-  return { svc: new AuthorizationCodeService({ client } as unknown as RedisService), calls };
+  const config = { getOrThrow: () => ({ accessTokenTtl: 900 }) } as unknown as ConfigService;
+  return {
+    svc: new AuthorizationCodeService({ client } as unknown as RedisService, config),
+    calls,
+  };
 }
 
 describe('AuthorizationCodeService.peek / consume(expectedRaw) (DEBT-388)', () => {

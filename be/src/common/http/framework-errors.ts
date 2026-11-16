@@ -1,9 +1,10 @@
+import type { IncomingMessage } from 'node:http';
 import { Logger } from '@nestjs/common';
 import { FastifyAdapter } from '@nestjs/platform-fastify';
 import { httpDuration } from '../metrics/metrics';
 import { METHODS } from '../metrics/metrics.http';
 import { buildCsp } from './csp';
-import { requestIdFrom } from './request-id';
+import { requestIdFrom, trustedProxies } from './request-id';
 
 /**
  * Errors Fastify raises BEFORE routing (DEBT-239, run 59): a malformed percent-encoding
@@ -63,7 +64,13 @@ export function frameworkErrors(
  * request id (DEBT-095) comes from `requestIdFrom`, and every routed response echoes it.
  */
 export function createFastifyAdapter(trustProxy?: false | string[]): FastifyAdapter {
-  const adapter = new FastifyAdapter({ trustProxy, frameworkErrors, genReqId: requestIdFrom });
+  // D91.10: a client `x-request-id` is honoured only from a `TRUST_PROXY` peer.
+  const trusted = trustedProxies(trustProxy);
+  const adapter = new FastifyAdapter({
+    trustProxy,
+    frameworkErrors,
+    genReqId: (req: IncomingMessage) => requestIdFrom(req, trusted),
+  });
   adapter.getInstance().addHook('onRequest', (request, reply, done) => {
     void reply.header('x-request-id', request.id);
     done();

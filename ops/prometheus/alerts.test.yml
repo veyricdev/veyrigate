@@ -177,3 +177,53 @@ tests:
             exp_annotations:
               summary: No successful encrypted MongoDB backup for more than 2 hours
               description: The RPO of 1 hour is at risk. Check the backup job log of ops/backup/mongo-backup.sh and runbook-ops section 4.
+  # Run 91 (DEBT-666): one failed register write (0 -> 1) fires the critical alert per `what`; an auth
+  # mail failure alone fires only the warning; a flat 0 and an event older than 15m are silent.
+  - interval: 1m
+    input_series:
+      - series: 'sso_background_write_failures_total{what="register",instance="a"}'
+        values: '0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'sso_background_write_failures_total{what="forgot",instance="a"}'
+        values: '0x25'
+      - series: 'sso_background_write_failures_total{what="resend_verify",instance="a"}'
+        values: '0x25'
+      - series: 'sso_background_write_failures_total{what="auth_mail",instance="a"}'
+        values: '0x25'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: SsoBackgroundWriteFailed
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: SsoBackgroundWriteFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              what: register
+            exp_annotations:
+              summary: A registration, password reset or verification resend write failed in the background
+              description: The user saw the success page but no account, token or mail was written. Check Mongo/SMTP and runbook-ops section 13.
+      - eval_time: 24m
+        alertname: SsoBackgroundWriteFailed
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: SsoAuthMailFailed
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'sso_background_write_failures_total{what="auth_mail",instance="a"}'
+        values: '0 0 0 1 1 1 1 1 1 1'
+      - series: 'sso_background_write_failures_total{what="register",instance="a"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: SsoAuthMailFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              what: auth_mail
+            exp_annotations:
+              summary: A verification or password reset mail could not be sent
+              description: The token was written but the SMTP send failed. Check SMTP and runbook-ops section 13.
+      - eval_time: 4m
+        alertname: SsoBackgroundWriteFailed
+        exp_alerts: []

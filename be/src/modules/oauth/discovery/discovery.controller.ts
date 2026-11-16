@@ -64,6 +64,8 @@ export class DiscoveryController {
       introspection_endpoint: this.url('/introspect'),
       end_session_endpoint: this.url('/logout'),
       response_types_supported: ['code'],
+      // DEBT-662: `/authorize` refuses any other response_mode.
+      response_modes_supported: ['query'],
       grant_types_supported: ['authorization_code', 'refresh_token'],
       subject_types_supported: ['public'],
       id_token_signing_alg_values_supported: ['RS256'],

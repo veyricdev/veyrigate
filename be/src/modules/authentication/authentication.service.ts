@@ -17,12 +17,14 @@ import {
   verifyPassword,
 } from '../../common/crypto/crypto.util';
 import { errorForLog } from '../../common/logger/error-log';
+import { observeBackgroundWriteFailure, type BackgroundWrite } from '../../common/metrics/metrics';
 import type { AppConfig } from '../../config/configuration';
 import { DEFAULT_TENANT_ID } from '../identity/tenant.service';
 import { UserTenantService } from '../identity/user-tenant.service';
 import { UserService } from '../identity/user.service';
-import { MAILER, type Mailer } from '../mailer/mailer';
+import { MAILER, type MailMessage, type Mailer } from '../mailer/mailer';
 import {
+  completeRegistrationMessage,
   passwordChangedMessage,
   resetPasswordMessage,
   verifyEmailMessage,
@@ -40,7 +42,9 @@ interface OneTimeTokenDoc {
   userId: Types.ObjectId | string;
   expiresAt: Date;
   usedAt: Date | null;
+  attempts?: number;
 }
+type MailTemplate = (to: string, link: string, minutes: number, code: string) => MailMessage;
 export interface AuthContext {
   ip?: string;
   userAgent?: string;
@@ -90,7 +94,13 @@ export type RevokeStep = 'pre_revoke' | 'sessions' | 'sweep';
 
 const VERIFY_TTL_MS = 24 * 60 * 60 * 1000;
 const RESET_TTL_MS = 30 * 60 * 1000;
+/** Longest wait for detached writes at shutdown (D91.11); the orchestrator grace period is longer. */
+const SHUTDOWN_DRAIN_MS = 5000;
 const GENERIC_LOGIN_ERROR = 'Email or password is incorrect.';
+/** One answer for every refused `/verify-email` (D91.14): bad/used/expired link or wrong password. */
+const VERIFY_FAILED = 'This link is invalid or expired, or the password is wrong.';
+/** Password attempts per verify token (D91.14); the last wrong one burns the token. */
+const VERIFY_MAX_ATTEMPTS = 5;
 /** One fixed 429 text for every login bucket and for unknown emails (DEBT-575, no oracle). */
 export const LOGIN_THROTTLED_MESSAGE =
   'Too many sign-in attempts. Try again later or reset your password.';
@@ -125,26 +135,44 @@ export class AuthenticationService {
   private readonly pending = new Set<Promise<void>>();
 
   /**
-   * Starts `work` now and returns at once. A failure is logged (error class + frames, never the
-   * message, which may carry the email) and never reaches the caller: the page is the same either way.
+   * Starts `work` now and returns at once. A failure is counted (DEBT-666, alert
+   * `SsoBackgroundWriteFailed`) BEFORE it is logged (error class + frames, never the message, which
+   * may carry the email), and never reaches the caller: the page is the same either way.
    */
-  private detach(what: string, work: () => Promise<void>): void {
+  private detach(what: BackgroundWrite, work: () => Promise<void>): void {
     const run: Promise<void> = work()
-      .catch((err: unknown) =>
-        this.logger.error(`${what} background write failed: ${errorForLog(err)}`),
-      )
+      .catch((err: unknown) => {
+        observeBackgroundWriteFailure(what);
+        this.logger.error(`${what} background write failed: ${errorForLog(err)}`);
+      })
+      .catch(() => undefined) // a throwing logger must not leave an unhandled rejection
       .finally(() => this.pending.delete(run));
     this.pending.add(run);
   }
 
   /** Resolves once every detached write has finished (shutdown drain; int tests). */
-  async settled(): Promise<void> {
+  async drainBackgroundWrites(): Promise<void> {
     while (this.pending.size > 0) await Promise.allSettled([...this.pending]);
   }
 
-  /** SIGTERM (`enableShutdownHooks`): finish detached writes before Mongo closes. */
-  beforeApplicationShutdown(): Promise<void> {
-    return this.settled();
+  /**
+   * SIGTERM (`enableShutdownHooks`): finish detached writes before Mongo closes, waiting at most
+   * {@link SHUTDOWN_DRAIN_MS} (D91.11). Past that, log how many are still pending (a count only)
+   * and return so the rest of the shutdown still runs.
+   */
+  async beforeApplicationShutdown(): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(true), SHUTDOWN_DRAIN_MS);
+      timer.unref();
+    });
+    try {
+      if (await Promise.race([this.drainBackgroundWrites().then(() => false), timedOut])) {
+        this.logger.warn(`shutdown: ${this.pending.size} background write(s) still pending`);
+      }
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async register(email: string, password: string): Promise<void> {
@@ -153,10 +181,38 @@ export class AuthenticationService {
     const existing = await this.users.findByEmail(email);
     // Equalise the expensive branch even when no user will be created.
     const passwordHash = await hashPassword(password);
-    if (existing) return;
+    if (existing) {
+      // DEBT-665 (D91.4, retry 1): the way back for an unfinished registration. A RESET link, never
+      // a verify link: the stored password may be an attacker's (pre-hijacking, D91.13); the reset
+      // lets the mailbox owner choose the password, verifies the email (D91.5) and revokes every
+      // credential. Detached like the new-email branch (no await on the response path); one mail at
+      // most while a reset token is live (30', the `/forgot` rate), on top of the `register`
+      // throttle. Check-then-issue is not atomic: two concurrent requests may send two mails —
+      // accepted. Verified or federation-only accounts get nothing.
+      if (!existing.emailVerifiedAt) {
+        this.detach('resend_verify', async () => {
+          if (!(await this.users.isUnverifiedWithPassword(existing.sub))) return;
+          const live = await this.resetTokens.exists({
+            userId: existing.sub,
+            usedAt: null,
+            expiresAt: { $gt: new Date() },
+          });
+          if (live) return;
+          await this.issueToken(
+            this.resetTokens,
+            existing.sub,
+            existing.email,
+            '/reset',
+            RESET_TTL_MS,
+            completeRegistrationMessage,
+          );
+        });
+      }
+      return;
+    }
     // DEBT-659: creating the user, its membership and the verify token (~20 ms) only happens for a
     // new email, so it runs detached; the answer is the same generic page either way.
-    this.detach('Registration', async () => {
+    this.detach('register', async () => {
       let user;
       try {
         user = await this.users.createWithPasswordHash(email, passwordHash);
@@ -171,15 +227,48 @@ export class AuthenticationService {
         user.email,
         '/verify-email',
         VERIFY_TTL_MS,
-        true,
+        verifyEmailMessage,
       );
     });
   }
 
-  async verifyEmail(token: string): Promise<void> {
-    const consumed = await this.consume(this.verifyTokens, token);
+  /**
+   * DEBT-671 (D91.14): verifying the mailbox must also prove the password, so a mailbox owner never
+   * activates a password someone else chose (D91.13). Order: reserve one attempt on the live token
+   * (atomic `$inc`, at most {@link VERIFY_MAX_ATTEMPTS}) BEFORE Argon2, so parallel guesses stay
+   * bounded → Argon2 → only then consume the token atomically. A wrong password keeps the token;
+   * after the 5th attempt the reservation filter refuses it for good (DEBT-672: no separate burn
+   * write). Every refusal is the same 400; nothing is logged.
+   */
+  async verifyEmail(token: string, password: string): Promise<void> {
+    const reserved = await this.verifyTokens
+      .findOneAndUpdate(
+        {
+          tokenHash: sha256(token),
+          usedAt: null,
+          expiresAt: { $gt: new Date() },
+          attempts: { $not: { $gte: VERIFY_MAX_ATTEMPTS } },
+        },
+        { $inc: { attempts: 1 } },
+        { returnDocument: 'after' },
+      )
+      .lean<OneTimeTokenDoc & { _id: unknown }>()
+      .exec();
+    if (!reserved) throw new BadRequestException(VERIFY_FAILED);
+    const user = await this.users.findByIdForAuthentication(String(reserved.userId));
+    if (!user?.passwordHash || !(await this.passwordMatches(user.passwordHash, password))) {
+      throw new BadRequestException(VERIFY_FAILED);
+    }
+    const consumed = await this.verifyTokens
+      .findOneAndUpdate(
+        { _id: reserved._id, usedAt: null },
+        { $set: { usedAt: new Date() } },
+        { returnDocument: 'after' },
+      )
+      .lean<OneTimeTokenDoc>()
+      .exec();
     if (!consumed || !(await this.users.verifyEmail(String(consumed.userId)))) {
-      throw new BadRequestException('This link is invalid or expired.');
+      throw new BadRequestException(VERIFY_FAILED);
     }
     await this.audit.record({
       actorType: 'user',
@@ -339,8 +428,15 @@ export class AuthenticationService {
     await hashPassword(generateToken());
     // DEBT-660: the reset token write only happens for a known email, so it runs detached.
     if (user)
-      this.detach('Password reset', () =>
-        this.issueToken(this.resetTokens, user.sub, user.email, '/reset', RESET_TTL_MS, false),
+      this.detach('forgot', () =>
+        this.issueToken(
+          this.resetTokens,
+          user.sub,
+          user.email,
+          '/reset',
+          RESET_TTL_MS,
+          resetPasswordMessage,
+        ),
       );
   }
 
@@ -559,7 +655,7 @@ export class AuthenticationService {
     email: string,
     path: string,
     ttlMs: number,
-    verify: boolean,
+    template: MailTemplate,
   ): Promise<void> {
     const token = generateToken();
     await model.create({
@@ -572,12 +668,14 @@ export class AuthenticationService {
     // reaches a request line, access log or Referer. `token-fragment.js` moves it into the form.
     const link = new URL(path, this.issuer);
     link.hash = `token=${token}`;
-    const message = verify
-      ? verifyEmailMessage(email, link.href, ttlMs / 60000, token)
-      : resetPasswordMessage(email, link.href, ttlMs / 60000, token);
+    const message = template(email, link.href, ttlMs / 60000, token);
     void this.mailer
       .send(message)
-      .catch(() => this.logger.error('Authentication email delivery failed'));
+      .catch(() => {
+        observeBackgroundWriteFailure('auth_mail'); // DEBT-666 (D91.3): counted before logging
+        this.logger.error('Authentication email delivery failed');
+      })
+      .catch(() => undefined);
   }
 
   private consume(model: Model<OneTimeTokenDoc>, token: string): Promise<OneTimeTokenDoc | null> {

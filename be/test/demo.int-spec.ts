@@ -37,7 +37,9 @@ const CLIENT = `${RUN}-client`;
 
 // Session-end lookup double (DEBT-037): spy-able so a test drives tombstone present/absent.
 const isEnded = jest.fn<(ref: string) => Promise<boolean>>().mockResolvedValue(false);
-const sessionsStub = { isEnded } as unknown as SessionService;
+// Run 91 (D91.8): the revoked-`jti` denylist shares the Redis lookup; nothing is denied here.
+const isAccessTokenRevoked = jest.fn<(jti: string) => Promise<boolean>>().mockResolvedValue(false);
+const sessionsStub = { isEnded, isAccessTokenRevoked } as unknown as SessionService;
 
 /** `cfg` with a given raw `nodeEnv` so we can also exercise the production-defence 404 branch. */
 const configFor = (nodeEnv: string): ConfigService =>

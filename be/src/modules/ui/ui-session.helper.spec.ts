@@ -36,12 +36,26 @@ describe('UiSessionHelper', () => {
   const reply = () => {
     const cleared: string[] = [];
     const set: string[] = [];
+    const headers: Record<string, string> = {};
     const r = {
       clearCookie: (name: string) => cleared.push(name),
       setCookie: (name: string) => set.push(name),
+      header: (name: string, value: string) => (headers[name] = value),
     } as unknown as HttpReply;
-    return { r, cleared, set };
+    return { r, cleared, set, headers };
   };
+
+  it('DEBT-663 (D91.12): liveSession and the CSRF identity mark the response no-store', async () => {
+    const helper = make(async () => null);
+    for (const call of [
+      (r: HttpReply) => helper.liveSession({ cookies: {} } as unknown as HttpRequest, r),
+      (r: HttpReply) => helper.identity({ cookies: {} } as unknown as HttpRequest, r),
+    ]) {
+      const { r, headers } = reply();
+      await call(r);
+      expect(headers['Cache-Control']).toBe('no-store');
+    }
+  });
 
   it('a dead session cookie is cleared and dropped from the request', async () => {
     const helper = make(async () => null);

@@ -89,6 +89,8 @@ test("setup: register and verify through the fragment link", async ({ browser })
   expect(new URL(verify.link).search).toBe("");
   expect(new URL(verify.link).hash).toBe(`#token=${verify.code}`);
   await page.goto(verify.link);
+  // Run 91 (DEBT-671, D91.14): verifying the email also proves the password.
+  await page.getByLabel("Password of the account").fill(FIRST);
   await page.getByRole("button", { name: "Verify email" }).click();
   await expect(page.getByRole("heading", { name: "Email verified" })).toBeVisible();
   await page.context().close();
