@@ -1,6 +1,6 @@
 import { ConfirmAction, outcomeOf, useActionNotice, type ActionOutcome } from "@/components/feedback/confirm-action";
 import { useQueryClient } from "@tanstack/react-query";
-import { useLockUser, useRevokeUserSessions, useUnlockUser } from "@/features/admin-api/hooks";
+import { useLockUser, useResetUserMfa, useRevokeUserSessions, useUnlockUser } from "@/features/admin-api/hooks";
 import { adminKeys } from "@/features/admin-api/keys";
 import { signInAgain } from "@/features/admin-api/query-client";
 import { AdminRequestError } from "@/features/admin-api/types";
@@ -19,6 +19,12 @@ export function lockStatus(user: Pick<AdminUser, "locked" | "lockedUntil">): str
     return "Locked by an administrator (until unlocked)";
   }
   return `Temporarily locked after failed sign-ins until ${user.lockedUntil}`;
+}
+
+/** Second-factor state as text (run 89 T5), the date as ISO text like {@link lockStatus}. */
+export function mfaStatus(user: Pick<AdminUser, "mfa">): string {
+  if (!user.mfa.enrolled) return "Off";
+  return user.mfa.enrolledAt === null ? "On" : `On (since ${user.mfa.enrolledAt})`;
 }
 
 /**
@@ -44,6 +50,12 @@ export const LOCK_UNCERTAIN =
   'The lock may not have been applied, or sessions may not all have ended. The current state is shown below; if the account shows as locked, use "Revoke all sessions" to make sure.';
 export const UNLOCK_UNCERTAIN = "The unlock may not have been applied. The current state is shown below; check it before trying again.";
 export const REVOKE_ALL_UNCERTAIN = "The outcome is unknown; the data was reloaded. Running it again is safe.";
+/** The BE removes the factor first, then ends the sessions: a 5xx may follow a removed factor. */
+export const MFA_RESET_UNCERTAIN =
+  'The reset may not have completed. The current state is shown below: if two-step verification is still On, reset it again; if it is Off, use "Revoke all sessions" to make sure every session ended.';
+/** Own account: this console's session may already have ended with the others. */
+export const MFA_RESET_SELF_UNCERTAIN =
+  "The reset of your own two-step verification may not have completed. If you are asked to sign in, set up two-step verification again afterwards; otherwise check the state shown below before trying again.";
 
 interface Props {
   user: AdminUser;
@@ -62,6 +74,7 @@ export function UserAccount({ user, viewer, path, writable }: Props) {
   const lock = useLockUser();
   const unlock = useUnlockUser();
   const revokeAll = useRevokeUserSessions();
+  const resetMfa = useResetUserMfa();
   const queryClient = useQueryClient();
   const { notice, headingRef, announce } = useActionNotice();
   const { self, protectedTarget } = accountGate(viewer, user);
@@ -100,6 +113,21 @@ export function UserAccount({ user, viewer, path, writable }: Props) {
     return { done: "Every session and refresh token of this account was ended." };
   }
 
+  /** Never re-sent by itself: an unknown outcome closes the dialog and the re-read shows the state. */
+  async function resetSecondFactor(): Promise<ActionOutcome> {
+    try {
+      await resetMfa.mutateAsync(user.id);
+    } catch (err) {
+      if (!(err instanceof AdminRequestError) || err.uncertain) return { done: self ? MFA_RESET_SELF_UNCERTAIN : MFA_RESET_UNCERTAIN };
+      return refused(err, MFA_RESET_UNCERTAIN);
+    }
+    if (self) {
+      signInAgain(); // this console's own session just ended
+      return { done: "" };
+    }
+    return { done: "Two-step verification was reset. Every session of this account was ended; the user must set it up again." };
+  }
+
   const facts: [string, string][] = [
     ["Email", user.email],
     ["User ID", user.id],
@@ -108,6 +136,7 @@ export function UserAccount({ user, viewer, path, writable }: Props) {
     ["Roles", user.roles.length ? user.roles.join(", ") : "—"],
     ["Created", user.createdAt ?? "—"],
     ["Lock", lockStatus(user)],
+    ["Two-step verification", mfaStatus(user)],
   ];
 
   return (
@@ -184,6 +213,35 @@ export function UserAccount({ user, viewer, path, writable }: Props) {
               only this one. Access tokens already issued stay valid until they expire.
             </p>
           </ConfirmAction>
+          {user.mfa.enrolled && (
+            <ConfirmAction
+              trigger="Reset two-step verification"
+              title="Reset two-step verification?"
+              confirmLabel="Reset"
+              destructive
+              path={path}
+              warning={
+                self && (
+                  <p role="alert" className="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-destructive">
+                    This is your own account: you will be signed out of this console and must set up two-step verification
+                    again before you can use it.
+                  </p>
+                )
+              }
+              run={resetSecondFactor}
+              onDone={announce}
+            >
+              <p>
+                Removes the authenticator and recovery codes of this user. The user is signed out everywhere: every
+                session, refresh token and remembered device ends, in every application and every tenant.
+              </p>
+              <p>
+                The user signs in with the password only until they set up two-step verification again; an admin must
+                set it up again before using this console. Reset only after confirming the user&apos;s identity another
+                way.
+              </p>
+            </ConfirmAction>
+          )}
         </div>
       )}
     </section>

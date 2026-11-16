@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import type { FederationConfig } from '../../config/configuration';
 import { AuthenticationModule } from '../authentication/authentication.module';
 import { IdentityModule } from '../identity/identity.module';
+import { MfaModule } from '../mfa/mfa.module';
 import { OauthModule } from '../oauth/oauth.module';
 import { CsrfGuard, CsrfService } from '../ui/csrf.service';
 import { HtmlExceptionFilter } from '../ui/html-exception.filter';
@@ -19,7 +20,7 @@ import { buildFederationProviders, FEDERATION_PROVIDERS } from './providers';
  * no cycle.
  */
 @Module({
-  imports: [IdentityModule, OauthModule, AuthenticationModule],
+  imports: [IdentityModule, OauthModule, AuthenticationModule, MfaModule],
   controllers: [FederationController],
   providers: [
     {

@@ -17,6 +17,10 @@ export const RefreshTokenSchema = new Schema({
   // Filter `{userId, sessionRef}` is a prefix of the `{userId:1, clientId:1}` index (no new index).
   // Tokens minted before B4.7 have none and are only reachable by global logout / `/revoke` / TTL.
   sessionRef: { type: String },
+  // Run 89 (D89.5): ms epoch of the second factor of the code that started the family, copied on
+  // every rotation. The `admin` refresh gate needs `mfaAt >= User.mfa.enrolledAt`; a family without
+  // it (pre-run-89) is refused for `admin` (fail-closed: fe-admin signs in again once).
+  mfaAt: { type: Number },
   scope: { type: [String], default: [] },
   resource: { type: String, required: true },
   issuedAt: { type: Date, default: Date.now },

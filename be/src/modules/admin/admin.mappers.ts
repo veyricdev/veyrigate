@@ -109,6 +109,12 @@ export function toAdminCredential(
   return { version: c.version, createdAt: c.createdAt, expiresAt, revokedAt, status };
 }
 
+/** Second-factor state (run 89 T4 AC4): never the seed, recovery codes, salt or counters. */
+export interface AdminMfaView {
+  enrolled: boolean;
+  enrolledAt: Date | null;
+}
+
 export interface AdminUserView {
   id: string;
   email: string;
@@ -118,16 +124,19 @@ export interface AdminUserView {
   membershipStatus: string;
   roles: string[];
   createdAt: Date | null;
+  mfa: AdminMfaView;
 }
 
 /**
- * User + its membership of the token's tenant (B6.3b). Never `passwordHash`, `mfaSecret`, profile,
+ * User + its membership of the token's tenant (B6.3b). Never `passwordHash`, `mfa`, profile,
  * or any session/token field (legacy fields `lockTransitionNonce`/`failedLoginCount` removed run 87).
  */
 export function toAdminUser(
   u: UserView,
   m: Pick<UserTenant, 'status' | 'roles'>,
   now: Date,
+  /** `User.mfa.enrolledAt` (projection only), null when not enrolled. */
+  mfaEnrolledAt: Date | null,
 ): AdminUserView {
   const lockedUntil = u.lockedUntil ?? null;
   return {
@@ -139,6 +148,7 @@ export function toAdminUser(
     membershipStatus: m.status,
     roles: [...(m.roles ?? [])],
     createdAt: u.createdAt ?? null,
+    mfa: { enrolled: mfaEnrolledAt !== null, enrolledAt: mfaEnrolledAt },
   };
 }
 

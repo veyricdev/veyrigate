@@ -30,6 +30,7 @@ import {
 import { tokenFromMailLink } from './helpers/mail-token';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 import { seedConsent } from './oauth-fixtures';
+import { TEST_MFA_ENCRYPTION_KEYS } from './helpers/mfa';
 
 /**
  * Run 86 tester (T6) — edges the T1/T2/T4 dev specs do not cover, on the REAL app:
@@ -694,6 +695,7 @@ describe('run 86 tester (T6): token fragment, POST /logout, key pre-publish edge
       SMTP_URL: 'smtp://x',
       ADMIN_SEED_EMAIL: 'a@example.com',
       CSRF_SECRET: 's',
+      MFA_ENCRYPTION_KEYS: TEST_MFA_ENCRYPTION_KEYS,
       RATE_LIMIT_WINDOW: '60',
       RATE_LIMIT_MAX: '100',
     });

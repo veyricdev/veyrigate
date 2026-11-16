@@ -179,13 +179,14 @@ export class LoginThrottleService {
    * unit (untrusted only) and, with `trustDevice`, record a FRESH device token as trusted for the
    * user (DEBT-596, D85.11: never the presented value, which may be planted; the presented hash is
    * removed in the same MULTI). Best-effort: a failure only costs the throttle/trust state. Returns
-   * the new token to set as the cookie, or undefined.
+   * the new token to set as the cookie, or undefined. `presentedHash` = sha256 of the presented
+   * device cookie (run 89: an MFA ticket stores the hash, never the cookie value).
    */
   async onSuccess(
     b: LoginBuckets,
     userId: string,
     trustDevice: boolean,
-    presented?: string,
+    presentedHash?: string,
   ): Promise<string | undefined> {
     try {
       await this.redis.client.del(b.keys[0].key);
@@ -199,7 +200,7 @@ export class LoginThrottleService {
       const now = Date.now();
       const key = trustKey(userId);
       const multi = this.redis.client.multi();
-      if (presented) multi.zrem(key, sha256(presented));
+      if (presentedHash) multi.zrem(key, presentedHash);
       const replies = await multi
         .zadd(key, now, sha256(deviceToken))
         .zremrangebyscore(key, '-inf', `(${now - TRUST_TTL_MS}`)

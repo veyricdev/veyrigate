@@ -34,6 +34,7 @@ import {
 } from './full-app';
 import { expectNoIssued, recordIssued } from './issued-tokens';
 import { seedConsent, seedOAuthUser } from './oauth-fixtures';
+import { TEST_MFA_ENCRYPTION_KEYS } from './helpers/mfa';
 
 /**
  * Tester risk tests, run 53 (B7.3 part 1, Vault Transit KeyProvider). Opt-in via `test:vault`, same
@@ -545,6 +546,7 @@ describe('run 53 tester: Vault Transit KeyProvider risk tests', () => {
       SMTP_URL: 'smtp://mail.internal:25',
       ADMIN_SEED_EMAIL: 'admin@example.test',
       CSRF_SECRET: 'tester-csrf-secret-not-a-real-secret-0000',
+      MFA_ENCRYPTION_KEYS: TEST_MFA_ENCRYPTION_KEYS,
       RATE_LIMIT_WINDOW: '60',
       RATE_LIMIT_MAX: '100',
       KEY_PROVIDER: 'vault',

@@ -20,13 +20,13 @@ import { ConfigService } from '@nestjs/config';
 import { buildCsp, safeCspOrigin } from '../../common/http/csp';
 import type { HttpReply, HttpRequest } from '../../common/http/http.types';
 import { IsDeliverableEmail } from '../../common/validation/email-address';
-import type { AppConfig, SessionConfig } from '../../config/configuration';
+import type { AppConfig } from '../../config/configuration';
 import { AuthenticationService } from '../authentication/authentication.service';
 import { LoginThrottleService } from '../authentication/login-throttle.service';
+import { MfaLoginService } from '../mfa/mfa-login.service';
 import { normalizeEmail } from '../identity/user.service';
 import { AuditAction } from '../security/audit/audit-action.enum';
 import { AuditService } from '../security/audit/audit.service';
-import { RateLimitService } from '../security/rate-limit/rate-limit.service';
 import { SessionCookie } from '../sessions/session.cookie';
 import { deviceLabelFromUserAgent } from '../sessions/device-label';
 import { SessionService } from '../sessions/session.service';
@@ -38,16 +38,11 @@ import {
   FEDERATION_PROVIDERS,
   type FederationProviders,
 } from '../federation/providers';
-import {
-  CsrfGuard,
-  CsrfService,
-  LogoutCsrfGuard,
-  csrfCookieName,
-  formCsrfIdentity,
-} from './csrf.service';
+import { CsrfGuard, CsrfService, LogoutCsrfGuard } from './csrf.service';
 import { HtmlExceptionFilter } from './html-exception.filter';
 import { requestIdFromReturnTo, safeReturnTo } from './return-to';
 import { revokeOneSession } from './session-revoke';
+import { UiSessionHelper } from './ui-session.helper';
 
 class FormDto {
   @IsOptional() @IsString() _csrf?: string;
@@ -103,7 +98,6 @@ type UiReply = HttpReply;
 @UseFilters(HtmlExceptionFilter)
 export class UiController {
   private readonly issuer: string;
-  private readonly secure: boolean;
   private readonly logger = new Logger(UiController.name);
   constructor(
     private readonly auth: AuthenticationService,
@@ -111,17 +105,17 @@ export class UiController {
     private readonly sessions: SessionService,
     private readonly sessionCookie: SessionCookie,
     private readonly audit: AuditService,
-    private readonly rateLimit: RateLimitService,
     private readonly refreshTokens: RefreshTokenService,
     private readonly logoutRp: LogoutService,
     private readonly authzContexts: AuthorizeRequestContextService,
     config: ConfigService,
     private readonly loginThrottle: LoginThrottleService,
+    private readonly ui: UiSessionHelper,
+    private readonly mfaLogin: MfaLoginService,
     // Optional: absent (tests composing UiController without FederationModule) => no buttons.
     @Optional() @Inject(FEDERATION_PROVIDERS) private readonly federation?: FederationProviders,
   ) {
     this.issuer = config.getOrThrow<AppConfig>('app').issuer;
-    this.secure = config.getOrThrow<SessionConfig>('session').cookieSecure;
   }
 
   @Get('/') async home(@Req() req: UiRequest, @Res() reply: UiReply) {
@@ -134,6 +128,7 @@ export class UiController {
       links: [
         { url: '/account/sessions', label: 'Your sessions' },
         { url: '/account/apps', label: 'Connected apps' },
+        { url: '/account/mfa', label: 'Two-step verification' },
       ],
       actionUrl: '/logout',
       actionLabel: 'Sign out',
@@ -154,7 +149,7 @@ export class UiController {
     // Chromium enforces the `form-action` of THIS page across that chain, so relax it to the single
     // RP origin already exact-matched in the resumable context (never the raw query). Fail-closed to
     // `'self'` on any doubt. The page carries a CSRF token + credentials field: never cache it.
-    await this.setLoginFormActionCsp(reply, safeReturn);
+    await this.ui.setLoginFormActionCsp(reply, safeReturn);
     return this.form(req, reply, 'login.eta', {
       title: 'Sign in',
       returnTo: safeReturn,
@@ -189,19 +184,6 @@ export class UiController {
   }
 
   /**
-   * Set the per-response CSP for `GET /login` (DEBT-084). Only when `safeReturn` is EXACTLY
-   * `/authorize?request_id=<id>` (single query key) and the still-live context's already-validated
-   * `redirectUri` yields a clean origin is that one origin appended to `form-action`; otherwise the
-   * header stays `form-action 'self'` (INV-084-1/2). `peek` never consumes/extends the context
-   * (INV-084-3). A Redis failure is fail-closed (`'self'`) and logged without the request_id.
-   */
-  private async setLoginFormActionCsp(reply: UiReply, safeReturn: string): Promise<void> {
-    reply.header('Cache-Control', 'no-store');
-    const origin = await this.loginFormActionOrigin(safeReturn);
-    reply.header('Content-Security-Policy', buildCsp({ formAction: origin ? [origin] : [] }));
-  }
-
-  /**
    * Whether `safeReturn` is exactly `/authorize?request_id=<id>` of a live context that demands
    * re-authentication (`reauthAfter`, B6.2). A Redis failure keeps the old behaviour (false) and is
    * logged without the request_id.
@@ -217,21 +199,6 @@ export class UiController {
     }
   }
 
-  /** Resolve the single `form-action` origin for a `/login` resume, or null (→ `'self'`). */
-  private async loginFormActionOrigin(safeReturn: string): Promise<string | null> {
-    const requestId = requestIdFromReturnTo(safeReturn);
-    if (!requestId) return null;
-    let ctx;
-    try {
-      ctx = await this.authzContexts.peek(requestId);
-    } catch {
-      // Redis read failure: never guess an origin; keep `form-action 'self'` (fail-closed). Do not
-      // log the request_id or returnTo (exposure budget).
-      this.logger.warn('login CSP: context peek failed; keeping form-action self');
-      return null;
-    }
-    return ctx ? safeCspOrigin(ctx.redirectUri) : null;
-  }
   @Get('/register') async register(@Req() req: UiRequest, @Res() reply: UiReply) {
     if (await this.hasLiveSession(req, reply)) return reply.redirect('/', 302);
     return this.form(req, reply, 'register.eta', { title: 'Create account' });
@@ -306,7 +273,7 @@ export class UiController {
   @Post('/register')
   @UseGuards(CsrfGuard)
   async registerPost(@Body() body: RegisterDto, @Req() req: UiRequest, @Res() reply: UiReply) {
-    await this.limit('register', req, body.email);
+    await this.ui.limit('register', req, body.email);
     await this.auth.register(normalizeEmail(body.email), body.password);
     return reply.view('message.eta', {
       title: 'Check your email',
@@ -318,8 +285,8 @@ export class UiController {
   async loginPost(@Body() body: LoginDto, @Req() req: UiRequest, @Res() reply: UiReply) {
     // DEBT-575: no `account` dimension here — the per-email limit lives in the login throttle,
     // where a trusted device is exempt (a shared per-account counter would be a lockout vector).
-    await this.limit('login', req);
-    const established = await this.auth.login(normalizeEmail(body.email), body.password, {
+    await this.ui.limit('login', req);
+    const result = await this.auth.login(normalizeEmail(body.email), body.password, {
       oldSessionId: this.sessionCookie.read(req),
       ip: req.ip,
       userAgent: String(req.headers['user-agent'] ?? ''),
@@ -328,14 +295,23 @@ export class UiController {
       deviceToken: this.loginThrottle.readDeviceToken(req),
       trustDevice: true,
     });
-    this.sessionCookie.set(reply, established.id);
-    if (established.deviceToken) this.loginThrottle.setDeviceCookie(reply, established.deviceToken);
+    if (result.kind === 'mfa') {
+      // Run 89 (D89.7/D89.8): password right, second factor pending => ticket cookie, no session.
+      const ticketId = await this.mfaLogin.start(
+        result.pending,
+        safeReturnTo(body.returnTo, this.issuer),
+      );
+      this.mfaLogin.setTicketCookie(reply, ticketId);
+      return reply.redirect('/login/mfa', 302);
+    }
+    this.sessionCookie.set(reply, result.id);
+    if (result.deviceToken) this.loginThrottle.setDeviceCookie(reply, result.deviceToken);
     return reply.redirect(safeReturnTo(body.returnTo, this.issuer), 302);
   }
   @Post('/forgot')
   @UseGuards(CsrfGuard)
   async forgotPost(@Body() body: EmailDto, @Req() req: UiRequest, @Res() reply: UiReply) {
-    await this.limit('forgot', req, body.email);
+    await this.ui.limit('forgot', req, body.email);
     await this.auth.forgotPassword(normalizeEmail(body.email));
     return reply.view('message.eta', {
       title: 'Check your email',
@@ -354,7 +330,7 @@ export class UiController {
   @Post('/reset')
   @UseGuards(CsrfGuard)
   async resetPost(@Body() body: ResetDto, @Req() req: UiRequest, @Res() reply: UiReply) {
-    await this.limit('reset', req, body.token);
+    await this.ui.limit('reset', req, body.token);
     await this.auth.resetPassword(body.token, body.password);
     return reply.view('message.eta', {
       title: 'Password changed',
@@ -363,7 +339,7 @@ export class UiController {
   }
   /** DEBT-573 (D85.6): change password form; a live session is required. */
   @Get('/account/password') async passwordForm(@Req() req: UiRequest, @Res() reply: UiReply) {
-    const session = await this.liveSession(req, reply);
+    const session = await this.ui.liveSession(req, reply);
     if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fpassword', 302);
     if (!(await this.auth.hasPassword(session.userId))) {
       reply.header('Cache-Control', 'no-store');
@@ -383,9 +359,9 @@ export class UiController {
     @Req() req: UiRequest,
     @Res() reply: UiReply,
   ) {
-    const session = await this.liveSession(req, reply);
+    const session = await this.ui.liveSession(req, reply);
     if (!session) return reply.redirect('/login', 302);
-    await this.limit('password_change', req, session.userId);
+    await this.ui.limit('password_change', req, session.userId);
     const outcome = await this.auth.changePassword(
       session.userId,
       body.current_password,
@@ -606,31 +582,10 @@ export class UiController {
   private form(req: UiRequest, reply: UiReply, template: string, data: Record<string, unknown>) {
     // Every form page carries a CSRF token (and often a one-time token): never cache it (B7.4).
     reply.header('Cache-Control', 'no-store');
-    const identity = this.identity(req, reply);
+    const identity = this.ui.identity(req, reply);
     return reply.view(template, { ...data, csrf: this.csrf.token(identity) });
   }
   private async hasLiveSession(req: UiRequest, reply: UiReply): Promise<boolean> {
-    return (await this.liveSession(req, reply)) !== null;
-  }
-  /** The live session of the cookie, or null (a dead cookie is cleared). */
-  private async liveSession(req: UiRequest, reply: UiReply) {
-    const id = this.sessionCookie.read(req);
-    if (!id) return null;
-    const session = await this.sessions.get(id);
-    if (session) return session;
-    this.sessionCookie.clear(reply);
-    delete req.cookies?.[this.sessionCookie.name];
-    return null;
-  }
-  private identity(req: UiRequest, reply: UiReply): string {
-    return formCsrfIdentity(this.sessionCookie.read(req), req, reply, this.secure);
-  }
-  private async limit(name: string, req: UiRequest, account?: string) {
-    const result = await this.rateLimit.hit(
-      { name },
-      { ip: req.ip, account, deviceId: req.cookies?.[csrfCookieName(this.secure)] },
-    );
-    if (!result.allowed)
-      throw new HttpException({ retryAfter: result.retryAfterSec }, HttpStatus.TOO_MANY_REQUESTS);
+    return (await this.ui.liveSession(req, reply)) !== null;
   }
 }

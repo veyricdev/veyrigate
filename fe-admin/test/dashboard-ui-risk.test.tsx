@@ -67,7 +67,8 @@ const ok = <T,>(data: T) => ({ ok: true as const, data });
 const fail = (code: AdminApiErrorCode) => ({ ok: false as const, error: { code, message: `msg ${code}` } });
 const page = (n: number, nextCursor: string | null = null) => ok({ items: Array.from({ length: n }, (_, i) => ({ i })), nextCursor });
 const empty = () => ok({ items: [], nextCursor: null });
-const ACTIONS = ["TOKEN_REUSE_DETECTED", "SIGNING_KEY_ROTATED", "ADMIN_USER_LOCKED"] as const;
+const ACTIONS = ["TOKEN_REUSE_DETECTED", "SIGNING_KEY_ROTATED", "ADMIN_USER_LOCKED", "ADMIN_USER_MFA_RESET", "MFA_DISABLED", "AUTH_MFA_THROTTLED", "AUTH_MFA_LOCKED"] as const;
+const N = ACTIONS.length;
 
 const ev = (action: string, eventId: string, timestamp: string, extra: Partial<AuditEvent> = {}): AuditEvent => ({
   eventId,
@@ -232,9 +233,10 @@ describe("signing keys gate across navigation", () => {
 
 describe("recent security events", () => {
   it.each([
-    [["SIGNING_KEY_ROTATED"], 4],
-    [["TOKEN_REUSE_DETECTED", "ADMIN_USER_LOCKED"], 5],
-    [[...ACTIONS], 6],
+    [["SIGNING_KEY_ROTATED"], N + 1],
+    [["TOKEN_REUSE_DETECTED", "ADMIN_USER_LOCKED"], N + 2],
+    [["MFA_DISABLED", "AUTH_MFA_LOCKED"], N + 2],
+    [[...ACTIONS], 2 * N],
   ] as const)("%j failing => error block; Try again asks only those again (total %i calls)", async (failing, total) => {
     for (const a of failing) byAction[a] = async () => fail("unavailable");
     if (!(failing as readonly string[]).includes("ADMIN_USER_LOCKED")) {
@@ -246,13 +248,13 @@ describe("recent security events", () => {
     expect(within(r).queryByRole("list")).toBeNull();
     expect(r.textContent).not.toContain("No recent security events");
     expect(r.textContent).not.toContain("target-");
-    expect(audit).toHaveBeenCalledTimes(3);
+    expect(audit).toHaveBeenCalledTimes(N);
     for (const a of failing) byAction[a] = async () => empty();
     fireEvent.click(within(alert).getByRole("button", { name: "Try again" }));
     await waitFor(() => expect(within(r).queryByRole("alert")).toBeNull());
     await settle();
     expect(audit).toHaveBeenCalledTimes(total);
-    const retried = audit.mock.calls.slice(3).map((c) => (c[0] as AuditArg).data.action);
+    const retried = audit.mock.calls.slice(N).map((c) => (c[0] as AuditArg).data.action);
     expect(new Set(retried)).toEqual(new Set(failing));
   });
 
@@ -287,8 +289,8 @@ describe("recent security events", () => {
 
   it("3 x 10 events => the 10 newest overall", async () => {
     const t = (m: number) => `2026-10-23T02:${String(m).padStart(2, "0")}:00.000Z`;
-    ACTIONS.forEach((a, k) => {
-      // action k holds minutes k, k+3, ..., k+27 (newest first, as the BE pages)
+    ACTIONS.slice(0, 3).forEach((a, k) => {
+      // the other actions stay empty; action k holds minutes k, k+3, ..., k+27 (newest first, as the BE pages)
       const items = Array.from({ length: 10 }, (_, i) => k + 3 * (9 - i)).map((m) => ev(a, `${a}-${m}`, t(m)));
       byAction[a] = async () => ok({ items, nextCursor: "more" });
     });

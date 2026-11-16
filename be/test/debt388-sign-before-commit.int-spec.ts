@@ -89,6 +89,8 @@ const cfg = {
         clientAuthFailIpMax: 100000,
         clientAuthFailClientMax: 100000,
       };
+    // Run 89 (D89.4): the admin MFA gate is off in hand-composed modules, like `full-app`.
+    if (ns === 'mfa') return { adminRequired: false };
     throw new Error(`Unexpected config namespace: ${ns}`);
   },
 } as unknown as ConfigService;

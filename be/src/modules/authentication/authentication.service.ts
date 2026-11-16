@@ -28,10 +28,10 @@ import {
 } from '../mailer/templates';
 import { AuditAction } from '../security/audit/audit-action.enum';
 import { AuditService } from '../security/audit/audit.service';
-import { SessionService } from '../sessions/session.service';
+import { SessionService, type Session } from '../sessions/session.service';
 import { RefreshTokenService } from '../oauth/token/refresh-token.service';
 import { DuplicateError } from '../identity/identity.errors';
-import { LoginThrottleService } from './login-throttle.service';
+import { LoginThrottleService, type LoginBuckets } from './login-throttle.service';
 import { assertAcceptablePassword } from './password-policy/password-policy';
 
 interface OneTimeTokenDoc {
@@ -54,6 +54,35 @@ export type ChangePasswordOutcome =
   | { kind: 'invalid_current' }
   | { kind: 'policy'; message: string }
   | { kind: 'conflict' };
+
+/**
+ * A first factor proven for a user who has a second one (run 89, D89.7/D89.8): what step 2 needs to
+ * finish the sign-in. Nothing here was applied yet (no session, no bucket clear, no device trust, no
+ * success audit). Server data only, stored in the MFA ticket (never a password or a device cookie).
+ */
+export interface PendingMfa {
+  userId: string;
+  /** First-factor method: `['pwd']` or `['fed']`. */
+  amr: string[];
+  /** The enrollment step 1 saw; step 2 must verify against the same one. */
+  enrolledAt: Date;
+  /** Federation only: the upstream `auth_time` (ms) kept as the session `authTime` (D89.15). */
+  authTime?: number;
+  /** Federation only: provider name for the success audit. */
+  provider?: string;
+  /** Password only: sha256(passwordHash) verified at step 1 (re-checked after `establish`). */
+  pwdFp?: string;
+  /** Password only: the throttle buckets to clear and the device to trust once step 2 succeeds. */
+  buckets?: LoginBuckets;
+  deviceHash?: string;
+  trustDevice?: boolean;
+  deviceLabel?: string;
+}
+
+/** `login()` (D89.7): a session, or a pending second factor. */
+export type LoginResult =
+  | { kind: 'session'; id: string; session: Session; deviceToken?: string }
+  | { kind: 'mfa'; pending: PendingMfa };
 
 /** Step of `revokeAllUserCredentials` that failed first (audit metadata, never a secret). */
 export type RevokeStep = 'pre_revoke' | 'sessions' | 'sweep';
@@ -134,7 +163,9 @@ export class AuthenticationService {
    * `deviceToken` is the well-formed device cookie of the request. With `trustDevice` (the `/login`
    * form only; federation neither reads nor sets the cookie) the result's `deviceToken` is the
    * new cookie value to set (always freshly generated, D85.11), absent when recording trust failed
-   * (fail-safe).
+   * (fail-safe). Run 89 (D89.7): a user with a second factor gets `{kind:'mfa'}` after every step-1
+   * check passed, and NOTHING of the success path runs yet (no session, no bucket clear, no device
+   * trust, no success audit): the caller turns `pending` into an MFA ticket.
    */
   async login(
     email: string,
@@ -145,7 +176,7 @@ export class AuthenticationService {
       deviceToken?: string;
       trustDevice?: boolean;
     },
-  ) {
+  ): Promise<LoginResult> {
     const user = await this.users.findByEmailForAuthentication(email);
     const buckets = await this.throttle.buckets(email, context.ip, user?.sub, context.deviceToken);
     const reserved = await this.throttle.reserve(buckets);
@@ -189,6 +220,22 @@ export class AuthenticationService {
       await recordFailed();
       throw new UnauthorizedException(GENERIC_LOGIN_ERROR);
     }
+    const enrolledAt = await this.users.mfaEnrolledAt(user.sub);
+    if (enrolledAt) {
+      return {
+        kind: 'mfa',
+        pending: {
+          userId: user.sub,
+          amr: ['pwd'],
+          enrolledAt,
+          pwdFp: sha256(user.passwordHash!),
+          buckets,
+          ...(context.deviceToken ? { deviceHash: sha256(context.deviceToken) } : {}),
+          trustDevice: context.trustDevice === true,
+          ...(context.deviceLabel ? { deviceLabel: context.deviceLabel } : {}),
+        },
+      };
+    }
     const established = await this.sessions.establish(
       context.oldSessionId,
       user.sub,
@@ -205,9 +252,13 @@ export class AuthenticationService {
     // attempt verified, any later change revokes this session; if it differs, the password checked
     // here is already stale => kill the session, generic 401, no success audit, no device trust,
     // no bucket clear.
+    // DEBT-637 (run 89): same for an enrollment racing this login (read `null` above, enrolled
+    // before `establish`): its revoke-all may have run before this session existed.
     let fresh: Awaited<ReturnType<UserService['findByIdForAuthentication']>>;
+    let enrolledNow: Date | null;
     try {
       fresh = await this.users.findByIdForAuthentication(user.sub);
+      enrolledNow = await this.users.mfaEnrolledAt(user.sub);
     } catch (err) {
       await this.sessions.revoke(established.id).catch(() => undefined);
       throw err;
@@ -215,7 +266,8 @@ export class AuthenticationService {
     if (
       !fresh ||
       (fresh.lockedUntil && fresh.lockedUntil > new Date()) ||
-      fresh.passwordHash !== user.passwordHash
+      fresh.passwordHash !== user.passwordHash ||
+      enrolledNow !== null
     ) {
       await this.sessions.revoke(established.id);
       await recordFailed();
@@ -243,9 +295,9 @@ export class AuthenticationService {
       buckets,
       user.sub,
       context.trustDevice === true,
-      context.deviceToken,
+      context.deviceToken ? sha256(context.deviceToken) : undefined,
     );
-    return { ...established, ...(deviceToken ? { deviceToken } : {}) };
+    return { kind: 'session', ...established, ...(deviceToken ? { deviceToken } : {}) };
   }
 
   async forgotPassword(email: string): Promise<void> {
@@ -375,15 +427,20 @@ export class AuthenticationService {
    * Re-authentication with the current password (run 88, D88.18, ASVS 5.0 7.5.2) through the SAME
    * 5/900 s bucket as `/account/password` (reserved before Argon2, refunded on success), so the
    * form is not a second password-guessing oracle. Redis/Mongo errors propagate (fail-closed).
+   * `throttled.report` is true for the first refusal of the window (DEBT-629: the caller audits it
+   * once, like `changePassword`).
    */
   async verifyCurrentPassword(
     userId: string,
     password: string,
   ): Promise<
-    { kind: 'ok' | 'invalid' | 'no_password' } | { kind: 'throttled'; retryAfterSec: number }
+    | { kind: 'ok' | 'invalid' | 'no_password' }
+    | { kind: 'throttled'; retryAfterSec: number; report: boolean }
   > {
     const reserved = await this.throttle.reservePasswordChange(userId);
-    if (reserved.blocked) return { kind: 'throttled', retryAfterSec: reserved.retryAfterSec };
+    if (reserved.blocked) {
+      return { kind: 'throttled', retryAfterSec: reserved.retryAfterSec, report: reserved.report };
+    }
     const user = await this.users.findByIdForAuthentication(userId);
     if (!user?.passwordHash) {
       await this.throttle.refundPasswordChange(userId);

@@ -28,6 +28,12 @@ export interface RecoverArgs {
   unlock: boolean;
   allowExistingSuperAdmin: boolean;
   dryRun: boolean;
+  /**
+   * Run 89 (D89.17): also remove the user's second factor and revoke every refresh family (Mongo
+   * only, same transaction). Redis sessions are not touched (DEBT-634): the `admin` gate refuses
+   * them (`mfaAt >= enrolledAt`, D89.5).
+   */
+  resetMfa: boolean;
 }
 
 export interface RecoverIo {
@@ -53,7 +59,7 @@ export type RecoverResult =
 const NAME = /^[a-z0-9._-]{2,64}$/;
 const TICKET = /^[A-Za-z0-9._#/-]{1,64}$/;
 const VALUE_FLAGS = ['--email', '--requested-by', '--approved-by', '--ticket'] as const;
-const SWITCHES = ['--unlock', '--allow-existing-super-admin', '--dry-run'] as const;
+const SWITCHES = ['--unlock', '--allow-existing-super-admin', '--dry-run', '--reset-mfa'] as const;
 
 /** Allowlist parse of `process.argv`. Every error is a fixed text: no argument value is echoed. */
 export function parseRecoverArgs(argv: readonly string[]): RecoverArgs {
@@ -93,6 +99,7 @@ export function parseRecoverArgs(argv: readonly string[]): RecoverArgs {
     unlock: switches.has('--unlock'),
     allowExistingSuperAdmin: switches.has('--allow-existing-super-admin'),
     dryRun: switches.has('--dry-run'),
+    resetMfa: switches.has('--reset-mfa'),
   };
 }
 
@@ -128,7 +135,7 @@ class Refusal extends Error {
   }
 }
 
-type UserRow = { _id: Types.ObjectId; lockedUntil?: Date };
+type UserRow = { _id: Types.ObjectId; lockedUntil?: Date; mfa?: { enrolledAt?: Date } };
 
 const SUPER_ADMINS = { tenantId: DEFAULT_TENANT_ID, status: 'active', roles: 'super_admin' };
 
@@ -183,8 +190,13 @@ export async function recoverSuperAdmin(
     targetType: 'user',
     ...(targetId ? { targetId } : {}),
   });
-  const metadata = (m: { unlocked: boolean; usableSuperAdmins: number }): AuditMetadata =>
+  const metadata = (m: {
+    unlocked: boolean;
+    usableSuperAdmins: number;
+    mfaReset?: boolean;
+  }): AuditMetadata =>
     sanitizeMetadata({
+      mfaReset: m.mfaReset ?? false,
       requestedBy: args.requestedBy,
       approvedBy: args.approvedBy,
       ticket: args.ticket,
@@ -224,7 +236,10 @@ export async function recoverSuperAdmin(
 
   // 1. Plan (read-only).
   io.write(`target: ${conn.host}:${conn.port}/${conn.name}`);
-  const user = await users.findOne({ email }, { _id: 1, lockedUntil: 1 }).lean<UserRow>().exec();
+  // Native read: `mfa` is `select:false` in the schema, only its `enrolledAt` is projected.
+  const user = await conn
+    .collection('users')
+    .findOne<UserRow>({ email }, { projection: { _id: 1, lockedUntil: 1, 'mfa.enrolledAt': 1 } });
   if (!user) return refuse('user_not_found', undefined, 0);
   const userId = user._id.toHexString();
   const member = await memberships
@@ -238,11 +253,15 @@ export async function recoverSuperAdmin(
     `membership ${DEFAULT_TENANT_ID}: ${member ? `${member.status} [${member.roles.join(', ')}]` : 'none'}`,
   );
   io.write(`locked: ${locked ? 'yes (admin lock)' : 'no'}`);
+  const enrolled = user.mfa?.enrolledAt != null;
+  io.write(
+    `mfa: ${enrolled ? 'enrolled' : 'not enrolled'}${args.resetMfa ? ' -> reset' : enrolled ? ' (kept)' : ''}`,
+  );
   io.write(`usable super_admins: ${usable}`);
   io.write(`requested by: ${args.requestedBy}, approved by: ${args.approvedBy}`);
   io.write(`ticket: ${args.ticket}`);
   io.write(
-    `options: unlock=${args.unlock} allow-existing-super-admin=${args.allowExistingSuperAdmin}`,
+    `options: unlock=${args.unlock} allow-existing-super-admin=${args.allowExistingSuperAdmin} reset-mfa=${args.resetMfa}`,
   );
   if (usable > 0 && !args.allowExistingSuperAdmin) {
     return refuse('super_admin_exists', userId, usable);
@@ -264,7 +283,7 @@ export async function recoverSuperAdmin(
   // 3. One transaction: touch (serializes CLI ∥ CLI and CLI ∥ API demote/lock), re-check, write, audit.
   const guard = new SuperAdminGuard(conn, memberships as never, users as never);
   const userService = new UserService(users as never);
-  let result: { eventId: string; usable: number; unlocked: boolean };
+  let result: { eventId: string; usable: number; unlocked: boolean; mfaReset: boolean };
   try {
     result = await guard.runGuarded(async (session) => {
       const touched = await tenants.updateOne(
@@ -300,21 +319,44 @@ export async function recoverSuperAdmin(
         const r = await userService.adminUnlock(userId, true, now(), session);
         unlocked = r != null && r !== 'forbidden' && r.before.lockedUntil != null;
       }
+      // Run 89 (D89.17): factor removed + every refresh family revoked (stamp first, like
+      // `revokeAllForUser`), aborted with everything else if the audit insert fails.
+      let mfaReset = false;
+      if (args.resetMfa) {
+        const at = now();
+        const unset = await users
+          .updateOne({ _id: user._id, mfa: { $exists: true } }, { $unset: { mfa: 1 } }, { session })
+          .exec();
+        mfaReset = unset.modifiedCount === 1;
+        const families = conn.collection('refreshtokens');
+        await families.updateMany(
+          { userId: user._id, revokedAt: null },
+          { $set: { familyRevokedAt: at } },
+          { session },
+        );
+        await families.updateMany(
+          { userId: user._id, revokedAt: null },
+          { $set: { revokedAt: at } },
+          { session },
+        );
+      }
       const event: AuditEvent = {
         ...baseAudit(userId),
         result: 'success',
-        metadata: metadata({ unlocked, usableSuperAdmins: n }),
+        metadata: metadata({ unlocked, usableSuperAdmins: n, mfaReset }),
         eventId: randomUUID(),
         timestamp: now(),
       };
       await auditModel.create([event], { session });
-      return { eventId: event.eventId, usable: n, unlocked };
+      return { eventId: event.eventId, usable: n, unlocked, mfaReset };
     });
   } catch (err) {
     if (err instanceof Refusal) return refuse(err.reason, userId, err.usable);
     throw err;
   }
-  io.write(`recovered: user ${userId}, audit event ${result.eventId}`);
+  io.write(
+    `recovered: user ${userId}, audit event ${result.eventId}${result.mfaReset ? ', mfa reset' : ''}`,
+  );
   // The app's alert listener does not run here: the log pipeline alerts on this line.
   io.write(
     JSON.stringify({ alert: true, action: AuditAction.ADMIN_RECOVERED, eventId: result.eventId }),
@@ -326,6 +368,7 @@ async function main(): Promise<number> {
   const args = parseRecoverArgs(process.argv);
   const env = validateEnv(process.env);
   console.log(mongoTarget(env.MONGO_URI));
+  if (args.resetMfa) console.log('mfa: reset (factor removed, refresh families revoked)');
   if (args.dryRun) {
     console.log('dry-run: no connection made');
     return 0;

@@ -29,6 +29,8 @@ export interface AuthorizationCodeData {
   sessionRef: string;
   /** Session authentication methods (DEBT-030). Absent on pre-run-32 codes => ID token `['pwd']`. */
   amr?: string[];
+  /** Second-factor time of the session (run 89, D89.5); the `/token` admin gate reads it. */
+  mfaAt?: number;
   /** Mint time, epoch ms (DEBT-209), set by `create` only. Absent on pre-run-56 codes => 0. */
   issuedAt?: number;
 }

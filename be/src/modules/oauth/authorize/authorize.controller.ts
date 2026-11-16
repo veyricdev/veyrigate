@@ -166,6 +166,7 @@ export class AuthorizeController {
           authTime: live.authTime,
           ref: live.ref,
           ...(live.amr ? { amr: live.amr } : {}),
+          ...(live.mfaAt !== undefined ? { mfaAt: live.mfaAt } : {}),
         }
       : null;
   }
@@ -181,7 +182,7 @@ export class AuthorizeController {
     outcome: AuthorizeOutcome,
     binding: string,
   ): unknown {
-    if (outcome.kind === 'login_required') {
+    if (outcome.kind === 'login_required' || outcome.kind === 'mfa_required') {
       // DEBT-413: set (or refresh the Max-Age of) the binding the new login context was hashed with.
       reply.setCookie(this.bindingCookieName(), binding, {
         httpOnly: true,
@@ -195,6 +196,14 @@ export class AuthorizeController {
         `/authorize?request_id=${encodeURIComponent(outcome.requestId)}`,
         this.authorize.issuerUrl,
       );
+      if (outcome.kind === 'mfa_required') {
+        // Run 89 (D89.6): no code for `admin` without a second factor; enroll, then come back.
+        reply.header('Cache-Control', 'no-store');
+        return reply.status(403).view('mfa-required.eta', {
+          title: 'Two-step verification required',
+          enrollUrl: `/account/mfa?returnTo=${encodeURIComponent(returnTo)}`,
+        });
+      }
       return reply.redirect(`/login?returnTo=${encodeURIComponent(returnTo)}`, 302);
     }
     if (outcome.kind === 'consent_required') {
@@ -224,10 +233,11 @@ export class AuthorizeController {
         // D88.21: the origin of the exact-matched stored redirect URI (never the query); none when
         // it does not yield a clean origin.
         origin,
-        accessMinutes: Math.round(outcome.accessTtlSec / 60),
+        // Never "0 minutes" / "0 days" for a lifetime shorter than half a unit.
+        accessMinutes: Math.max(1, Math.round(outcome.accessTtlSec / 60)),
         refreshDays:
           outcome.refreshTtlSec !== undefined
-            ? Math.round(outcome.refreshTtlSec / 86400)
+            ? Math.max(1, Math.round(outcome.refreshTtlSec / 86400))
             : undefined,
       });
     }

@@ -205,6 +205,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/users/{id}/mfa/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Removes the two-step verification of the user, then ends every session and refresh family. */
+        post: operations["AdminUsersController_resetMfa"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/users/{id}/roles": {
         parameters: {
             query?: never;
@@ -460,6 +477,11 @@ export interface components {
             /** @description The scopes the caller read (exact, ordered; [] also matches a resource without scopes). Present => written only if the stored scopes still equal it, otherwise 409 conflict. Absent => last write wins. Items follow the loose stored rule (non-empty, no whitespace), not the scope-token grammar of `scopes`, so a resource holding a legacy token can be repaired. */
             expectedScopes?: string[];
         };
+        AdminMfaViewDto: {
+            enrolled: boolean;
+            /** Format: date-time */
+            enrolledAt: string | null;
+        };
         AdminUserViewDto: {
             id: string;
             email: string;
@@ -472,6 +494,7 @@ export interface components {
             roles: string[];
             /** Format: date-time */
             createdAt: string | null;
+            mfa: components["schemas"]["AdminMfaViewDto"];
         };
         UserPageViewDto: {
             items: components["schemas"]["AdminUserViewDto"][];
@@ -523,7 +546,7 @@ export interface components {
             actorType: "user" | "client" | "admin" | "system";
             actorId?: string;
             /** @enum {string} */
-            action: "AUTH_LOGIN_SUCCESS" | "AUTH_LOGIN_FAILED" | "AUTH_ACCOUNT_LOCKED" | "AUTH_EMAIL_VERIFIED" | "AUTH_PASSWORD_RESET" | "SESSION_CREATED" | "SESSION_REVOKED" | "OAUTH_AUTHORIZE" | "OAUTH_CONSENT_GRANTED" | "OAUTH_CONSENT_DENIED" | "TOKEN_ISSUED" | "TOKEN_REFRESHED" | "TOKEN_REUSE_DETECTED" | "TOKEN_REVOKED" | "CLIENT_SECRET_CREATED" | "CLIENT_SECRET_ROTATED" | "CLIENT_SECRET_REVOKED" | "REDIRECT_URI_CHANGED" | "SIGNING_KEY_CREATED" | "SIGNING_KEY_ROTATED" | "ACCOUNT_LINKED" | "ACCOUNT_UNLINKED" | "ADMIN_CLIENT_CREATED" | "ADMIN_CLIENT_UPDATED" | "ADMIN_RESOURCE_CREATED" | "ADMIN_RESOURCE_UPDATED" | "ADMIN_USER_LOCKED" | "ADMIN_USER_UNLOCKED" | "ADMIN_USER_ROLES_CHANGED" | "OAUTH_CONSENT_REVOKED" | "AUTH_LOGIN_THROTTLED" | "AUTH_PASSWORD_CHANGED" | "ADMIN_RECOVERED" | "ADMIN_BOOTSTRAPPED" | "TRUSTED_DEVICE_REVOKED";
+            action: "AUTH_LOGIN_SUCCESS" | "AUTH_LOGIN_FAILED" | "AUTH_ACCOUNT_LOCKED" | "AUTH_EMAIL_VERIFIED" | "AUTH_PASSWORD_RESET" | "SESSION_CREATED" | "SESSION_REVOKED" | "OAUTH_AUTHORIZE" | "OAUTH_CONSENT_GRANTED" | "OAUTH_CONSENT_DENIED" | "TOKEN_ISSUED" | "TOKEN_REFRESHED" | "TOKEN_REUSE_DETECTED" | "TOKEN_REVOKED" | "CLIENT_SECRET_CREATED" | "CLIENT_SECRET_ROTATED" | "CLIENT_SECRET_REVOKED" | "REDIRECT_URI_CHANGED" | "SIGNING_KEY_CREATED" | "SIGNING_KEY_ROTATED" | "ACCOUNT_LINKED" | "ACCOUNT_UNLINKED" | "ADMIN_CLIENT_CREATED" | "ADMIN_CLIENT_UPDATED" | "ADMIN_RESOURCE_CREATED" | "ADMIN_RESOURCE_UPDATED" | "ADMIN_USER_LOCKED" | "ADMIN_USER_UNLOCKED" | "ADMIN_USER_ROLES_CHANGED" | "OAUTH_CONSENT_REVOKED" | "AUTH_LOGIN_THROTTLED" | "AUTH_PASSWORD_CHANGED" | "ADMIN_RECOVERED" | "ADMIN_BOOTSTRAPPED" | "TRUSTED_DEVICE_REVOKED" | "AUTH_MFA_FAILED" | "AUTH_MFA_THROTTLED" | "MFA_ENROLLED" | "MFA_DISABLED" | "MFA_RECOVERY_REGENERATED" | "MFA_RECOVERY_USED" | "AUTH_REAUTH_FAILED" | "ADMIN_USER_MFA_RESET" | "AUTH_MFA_LOCKED";
             targetType?: string;
             targetId?: string;
             clientId?: string;
@@ -966,6 +989,25 @@ export interface operations {
             };
         };
     };
+    AdminUsersController_resetMfa: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     AdminUsersController_setRoles: {
         parameters: {
             query?: never;
@@ -1087,7 +1129,7 @@ export interface operations {
                 limit?: number;
                 /** @description Opaque cursor: `nextCursor` of the previous page. */
                 after?: string;
-                action?: "AUTH_LOGIN_SUCCESS" | "AUTH_LOGIN_FAILED" | "AUTH_ACCOUNT_LOCKED" | "AUTH_EMAIL_VERIFIED" | "AUTH_PASSWORD_RESET" | "SESSION_CREATED" | "SESSION_REVOKED" | "OAUTH_AUTHORIZE" | "OAUTH_CONSENT_GRANTED" | "OAUTH_CONSENT_DENIED" | "TOKEN_ISSUED" | "TOKEN_REFRESHED" | "TOKEN_REUSE_DETECTED" | "TOKEN_REVOKED" | "CLIENT_SECRET_CREATED" | "CLIENT_SECRET_ROTATED" | "CLIENT_SECRET_REVOKED" | "REDIRECT_URI_CHANGED" | "SIGNING_KEY_CREATED" | "SIGNING_KEY_ROTATED" | "ACCOUNT_LINKED" | "ACCOUNT_UNLINKED" | "ADMIN_CLIENT_CREATED" | "ADMIN_CLIENT_UPDATED" | "ADMIN_RESOURCE_CREATED" | "ADMIN_RESOURCE_UPDATED" | "ADMIN_USER_LOCKED" | "ADMIN_USER_UNLOCKED" | "ADMIN_USER_ROLES_CHANGED" | "OAUTH_CONSENT_REVOKED" | "AUTH_LOGIN_THROTTLED" | "AUTH_PASSWORD_CHANGED" | "ADMIN_RECOVERED" | "ADMIN_BOOTSTRAPPED" | "TRUSTED_DEVICE_REVOKED";
+                action?: "AUTH_LOGIN_SUCCESS" | "AUTH_LOGIN_FAILED" | "AUTH_ACCOUNT_LOCKED" | "AUTH_EMAIL_VERIFIED" | "AUTH_PASSWORD_RESET" | "SESSION_CREATED" | "SESSION_REVOKED" | "OAUTH_AUTHORIZE" | "OAUTH_CONSENT_GRANTED" | "OAUTH_CONSENT_DENIED" | "TOKEN_ISSUED" | "TOKEN_REFRESHED" | "TOKEN_REUSE_DETECTED" | "TOKEN_REVOKED" | "CLIENT_SECRET_CREATED" | "CLIENT_SECRET_ROTATED" | "CLIENT_SECRET_REVOKED" | "REDIRECT_URI_CHANGED" | "SIGNING_KEY_CREATED" | "SIGNING_KEY_ROTATED" | "ACCOUNT_LINKED" | "ACCOUNT_UNLINKED" | "ADMIN_CLIENT_CREATED" | "ADMIN_CLIENT_UPDATED" | "ADMIN_RESOURCE_CREATED" | "ADMIN_RESOURCE_UPDATED" | "ADMIN_USER_LOCKED" | "ADMIN_USER_UNLOCKED" | "ADMIN_USER_ROLES_CHANGED" | "OAUTH_CONSENT_REVOKED" | "AUTH_LOGIN_THROTTLED" | "AUTH_PASSWORD_CHANGED" | "ADMIN_RECOVERED" | "ADMIN_BOOTSTRAPPED" | "TRUSTED_DEVICE_REVOKED" | "AUTH_MFA_FAILED" | "AUTH_MFA_THROTTLED" | "MFA_ENROLLED" | "MFA_DISABLED" | "MFA_RECOVERY_REGENERATED" | "MFA_RECOVERY_USED" | "AUTH_REAUTH_FAILED" | "ADMIN_USER_MFA_RESET" | "AUTH_MFA_LOCKED";
                 actorId?: string;
                 targetType?: string;
                 targetId?: string;

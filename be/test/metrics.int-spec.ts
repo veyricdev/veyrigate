@@ -60,6 +60,9 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { seedConsent, seedOAuthUser } from './oauth-fixtures';
+import { MFA_KEYRING } from '../src/modules/mfa/mfa-crypto';
+import { MfaService } from '../src/modules/mfa/mfa.service';
+import { testKeyring } from './helpers/mfa';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -97,6 +100,8 @@ const cfg = {
         clientAuthFailIpMax: 100000,
         clientAuthFailClientMax: 100000,
       };
+    // Run 89 (D89.4): the admin MFA gate is off in hand-composed modules, like `full-app`.
+    if (ns === 'mfa') return { adminRequired: false };
     throw new Error(`Unexpected config namespace: ${ns}`);
   },
 } as unknown as ConfigService;
@@ -262,6 +267,9 @@ describe('Prometheus /metrics + business metrics (B7.2)', () => {
         UserService,
         UserTenantService,
         SuperAdminGuard,
+        // Run 89 T4: `POST /admin/users/:id/mfa/reset`.
+        MfaService,
+        { provide: MFA_KEYRING, useValue: testKeyring() },
         ResourceService,
         SessionService,
         SessionCookie,

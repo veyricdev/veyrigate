@@ -30,6 +30,7 @@ import { adminResourceIdentifier } from '../src/modules/oauth/token/token.servic
 import { ResourceService } from '../src/modules/resources/resource.service';
 import { SESSION_COOKIE } from '../src/modules/sessions/session.cookie';
 import { dropIntDb, withDbSuffix } from './int-hooks';
+import { TEST_MFA_ENCRYPTION_KEYS } from './helpers/mfa';
 
 /**
  * The REAL app for integration tests (run 38, B7.4): `AppModule` + `configureApp` exactly like
@@ -121,6 +122,10 @@ async function startFullApp(
     GITHUB_CLIENT_SECRET: '',
     ADMIN_SEED_EMAIL: 'admin@fixture.test',
     CSRF_SECRET: 'full-app-csrf-secret-not-a-real-secret',
+    MFA_ENCRYPTION_KEYS: TEST_MFA_ENCRYPTION_KEYS,
+    // Run 89 (D89.4): the admin MFA gate is off here like KEY_PREPUBLISH_SEC=0; the run 89 gate
+    // specs pass `ADMIN_MFA_REQUIRED: 'true'` through `opts.env`, E2E/X3 run the default (true).
+    ADMIN_MFA_REQUIRED: 'false',
     RATE_LIMIT_WINDOW: '60',
     RATE_LIMIT_MAX: '100000',
     CLIENT_AUTH_FAIL_IP_MAX: '100000',

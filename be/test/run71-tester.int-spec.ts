@@ -16,6 +16,7 @@ import {
 } from './full-app';
 import { INT_SETUP_TIMEOUT_MS, settled, withDbSuffix } from './int-hooks';
 import { seedConsent, seedOAuthUser } from './oauth-fixtures';
+import { TEST_MFA_ENCRYPTION_KEYS } from './helpers/mfa';
 
 /**
  * Run 71 tester (DEBT-344 + DEBT-498), independent of the dev spec: a wide IP corpus over real HTTP
@@ -279,6 +280,7 @@ describe('run 71 tester: db:sync-indexes CLI on a legacy audit collection', () =
     GITHUB_CLIENT_SECRET: '',
     ADMIN_SEED_EMAIL: 'admin@fixture.test',
     CSRF_SECRET: 'r71t-cli-csrf-not-a-real-secret',
+    MFA_ENCRYPTION_KEYS: TEST_MFA_ENCRYPTION_KEYS,
     RATE_LIMIT_WINDOW: '60',
     RATE_LIMIT_MAX: '100000',
     CLIENT_AUTH_FAIL_IP_MAX: '100000',

@@ -41,6 +41,7 @@ vi.mock("@/features/admin-api/users", () => ({
   revokeUserSessions: vi.fn(),
   revokeUserFamily: vi.fn(),
   revokeUserConsent: vi.fn(),
+  resetUserMfa: vi.fn(),
   setUserRoles: vi.fn(),
 }));
 
@@ -67,6 +68,7 @@ const USER: AdminUser = {
   membershipStatus: "active",
   roles: [],
   createdAt: "2026-10-01T00:00:00.000Z",
+  mfa: { enrolled: false, enrolledAt: null },
 };
 const ADMIN_LOCK = "9999-12-31T23:59:59.999Z";
 const FAMILY: AdminFamily = {

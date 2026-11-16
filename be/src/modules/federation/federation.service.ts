@@ -15,6 +15,7 @@ import { UserTenantService } from '../identity/user-tenant.service';
 import { normalizeEmail, UserService } from '../identity/user.service';
 import { AuthorizeRequestContextService } from '../oauth/authorize/authorize-request-context.service';
 import { AuditAction } from '../security/audit/audit-action.enum';
+import { MfaLoginService } from '../mfa/mfa-login.service';
 import { AuditService } from '../security/audit/audit.service';
 import { SessionService } from '../sessions/session.service';
 import { buildAuthorizeUrl, exchangeCode, type ProviderIdentity } from './federation.client';
@@ -60,7 +61,9 @@ export type CallbackOutcome =
   /** The provider returned `error` (e.g. access_denied): offer to go back to the login page. */
   | { kind: 'denied'; loginUrl: string }
   /** Verified email of an existing local account (B5.3): set `idp_link`, 302 `/auth/link`. */
-  | { kind: 'link_required'; linkToken: string };
+  | { kind: 'link_required'; linkToken: string }
+  /** Run 89 (D89.14): the user has a second factor: MFA ticket cookie, 302 `/login/mfa`, no session. */
+  | { kind: 'mfa'; ticketId: string };
 
 export type LinkOutcome =
   /** Linked: set the session cookie, 302 to the resumable `/authorize?request_id`. */
@@ -68,7 +71,12 @@ export type LinkOutcome =
   /** Pending gone/replayed, binding mismatch or bad credentials: nothing linked, no session. */
   | { kind: 'failed'; loginUrl: string }
   /** Password login succeeded but the link was refused (other user / duplicate): session, no link. */
-  | { kind: 'not_linked'; sessionId: string; location: string };
+  | { kind: 'not_linked'; sessionId: string; location: string }
+  /**
+   * Run 89 (D89.14, DEBT-633): the account has a second factor: NOT linked (a password alone must not
+   * attach a new identity); MFA ticket to finish the sign-in, no session yet.
+   */
+  | { kind: 'mfa'; ticketId: string };
 
 const resumeUrl = (requestId: string) => `/authorize?request_id=${encodeURIComponent(requestId)}`;
 /** `/login` fallback that still resumes the (only peeked) context. */
@@ -99,6 +107,7 @@ export class FederationService {
     private readonly auth: AuthenticationService,
     config: ConfigService,
     @InjectConnection() private readonly connection: Connection,
+    private readonly mfaLogin: MfaLoginService,
   ) {
     this.issuer = config.getOrThrow<AppConfig>('app').issuer;
   }
@@ -188,6 +197,24 @@ export class FederationService {
     }
     await this.identities.touchLastLogin(provider.name, identity.providerId);
 
+    // Run 89 (D89.14/D89.15): an enrolled user gets a ticket, never a session, before step 2. The
+    // upstream auth time is kept for `max_age` (D88.29); step 2 re-checks the lock (DEBT-187).
+    const enrolledAt = await this.users.mfaEnrolledAt(userId);
+    if (enrolledAt) {
+      const ticketId = await this.mfaLogin.start(
+        {
+          userId,
+          amr: ['fed'],
+          enrolledAt,
+          authTime: upstreamAuthTime(identity, record.reauthAfter),
+          provider: provider.name,
+          deviceLabel: deviceLabelFromUserAgent(audit.userAgent),
+        },
+        resumeUrl(record.requestId),
+      );
+      return { kind: 'mfa', ticketId };
+    }
+
     const established = await this.sessions.establish(cookies.session, userId, DEFAULT_TENANT_ID, {
       amr: ['fed'],
       authTime: upstreamAuthTime(identity, record.reauthAfter),
@@ -196,9 +223,13 @@ export class FederationService {
     // DEBT-187 (run 36 G5): a lock landing after `loginExisting` but before the session exists
     // must still win (lock writes state first, sweeps second). Re-read now; locked/gone => kill
     // the new session, audit `locked`, first-party `account_locked`. DB error => kill + 500.
+    // DEBT-637 (run 89): an enrollment racing this callback (read `null` above) kills the new
+    // fed-only session too; a retry then goes through the MFA ticket.
     let fresh: Awaited<ReturnType<UserService['findById']>>;
+    let enrolledNow: Date | null;
     try {
       fresh = await this.users.findById(userId);
+      enrolledNow = await this.users.mfaEnrolledAt(userId);
     } catch (err) {
       await this.sessions.revoke(established.id).catch(() => undefined);
       throw err;
@@ -207,6 +238,11 @@ export class FederationService {
       await this.sessions.revoke(established.id);
       await this.recordFailed(provider.name, 'locked', audit, userId);
       throw new FederationError('account_locked');
+    }
+    if (enrolledNow !== null) {
+      await this.sessions.revoke(established.id);
+      await this.recordFailed(provider.name, 'mfa_enrolled', audit, userId);
+      throw new FederationError('retry');
     }
     await this.audit.record({
       actorType: 'user',
@@ -287,9 +323,9 @@ export class FederationService {
     if (!binding || !constantTimeEqual(sha256(binding), pending.bindingHash)) {
       return this.linkFailed('binding', loginUrl);
     }
-    let established: Awaited<ReturnType<AuthenticationService['login']>>;
+    let result: Awaited<ReturnType<AuthenticationService['login']>>;
     try {
-      established = await this.auth.login(pending.email, password, {
+      result = await this.auth.login(pending.email, password, {
         ...ctx,
         deviceLabel: deviceLabelFromUserAgent(ctx.userAgent),
       });
@@ -297,6 +333,13 @@ export class FederationService {
       if (!(err instanceof UnauthorizedException)) throw err;
       return this.linkFailed('credentials', loginUrl);
     }
+    if (result.kind === 'mfa') {
+      // D89.14 / DEBT-633: never link on a password alone when the account has a second factor.
+      this.logger.warn('federation link failed: mfa_enrolled');
+      const ticketId = await this.mfaLogin.start(result.pending, resumeUrl(pending.requestId));
+      return { kind: 'mfa', ticketId };
+    }
+    const established = result;
     // From here a new session exists (the old one was rotated away): always hand it back.
     const signedIn = { sessionId: established.id, location: resumeUrl(pending.requestId) };
     if (established.session.userId !== pending.userId) {

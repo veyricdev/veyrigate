@@ -66,6 +66,18 @@ export const E2E_USER_EMAIL = "e2e-user@example.com";
 export const E2E_USER_PASSWORD = "e2e-user-password";
 
 /**
+ * Run 89 (D89.4/D89.20): MFA in the E2E BE, never read from `be/.env`. Fixed, public, non-secret
+ * values: the AES-256-GCM key of stored TOTP seeds (not the `.env.example` key) and the base32 TOTP
+ * seeds `seed:e2e-admin` enrolls for the E2E admin and `E2E_USER` (T6).
+ */
+export const E2E_MFA_ENCRYPTION_KEYS = "k1:dmV5cmlnYXRlLWUyZS1tZmEta2V5LW5vdC1zZWNyZXQ=";
+export const E2E_ADMIN_TOTP_SECRET = "E2EADMINTOTPSEEDNOTASECRETAAAAAA";
+export const E2E_USER_TOTP_SECRET = "E2EUSERTOTPSEEDNOTASECRETBBBBBBB";
+/** Run 89 T6: user of `mfa.spec.ts` (enroll / step 2 / reset). `seed:e2e-admin` resets it WITHOUT MFA every run. */
+export const E2E_MFA_USER_EMAIL = "e2e-mfa-user@example.com";
+export const E2E_MFA_USER_PASSWORD = "e2e-mfa-user-password";
+
+/**
  * Full BE env for the E2E run. Includes every var `envSchema` requires (no defaults) plus
  * `SESSION_COOKIE_SECURE=false` (http) and `NODE_ENV=test` (not production, so the cookie-secure
  * guard and the seed`s production block both allow the run). Federation/admin/CSRF values are
@@ -110,6 +122,11 @@ export function beEnv(): Record<string, string> {
     E2E_USER_EMAIL,
     E2E_USER_PASSWORD,
     CSRF_SECRET: "e2e-csrf-secret-0123456789abcdef0123456789abcdef",
+    MFA_ENCRYPTION_KEYS: E2E_MFA_ENCRYPTION_KEYS,
+    E2E_ADMIN_TOTP_SECRET,
+    E2E_USER_TOTP_SECRET,
+    E2E_MFA_USER_EMAIL,
+    E2E_MFA_USER_PASSWORD,
     RATE_LIMIT_WINDOW: "60",
     RATE_LIMIT_MAX: "1000",
     CLIENT_AUTH_FAIL_IP_MAX: "1000",

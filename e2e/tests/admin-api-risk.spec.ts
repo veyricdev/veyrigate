@@ -1,5 +1,6 @@
 import { test, expect, type Page, type Request } from "@playwright/test";
 import { ADMIN_SEED_EMAIL, ADMIN_SEED_PASSWORD, BE_PORT, FE_ADMIN_URL } from "../config/env";
+import { passSecondFactorIfAsked } from "./support/fe-admin";
 
 /**
  * Tester (run 43 A5): the admin server functions over the real fe-admin dev server + real BE.
@@ -21,6 +22,7 @@ async function signInAsAdmin(page: Page): Promise<void> {
   await form.getByRole("button", { name: "Sign in" }).click();
   const consent = page.locator('form[action="/authorize/consent"]');
   const email = page.getByTestId("viewer-email");
+  await passSecondFactorIfAsked(page, ADMIN_SEED_EMAIL, consent.or(email));
   for (let i = 0; i < 3; i++) {
     await expect(consent.or(email).first()).toBeVisible({ timeout: 30_000 });
     if (await email.isVisible()) break;
@@ -58,6 +60,8 @@ async function callFromPage(page: Page, fn: Fn, data: unknown): Promise<{ result
 const LEAK = /eyJ|secretHash|clientSecret|Bearer|WWW-Authenticate|invalid_token/;
 
 test("admin server functions: same-origin works, cross-site replay refused, nothing leaks", async ({ browser }) => {
+  // Run 89: an IdP sign-in now includes TOTP, which may wait up to one 30 s step (replay rule, AC2).
+  test.setTimeout(90_000);
   const context = await browser.newContext();
   const page = await context.newPage();
   await signInAsAdmin(page);

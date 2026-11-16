@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { ADMIN_SEED_EMAIL, ADMIN_SEED_PASSWORD, BE_PORT, FE_ADMIN_PORT, FE_ADMIN_URL, ISSUER } from "../config/env";
+import { passSecondFactorIfAsked } from "./support/fe-admin";
 
 /**
  * fe-admin BFF login (run 42 A4, Task 4). Real IdP + real fe-admin dev server: sign in as the E2E
@@ -20,6 +21,7 @@ async function signInAsAdmin(page: Page): Promise<void> {
   await form.getByRole("button", { name: "Sign in" }).click();
   const consent = page.locator('form[action="/authorize/consent"]');
   const email = page.getByTestId("viewer-email");
+  await passSecondFactorIfAsked(page, ADMIN_SEED_EMAIL, consent.or(email));
   for (let i = 0; i < 3; i++) {
     await expect(consent.or(email).first()).toBeVisible({ timeout: 30_000 });
     if (await email.isVisible()) return;
@@ -31,6 +33,8 @@ async function signInAsAdmin(page: Page): Promise<void> {
 test("fe-admin: BFF login shows the admin, no token in the browser, logout ends the IdP session", async ({
   browser,
 }) => {
+  // Run 89: an IdP sign-in now includes TOTP, which may wait up to one 30 s step (replay rule, AC2).
+  test.setTimeout(90_000);
   const context = await browser.newContext();
   const page = await context.newPage();
   const appBodies: Promise<{ path: string; body: string }>[] = [];

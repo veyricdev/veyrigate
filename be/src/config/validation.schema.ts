@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { parseMfaKeys } from '../modules/mfa/mfa-crypto';
 import { DEFAULT_AUDIT_RETENTION_DAYS } from '../modules/security/audit/audit-log.schema';
 import { parseTrustProxy } from './trust-proxy';
 
@@ -22,6 +23,12 @@ const optionalCredential = z
 // Optional string where an empty value means unset (run 53: Vault vars stay empty for KEY_PROVIDER=local).
 const optionalNonEmpty = <T extends z.ZodType>(schema: T) =>
   z.preprocess((v) => (v === '' ? undefined : v), schema.optional());
+
+/**
+ * The key of `MFA_ENCRYPTION_KEYS` in `be/.env.example` (run 89, D89.4): public, so refused when
+ * NODE_ENV=production under any kid.
+ */
+const EXAMPLE_MFA_KEY = Buffer.from('veyrigate-dev-mfa-key-not-secret', 'utf8');
 
 /** `host:port` / `[v6]:port` ⇒ {host, port}; null when malformed (empty host, port not 1..65535). */
 function parseHostPort(value: string): { host: string; port: number } | null {
@@ -137,6 +144,26 @@ export const envSchema = z
 
     CSRF_SECRET: z.string().min(1),
 
+    // MFA (run 89, D89.4/D89.12): AES-256-GCM keys of the stored TOTP seeds, `kid:base64` comma list,
+    // first = current. Required in EVERY NODE_ENV (no "MFA off for lack of a key"). Errors name the
+    // entry position only (never a value); the parsed keys reach `buildConfig` as Buffers.
+    MFA_ENCRYPTION_KEYS: z
+      .string({ error: 'MFA_ENCRYPTION_KEYS is required (kid:base64-32-bytes[,...])' })
+      .transform((v, ctx) => {
+        try {
+          return parseMfaKeys(v);
+        } catch (err) {
+          ctx.addIssue({ code: 'custom', message: (err as Error).message });
+          return z.NEVER;
+        }
+      }),
+    // Resource `admin` demands a completed second factor (D89.5). Unset/empty => true; `false` only
+    // outside production (superRefine below). Not z.coerce.boolean() ("false" would be true).
+    ADMIN_MFA_REQUIRED: z.preprocess(
+      (v) => (v === undefined || v === '' ? 'true' : v),
+      z.enum(['true', 'false']).transform((v) => v === 'true'),
+    ),
+
     RATE_LIMIT_WINDOW: positiveInt,
     RATE_LIMIT_MAX: positiveInt,
 
@@ -226,6 +253,24 @@ export const envSchema = z
         code: 'custom',
         path: ['SESSION_COOKIE_SECURE'],
         message: 'SESSION_COOKIE_SECURE=false is not allowed when NODE_ENV=production',
+      });
+    }
+    if (env.NODE_ENV === 'production' && !env.ADMIN_MFA_REQUIRED) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['ADMIN_MFA_REQUIRED'],
+        message: 'ADMIN_MFA_REQUIRED=false is not allowed when NODE_ENV=production',
+      });
+    }
+    if (
+      env.NODE_ENV === 'production' &&
+      env.MFA_ENCRYPTION_KEYS.some((k) => k.key.equals(EXAMPLE_MFA_KEY))
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['MFA_ENCRYPTION_KEYS'],
+        message:
+          'MFA_ENCRYPTION_KEYS uses the public .env.example key: generate one for production',
       });
     }
     if (env.NODE_ENV === 'production' && env.KEY_PROVIDER !== 'vault') {

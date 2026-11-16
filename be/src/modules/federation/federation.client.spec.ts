@@ -399,6 +399,7 @@ describe('static registry (B5.1, F1/F4, INV-23)', () => {
       CSRF_SECRET: 's',
       RATE_LIMIT_WINDOW: '60',
       RATE_LIMIT_MAX: '100',
+      MFA_ENCRYPTION_KEYS: `k1:${Buffer.alloc(32, 7).toString('base64')}`,
       ...over,
     });
 

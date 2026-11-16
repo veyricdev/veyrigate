@@ -29,6 +29,7 @@ vi.mock("@/features/admin-api/users", () => ({
   revokeUserSessions: vi.fn(),
   revokeUserFamily: vi.fn(),
   revokeUserConsent: vi.fn(),
+  resetUserMfa: vi.fn(),
   setUserRoles: vi.fn(),
 }));
 
@@ -44,6 +45,7 @@ const USER: AdminUser = {
   membershipStatus: "active",
   roles: [],
   createdAt: "2026-10-01T00:00:00.000Z",
+  mfa: { enrolled: false, enrolledAt: null },
 };
 const SUPER = { sub: "aaaaaaaaaaaaaaaaaaaaaaaa", email: "admin@example.com", roles: ["super_admin"], tenantId: "t1" };
 const TENANT_ADMIN = { ...SUPER, roles: ["tenant_admin"] };

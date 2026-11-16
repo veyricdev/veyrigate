@@ -4,6 +4,8 @@ import {
   Delete,
   Get,
   HttpCode,
+  Inject,
+  Logger,
   Param,
   Patch,
   Post,
@@ -19,8 +21,10 @@ import {
   ApiOperation,
   ApiTags,
 } from '@nestjs/swagger';
+import { ConfigService } from '@nestjs/config';
 import type { ClientSession } from 'mongoose';
 import type { HttpRequest } from '../../common/http/http.types';
+import type { AppConfig } from '../../config/configuration';
 import { AuthenticationService } from '../authentication/authentication.service';
 import { ClientService } from '../clients/client.service';
 import { AdminAuthError, AdminAuthErrorFilter } from '../identity/tenant-context/admin-auth.errors';
@@ -38,6 +42,9 @@ import { LastSuperAdminError } from '../identity/identity.errors';
 import { SuperAdminGuard } from '../identity/super-admin-guard';
 import { type UserTenant, UserTenantService } from '../identity/user-tenant.service';
 import { UserService, type UserView } from '../identity/user.service';
+import { MAILER, type Mailer } from '../mailer/mailer';
+import { mfaResetByAdminMessage } from '../mailer/templates';
+import { MfaService } from '../mfa/mfa.service';
 import { ConsentService } from '../oauth/consent/consent.service';
 import { RefreshTokenService } from '../oauth/token/refresh-token.service';
 import { AuditAction } from '../security/audit/audit-action.enum';
@@ -86,6 +93,8 @@ interface Target {
 @UseGuards(AdminTokenGuard)
 @UseFilters(AdminAuthErrorFilter)
 export class AdminUsersController {
+  private readonly logger = new Logger(AdminUsersController.name);
+
   constructor(
     private readonly users: UserService,
     private readonly memberships: UserTenantService,
@@ -95,6 +104,9 @@ export class AdminUsersController {
     private readonly refreshTokens: RefreshTokenService,
     private readonly consents: ConsentService,
     private readonly superAdmins: SuperAdminGuard,
+    private readonly mfa: MfaService,
+    @Inject(MAILER) private readonly mailer: Mailer,
+    private readonly config: ConfigService,
   ) {}
 
   @Get()
@@ -121,6 +133,7 @@ export class AdminUsersController {
       rows.slice(0, limit).map((r) => r.userId.toHexString()),
     );
     const byId = new Map(found.map((u) => [u.sub, u]));
+    const enrolled = await this.users.mfaEnrolledAtMany(found.map((u) => u.sub));
     const now = new Date();
     const page = toPage(
       rows,
@@ -128,7 +141,7 @@ export class AdminUsersController {
       (r) => String(r._id),
       (r): AdminUserView | null => {
         const user = byId.get(r.userId.toHexString());
-        return user ? toAdminUser(user, r, now) : null;
+        return user ? toAdminUser(user, r, now, enrolled.get(user.sub) ?? null) : null;
       },
     );
     return { items: page.items.filter((u) => u !== null), nextCursor: page.nextCursor };
@@ -139,7 +152,7 @@ export class AdminUsersController {
   @ApiOkResponse({ type: AdminUserViewDto })
   async get(@Tenant() ctx: TenantContext, @Param('id') rawId: string) {
     const t = await this.mustFind(ctx, rawId);
-    return toAdminUser(t.user, t.member, new Date());
+    return toAdminUser(t.user, t.member, new Date(), await this.users.mfaEnrolledAt(t.id));
   }
 
   @Post(':id/lock')
@@ -220,7 +233,7 @@ export class AdminUsersController {
       },
       { timestamp: afterMark() },
     );
-    return toAdminUser(after, t.member, new Date());
+    return toAdminUser(after, t.member, new Date(), await this.users.mfaEnrolledAt(t.id));
   }
 
   @Post(':id/unlock')
@@ -257,7 +270,7 @@ export class AdminUsersController {
       await this.audit.record({ ...base, result: 'success' }, { timestamp: unlockMarkAt });
     }
     const after = { ...before, lockedUntil: undefined };
-    return toAdminUser(after, t.member, new Date());
+    return toAdminUser(after, t.member, new Date(), await this.users.mfaEnrolledAt(t.id));
   }
 
   @Post(':id/sessions/revoke')
@@ -296,6 +309,69 @@ export class AdminUsersController {
       result: 'success',
       metadata: { scope: 'all', count: sessionCount },
     });
+  }
+
+  /**
+   * Run 89 T4 (D89.16): remove the user's second factor (lost device), then end every session,
+   * refresh family and trusted device of the user. Idempotent 204 (`{wasEnrolled}` in the audit),
+   * so fe-admin may retry an uncertain call. A tenant_admin may never reset a privileged or shared
+   * account (`assertMayTouchAccount`); a super_admin target is audited `target_super_admin`. The
+   * factor stays removed if the revoke fails (5xx + `revoke_failed`, like a password reset).
+   */
+  @Post(':id/mfa/reset')
+  @AdminScope('admin.write')
+  @RequireRecentAuth(5)
+  @HttpCode(204)
+  @ApiNoContentResponse()
+  @ApiOperation({
+    description:
+      'Removes the two-step verification of the user, then ends every session and refresh family.',
+  })
+  async resetMfa(
+    @Tenant() ctx: TenantContext,
+    @CurrentAdmin() actor: AdminActor,
+    @Param('id') rawId: string,
+    @Req() req: HttpRequest,
+  ): Promise<void> {
+    const t = await this.mustFind(ctx, rawId);
+    const base = {
+      ...adminAuditBase(req, ctx),
+      action: AuditAction.ADMIN_USER_MFA_RESET,
+      targetType: 'user',
+      targetId: t.id,
+    };
+    const refusal = await this.touchRefusal(ctx, actor, t.id);
+    if (refusal) {
+      await this.audit.record({ ...base, result: 'failure', reason: refusal });
+      throw AdminAuthError.forbidden();
+    }
+    const enrolledAt = await this.users.mfaEnrolledAt(t.id);
+    const wasEnrolled = enrolledAt !== null && (await this.mfa.disable(t.id, enrolledAt));
+    // D89.26 (DEBT-642): tell the owner as soon as the factor is gone, before the revoke, so a
+    // revoke failure + retry (which then sees wasEnrolled:false) still sends exactly one notice.
+    if (wasEnrolled) this.notifyMfaReset(t.user.email);
+    await this.auth.revokeAllUserCredentials(t.id, new Date(), (failedStep) =>
+      this.audit.record({
+        ...base,
+        result: 'failure',
+        reason: 'revoke_failed',
+        metadata: { wasEnrolled, failedStep },
+      }),
+    );
+    await this.audit.record({ ...base, result: 'success', metadata: { wasEnrolled } });
+  }
+
+  /** Fire-and-forget "your two-step verification was reset" (D89.18): a failure is only logged. */
+  private notifyMfaReset(email: string): void {
+    void this.mailer
+      .send(
+        mfaResetByAdminMessage(
+          email,
+          new Date().toISOString(),
+          new URL('/account/mfa', this.config.getOrThrow<AppConfig>('app').issuer).href,
+        ),
+      )
+      .catch(() => this.logger.error('MFA reset notice delivery failed'));
   }
 
   @Patch(':id/roles')
@@ -356,7 +432,12 @@ export class AdminUsersController {
       });
     }
     const kept = (before.roles ?? []).filter((r) => !ADMIN_ROLES.includes(r));
-    return toAdminUser(t.user, { ...before, roles: [...kept, ...dto.roles] }, new Date());
+    return toAdminUser(
+      t.user,
+      { ...before, roles: [...kept, ...dto.roles] },
+      new Date(),
+      await this.users.mfaEnrolledAt(t.id),
+    );
   }
 
   @Get(':id/families')
@@ -547,10 +628,23 @@ export class AdminUsersController {
     actor: AdminActor,
     userId: string,
   ): Promise<void> {
-    if (actor.roles.includes('super_admin')) return;
+    if (await this.touchRefusal(ctx, actor, userId)) throw AdminAuthError.forbidden();
+  }
+
+  /**
+   * Why a non-super_admin may not touch this account (one membership read), or null. DB errors
+   * propagate (never mapped to a refusal reason).
+   */
+  private async touchRefusal(
+    ctx: TenantContext,
+    actor: AdminActor,
+    userId: string,
+  ): Promise<'target_super_admin' | 'target_not_allowed' | null> {
+    if (actor.roles.includes('super_admin')) return null;
     const all = await this.memberships.membershipsOf(userId);
+    if (all.some((m) => (m.roles ?? []).includes('super_admin'))) return 'target_super_admin';
     const privileged = all.some((m) => (m.roles ?? []).some((r) => ADMIN_ROLES.includes(r)));
     const elsewhere = all.some((m) => m.tenantId !== ctx.tenantId && m.status === 'active');
-    if (privileged || elsewhere) throw AdminAuthError.forbidden();
+    return privileged || elsewhere ? 'target_not_allowed' : null;
   }
 }

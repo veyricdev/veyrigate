@@ -1,4 +1,4 @@
-import { parseBootstrapArgs, readBootstrapEnv } from './bootstrap';
+import { parseBootstrapArgs, readBootstrapEnv, reportCommitted } from './bootstrap';
 
 /** Run 88 T1 (DEBT-164, D88.4/D88.5): argument allowlist + bootstrap-only env (AC4, AC7, AC10). */
 const argv = (...args: string[]) => ['node', 'bootstrap.js', ...args];
@@ -123,5 +123,82 @@ describe('bootstrap readBootstrapEnv (D88.4)', () => {
     }
     expect(message).toMatch(/BOOTSTRAP_FE_ADMIN_(POST_LOGOUT_)?REDIRECT_URIS/);
     expect(message).not.toMatch(/localhost:3000|example\.com|\/cb|#frag/);
+  });
+});
+
+/** Run 89 T0 (DEBT-628, DEBT-630): every post-commit line, secret first, rotate hint on any failure. */
+describe('bootstrap reportCommitted', () => {
+  const SECRET = 'x'.repeat(43);
+  const committed = (over: Partial<Parameters<typeof reportCommitted>[1]> = {}) => ({
+    created: { tenant: true, resource: true, client: true },
+    urisUpdated: false,
+    secretIssued: true,
+    secretRotated: false,
+    audits: [{ action: 'ADMIN_BOOTSTRAPPED', eventId: 'e-boot' }],
+    ...over,
+  });
+
+  it('DEBT-628 the secret is the first line written after commit', async () => {
+    const lines: string[] = [];
+    await reportCommitted({ write: (l) => void lines.push(l) }, committed(), SECRET, async () => 1);
+    expect(lines[0]).toBe(`OIDC_CLIENT_SECRET=${SECRET}`);
+    expect(lines[1]).toMatch(/shown once/);
+    expect(lines.slice(2).join('\n')).toMatch(/tenant default-tenant: created/);
+  });
+
+  it.each([1, 2, 3])(
+    'DEBT-628 stdout fails on post-commit write #%i => error names --rotate-secret',
+    async (n) => {
+      let i = 0;
+      const write = () => {
+        i++;
+        if (i === n) return Promise.reject(new Error('EPIPE'));
+        return Promise.resolve();
+      };
+      await expect(reportCommitted({ write }, committed(), SECRET, async () => 1)).rejects.toThrow(
+        /--rotate-secret/,
+      );
+    },
+  );
+
+  it('no secret issued => a write failure is rethrown without the rotate hint', async () => {
+    const write = () => Promise.reject(new Error('EPIPE'));
+    await expect(
+      reportCommitted({ write }, committed({ secretIssued: false }), SECRET, async () => 1),
+    ).rejects.toThrow('EPIPE');
+  });
+
+  it('DEBT-630 one {alert:true} line per audit whose action alerts (update-uris + bootstrapped)', async () => {
+    const lines: string[] = [];
+    await reportCommitted(
+      { write: (l) => void lines.push(l) },
+      committed({
+        secretIssued: false,
+        urisUpdated: true,
+        audits: [
+          { action: 'REDIRECT_URI_CHANGED', eventId: 'e-uri' },
+          { action: 'ADMIN_BOOTSTRAPPED', eventId: 'e-boot' },
+        ],
+      }),
+      SECRET,
+      async () => 1,
+    );
+    const alerts = lines.filter((l) => l.startsWith('{"alert":true'));
+    expect(alerts).toEqual([
+      JSON.stringify({ alert: true, action: 'REDIRECT_URI_CHANGED', eventId: 'e-uri' }),
+      JSON.stringify({ alert: true, action: 'ADMIN_BOOTSTRAPPED', eventId: 'e-boot' }),
+    ]);
+    expect(lines.join('\n')).not.toContain('OIDC_CLIENT_SECRET');
+  });
+
+  it('a non-alert audit gets no alert line', async () => {
+    const lines: string[] = [];
+    await reportCommitted(
+      { write: (l) => void lines.push(l) },
+      committed({ secretIssued: false, audits: [{ action: 'AUTH_LOGIN_SUCCESS', eventId: 'x' }] }),
+      SECRET,
+      async () => 1,
+    );
+    expect(lines.some((l) => l.includes('"alert"'))).toBe(false);
   });
 });

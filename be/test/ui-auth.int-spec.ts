@@ -27,11 +27,13 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { UiController } from '../src/modules/ui/ui.controller';
+import { UiSessionHelper } from '../src/modules/ui/ui-session.helper';
 import { RefreshTokenService } from '../src/modules/oauth/token/refresh-token.service';
 import { LogoutService } from '../src/modules/oauth/logout/logout.service';
 import { AuthorizeRequestContextService } from '../src/modules/oauth/authorize/authorize-request-context.service';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 import { tokenFromMailLink } from './helpers/mail-token';
+import { mfaTestProviders } from './helpers/mfa';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -82,6 +84,8 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
         AuditService,
         RateLimitService,
         CsrfService,
+        UiSessionHelper,
+        ...mfaTestProviders(),
         CsrfGuard,
         HtmlExceptionFilter,
         // DEBT-084: `GET /login` peeks the resumable context (non-consuming) for the CSP origin.

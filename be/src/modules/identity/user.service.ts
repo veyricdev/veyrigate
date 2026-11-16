@@ -1,12 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import {
-  type ClientSession,
-  isValidObjectId,
-  type Model,
-  type QueryFilter,
-  type Types,
-} from 'mongoose';
+import { type ClientSession, isValidObjectId, type Model, type QueryFilter, Types } from 'mongoose';
 import { hashPassword } from '../../common/crypto/crypto.util';
 import { mapDuplicate } from './identity.errors';
 
@@ -46,7 +40,7 @@ export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
-const PUBLIC_FIELDS = '-passwordHash -mfaSecret';
+const PUBLIC_FIELDS = '-passwordHash -mfa';
 
 /** Admin lock = "until an admin unlocks" (B6.3b). Only admin unlock clears it, never a reset. */
 export const ADMIN_LOCKED_UNTIL = new Date('9999-12-31T23:59:59.999Z');
@@ -165,6 +159,34 @@ export class UserService {
       .lean<UserDoc>()
       .exec();
     return doc ? { ...toView(doc), passwordHash: doc.passwordHash } : null;
+  }
+
+  /**
+   * `mfa.enrolledAt` only (run 89, D89.3: a projection, never the sealed seed), or null when the
+   * user is not enrolled or does not exist. Mongo errors propagate (fail-closed).
+   */
+  async mfaEnrolledAt(sub: string): Promise<Date | null> {
+    if (!isValidObjectId(sub)) return null;
+    const doc = await this.users.collection.findOne<{ mfa?: { enrolledAt?: Date } }>(
+      { _id: new Types.ObjectId(sub) },
+      { projection: { _id: 0, 'mfa.enrolledAt': 1 } },
+    );
+    return doc?.mfa?.enrolledAt ?? null;
+  }
+
+  /** `mfa.enrolledAt` of several users at once (admin list); absent ids are not enrolled. */
+  async mfaEnrolledAtMany(subs: string[]): Promise<Map<string, Date>> {
+    const ids = subs.filter((s) => isValidObjectId(s)).map((s) => new Types.ObjectId(s));
+    const out = new Map<string, Date>();
+    if (ids.length === 0) return out;
+    const docs = await this.users.collection
+      .find<{
+        _id: Types.ObjectId;
+        mfa?: { enrolledAt?: Date };
+      }>({ _id: { $in: ids }, mfa: { $exists: true } }, { projection: { 'mfa.enrolledAt': 1 } })
+      .toArray();
+    for (const d of docs) if (d.mfa?.enrolledAt) out.set(d._id.toHexString(), d.mfa.enrolledAt);
+    return out;
   }
 
   /** By id, with `passwordHash` (password change, DEBT-573). */

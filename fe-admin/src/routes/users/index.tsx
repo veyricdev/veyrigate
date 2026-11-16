@@ -7,7 +7,7 @@ import { PagePending } from "@/components/feedback/route-states";
 import { useUsers } from "@/features/admin-api/hooks";
 import { USER_STATUSES } from "@/features/admin-api/inputs";
 import { AdminRequestError } from "@/features/admin-api/types";
-import { lockStatus } from "@/features/users/user-account";
+import { lockStatus, mfaStatus } from "@/features/users/user-account";
 
 /**
  * Users of the tenant (run 47 A6.3), cursor pages ("next" / "first", no total). The email filter
@@ -59,6 +59,7 @@ function UsersPage() {
               <tr>
                 <th scope="col" className="py-2 pr-4 font-medium">Email</th>
                 <th scope="col" className="py-2 pr-4 font-medium">Lock</th>
+                <th scope="col" className="py-2 pr-4 font-medium">Two-step verification</th>
                 <th scope="col" className="py-2 pr-4 font-medium">Membership</th>
                 <th scope="col" className="py-2 pr-4 font-medium">Roles</th>
                 <th scope="col" className="py-2 font-medium">Created</th>
@@ -73,6 +74,7 @@ function UsersPage() {
                     </Link>
                   </th>
                   <td className="py-2 pr-4">{lockStatus(u)}</td>
+                  <td className="py-2 pr-4">{mfaStatus(u)}</td>
                   <td className="py-2 pr-4">{u.membershipStatus}</td>
                   <td className="py-2 pr-4">{u.roles.length ? u.roles.join(", ") : "—"}</td>
                   <td className="py-2 font-mono">{u.createdAt ?? "—"}</td>

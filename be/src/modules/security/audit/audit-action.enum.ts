@@ -40,6 +40,24 @@ export enum AuditAction {
   ADMIN_BOOTSTRAPPED = 'ADMIN_BOOTSTRAPPED',
   /** Run 88 (DEBT-582): a trusted device forgotten from `/account/sessions`. */
   TRUSTED_DEVICE_REVOKED = 'TRUSTED_DEVICE_REVOKED',
+  /** Run 89 (D89.19): a wrong second-factor code; once per user per window. Never the code. */
+  AUTH_MFA_FAILED = 'AUTH_MFA_FAILED',
+  /** Run 89: the per-user second-factor limiter refused a code (first refusal of the window). */
+  AUTH_MFA_THROTTLED = 'AUTH_MFA_THROTTLED',
+  /** Run 89: an authenticator was enrolled at `/account/mfa`. */
+  MFA_ENROLLED = 'MFA_ENROLLED',
+  /** Run 89: the user turned two-step verification off. */
+  MFA_DISABLED = 'MFA_DISABLED',
+  /** Run 89: new recovery codes (every older one revoked). */
+  MFA_RECOVERY_REGENERATED = 'MFA_RECOVERY_REGENERATED',
+  /** Run 89: a recovery code was used to sign in (`left` = codes remaining). */
+  MFA_RECOVERY_USED = 'MFA_RECOVERY_USED',
+  /** Run 89 (DEBT-639): a refused re-authentication on `/account/mfa` (never alerting). */
+  AUTH_REAUTH_FAILED = 'AUTH_REAUTH_FAILED',
+  /** Run 89 T4 (D89.16): an admin removed a user's second factor (`{wasEnrolled}`). */
+  ADMIN_USER_MFA_RESET = 'ADMIN_USER_MFA_RESET',
+  /** Run 89 DEBT-640 (D89.25): the consecutive wrong-code cap was reached; TOTP is refused. */
+  AUTH_MFA_LOCKED = 'AUTH_MFA_LOCKED',
 }
 
 /** Actions that must raise a separate alert (spec §10: reuse, key rotation, admin control-plane). */
@@ -63,4 +81,9 @@ export const ALERT_ACTIONS: ReadonlySet<AuditAction> = new Set([
   AuditAction.ADMIN_RECOVERED,
   // Same as ADMIN_RECOVERED: written by the `db:bootstrap` CLI, alerting through its `{alert:true,...}` line.
   AuditAction.ADMIN_BOOTSTRAPPED,
+  // Run 89 (D89.19): brute force on the second factor, and a factor removed.
+  AuditAction.AUTH_MFA_THROTTLED,
+  AuditAction.MFA_DISABLED,
+  AuditAction.ADMIN_USER_MFA_RESET,
+  AuditAction.AUTH_MFA_LOCKED,
 ]);

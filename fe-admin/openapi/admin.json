@@ -658,6 +658,36 @@
         ]
       }
     },
+    "/admin/users/{id}/mfa/reset": {
+      "post": {
+        "description": "Removes the two-step verification of the user, then ends every session and refresh family.",
+        "operationId": "AdminUsersController_resetMfa",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/admin/users/{id}/roles": {
       "patch": {
         "description": "Replaces the admin roles of the membership; any other role is kept. Never on yourself; granting/revoking super_admin, or changing a super_admin, is super_admin-only. 409 when the tenant would be left without an active super_admin. Effective on the target’s next request.",
@@ -961,7 +991,16 @@
                 "AUTH_PASSWORD_CHANGED",
                 "ADMIN_RECOVERED",
                 "ADMIN_BOOTSTRAPPED",
-                "TRUSTED_DEVICE_REVOKED"
+                "TRUSTED_DEVICE_REVOKED",
+                "AUTH_MFA_FAILED",
+                "AUTH_MFA_THROTTLED",
+                "MFA_ENROLLED",
+                "MFA_DISABLED",
+                "MFA_RECOVERY_REGENERATED",
+                "MFA_RECOVERY_USED",
+                "AUTH_REAUTH_FAILED",
+                "ADMIN_USER_MFA_RESET",
+                "AUTH_MFA_LOCKED"
               ]
             }
           },
@@ -1609,6 +1648,23 @@
           "scopes"
         ]
       },
+      "AdminMfaViewDto": {
+        "type": "object",
+        "properties": {
+          "enrolled": {
+            "type": "boolean"
+          },
+          "enrolledAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "enrolled",
+          "enrolledAt"
+        ]
+      },
       "AdminUserViewDto": {
         "type": "object",
         "properties": {
@@ -1646,6 +1702,9 @@
             "type": "string",
             "format": "date-time",
             "nullable": true
+          },
+          "mfa": {
+            "$ref": "#/components/schemas/AdminMfaViewDto"
           }
         },
         "required": [
@@ -1656,7 +1715,8 @@
           "lockedUntil",
           "membershipStatus",
           "roles",
-          "createdAt"
+          "createdAt",
+          "mfa"
         ]
       },
       "UserPageViewDto": {
@@ -1892,7 +1952,16 @@
               "AUTH_PASSWORD_CHANGED",
               "ADMIN_RECOVERED",
               "ADMIN_BOOTSTRAPPED",
-              "TRUSTED_DEVICE_REVOKED"
+              "TRUSTED_DEVICE_REVOKED",
+              "AUTH_MFA_FAILED",
+              "AUTH_MFA_THROTTLED",
+              "MFA_ENROLLED",
+              "MFA_DISABLED",
+              "MFA_RECOVERY_REGENERATED",
+              "MFA_RECOVERY_USED",
+              "AUTH_REAUTH_FAILED",
+              "ADMIN_USER_MFA_RESET",
+              "AUTH_MFA_LOCKED"
             ]
           },
           "targetType": {

@@ -12,7 +12,7 @@ import {
   isAdminCapableClient,
 } from '../modules/oauth/token/token.service';
 import { validateResourceIdentifier } from '../modules/resources/resource.validator';
-import { AuditAction } from '../modules/security/audit/audit-action.enum';
+import { ALERT_ACTIONS, AuditAction } from '../modules/security/audit/audit-action.enum';
 import { sanitizeMetadata } from '../modules/security/audit/audit.service';
 import type { AuditEvent, AuditMetadata } from '../modules/security/audit/audit.types';
 import { buildModels } from './mongo/models';
@@ -239,7 +239,11 @@ export async function bootstrapAdminPlane(
   const secret = generateToken();
   const secretHash = await hashPassword(secret);
 
-  type TxnResult = Omit<Extract<BootstrapResult, { status: 'ok' }>, 'status' | 'usableSuperAdmins'>;
+  type TxnResult = Omit<
+    Extract<BootstrapResult, { status: 'ok' }>,
+    'status' | 'usableSuperAdmins'
+  > &
+    Pick<Committed, 'audits'>;
   const write = async (session: ClientSession): Promise<TxnResult> => {
     await io.beforeTouch?.();
     // D88.6: serializes two bootstrap runs (write conflict on this one document).
@@ -370,7 +374,14 @@ export async function bootstrapAdminPlane(
     audits.push(event);
     // In the transaction (D88.11): an audit failure aborts every write above.
     await conn.model('AuditLog').create(audits, { session, ordered: true });
-    return { eventId: event.eventId, created, secretIssued, secretRotated, urisUpdated };
+    return {
+      eventId: event.eventId,
+      created,
+      secretIssued,
+      secretRotated,
+      urisUpdated,
+      audits: audits.map((a) => ({ action: a.action, eventId: a.eventId })),
+    };
   };
 
   let r: TxnResult;
@@ -397,7 +408,7 @@ export async function bootstrapAdminPlane(
       await io.write('re-run with --update-uris --ticket <ref> to replace the stored lists');
       return { status: 'drift' };
     }
-    if (err instanceof Refusal || (err instanceof Error && /^bootstrap: /.test(err.message))) {
+    if (err instanceof Refusal) {
       throw err;
     }
     throw new Error(
@@ -409,39 +420,75 @@ export async function bootstrapAdminPlane(
     await session?.endSession();
   }
 
-  // After the commit only (D88.7): the secret leaves the process here, once, on stdout.
-  await io.write(`tenant ${DEFAULT_TENANT_ID}: ${r.created.tenant ? 'created' : 'exists'}`);
-  await io.write(`resource admin: ${r.created.resource ? 'created' : 'exists'}`);
-  await io.write(`client ${FE_ADMIN_CLIENT_ID}: ${r.created.client ? 'created' : 'exists'}`);
-  if (r.urisUpdated) await io.write(`client ${FE_ADMIN_CLIENT_ID}: redirect URIs updated`);
-  if (r.secretIssued) {
+  const usable = await reportCommitted(io, r, secret, () => usableSuperAdmins(conn));
+  return {
+    status: 'ok',
+    eventId: r.eventId,
+    created: r.created,
+    secretIssued: r.secretIssued,
+    secretRotated: r.secretRotated,
+    urisUpdated: r.urisUpdated,
+    usableSuperAdmins: usable,
+  };
+}
+
+type Committed = {
+  created: { tenant: boolean; resource: boolean; client: boolean };
+  urisUpdated: boolean;
+  secretIssued: boolean;
+  secretRotated: boolean;
+  /** Every audit written in the transaction, in order (DEBT-630: one alert line per alerting one). */
+  audits: { action: string; eventId: string }[];
+};
+
+/**
+ * After the commit only (D88.7): the secret leaves the process here, once, on stdout, as the FIRST
+ * line (DEBT-628). Any later write failing while a secret was issued gets the same rotate hint: the
+ * operator cannot know which lines reached the terminal, and a re-run only prints "unchanged".
+ */
+export async function reportCommitted(
+  io: Pick<BootstrapIo, 'write'>,
+  r: Committed,
+  secret: string,
+  countUsable: () => Promise<number>,
+): Promise<number> {
+  const write = async (line: string) => {
     try {
-      await io.write(`OIDC_CLIENT_SECRET=${secret}`);
-    } catch {
+      await io.write(line);
+    } catch (err) {
+      if (!r.secretIssued) throw err;
       throw new Error(
         'the new fe-admin secret was committed but could not be printed: run db:bootstrap ' +
           '--rotate-secret --ticket <ref> to issue another one',
       );
     }
-    await io.write(
+  };
+  if (r.secretIssued) {
+    await write(`OIDC_CLIENT_SECRET=${secret}`);
+    await write(
       `fe-admin secret${r.secretRotated ? ' (rotated, every older one revoked)' : ''}: ` +
         'shown once, store it in the fe-admin secret store now',
     );
-  } else {
-    await io.write('fe-admin secret: unchanged (active credential exists)');
   }
-  await io.write(
-    JSON.stringify({ alert: true, action: AuditAction.ADMIN_BOOTSTRAPPED, eventId: r.eventId }),
-  );
-  const usable = await usableSuperAdmins(conn);
-  await io.write(`usable super_admins: ${usable}`);
+  await write(`tenant ${DEFAULT_TENANT_ID}: ${r.created.tenant ? 'created' : 'exists'}`);
+  await write(`resource admin: ${r.created.resource ? 'created' : 'exists'}`);
+  await write(`client ${FE_ADMIN_CLIENT_ID}: ${r.created.client ? 'created' : 'exists'}`);
+  if (r.urisUpdated) await write(`client ${FE_ADMIN_CLIENT_ID}: redirect URIs updated`);
+  if (!r.secretIssued) await write('fe-admin secret: unchanged (active credential exists)');
+  for (const a of r.audits) {
+    if (ALERT_ACTIONS.has(a.action as AuditAction)) {
+      await write(JSON.stringify({ alert: true, action: a.action, eventId: a.eventId }));
+    }
+  }
+  const usable = await countUsable();
+  await write(`usable super_admins: ${usable}`);
   if (usable === 0) {
-    await io.write(
+    await write(
       'next: the first administrator registers at /register and verifies the email, then run ' +
         'db:admin-recover --email <email> --requested-by <a> --approved-by <b> --ticket <ref>',
     );
   }
-  return { status: 'ok', ...r, usableSuperAdmins: usable };
+  return usable;
 }
 
 async function main(): Promise<number> {

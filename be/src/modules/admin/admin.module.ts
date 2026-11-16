@@ -3,6 +3,7 @@ import { AuthenticationModule } from '../authentication/authentication.module';
 import { ClientsModule } from '../clients/clients.module';
 import { IdentityModule } from '../identity/identity.module';
 import { KeysModule } from '../keys/keys.module';
+import { MfaModule } from '../mfa/mfa.module';
 import { OauthModule } from '../oauth/oauth.module';
 import { ResourcesModule } from '../resources/resources.module';
 import { AdminAuditController } from './admin-audit.controller';
@@ -25,6 +26,7 @@ import { AdminController } from './admin.controller';
     ResourcesModule,
     OauthModule,
     AuthenticationModule,
+    MfaModule,
   ],
   controllers: [
     AdminController,

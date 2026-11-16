@@ -1,3 +1,4 @@
+import type { MfaKey } from '../modules/mfa/mfa-crypto';
 import { parseTrustProxy } from './trust-proxy';
 import type { Env } from './validation.schema';
 
@@ -116,6 +117,12 @@ export interface AuditConfig {
   retentionDays: number;
 }
 
+/** MFA (run 89): seed encryption keyring (first = current) and the `admin` resource gate (D89.5). */
+export interface MfaConfig {
+  keys: MfaKey[];
+  adminRequired: boolean;
+}
+
 export interface Config {
   app: AppConfig;
   database: DatabaseConfig;
@@ -131,6 +138,7 @@ export interface Config {
   consent: ConsentConfig;
   metrics: MetricsConfig;
   audit: AuditConfig;
+  mfa: MfaConfig;
 }
 
 /**
@@ -215,6 +223,10 @@ export function buildConfig(env: Env): Config {
     },
     audit: {
       retentionDays: env.AUDIT_RETENTION_DAYS,
+    },
+    mfa: {
+      keys: env.MFA_ENCRYPTION_KEYS,
+      adminRequired: env.ADMIN_MFA_REQUIRED,
     },
   };
 }

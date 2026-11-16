@@ -53,6 +53,8 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { UiController } from '../src/modules/ui/ui.controller';
+import { UiSessionHelper } from '../src/modules/ui/ui-session.helper';
+import { mfaTestProviders } from './helpers/mfa';
 
 /**
  * Run 31 QA (tester) — DEBT-174/173(3) over the REAL HTTP paths, for the 9 client shapes of the
@@ -131,6 +133,8 @@ describe('DEBT-174 HTTP matrix: 9 client shapes x 4 aud=admin gates (run 31 QA)'
         };
       if (ns === 'client') return { secretGraceTtl: 60 };
       if (ns === 'consent') return { policyVersion: '1', termsVersion: '1' };
+      // Run 89 (D89.4): the admin MFA gate is off in hand-composed modules, like `full-app`.
+      if (ns === 'mfa') return { adminRequired: false };
       throw new Error(`Unexpected config namespace: ${ns}`);
     },
   } as unknown as ConfigService;
@@ -266,6 +270,8 @@ describe('DEBT-174 HTTP matrix: 9 client shapes x 4 aud=admin gates (run 31 QA)'
         AuthorizationCodeService,
         ConsentService,
         CsrfService,
+        UiSessionHelper,
+        ...mfaTestProviders(),
         CsrfGuard,
         TokenService,
         RefreshTokenService,

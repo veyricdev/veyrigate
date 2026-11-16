@@ -59,6 +59,9 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { tokenFromMailLink } from './helpers/mail-token';
+import { MFA_KEYRING } from '../src/modules/mfa/mfa-crypto';
+import { MfaService } from '../src/modules/mfa/mfa.service';
+import { testKeyring } from './helpers/mfa';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -94,6 +97,7 @@ const USER_KEYS = [
   'lockedUntil',
   'locked',
   'membershipStatus',
+  'mfa', // run 89 T4 AC4: {enrolled, enrolledAt} only
   'roles',
 ].sort();
 
@@ -141,6 +145,8 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
         };
       if (ns === 'client') return { secretGraceTtl: 60 };
       if (ns === 'consent') return { policyVersion: '1', termsVersion: '1' };
+      // Run 89 (D89.4): the admin MFA gate is off in hand-composed modules, like `full-app`.
+      if (ns === 'mfa') return { adminRequired: false };
       throw new Error(`Unexpected config namespace: ${ns}`);
     },
   } as unknown as ConfigService;
@@ -339,6 +345,9 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
         UserService,
         UserTenantService,
         SuperAdminGuard,
+        // Run 89 T4: `POST /admin/users/:id/mfa/reset`.
+        MfaService,
+        { provide: MFA_KEYRING, useValue: testKeyring() },
         LogoutService,
         { provide: MAILER, useValue: { send: async () => undefined } },
         { provide: STEP_UP_CLOCK, useValue: () => Date.now() },

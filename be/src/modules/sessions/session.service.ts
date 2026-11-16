@@ -23,6 +23,11 @@ export interface SessionData {
    * sessions created before run 32 => treat as `['pwd']` (the only method then).
    */
   amr?: string[];
+  /**
+   * ms epoch at which the second factor was completed (run 89, D89.5/D89.15), with `'mfa'` in `amr`.
+   * The `admin` resource demands `mfaAt >= User.mfa.enrolledAt`. Absent => no second factor.
+   */
+  mfaAt?: number;
 }
 
 /** A live session. `ref` = sha256(id): safe to show/pass around, cannot be turned back into the cookie. */
@@ -39,6 +44,8 @@ export interface CreateSessionOptions {
    * DEBT-189). Server-only; the caller clamps it to `<= now`. Default: now.
    */
   authTime?: number;
+  /** See `SessionData.mfaAt`. Server-only (`MfaLoginService`). */
+  mfaAt?: number;
 }
 
 const sessKey = (ref: string): string => `sess:${ref}`;
@@ -137,6 +144,7 @@ export class SessionService {
       lastSeenAt: now,
       device: opts.deviceLabel ? { label: opts.deviceLabel } : {},
       ...(opts.amr ? { amr: opts.amr } : {}),
+      ...(opts.mfaAt !== undefined ? { mfaAt: opts.mfaAt } : {}),
     };
     const [set] = await execOrThrow(
       this.redis.client
@@ -255,6 +263,15 @@ export class SessionService {
     const data = await this.read(ref);
     if (!data) await this.redis.client.srem(userKey(userId), ref);
     return data && data.userId === userId ? { ref, ...data } : null;
+  }
+
+  /**
+   * Revoke a session whose ownership the caller already proved with `findOwned` (run 89, DEBT-631):
+   * delete + `sess_end` tombstone + index removal in one MULTI, also when the session vanished in
+   * between (the tombstone still kills a `sid`-bearing access token). Redis errors propagate.
+   */
+  async revokeOwnedRef(userId: string, ref: string): Promise<void> {
+    await this.revokeRef(ref, userId, true);
   }
 
   /** Revoke every session of a user (password change, account lock, "log out everywhere"). */

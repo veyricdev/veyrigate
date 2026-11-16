@@ -25,9 +25,11 @@ import {
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { UiController } from '../src/modules/ui/ui.controller';
+import { UiSessionHelper } from '../src/modules/ui/ui-session.helper';
 import { OAuthExceptionFilter } from '../src/common/filters/oauth-exception.filter';
 import { buildCsp } from '../src/common/http/csp';
 import { Logger } from '@nestjs/common';
+import { MfaLoginService } from '../src/modules/mfa/mfa-login.service';
 
 @Controller('oauth-test')
 class OAuthTestController {
@@ -105,6 +107,8 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
       controllers: [UiController, OAuthTestController],
       providers: [
         CsrfService,
+        UiSessionHelper,
+        { provide: MfaLoginService, useValue: {} },
         CsrfGuard,
         HtmlExceptionFilter,
         SessionCookie,

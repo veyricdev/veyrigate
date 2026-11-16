@@ -3,17 +3,20 @@ import {
   ADMIN_SEED_EMAIL,
   ADMIN_SEED_PASSWORD,
   BE_PORT,
-  DEV_SEED_EMAIL,
-  DEV_SEED_PASSWORD,
+  E2E_USER_EMAIL,
+  E2E_USER_PASSWORD,
   FE_ADMIN_PORT,
   FE_ADMIN_URL,
 } from "../config/env";
+import { passSecondFactorIfAsked } from "./support/fe-admin";
 
 /**
  * fe-admin BFF risk matrix (run 42 tester): non-admin user => 403 page (real IdP + real fe-admin),
  * real callback replay, returnTo kept through the login, and step-up that signs in as ANOTHER user
  * through the real IdP UI (DEBT-117) => both sessions gone. Assertions are booleans/counts only:
- * no token, code or state is ever printed.
+ * no token, code or state is ever printed. Run 89 (D89.5): the `admin` resource needs a second
+ * factor for EVERY user, so the non-admin is `E2E_USER` (enrolled, no role) instead of the dev user
+ * (not enrolled => the IdP stops at "Two-step verification required", covered by `mfa.spec.ts`).
  */
 
 const isIdp = (url: URL) => url.port === String(BE_PORT);
@@ -27,6 +30,7 @@ async function signIn(page: Page, email: string, password: string, done: ReturnT
   await form.getByLabel("Password").fill(password);
   await form.getByRole("button", { name: "Sign in" }).click();
   const consent = page.locator('form[action="/authorize/consent"]');
+  await passSecondFactorIfAsked(page, email, consent.or(done));
   for (let i = 0; i < 3; i++) {
     await expect(consent.or(done).first()).toBeVisible({ timeout: 30_000 });
     if (await done.isVisible()) return;
@@ -42,6 +46,8 @@ const sidOf = async (context: BrowserContext) =>
 test("fe-admin: a signed-in user without an admin role gets the 403 page; callback replay is rejected", async ({
   browser,
 }) => {
+  // Run 89: an IdP sign-in now includes TOTP, which may wait up to one 30 s step (replay rule, AC2).
+  test.setTimeout(90_000);
   const context = await browser.newContext();
   const page = await context.newPage();
   let callbackUrl: string | null = null;
@@ -53,10 +59,10 @@ test("fe-admin: a signed-in user without an admin role gets the 403 page; callba
   // Deep link with a query: kept through the whole login (returnTo stored server-side).
   await page.goto(`${FE_ADMIN_URL}/users?tab=1`);
   const denied = page.getByRole("heading", { name: "Access denied" });
-  await signIn(page, DEV_SEED_EMAIL, DEV_SEED_PASSWORD, denied);
+  await signIn(page, E2E_USER_EMAIL, E2E_USER_PASSWORD, denied);
   const landed = new URL(page.url());
   expect(`${landed.origin}${landed.pathname}${landed.search}`).toBe(`${FE_ADMIN_URL}/users?tab=1`);
-  await expect(page.getByTestId("viewer-email")).toHaveText(DEV_SEED_EMAIL);
+  await expect(page.getByTestId("viewer-email")).toHaveText(E2E_USER_EMAIL);
   await expect(page.getByRole("heading", { name: "Dashboard" })).toHaveCount(0);
   await expect(page.getByRole("main").getByRole("button", { name: "Sign out" })).toBeVisible();
 
@@ -90,6 +96,8 @@ test("fe-admin: step-up that signs in as another user ends the session (DEBT-117
   browser,
   playwright,
 }) => {
+  // Run 89: an IdP sign-in now includes TOTP, which may wait up to one 30 s step (replay rule, AC2).
+  test.setTimeout(90_000);
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.goto(`${FE_ADMIN_URL}/`);
@@ -101,7 +109,7 @@ test("fe-admin: step-up that signs in as another user ends the session (DEBT-117
   // Step-up: prompt=login&max_age=0 => the IdP shows its login form even with a live IdP session.
   await page.goto(`${FE_ADMIN_URL}/auth/login?stepup=1&returnTo=%2F`);
   const ended = page.getByRole("alert");
-  await signIn(page, DEV_SEED_EMAIL, DEV_SEED_PASSWORD, ended);
+  await signIn(page, E2E_USER_EMAIL, E2E_USER_PASSWORD, ended);
   await expect(ended).toContainText("ended for security reasons");
   const at = new URL(page.url());
   expect(isAdminApp(at) && at.pathname === "/auth/callback").toBe(true);

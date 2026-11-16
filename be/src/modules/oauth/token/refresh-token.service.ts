@@ -33,6 +33,8 @@ export interface RotationResult {
   /** Session binding inherited by the family (DEBT-037): set as `sid` on the minted access token so
    * an active logout of the originating session makes it inactive. Undefined for pre-B4.7 families. */
   sessionRef?: string;
+  /** Second-factor time inherited by the family (run 89, D89.5); undefined when none. */
+  mfaAt?: number;
   /** `_id` of the doc this rotation consumed (DEBT-215 marker target); never a hash or token. */
   rotatedFromId: Types.ObjectId;
 }
@@ -58,6 +60,7 @@ interface RefreshDoc {
   reuseDetectedAt?: Date | null;
   familyRevokedAt?: Date | null;
   sessionRef?: string | null;
+  mfaAt?: number | null;
 }
 
 /**
@@ -149,8 +152,13 @@ export class RefreshTokenService {
     >,
     request: { scope?: string; resource?: string },
     /** DEBT-207/216: `resource` is the rotated doc's (never the request body's); DEBT-214: `scope`
-     * is the family's grant (never the narrowed request scope). */
-    recheck: (userId: string, resource: string, scope: string[]) => Promise<string | null>,
+     * is the family's grant (never the narrowed request scope); run 89: `mfaAt` is the family's. */
+    recheck: (
+      userId: string,
+      resource: string,
+      scope: string[],
+      mfaAt: number | undefined,
+    ) => Promise<string | null>,
     audit: AuditCtx = {},
   ): Promise<TokenResponse> {
     const tokenHash = sha256(value);
@@ -316,7 +324,12 @@ export class RefreshTokenService {
   /** DEBT-207: current-state re-check of a refresh after `rotate` (see `issueForRefresh`). */
   private async recheckAfterRotate(
     result: RotationResult,
-    recheck: (userId: string, resource: string, scope: string[]) => Promise<string | null>,
+    recheck: (
+      userId: string,
+      resource: string,
+      scope: string[],
+      mfaAt: number | undefined,
+    ) => Promise<string | null>,
     audit: AuditCtx,
   ): Promise<void> {
     const refuse = (reason: string) =>
@@ -351,7 +364,7 @@ export class RefreshTokenService {
         );
     let reason: string | null;
     try {
-      reason = await recheck(result.userId, result.resource, result.scope);
+      reason = await recheck(result.userId, result.resource, result.scope, result.mfaAt);
     } catch (err) {
       const revoked = await this.revokeFamily(result.familyId, result.clientId, new Date()).then(
         () => true,
@@ -481,6 +494,8 @@ export class RefreshTokenService {
       // Inherit the session binding (like familyId) so a local logout keeps reaching the family
       // after any number of rotations (B4.7). Undefined for pre-B4.7 families (no binding).
       sessionRef: old.sessionRef ?? undefined,
+      // D89.5: the second-factor time travels with the family like the session binding.
+      ...(typeof old.mfaAt === 'number' ? { mfaAt: old.mfaAt } : {}),
       ip: audit.ip,
       userAgent: audit.userAgent,
     });
@@ -514,6 +529,7 @@ export class RefreshTokenService {
       newRefreshToken: minted.token,
       // Carry the family's session binding out so the minted access token gets `sid` (DEBT-037).
       sessionRef: old.sessionRef ?? undefined,
+      ...(typeof old.mfaAt === 'number' ? { mfaAt: old.mfaAt } : {}),
       rotatedFromId: old._id,
     };
   }

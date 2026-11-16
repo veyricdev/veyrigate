@@ -2,7 +2,6 @@ import {
   Body,
   Controller,
   Get,
-  HttpException,
   HttpStatus,
   Post,
   Query,
@@ -11,10 +10,8 @@ import {
   UseFilters,
   UseGuards,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { IsOptional, IsString, Length } from 'class-validator';
 import type { HttpReply, HttpRequest } from '../../common/http/http.types';
-import type { SessionConfig } from '../../config/configuration';
 import { AuthenticationService } from '../authentication/authentication.service';
 import { LoginThrottleService } from '../authentication/login-throttle.service';
 import { ClientService } from '../clients/client.service';
@@ -23,15 +20,12 @@ import { RefreshTokenService } from '../oauth/token/refresh-token.service';
 import { AuditAction } from '../security/audit/audit-action.enum';
 import { AuditService } from '../security/audit/audit.service';
 import type { AuditEventInput } from '../security/audit/audit.types';
-import { RateLimitService } from '../security/rate-limit/rate-limit.service';
-import { SessionCookie } from '../sessions/session.cookie';
 import { SessionService, type Session } from '../sessions/session.service';
-import { CsrfGuard, CsrfService, csrfCookieName, formCsrfIdentity } from './csrf.service';
+import { CsrfGuard, CsrfService } from './csrf.service';
 import { HtmlExceptionFilter } from './html-exception.filter';
 import { revokeOneSession } from './session-revoke';
+import { ACCOUNT_REAUTH_WINDOW_MS, UiSessionHelper } from './ui-session.helper';
 
-/** Re-authentication window (D88.18): same 5' as the admin step-up (D3). */
-export const ACCOUNT_REAUTH_WINDOW_MS = 300_000;
 const HEX64 = /^[0-9a-f]{64}$/;
 const OBJECT_ID_HEX = /^[0-9a-f]{24}$/;
 const MAX_APPS = 100;
@@ -58,8 +52,6 @@ class ForgetDeviceDto extends ReauthDto {
   @IsOptional() @IsString() @Length(0, 128) device?: string;
 }
 
-type Reauth = { ok: true } | { ok: false; status: number; error: string };
-
 /**
  * Self-service account pages (run 88): `/account/sessions` (C-7.5.2, DEBT-582/586, D88.15–D88.20).
  * Every POST: CSRF bound to the session cookie, a per-user limiter, re-authentication (session
@@ -69,22 +61,17 @@ type Reauth = { ok: true } | { ok: false; status: number; error: string };
 @Controller()
 @UseFilters(HtmlExceptionFilter)
 export class AccountController {
-  private readonly secure: boolean;
   constructor(
     private readonly auth: AuthenticationService,
     private readonly csrf: CsrfService,
     private readonly sessions: SessionService,
-    private readonly sessionCookie: SessionCookie,
     private readonly audit: AuditService,
-    private readonly rateLimit: RateLimitService,
     private readonly refreshTokens: RefreshTokenService,
     private readonly loginThrottle: LoginThrottleService,
     private readonly consents: ConsentService,
     private readonly clients: ClientService,
-    config: ConfigService,
-  ) {
-    this.secure = config.getOrThrow<SessionConfig>('session').cookieSecure;
-  }
+    private readonly ui: UiSessionHelper,
+  ) {}
 
   @Get('/account/sessions')
   async sessionsPage(
@@ -92,7 +79,7 @@ export class AccountController {
     @Res() reply: HttpReply,
     @Query('done') done?: string,
   ) {
-    const session = await this.liveSession(req, reply);
+    const session = await this.ui.liveSession(req, reply);
     if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fsessions', 302);
     return this.render(req, reply, session, {
       notice: typeof done === 'string' ? DONE[done] : undefined,
@@ -106,10 +93,10 @@ export class AccountController {
     @Req() req: HttpRequest,
     @Res() reply: HttpReply,
   ) {
-    const session = await this.liveSession(req, reply);
+    const session = await this.ui.liveSession(req, reply);
     if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fsessions', 302);
-    await this.limit('account_sessions', req, session.userId);
-    const reauth = await this.reauth(session, body.current_password, 'session');
+    await this.ui.limit('account_sessions', req, session.userId);
+    const reauth = await this.reauth(req, session, body.current_password, 'session');
     if (!reauth.ok) return this.render(req, reply, session, { error: reauth.error }, reauth.status);
 
     const ref = body.ref ?? '';
@@ -136,7 +123,7 @@ export class AccountController {
       this.refreshTokens,
       target,
       now,
-      () => this.sessions.revokeByDevice(session.userId, target.ref),
+      () => this.sessions.revokeOwnedRef(session.userId, target.ref),
       (failedStep) =>
         this.record(session, AuditAction.SESSION_REVOKED, 'failure', {
           targetId: target.ref,
@@ -151,10 +138,10 @@ export class AccountController {
   @Post('/account/sessions/revoke-others')
   @UseGuards(CsrfGuard)
   async revokeOthers(@Body() body: ReauthDto, @Req() req: HttpRequest, @Res() reply: HttpReply) {
-    const session = await this.liveSession(req, reply);
+    const session = await this.ui.liveSession(req, reply);
     if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fsessions', 302);
-    await this.limit('account_sessions', req, session.userId);
-    const reauth = await this.reauth(session, body.current_password, 'others');
+    await this.ui.limit('account_sessions', req, session.userId);
+    const reauth = await this.reauth(req, session, body.current_password, 'others');
     if (!reauth.ok) return this.render(req, reply, session, { error: reauth.error }, reauth.status);
 
     // A session created after this listing is not touched (it did not exist when the user asked).
@@ -201,10 +188,10 @@ export class AccountController {
     @Req() req: HttpRequest,
     @Res() reply: HttpReply,
   ) {
-    const session = await this.liveSession(req, reply);
+    const session = await this.ui.liveSession(req, reply);
     if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fsessions', 302);
-    await this.limit('account_sessions', req, session.userId);
-    const reauth = await this.reauth(session, body.current_password, 'device');
+    await this.ui.limit('account_sessions', req, session.userId);
+    const reauth = await this.reauth(req, session, body.current_password, 'device');
     if (!reauth.ok) return this.render(req, reply, session, { error: reauth.error }, reauth.status);
 
     const device = body.device ?? '';
@@ -231,10 +218,10 @@ export class AccountController {
     @Req() req: HttpRequest,
     @Res() reply: HttpReply,
   ) {
-    const session = await this.liveSession(req, reply);
+    const session = await this.ui.liveSession(req, reply);
     if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fsessions', 302);
-    await this.limit('account_sessions', req, session.userId);
-    const reauth = await this.reauth(session, body.current_password, 'devices');
+    await this.ui.limit('account_sessions', req, session.userId);
+    const reauth = await this.reauth(req, session, body.current_password, 'devices');
     if (!reauth.ok) return this.render(req, reply, session, { error: reauth.error }, reauth.status);
 
     const count = await this.loginThrottle.forgetTrusted(session.userId, {
@@ -249,7 +236,7 @@ export class AccountController {
   /** `/account/apps` (C-10.7b, DEBT-581, D88.22): the user's own active consents. */
   @Get('/account/apps')
   async appsPage(@Req() req: HttpRequest, @Res() reply: HttpReply, @Query('done') done?: string) {
-    const session = await this.liveSession(req, reply);
+    const session = await this.ui.liveSession(req, reply);
     if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fapps', 302);
     const rows = await this.consents.listOwn(session.userId, MAX_APPS);
     const states = await this.clients.disabledStates([...new Set(rows.map((c) => c.clientId))]);
@@ -266,7 +253,7 @@ export class AccountController {
         grantedAt: new Date(c.grantedAt).toISOString(),
         updatedAt: new Date(c.updatedAt).toISOString(),
       })),
-      csrf: this.csrf.token(this.identity(req, reply)),
+      csrf: this.csrf.token(this.ui.identity(req, reply)),
     });
   }
 
@@ -282,9 +269,9 @@ export class AccountController {
     @Req() req: HttpRequest,
     @Res() reply: HttpReply,
   ) {
-    const session = await this.liveSession(req, reply);
+    const session = await this.ui.liveSession(req, reply);
     if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fapps', 302);
-    await this.limit('account_apps', req, session.userId);
+    await this.ui.limit('account_apps', req, session.userId);
     const id = body.consent_id ?? '';
     const now = new Date();
     const revoked = OBJECT_ID_HEX.test(id)
@@ -340,45 +327,17 @@ export class AccountController {
     return reply.redirect('/account/apps?done=revoked', 303);
   }
 
-  /** D88.18: fresh session (< 5') or the current password (shared 5/900 s bucket). */
-  private async reauth(
-    session: Session,
-    password: string | undefined,
-    scope: string,
-  ): Promise<Reauth> {
-    if (session.authTime >= Date.now() - ACCOUNT_REAUTH_WINDOW_MS) return { ok: true };
-    if (!(await this.auth.hasPassword(session.userId))) {
-      return { ok: false, status: HttpStatus.BAD_REQUEST, error: NO_PASSWORD_REAUTH };
-    }
-    if (!password) {
-      return {
-        ok: false,
-        status: HttpStatus.BAD_REQUEST,
-        error: 'Enter your current password to confirm.',
-      };
-    }
-    const result = await this.auth.verifyCurrentPassword(session.userId, password);
-    if (result.kind === 'throttled') {
-      throw new HttpException(
-        { retryAfter: result.retryAfterSec, message: 'Too many attempts. Try again later.' },
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
-    }
-    if (result.kind === 'ok') return { ok: true };
-    await this.record(
-      session,
-      scope === 'device' || scope === 'devices'
-        ? AuditAction.TRUSTED_DEVICE_REVOKED
-        : AuditAction.SESSION_REVOKED,
-      'failure',
-      { reason: 'reauth_failed', metadata: { scope, via: 'self' } },
-    );
-    return {
-      ok: false,
-      status: HttpStatus.BAD_REQUEST,
-      error:
-        result.kind === 'no_password' ? NO_PASSWORD_REAUTH : 'The current password is incorrect.',
-    };
+  /** D88.18 through the shared helper (DEBT-638): fresh session or the current password. */
+  private reauth(req: HttpRequest, session: Session, password: string | undefined, scope: string) {
+    const devices = scope === 'device' || scope === 'devices';
+    return this.ui.reauth(req, session, password, {
+      audit: {
+        action: devices ? AuditAction.TRUSTED_DEVICE_REVOKED : AuditAction.SESSION_REVOKED,
+        targetType: devices ? 'device' : 'session',
+        metadata: { scope, via: 'self' },
+      },
+      noPasswordMessage: NO_PASSWORD_REAUTH,
+    });
   }
 
   private async render(
@@ -401,7 +360,10 @@ export class AccountController {
       .map((s) => ({
         ref: s.ref,
         label: s.device?.label ?? 'Unknown device',
-        method: s.amr?.includes('fed') ? 'Google/GitHub sign-in' : 'Password',
+        method:
+          (s.amr?.includes('fed') ? 'Google/GitHub sign-in' : 'Password') +
+          // D89.24: a session that passed the second factor.
+          (s.amr?.includes('mfa') ? ' + authenticator' : ''),
         createdAt: new Date(s.createdAt).toISOString(),
         lastSeenAt: new Date(s.lastSeenAt).toISOString(),
         current: s.ref === session.ref,
@@ -421,7 +383,7 @@ export class AccountController {
       reauth: fresh ? 'fresh' : hasPassword ? 'password' : 'impossible',
       noPasswordMessage: NO_PASSWORD_REAUTH,
       ...extra,
-      csrf: this.csrf.token(this.identity(req, reply)),
+      csrf: this.csrf.token(this.ui.identity(req, reply)),
     });
   }
 
@@ -473,30 +435,6 @@ export class AccountController {
 
   private done(reply: HttpReply, kind: keyof typeof DONE) {
     return reply.redirect(`/account/sessions?done=${kind}`, 303);
-  }
-
-  /** The live session of the cookie, or null (a dead cookie is cleared). */
-  private async liveSession(req: HttpRequest, reply: HttpReply): Promise<Session | null> {
-    const id = this.sessionCookie.read(req);
-    if (!id) return null;
-    const session = await this.sessions.get(id);
-    if (session) return session;
-    this.sessionCookie.clear(reply);
-    delete req.cookies?.[this.sessionCookie.name];
-    return null;
-  }
-
-  private identity(req: HttpRequest, reply: HttpReply): string {
-    return formCsrfIdentity(this.sessionCookie.read(req), req, reply, this.secure);
-  }
-
-  private async limit(name: string, req: HttpRequest, account?: string) {
-    const result = await this.rateLimit.hit(
-      { name },
-      { ip: req.ip, account, deviceId: req.cookies?.[csrfCookieName(this.secure)] },
-    );
-    if (!result.allowed)
-      throw new HttpException({ retryAfter: result.retryAfterSec }, HttpStatus.TOO_MANY_REQUESTS);
   }
 }
 

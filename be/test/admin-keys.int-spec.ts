@@ -130,6 +130,8 @@ describe('Admin API B6.3c (keys + tenants) on real Mongo + Redis', () => {
         };
       if (ns === 'client') return { secretGraceTtl: 60 };
       if (ns === 'consent') return { policyVersion: '1', termsVersion: '1' };
+      // Run 89 (D89.4): the admin MFA gate is off in hand-composed modules, like `full-app`.
+      if (ns === 'mfa') return { adminRequired: false };
       throw new Error(`Unexpected config namespace: ${ns}`);
     },
   } as unknown as ConfigService;

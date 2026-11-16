@@ -31,6 +31,7 @@ import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { authzBinding, seedConsent, seedOAuthUser } from './oauth-fixtures';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
+import { UserService } from '../src/modules/identity/user.service';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -128,6 +129,7 @@ describe('OAuth tenant isolation at /authorize + POST /authorize/consent (MT1/MT
         SessionCookie,
         AuditService,
         UserTenantService,
+        UserService,
         HtmlExceptionFilter,
         { provide: RedisService, useValue: new RedisService(redis) },
         { provide: ConfigService, useValue: cfg },

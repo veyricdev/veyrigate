@@ -32,6 +32,7 @@ import { ResourceService, type Resource } from '../src/modules/resources/resourc
 import { IntrospectController } from '../src/modules/oauth/introspect/introspect.controller';
 import { UserinfoController } from '../src/modules/oauth/userinfo/userinfo.controller';
 import { UiController } from '../src/modules/ui/ui.controller';
+import { UiSessionHelper } from '../src/modules/ui/ui-session.helper';
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { SESSION_COOKIE, SessionCookie } from '../src/modules/sessions/session.cookie';
@@ -44,6 +45,7 @@ import { UserTenantService } from '../src/modules/identity/user-tenant.service';
 import { ConsentService } from '../src/modules/oauth/consent/consent.service';
 import { seedCodeGrant } from './oauth-fixtures';
 import { MAILER } from '../src/modules/mailer/mailer';
+import { mfaTestProviders } from './helpers/mfa';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -205,6 +207,8 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
         // B7.1 SE12: the real POST /logout path (revoke families + session + SWEEP).
         SessionCookie,
         CsrfService,
+        UiSessionHelper,
+        ...mfaTestProviders(),
         CsrfGuard,
         HtmlExceptionFilter,
         LogoutService,

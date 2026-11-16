@@ -601,3 +601,72 @@ count: 30
 ```
 Chỉ in `_id` (không đưa email vào ticket/chat). `count: 0` ⇒ không cần làm gì. Khác 0 ⇒ liên hệ người dùng qua kênh đã
 xác minh khác, đổi email qua kênh có kiểm soát (từng tài khoản, có người duyệt). **Không sửa hàng loạt** trong Mongo.
+
+## 11. Mất yếu tố thứ hai (MFA) / mã bị chặn (run 89, D89.16, D89.17, D89.25)
+
+Ai được yêu cầu: chính chủ tài khoản. **Trước khi reset**, xác minh danh tính qua **kênh thứ hai** độc lập với
+email/mật khẩu (ASVS 6.4.4): gọi lại số điện thoại trong hồ sơ nhân sự, gặp trực tiếp, hoặc quản lý trực tiếp xác nhận
+trên kênh nội bộ đã biết. Ghi ticket (ai yêu cầu, ai xác minh, cách xác minh). Không reset chỉ vì một email/chat.
+
+Thử trước (không cần admin):
+- Còn **mã khôi phục** (mất thiết bị, D89.27) ⇒ đăng nhập bằng mã khôi phục ở ô "Code", rồi `/account/mfa`: ô
+  "Authenticator code or recovery code" nhận **mật khẩu + một mã khôi phục khác** (mỗi mã dùng một lần) để
+  "Create new recovery codes" hoặc "Turn off two-step verification", rồi bật lại với thiết bị mới. Audit
+  `MFA_RECOVERY_USED {via:'account'}` + `MFA_DISABLED`/`MFA_RECOVERY_REGENERATED` `{factor:'recovery_code'}`.
+- Trang bước 2 báo "Authenticator codes are blocked…" (D89.25: 50 mã sai **liên tiếp**, alert `AUTH_MFA_LOCKED`
+  + thư cho user) ⇒ chỉ **mã khôi phục** mở lại (D89.28: `/forgot` **không** mở — kẻ có cả mật khẩu lẫn hộp thư không
+  được thêm lượt đoán). Hết mã khôi phục ⇒ reset qua admin bên dưới, sau xác minh kênh 2. Alert này nghĩa là **có người
+  khác đang có mật khẩu**: user phải đổi mật khẩu ngay.
+- **Quy tắc alert (D89.28)**: `AUTH_MFA_LOCKED` **≥ 2 lần trong 24 h cho cùng `targetId`** ⇒ on-call khoá tài khoản ngay
+  (`POST /admin/users/{id}/lock`), liên hệ chủ tài khoản qua kênh 2, chỉ mở khoá + đổi mật khẩu + reset MFA sau khi xác minh
+  (kẻ tấn công có thể đang giữ cả mật khẩu lẫn hộp thư).
+
+Reset qua admin API (đường chính, còn admin khác):
+- fe-admin ⇒ chi tiết user ⇒ "Reset two-step verification", hoặc `POST /admin/users/{id}/mfa/reset` (`admin.write`,
+  token có `auth_time` < 5'). Trả `204` kể cả khi user không có MFA (idempotent: lỗi mạng ⇒ tải lại rồi bấm lại được).
+- Kết quả: gỡ `User.mfa`, đăng xuất mọi phiên, thu hồi mọi refresh family + thiết bị tin cậy, thư cho user, audit
+  `ADMIN_USER_MFA_RESET` (alert) `{wasEnrolled}`. 5xx + audit `revoke_failed` ⇒ MFA **đã** gỡ (thư đã gửi ngay khi gỡ,
+  D89.26), bấm lại để thu hồi nốt.
+- tenant_admin không reset được tài khoản có vai trò admin / còn active ở tenant khác (403, audit `target_super_admin`
+  hoặc `target_not_allowed`); người cần là super_admin.
+- Ngay sau reset user phải enroll lại ở `/account/mfa` (enroll ⇒ revoke-all) trước khi vào console.
+
+Reset bằng CLI (không còn admin nào dùng được console, vd. super_admin duy nhất mất thiết bị):
+```bash
+docker run --rm -i --env-file <env app> "$IMG" node dist/database/admin-recover.js \
+  --email <email> --requested-by <a> --approved-by <b> --ticket <ref> --reset-mfa --dry-run   # in kế hoạch, KHÔNG kết nối
+docker run --rm -i --env-file <env app> "$IMG" node dist/database/admin-recover.js \
+  --email <email> --requested-by <a> --approved-by <b> --ticket <ref> --reset-mfa [--allow-existing-super-admin]
+```
+- ⚠ `admin-recover` **luôn cấp `super_admin`** (+ membership active) cho `--email`: chỉ dùng cho tài khoản sẽ là
+  super_admin. **KHÔNG** dùng để reset MFA cho user thường — user thường dùng admin API ở trên.
+- Như §3d (hai người, mã xác nhận gõ lại); kế hoạch in thêm `mfa: enrolled -> reset`. Trong **một** transaction: cấp lại
+  `super_admin`, gỡ `mfa`, thu hồi mọi refresh family (Mongo), audit `ADMIN_RECOVERED {mfaReset:true}`; dán dòng
+  `{"alert":true,…}` vào kênh sự cố.
+- CLI **không** chạm Redis (DEBT-634): phiên cũ của user vẫn sống với RP khác tới khi hết hạn hoặc user enroll lại; console
+  `admin` vẫn từ chối các phiên đó (`mfaAt ≥ enrolledAt`, D89.5). Có admin khác ⇒ chạy thêm
+  `POST /admin/users/{id}/sessions/revoke`.
+
+## 12. Xoay `MFA_ENCRYPTION_KEYS` (run 89, D89.12)
+
+Seed TOTP mã hoá AES-256-GCM bằng khoá trong env (`kid:base64`, phần tử đầu = khoá hiện hành), AAD gắn `userId`.
+1. Sinh khoá: `openssl rand -base64 32`; lưu ở secret store (KHÔNG cùng chỗ backup Mongo — backup + khoá = lộ seed).
+2. Thêm khoá mới **lên đầu**: `MFA_ENCRYPTION_KEYS=k2:<mới>,k1:<cũ>` cho app **và** mọi CLI (`db:bootstrap`,
+   `db:admin-recover`, `db:sync-indexes` đều chạy `validateEnv` đầy đủ). Deploy.
+3. Mỗi lần user nhập đúng TOTP, seed được mã hoá lại bằng khoá hiện hành trong cùng update (lười, không có CLI hàng loạt —
+   DEBT-635). Đếm còn bao nhiêu seed dùng kid cũ (chỉ đọc, qua `d` đã in `DB:` như §3d):
+   ```js
+   const d = db.getSiblingDB('<db>'); print('DB:', d.getName());
+   print('k1 left:', d.users.countDocuments({ 'mfa.secret.kid': 'k1' }));
+   ```
+4. Chỉ gỡ `k1` khỏi env khi số trên = 0. Gỡ sớm ⇒ user đó không đăng nhập được bước 2 (giải mã lỗi = sai mã, log ERROR
+   có `kid`) ⇒ phải reset MFA (§11).
+5. **Mất mọi khoá** (hoặc lộ khoá): mọi user mất MFA. Mở ticket sự cố, đặt khoá mới, rồi reset MFA hàng loạt có ticket:
+   ```js
+   const d = db.getSiblingDB('<db>'); print('DB:', d.getName());
+   print('enrolled:', d.users.countDocuments({ mfa: { $exists: true } }));   // dry-run: in số trước
+   // d.users.updateMany({ mfa: { $exists: true } }, { $unset: { mfa: 1 } })  // chạy khi 2 người đã duyệt
+   ```
+   Sau đó thu hồi phiên (`POST /admin/users/{id}/sessions/revoke` hoặc xoay `sess:*` theo §5) và báo user enroll lại.
+   Khoá bị lộ (không mất) ⇒ thêm khoá mới lên đầu (bước 2), chờ đăng nhập mã hoá lại, cân nhắc reset hàng loạt vì backup
+   cũ + khoá lộ vẫn giải được seed cũ.

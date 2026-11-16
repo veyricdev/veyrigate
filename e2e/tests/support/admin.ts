@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { expect, request, type BrowserContext } from "@playwright/test";
 import { ADMIN_SEED_EMAIL, ADMIN_SEED_PASSWORD, BE_PORT, E2E_FE_ADMIN_SECRET, ISSUER } from "../../config/env";
+import { passSecondFactor } from "./fe-admin";
 
 /**
  * Admin token through the REAL `fe-admin` OAuth flow (run 39 Q-39.1): authorization_code + PKCE
@@ -14,6 +15,15 @@ const FE_ADMIN_REDIRECT = "http://localhost:3000/auth/callback";
 const ADMIN_RESOURCE = `${ISSUER}/admin/`;
 const b64url = (b: Buffer) => b.toString("base64url");
 const basicAuth = `Basic ${Buffer.from(`${FE_ADMIN}:${E2E_FE_ADMIN_SECRET}`).toString("base64")}`;
+
+/**
+ * D89.21 (run 89 T6 AC7): with TOTP the IdP accepts ~1 sign-in per 30 s per user (replay rule), so
+ * the IdP cookies of a fresh sign-in (password + TOTP) are reused by the next `adminToken` of the
+ * same user without `forceLogin`, for at most `REUSE_MS` (the admin API's step-up needs
+ * `auth_time` < 5 min). A dead session (lock, revoke, MFA reset) just shows the login form again.
+ */
+const REUSE_MS = 180_000;
+const idpSessions = new Map<string, { at: number; cookies: Awaited<ReturnType<BrowserContext["cookies"]>> }>();
 
 export interface AdminTokens {
   accessToken: string;
@@ -51,6 +61,9 @@ export async function adminToken(
   if (forceLogin) {
     params.set("prompt", "login");
     params.set("max_age", "0");
+  } else {
+    const cached = idpSessions.get(email.toLowerCase());
+    if (cached && Date.now() - cached.at < REUSE_MS) await context.addCookies(cached.cookies);
   }
 
   // The IdP answers with a 302 to `localhost:3000` (no fe-admin app in E2E); the `code` is read
@@ -79,7 +92,7 @@ export async function adminToken(
   let loginFormShown = false;
   try {
     await step(page.goto(`${ISSUER}/authorize?${params.toString()}`));
-    for (let i = 0; i < 4 && !callback; i++) {
+    for (let i = 0; i < 5 && !callback; i++) {
       const url = new URL(page.url());
       const onIdp = url.port === String(BE_PORT);
       const leftIdpPage = (u: URL) => u.port !== String(BE_PORT) || u.pathname !== url.pathname;
@@ -94,6 +107,11 @@ export async function adminToken(
             form.getByRole("button", { name: "Sign in" }).click(),
           ]),
         );
+      } else if (onIdp && url.pathname === "/login/mfa") {
+        // Run 89 (T6 AC4): the `admin` resource needs the second factor (TOTP of `email`).
+        await step(
+          Promise.all([page.waitForURL(leftIdpPage, { waitUntil: "load" }), passSecondFactor(page, email)]),
+        );
       } else if (onIdp && url.pathname === "/authorize") {
         const consent = page.locator('form[action="/authorize/consent"]');
         await step(
@@ -105,6 +123,9 @@ export async function adminToken(
       } else {
         break;
       }
+    }
+    if (callback && loginFormShown) {
+      idpSessions.set(email.toLowerCase(), { at: Date.now(), cookies: await context.cookies(ISSUER) });
     }
   } finally {
     await page.close();

@@ -29,6 +29,7 @@ import {
   listUserFamilies,
   listUsers,
   lockUser,
+  resetUserMfa,
   revokeUserConsent,
   revokeUserFamily,
   revokeUserSessions,
@@ -194,6 +195,7 @@ function useUserWrite<I, T>(fn: (o: { data: I }) => Promise<AdminResult<T>>) {
 export const useLockUser = () => useUserWrite<string, AdminUser>(lockUser);
 export const useUnlockUser = () => useUserWrite<string, AdminUser>(unlockUser);
 export const useRevokeUserSessions = () => useUserWrite<string, void>(revokeUserSessions);
+export const useResetUserMfa = () => useUserWrite<string, void>(resetUserMfa);
 export const useRevokeUserFamily = () => useUserWrite<RevokeFamilyParams, void>(revokeUserFamily);
 export const useRevokeUserConsent = () => useUserWrite<RevokeConsentParams, void>(revokeUserConsent);
 export const useSetUserRoles = () => useUserWrite<SetUserRolesParams, AdminUser>(setUserRoles);

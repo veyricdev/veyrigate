@@ -23,6 +23,8 @@ const BASE: Record<string, string> = {
   CSRF_SECRET: 's',
   RATE_LIMIT_WINDOW: '60',
   RATE_LIMIT_MAX: '100',
+  // Not the `.env.example` key (refused in production, run 89 D89.4).
+  MFA_ENCRYPTION_KEYS: `k1:${Buffer.alloc(32, 7).toString('base64')}`,
 };
 
 /** Valid Vault key-provider env (run 53): production requires KEY_PROVIDER=vault over https. */
@@ -562,5 +564,81 @@ describe('ADMIN_SEED_EMAIL is optional for the app (run 88, DEBT-165, D88.13)', 
 
   it('present and valid => kept in config', () => {
     expect(buildConfig(validateEnv(PROD)).adminSeed).toEqual({ email: 'a@example.com' });
+  });
+});
+
+describe('MFA_ENCRYPTION_KEYS / ADMIN_MFA_REQUIRED (run 89 T1 AC5, D89.4)', () => {
+  const PROD = { ...BASE, ...VAULT, NODE_ENV: 'production', ISSUER: 'https://idp.example.com' };
+  const key = (byte: number) => Buffer.alloc(32, byte).toString('base64');
+  const message = (env: Record<string, string>) => {
+    try {
+      validateEnv(env);
+    } catch (err) {
+      return (err as Error).message;
+    }
+    return '';
+  };
+  const example = () =>
+    (parseEnv(readFileSync(join(process.cwd(), '.env.example'), 'utf8')) as Record<string, string>)
+      .MFA_ENCRYPTION_KEYS;
+
+  it.each(['development', 'test', 'production'])(
+    'missing in NODE_ENV=%s => boot fails naming the variable',
+    (nodeEnv) => {
+      const env: Record<string, string> = { ...PROD, NODE_ENV: nodeEnv };
+      delete env.MFA_ENCRYPTION_KEYS;
+      expect(message(env)).toMatch(/MFA_ENCRYPTION_KEYS/);
+      expect(message({ ...env, MFA_ENCRYPTION_KEYS: '' })).toMatch(/MFA_ENCRYPTION_KEYS/);
+    },
+  );
+
+  it.each([
+    ['16-byte second key', `k1:${key(1)},k2:${Buffer.alloc(16, 2).toString('base64')}`, /entry 2/],
+    ['uppercase kid', `K1:${key(1)}`, /entry 1/],
+    ['duplicate kid', `k1:${key(1)},k1:${key(2)}`, /entry 2/],
+  ])('%s => names the variable and the position, never a value', (_n, raw, re) => {
+    const m = message({ ...BASE, MFA_ENCRYPTION_KEYS: raw });
+    expect(m).toMatch(/MFA_ENCRYPTION_KEYS/);
+    expect(m).toMatch(re);
+    expect(m).not.toContain(key(1));
+    expect(m).not.toContain(key(2));
+  });
+
+  it('parsed into config.mfa: first entry is the current key', () => {
+    const cfg = buildConfig(
+      validateEnv({ ...BASE, MFA_ENCRYPTION_KEYS: `k2:${key(2)},k1:${key(1)}` }),
+    );
+    expect(cfg.mfa.keys.map((k) => k.kid)).toEqual(['k2', 'k1']);
+    expect(cfg.mfa.keys[0].key.equals(Buffer.alloc(32, 2))).toBe(true);
+  });
+
+  it('.env.example key: fine outside production, refused in production (also under another kid)', () => {
+    const ex = example();
+    expect(ex).toMatch(/^[a-z0-9-]+:/);
+    expect(() => validateEnv({ ...BASE, MFA_ENCRYPTION_KEYS: ex })).not.toThrow();
+    expect(message({ ...PROD, MFA_ENCRYPTION_KEYS: ex })).toMatch(/MFA_ENCRYPTION_KEYS.*example/);
+    const other = `k9:${ex.slice(ex.indexOf(':') + 1)}`;
+    expect(message({ ...PROD, MFA_ENCRYPTION_KEYS: `k1:${key(1)},${other}` })).toMatch(
+      /MFA_ENCRYPTION_KEYS.*example/,
+    );
+    expect(message({ ...PROD, MFA_ENCRYPTION_KEYS: ex })).not.toContain(ex);
+    expect(() => validateEnv(PROD)).not.toThrow();
+  });
+
+  it('ADMIN_MFA_REQUIRED: unset/empty => true; false outside production => false; false in production => refused', () => {
+    expect(buildConfig(validateEnv(BASE)).mfa.adminRequired).toBe(true);
+    expect(buildConfig(validateEnv({ ...BASE, ADMIN_MFA_REQUIRED: '' })).mfa.adminRequired).toBe(
+      true,
+    );
+    expect(
+      buildConfig(validateEnv({ ...BASE, ADMIN_MFA_REQUIRED: 'false' })).mfa.adminRequired,
+    ).toBe(false);
+    expect(
+      buildConfig(validateEnv({ ...PROD, ADMIN_MFA_REQUIRED: 'true' })).mfa.adminRequired,
+    ).toBe(true);
+    expect(message({ ...PROD, ADMIN_MFA_REQUIRED: 'false' })).toMatch(
+      /ADMIN_MFA_REQUIRED.*production/,
+    );
+    expect(message({ ...BASE, ADMIN_MFA_REQUIRED: 'no' })).toMatch(/ADMIN_MFA_REQUIRED/);
   });
 });

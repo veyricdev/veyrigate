@@ -705,3 +705,24 @@ Xử lý sự cố:
 - **Mất/lộ secret lần đầu** (hoặc CLI báo "committed but could not be printed"): bước 3 với `--rotate-secret --ticket <ref>`
   ⇒ mọi secret cũ của `fe-admin` bị thu hồi **ngay** (không grace), một secret mới in một lần; deploy lại fe-admin với secret
   mới. Khi console đã chạy, ưu tiên xoay secret qua admin API (có grace).
+
+## 17. Triển khai run 89 — MFA TOTP + mã khôi phục (D89.22)
+
+Trước deploy:
+1. Sinh khoá `openssl rand -base64 32`; đặt `MFA_ENCRYPTION_KEYS=k1:<base64>` vào env của app **và** mọi CLI chạy
+   `validateEnv` (`db:bootstrap`, `db:admin-recover`, `db:sync-indexes`). Thiếu/sai dạng ⇒ app và CLI **không khởi
+   động** (lỗi chỉ nêu tên biến + vị trí phần tử). Khoá ví dụ của `.env.example` bị **từ chối** ở production. Lưu khoá ở
+   secret store, **không** cùng chỗ backup Mongo; drill restore (runbook-ops §4) cần khoá này.
+2. `ADMIN_MFA_REQUIRED` để trống (= `true`). `false` ở production ⇒ không khởi động.
+3. Kiểm placeholder cũ (chỉ đọc, qua `d` đã in `DB:`): `print(d.users.countDocuments({ mfaSecret: { $exists: true } }))`
+   phải = 0. Nếu > 0 ⇒ `$unset` theo mẫu §15 (dry-run in số trước, hai người duyệt).
+4. `db:sync-indexes` như mọi lần (run 89 không thêm index).
+
+Sau deploy:
+- Mọi refresh family `resource=admin` cũ không có `mfaAt` ⇒ `invalid_grant` ở lần refresh kế ⇒ fe-admin đăng nhập lại một lần
+  (bình thường, không phải sự cố).
+- Mỗi admin vào console sẽ gặp trang "Two-step verification required" ⇒ `/account/mfa` ⇒ quét khoá bằng app authenticator,
+  nhập mã, **lưu 10 mã khôi phục** ⇒ bị đăng xuất mọi nơi ⇒ đăng nhập lại (có bước 2) ⇒ console.
+- Nên có **ít nhất hai** super_admin enroll xong trước khi rời ca: admin mất thiết bị mà không còn admin khác ⇒
+  `admin-recover --reset-mfa` (runbook-ops §11).
+- Theo dõi alert mới: `AUTH_MFA_THROTTLED`, `AUTH_MFA_LOCKED`, `MFA_DISABLED`, `ADMIN_USER_MFA_RESET`.

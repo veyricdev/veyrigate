@@ -8,7 +8,10 @@ import { DEFAULT_TENANT_ID } from '../src/modules/identity/tenant.service';
 import { ADMIN_LOCKED_UNTIL } from '../src/modules/identity/user.service';
 import { ClientCredentialService } from '../src/modules/clients/client-credential.service';
 import type { ConfigService } from '@nestjs/config';
-import { seedE2eAdmin, type E2eUserConfig } from './e2e/seed-e2e-admin';
+import { readE2eMfaConfig, seedE2eAdmin, type E2eUserConfig } from './e2e/seed-e2e-admin';
+import { base32Decode } from '../src/modules/mfa/base32';
+import { totpAad, type SealedSecret } from '../src/modules/mfa/mfa-crypto';
+import { TEST_MFA_ENCRYPTION_KEYS } from './helpers/mfa';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 
 // Throwaway int DB on vg-test-mongo (the DB-name guard is covered by the unit spec; this exercises
@@ -20,6 +23,13 @@ const ISSUER = 'http://localhost:4000';
 const ADMIN: AdminSeedConfig = { email: 'E2E-Admin@Example.com', password: 'e2e-int-admin-pass-1' };
 const SECRET = 'e2e-int-fe-admin-secret-0123456789abcdef';
 const E2E_USER: E2eUserConfig = { email: 'E2E-User@Example.com', password: 'e2e-int-user-pass-1' };
+// Run 89 T6 AC3: public test seeds (base32, 20 bytes) + the MFA user of `mfa.spec.ts`.
+const ADMIN_SEED_B32 = 'INTADMINTOTPSEEDNOTASECRETAAAAAA';
+const USER_SEED_B32 = 'INTUSERTOTPSEEDNOTASECRETBBBBBBB';
+const MFA_USER: E2eUserConfig = {
+  email: 'E2E-Mfa-User@Example.com',
+  password: 'e2e-int-mfa-pass-1',
+};
 
 describe('seed-e2e-admin (run 39 Task 0) on real Mongo', () => {
   let connection: Connection;
@@ -237,6 +247,117 @@ describe('seed-e2e-admin (run 39 Task 0) on real Mongo', () => {
         runWithUser({ email: ` ${ADMIN.email.toUpperCase()} `, password: 'other-pass-123' }),
       ).rejects.toThrow(/E2E_USER_EMAIL must differ from ADMIN_SEED_EMAIL/);
       expect(await snapshot()).toEqual(before);
+    });
+  });
+
+  describe('MFA (run 89 T6 AC3)', () => {
+    const env = (over: Record<string, string | undefined> = {}) => ({
+      MFA_ENCRYPTION_KEYS: TEST_MFA_ENCRYPTION_KEYS,
+      E2E_ADMIN_TOTP_SECRET: ADMIN_SEED_B32,
+      E2E_USER_TOTP_SECRET: USER_SEED_B32,
+      E2E_USER_EMAIL: E2E_USER.email,
+      E2E_MFA_USER_EMAIL: MFA_USER.email,
+      E2E_MFA_USER_PASSWORD: MFA_USER.password,
+      ADMIN_SEED_EMAIL: ADMIN.email,
+      ...over,
+    });
+    const runMfa = (over: Record<string, string | undefined> = {}) =>
+      seedE2eAdmin(
+        connection,
+        ADMIN,
+        ISSUER,
+        'test',
+        SECRET,
+        E2E_USER,
+        false,
+        readE2eMfaConfig(env(over)),
+      );
+    type MfaDoc = {
+      secret: SealedSecret;
+      enrolledAt: Date;
+      lastStep?: number;
+      failures?: number;
+      recovery: unknown[];
+    };
+    const mfaOf = async (mail: string) =>
+      (await users.findOne({ email: mail.toLowerCase() }).select('+mfa').lean().exec()) as {
+        _id: Types.ObjectId;
+        mfa?: MfaDoc;
+      } | null;
+
+    it('config: keys required; seed must be base32 >= 16 bytes; MFA user distinct from E2E user/admin', () => {
+      expect(() => readE2eMfaConfig(env({ MFA_ENCRYPTION_KEYS: undefined }))).toThrow(
+        /MFA_ENCRYPTION_KEYS is required/,
+      );
+      expect(() => readE2eMfaConfig(env({ E2E_USER_TOTP_SECRET: 'AAAA' }))).toThrow(
+        /E2E_USER_TOTP_SECRET must be base32/,
+      );
+      expect(() => readE2eMfaConfig(env({ E2E_MFA_USER_EMAIL: 'e2e-user@example.com' }))).toThrow(
+        /E2E_MFA_USER_EMAIL must differ from E2E_USER_EMAIL/,
+      );
+      expect(() => readE2eMfaConfig(env({ E2E_MFA_USER_EMAIL: 'e2e-admin@example.com' }))).toThrow(
+        /must differ from ADMIN_SEED_EMAIL/,
+      );
+      expect(readE2eMfaConfig(env({ E2E_ADMIN_TOTP_SECRET: '' })).adminSecret).toBeUndefined();
+    });
+
+    it('admin + E2E user enrolled with the fixed seeds (sealed, AAD = user id), no lastStep / failures / recovery; MFA user without MFA', async () => {
+      const t0 = Date.now();
+      await runMfa();
+      const keyring = readE2eMfaConfig(env()).keyring;
+      for (const [mail, b32] of [
+        [ADMIN.email, ADMIN_SEED_B32],
+        [E2E_USER.email, USER_SEED_B32],
+      ] as const) {
+        const u = await mfaOf(mail);
+        const mfa = u!.mfa!;
+        expect(mfa.lastStep).toBeUndefined();
+        expect(mfa.failures).toBeUndefined();
+        expect(mfa.recovery).toEqual([]);
+        expect(mfa.enrolledAt.getTime()).toBeGreaterThanOrEqual(t0 - 1000);
+        expect(
+          keyring.open(mfa.secret, totpAad(u!._id.toHexString()))?.equals(base32Decode(b32)),
+        ).toBe(true);
+        expect(JSON.stringify(mfa)).not.toContain(base32Decode(b32).toString('base64'));
+      }
+      const m = await mfaOf(MFA_USER.email);
+      expect(m).not.toBeNull();
+      expect(m!.mfa).toBeUndefined();
+    });
+
+    it('next run converges: lastStep/failures dropped, enrolledAt renewed; MFA user enrolled elsewhere => MFA removed', async () => {
+      const before = await mfaOf(E2E_USER.email);
+      await users
+        .updateOne({ _id: before!._id }, { $set: { 'mfa.lastStep': 123, 'mfa.failures': 50 } })
+        .exec();
+      const mfaUser = await mfaOf(MFA_USER.email);
+      await users.updateOne({ _id: mfaUser!._id }, { $set: { mfa: before!.mfa } }).exec();
+      await new Promise((r) => setTimeout(r, 5));
+      await runMfa();
+      const after = (await mfaOf(E2E_USER.email))!.mfa!;
+      expect(after.lastStep).toBeUndefined();
+      expect(after.failures).toBeUndefined();
+      expect(after.enrolledAt.getTime()).toBeGreaterThan(before!.mfa!.enrolledAt.getTime());
+      expect((await mfaOf(MFA_USER.email))!.mfa).toBeUndefined();
+    });
+
+    it('X3 (empty seeds) => MFA removed from the admin and the E2E user', async () => {
+      await runMfa({ E2E_ADMIN_TOTP_SECRET: '', E2E_USER_TOTP_SECRET: '' });
+      expect((await mfaOf(ADMIN.email))!.mfa).toBeUndefined();
+      expect((await mfaOf(E2E_USER.email))!.mfa).toBeUndefined();
+    });
+
+    it('never prints a seed or the key', () => {
+      const all = output.join('\n');
+      expect(all).toMatch(/MFA enrolled/);
+      for (const v of [
+        ADMIN_SEED_B32,
+        USER_SEED_B32,
+        TEST_MFA_ENCRYPTION_KEYS,
+        MFA_USER.password,
+      ]) {
+        expect(all).not.toContain(v);
+      }
     });
   });
 

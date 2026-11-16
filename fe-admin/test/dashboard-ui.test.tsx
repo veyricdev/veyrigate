@@ -107,6 +107,10 @@ beforeEach(() => {
     TOKEN_REUSE_DETECTED: ok({ items: [], nextCursor: null }),
     SIGNING_KEY_ROTATED: ok({ items: [], nextCursor: null }),
     ADMIN_USER_LOCKED: ok({ items: [], nextCursor: null }),
+    ADMIN_USER_MFA_RESET: ok({ items: [], nextCursor: null }),
+    MFA_DISABLED: ok({ items: [], nextCursor: null }),
+    AUTH_MFA_THROTTLED: ok({ items: [], nextCursor: null }),
+    AUTH_MFA_LOCKED: ok({ items: [], nextCursor: null }),
   };
   audit.mockImplementation((async (o: AuditArg) => byAction[o.data.action]) as never);
 });
@@ -236,15 +240,19 @@ describe("IdP status", () => {
 });
 
 describe("recent security events", () => {
-  it("one request per action with limit 10, exactly 3", async () => {
+  it("one request per action with limit 10, exactly 7 (run 89: + the alerting MFA actions)", async () => {
     renderDashboard();
     await within(await eventsRegion()).findByText("No recent security events in this tenant.");
-    expect(audit).toHaveBeenCalledTimes(3);
+    expect(audit).toHaveBeenCalledTimes(7);
     expect(audit.mock.calls.map((c) => (c[0] as AuditArg).data)).toEqual(
       expect.arrayContaining([
         { action: "TOKEN_REUSE_DETECTED", limit: 10 },
         { action: "SIGNING_KEY_ROTATED", limit: 10 },
         { action: "ADMIN_USER_LOCKED", limit: 10 },
+        { action: "ADMIN_USER_MFA_RESET", limit: 10 },
+        { action: "MFA_DISABLED", limit: 10 },
+        { action: "AUTH_MFA_THROTTLED", limit: 10 },
+        { action: "AUTH_MFA_LOCKED", limit: 10 },
       ]),
     );
     expect(within(await eventsRegion()).getByText("Events recorded for this tenant.")).toBeTruthy();
@@ -272,6 +280,15 @@ describe("recent security events", () => {
     const text = document.body.textContent!;
     expect(text).not.toContain("203.0.113.9");
     expect(text).not.toContain("UA-SECRET-AGENT");
+  });
+
+  it("run 89: an MFA reset event is listed with its label and links to its audit filter", async () => {
+    byAction.ADMIN_USER_MFA_RESET = ok({ items: [ev("ADMIN_USER_MFA_RESET", "m1", "2026-10-23T01:00:00.000Z")], nextCursor: null });
+    renderDashboard();
+    const r = await eventsRegion();
+    const link = await within(r).findByRole("link", { name: /View in audit log/ });
+    expect(link.getAttribute("href")).toBe("/audit?action=ADMIN_USER_MFA_RESET");
+    expect(r.textContent).toContain("Security alert: two-step verification reset by an administrator");
   });
 
   it("each row links to /audit filtered by its action", async () => {
@@ -308,7 +325,7 @@ describe("recent security events", () => {
       fireEvent.click(within(alert).getByRole("button", { name: "Try again" }));
       await within(r).findByRole("list");
       expect(within(r).queryByRole("alert")).toBeNull();
-      expect(audit).toHaveBeenCalledTimes(4); // only the failed action was asked again
+      expect(audit).toHaveBeenCalledTimes(8); // only the failed action was asked again
     },
   );
 });
@@ -352,7 +369,7 @@ describe("isolation and refresh", () => {
       expect(resources).toHaveBeenCalledTimes(1);
       expect(keys).toHaveBeenCalledTimes(1);
       expect(health).toHaveBeenCalledTimes(1);
-      expect(audit).toHaveBeenCalledTimes(3);
+      expect(audit).toHaveBeenCalledTimes(7);
     } finally {
       vi.useRealTimers();
     }

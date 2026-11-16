@@ -375,6 +375,18 @@ export function createAdminApi(deps: AdminApiDeps) {
         schema: null,
       });
     },
+    /**
+     * Removes the user's second factor, then ends every session, refresh family and trusted device
+     * (`204`, idempotent). A 5xx may follow a removed factor (the revoke failed): `uncertain`.
+     */
+    resetUserMfa(ctx: AdminCallContext, userId: string): Promise<void> {
+      return call(ctx, {
+        method: "POST",
+        route: "/admin/users/:id/mfa/reset",
+        path: `${userPath(userId)}/mfa/reset`,
+        schema: null,
+      });
+    },
     listUserFamilies(ctx: AdminCallContext, params: UserPageParams): Promise<FamilyPage> {
       return call(ctx, {
         method: "GET",

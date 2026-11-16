@@ -19,6 +19,7 @@ import { generateToken } from '../../common/crypto/crypto.util';
 import { buildCsp } from '../../common/http/csp';
 import type { HttpReply, HttpRequest } from '../../common/http/http.types';
 import type { SessionConfig } from '../../config/configuration';
+import { MfaLoginService } from '../mfa/mfa-login.service';
 import { RateLimitService } from '../security/rate-limit/rate-limit.service';
 import { hostCookieName, SessionCookie } from '../sessions/session.cookie';
 import { CsrfGuard, CsrfService, formCsrfIdentity } from '../ui/csrf.service';
@@ -87,6 +88,7 @@ export class FederationController {
 
   constructor(
     private readonly federation: FederationService,
+    private readonly mfaLogin: MfaLoginService,
     private readonly sessionCookie: SessionCookie,
     private readonly rateLimit: RateLimitService,
     private readonly csrf: CsrfService,
@@ -163,6 +165,10 @@ export class FederationController {
         );
         return reply.redirect('/auth/link', 302);
       }
+      if (outcome.kind === 'mfa') {
+        this.mfaLogin.setTicketCookie(reply, outcome.ticketId);
+        return reply.redirect('/login/mfa', 302);
+      }
       this.sessionCookie.set(reply, outcome.sessionId);
       return reply.redirect(outcome.location, 302);
     } catch (err) {
@@ -232,13 +238,20 @@ export class FederationController {
         requestId: req.id,
       },
     );
+    if (outcome.kind === 'mfa') {
+      this.mfaLogin.setTicketCookie(reply, outcome.ticketId);
+      return reply.redirect('/login/mfa', 302);
+    }
     if (outcome.kind !== 'failed') this.sessionCookie.set(reply, outcome.sessionId);
     if (outcome.kind === 'linked') return reply.redirect(outcome.location, 302);
     return this.linkFailedPage(reply, outcome);
   }
 
   /** One generic page per failure class, whatever the account state (F8/F11). */
-  private linkFailedPage(reply: HttpReply, outcome: Exclude<LinkOutcome, { kind: 'linked' }>) {
+  private linkFailedPage(
+    reply: HttpReply,
+    outcome: Exclude<LinkOutcome, { kind: 'linked' | 'mfa' }>,
+  ) {
     if (outcome.kind === 'failed') {
       return reply.status(400).view('error.eta', {
         title: 'Account not linked',

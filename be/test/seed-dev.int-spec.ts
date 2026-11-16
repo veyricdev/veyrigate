@@ -302,6 +302,7 @@ describe('seed-dev: the seeded client works against the REAL /authorize + CORS p
         SessionCookie,
         AuditService,
         UserTenantService,
+        UserService,
         ClientCorsService,
         HtmlExceptionFilter,
         { provide: RedisService, useValue: new RedisService(redis) },

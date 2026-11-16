@@ -28,7 +28,7 @@ import { ResourceService, type Resource } from '../../resources/resource.service
 import { grantableScopes } from '../scope-policy';
 import { ConsentService } from '../consent/consent.service';
 import { TokenError } from './token.errors';
-import { TokenService, adminTargetForbidden } from './token.service';
+import { TokenService, adminMfaSatisfied, adminTargetForbidden } from './token.service';
 import { RefreshRotationError, RefreshTokenService } from './refresh-token.service';
 import { errorForLog } from '../../../common/logger/error-log';
 import {
@@ -376,6 +376,20 @@ export class TokenController {
   }
 
   /**
+   * The `admin` gate at `/token` (run 89, D89.5): with `ADMIN_MFA_REQUIRED`, an `admin` grant needs
+   * a second factor not older than the user's CURRENT enrollment. Other resources are not gated.
+   * DB faults propagate (the caller fails closed).
+   */
+  private async adminMfaMissing(
+    userId: string,
+    resource: string | undefined,
+    grant: { amr?: string[]; mfaAt?: number },
+  ): Promise<boolean> {
+    if (resource !== this.tokens.adminResource || !this.tokens.adminMfaRequired) return false;
+    return !adminMfaSatisfied(grant, await this.users.mfaEnrolledAt(userId));
+  }
+
+  /**
    * Current-state re-check of a code grant (run 35), in a fixed order; returns the first failing
    * reason or null. The tenant comes from the client document just re-read (INV-24). The resource
    * uses the same predicate as `decideConsent` (resolved by resourceId, DEBT-210). Consent uses
@@ -406,6 +420,7 @@ export class TokenController {
     if (!scopes.every((s) => grantable.has(s))) return 'scope_not_allowed';
     const subject = await this.subjectFailure(data.userId, fresh.tenantId);
     if (subject) return subject;
+    if (await this.adminMfaMissing(data.userId, data.resource, data)) return 'mfa_required';
     const consent = await this.consents.find(data.userId, clientId, data.resource);
     if (!this.consents.isCovered(consent, scopes, this.consents.currentVersions())) {
       return 'consent_revoked';
@@ -453,7 +468,7 @@ export class TokenController {
         // predicate and reason as the code grant, DEBT-210).
         // DEBT-214: and the current consent must still cover the family's scope at the current
         // policy/terms versions (same `isCovered` and reason as the code grant, Q35.5).
-        async (userId, resource, scope) => {
+        async (userId, resource, scope, mfaAt) => {
           const fresh = await this.clients.findByClientId(client.clientId);
           if (!fresh) return 'client_disabled';
           if (
@@ -464,6 +479,10 @@ export class TokenController {
           }
           const subject = await this.subjectFailure(userId, fresh.tenantId);
           if (subject) return subject;
+          // D89.5: a family without `mfaAt` (pre-run-89) or older than the enrollment => refused.
+          if (await this.adminMfaMissing(userId, resource, { amr: ['mfa'], mfaAt })) {
+            return 'mfa_required';
+          }
           const consent = await this.consents.find(userId, client.clientId, resource);
           if (!this.consents.isCovered(consent, scope, this.consents.currentVersions())) {
             return 'consent_revoked';

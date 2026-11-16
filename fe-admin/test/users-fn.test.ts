@@ -41,6 +41,7 @@ type Fns = Record<
   | "revokeUserSessions"
   | "revokeUserFamily"
   | "revokeUserConsent"
+  | "resetUserMfa"
   | "setUserRoles",
   Fn
 >;
@@ -75,6 +76,7 @@ const USER = {
   membershipStatus: "active",
   roles: [],
   createdAt: "2026-01-01T00:00:00.000Z",
+  mfa: { enrolled: false, enrolledAt: null },
 };
 const FAMILY = {
   familyId: "fam-1",
@@ -110,6 +112,7 @@ const WRITES = () =>
     ["revokeUserSessions", fns.revokeUserSessions, ID],
     ["revokeUserFamily", fns.revokeUserFamily, { userId: ID, familyId: "fam-1" }],
     ["revokeUserConsent", fns.revokeUserConsent, { userId: ID, consentId: CONSENT.id }],
+    ["resetUserMfa", fns.resetUserMfa, ID],
   ] as const;
 
 describe("server function methods", () => {
@@ -163,6 +166,7 @@ describe("endpoints", () => {
       `POST http://idp.test/admin/users/${ID}/sessions/revoke`,
       `POST http://idp.test/admin/users/${ID}/families/fam-1/revoke`,
       `DELETE http://idp.test/admin/users/${ID}/consents/${CONSENT.id}`,
+      `POST http://idp.test/admin/users/${ID}/mfa/reset`,
     ];
     for (const [i, [name, fn, data]] of WRITES().entries()) {
       beFetch.mockReset();
@@ -172,6 +176,18 @@ describe("endpoints", () => {
       expect(beFetch).toHaveBeenCalledTimes(1);
       expect(`${call().method} ${call().url}`).toBe(expected[i]);
       expect(call().body).toBeUndefined();
+    }
+  });
+});
+
+describe("mfa.enrolledAt (run 89 T5 nit): ISO date-time only", () => {
+  it("a BE Date as JSON passes; anything else is off contract", async () => {
+    const { AdminUserSchema } = await import("@/server/admin-api/schemas");
+    const fromBe = JSON.parse(JSON.stringify({ ...USER, mfa: { enrolled: true, enrolledAt: new Date("2026-10-05T08:09:10.123Z") } }));
+    expect(AdminUserSchema.safeParse(fromBe).success).toBe(true);
+    expect(AdminUserSchema.safeParse({ ...USER, mfa: { enrolled: false, enrolledAt: null } }).success).toBe(true);
+    for (const enrolledAt of ["yesterday", "2026-10-05", "<img src=x>", ""]) {
+      expect(AdminUserSchema.safeParse({ ...USER, mfa: { enrolled: true, enrolledAt } }).success).toBe(false);
     }
   });
 });
@@ -201,6 +217,7 @@ describe("error codes (BE wire shape)", () => {
   it.each([
     [400, { error: "invalid_request", error_description: "invalid cursor" }, "invalid_request"],
     [403, { error: "forbidden" }, "forbidden"],
+    [403, { error: "insufficient_scope" }, "forbidden"],
     [403, { error: "step_up_required", max_age: 0 }, "step_up_required"],
     [404, { error: "not_found" }, "not_found"],
     [409, { error: "conflict", error_description: "c" }, "conflict"],
@@ -290,6 +307,7 @@ describe("input validators (before the BE)", () => {
       [fns.lockUser, id],
       [fns.unlockUser, id],
       [fns.revokeUserSessions, id],
+      [fns.resetUserMfa, id],
       [fns.listUserFamilies, { userId: id }],
       [fns.listUserConsents, { userId: id }],
       [fns.revokeUserFamily, { userId: id, familyId: "fam-1" }],

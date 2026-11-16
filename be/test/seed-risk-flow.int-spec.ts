@@ -49,6 +49,8 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { UiController } from '../src/modules/ui/ui.controller';
+import { UiSessionHelper } from '../src/modules/ui/ui-session.helper';
+import { mfaTestProviders } from './helpers/mfa';
 
 /**
  * Run 30 QA (tester) — end-to-end proof for the seed re-point path of DEBT-137: a PUBLIC client
@@ -96,6 +98,8 @@ describe('db:seed re-point: a public client must never obtain aud=admin (DEBT-13
         };
       if (ns === 'client') return { secretGraceTtl: 60 };
       if (ns === 'consent') return { policyVersion: '1', termsVersion: '1' };
+      // Run 89 (D89.4): the admin MFA gate is off in hand-composed modules, like `full-app`.
+      if (ns === 'mfa') return { adminRequired: false };
       throw new Error(`Unexpected config namespace: ${ns}`);
     },
   } as unknown as ConfigService;
@@ -123,6 +127,8 @@ describe('db:seed re-point: a public client must never obtain aud=admin (DEBT-13
         AuthorizationCodeService,
         ConsentService,
         CsrfService,
+        UiSessionHelper,
+        ...mfaTestProviders(),
         CsrfGuard,
         TokenService,
         RefreshTokenService,

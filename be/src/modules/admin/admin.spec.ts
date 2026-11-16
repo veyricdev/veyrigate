@@ -343,7 +343,12 @@ describe('admin OpenAPI response schemas (DEBT-290/294)', () => {
     const now = new Date();
     expect(keys('AdminUserViewDto')).toEqual(
       Object.keys(
-        toAdminUser({ sub: 'u', email: 'a@b.c' } as never, { status: 'active', roles: [] }, now),
+        toAdminUser(
+          { sub: 'u', email: 'a@b.c' } as never,
+          { status: 'active', roles: [] },
+          now,
+          null,
+        ),
       ).sort(),
     );
     expect(keys('AdminFamilyViewDto')).toEqual(

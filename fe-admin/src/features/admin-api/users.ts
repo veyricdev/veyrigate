@@ -43,6 +43,11 @@ export const revokeUserSessions = createServerFn({ method: "POST" })
   .inputValidator(UserIdSchema)
   .handler(({ data }) => adminCall((api, ctx) => api.revokeUserSessions(ctx, data)));
 
+/** Removes the second factor, then ends every session (idempotent: a 5xx may follow a removed factor). */
+export const resetUserMfa = createServerFn({ method: "POST" })
+  .inputValidator(UserIdSchema)
+  .handler(({ data }) => adminCall((api, ctx) => api.resetUserMfa(ctx, data)));
+
 /** Idempotent. */
 export const revokeUserFamily = createServerFn({ method: "POST" })
   .inputValidator(RevokeFamilyInput)

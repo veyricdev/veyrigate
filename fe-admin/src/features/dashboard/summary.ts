@@ -13,8 +13,17 @@ export const countText = (page: { items: unknown[]; nextCursor: string | null })
 /**
  * Security events read for the dashboard, one request each (the BE filters one action at a time).
  * Not `AUTH_ACCOUNT_LOCKED`: it carries no tenant (DEBT-140), so it is never in a tenant's audit.
+ * Run 89: the alerting second-factor actions (BE `ALERT_ACTIONS`, tenant-tagged by DEBT-645).
  */
-export const SECURITY_ACTIONS = ["TOKEN_REUSE_DETECTED", "SIGNING_KEY_ROTATED", "ADMIN_USER_LOCKED"] as const;
+export const SECURITY_ACTIONS = [
+  "TOKEN_REUSE_DETECTED",
+  "SIGNING_KEY_ROTATED",
+  "ADMIN_USER_LOCKED",
+  "ADMIN_USER_MFA_RESET",
+  "MFA_DISABLED",
+  "AUTH_MFA_THROTTLED",
+  "AUTH_MFA_LOCKED",
+] as const;
 export const RECENT_LIMIT = 10;
 
 /** Newest first across actions (ties: `eventId`, descending), at most {@link RECENT_LIMIT}. */

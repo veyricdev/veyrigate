@@ -53,6 +53,10 @@ export function x3BeEnv(): Record<string, string> {
     ISSUER: X3_ISSUER,
     SESSION_COOKIE_SECURE: "true",
     E2E_X3: "1",
+    // Run 89 (T6 AC6): X3 signs `E2E_USER` in with a password only => the seed turns MFA off for
+    // the admin and `E2E_USER` (the next default E2E run enrolls them again).
+    E2E_ADMIN_TOTP_SECRET: "",
+    E2E_USER_TOTP_SECRET: "",
   };
 }
 

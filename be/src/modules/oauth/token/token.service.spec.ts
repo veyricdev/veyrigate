@@ -12,7 +12,12 @@ import type { AuditService } from '../../security/audit/audit.service';
 import { AuditAction } from '../../security/audit/audit-action.enum';
 import type { Client } from '../../clients/client.service';
 import type { AuthorizationCodeData } from '../code/authorization-code.service';
-import { adminResourceIdentifier, isAdminCapableClient, TokenService } from './token.service';
+import {
+  adminMfaSatisfied,
+  adminResourceIdentifier,
+  isAdminCapableClient,
+  TokenService,
+} from './token.service';
 import { TokenError } from './token.errors';
 
 const ISSUER = 'http://localhost:4000';
@@ -372,5 +377,34 @@ describe('TokenService (B4.4 Task 2/3: claims + refresh minting)', () => {
 
   it('adminResourceIdentifier derives /admin/ from issuer', () => {
     expect(adminResourceIdentifier('http://localhost:4000')).toBe('http://localhost:4000/admin/');
+  });
+});
+
+/** Run 89 T3 (D89.5): the `admin` resource predicate, one table. */
+describe('adminMfaSatisfied (D89.5)', () => {
+  const enrolledAt = new Date(1_800_000_000_000);
+  const at = enrolledAt.getTime();
+  it.each<[string, { amr?: string[]; mfaAt?: number }, Date | null, boolean]>([
+    [
+      'amr mfa, mfaAt after enrollment',
+      { amr: ['pwd', 'otp', 'mfa'], mfaAt: at + 1 },
+      enrolledAt,
+      true,
+    ],
+    ['amr mfa, mfaAt == enrolledAt', { amr: ['fed', 'mfa'], mfaAt: at }, enrolledAt, true],
+    [
+      'amr mfa, mfaAt before the current enrollment',
+      { amr: ['pwd', 'otp', 'mfa'], mfaAt: at - 1 },
+      enrolledAt,
+      false,
+    ],
+    ['no mfa in amr', { amr: ['pwd'], mfaAt: at + 1 }, enrolledAt, false],
+    ['otp without mfa', { amr: ['pwd', 'otp'], mfaAt: at + 1 }, enrolledAt, false],
+    ['no amr at all (code minted directly)', { mfaAt: at + 1 }, enrolledAt, false],
+    ['no mfaAt', { amr: ['pwd', 'otp', 'mfa'] }, enrolledAt, false],
+    ['user no longer enrolled', { amr: ['pwd', 'otp', 'mfa'], mfaAt: at + 1 }, null, false],
+    ['nothing', {}, null, false],
+  ])('%s => %s', (_n, grant, enrolled, expected) => {
+    expect(adminMfaSatisfied(grant, enrolled)).toBe(expected);
   });
 });

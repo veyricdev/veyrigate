@@ -2,6 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createServer, type AddressInfo, type Server } from 'node:net';
 import { join } from 'node:path';
+import { TEST_MFA_ENCRYPTION_KEYS } from './helpers/mfa';
 
 /**
  * DEBT-254 / DEBT-256: the BUILT DB CLIs (`pnpm -C be build`). The target is a closed local port
@@ -38,6 +39,7 @@ const env = (mongoUri = URI) => ({
   DEV_SEED_EMAIL: 'dev@fixture.test',
   DEV_SEED_PASSWORD: 'cli-dry-run-dev-pw',
   CSRF_SECRET: 'cli-dry-run-csrf-not-a-real-secret',
+  MFA_ENCRYPTION_KEYS: TEST_MFA_ENCRYPTION_KEYS,
   RATE_LIMIT_WINDOW: '60',
   RATE_LIMIT_MAX: '100000',
   CLIENT_AUTH_FAIL_IP_MAX: '100000',

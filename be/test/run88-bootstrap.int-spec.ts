@@ -20,6 +20,7 @@ import {
 import { DEFAULT_TENANT_ID } from '../src/modules/identity/tenant.service';
 import { adminResourceIdentifier } from '../src/modules/oauth/token/token.service';
 import { INT_SETUP_TIMEOUT_MS, settled, withDbSuffix } from './int-hooks';
+import { TEST_MFA_ENCRYPTION_KEYS } from './helpers/mfa';
 
 /**
  * Run 88 T1 (DEBT-164/165, D88.2–D88.14): `db:bootstrap` ensures the production admin control plane
@@ -498,6 +499,7 @@ describe('run 88 T1: built bootstrap CLI (no connection paths, AC7/AC10)', () =>
     SMTP_URL: 'smtp://127.0.0.1:9',
     // DEBT-165: no ADMIN_SEED_EMAIL in a production env.
     CSRF_SECRET: 'cli-bootstrap-csrf-not-a-real-secret',
+    MFA_ENCRYPTION_KEYS: TEST_MFA_ENCRYPTION_KEYS,
     RATE_LIMIT_WINDOW: '60',
     RATE_LIMIT_MAX: '100000',
     CLIENT_AUTH_FAIL_IP_MAX: '100000',

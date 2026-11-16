@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type { AppConfig, TokenConfig } from '../../../config/configuration';
+import type { AppConfig, MfaConfig, TokenConfig } from '../../../config/configuration';
 import { AuditAction } from '../../security/audit/audit-action.enum';
 import { AuditService } from '../../security/audit/audit.service';
 import { ClientService, type Client, mintedBeforeDisable } from '../../clients/client.service';
@@ -16,7 +16,12 @@ import { AuthorizationCodeService } from '../code/authorization-code.service';
 import { ConsentService } from '../consent/consent.service';
 import { SessionService } from '../../sessions/session.service';
 import { UserTenantService } from '../../identity/user-tenant.service';
-import { adminResourceIdentifier, adminTargetForbidden } from '../token/token.service';
+import { UserService } from '../../identity/user.service';
+import {
+  adminMfaSatisfied,
+  adminResourceIdentifier,
+  adminTargetForbidden,
+} from '../token/token.service';
 import { grantableScopes } from '../scope-policy';
 
 /** Raw `/authorize` query parameters (already string-typed by the HTTP layer). */
@@ -49,6 +54,8 @@ export interface SessionView {
   ref: string;
   /** Authentication methods of the session (DEBT-030); carried into the code, then the ID token. */
   amr?: string[];
+  /** Second-factor time of the session (run 89, D89.5). */
+  mfaAt?: number;
 }
 
 /**
@@ -83,7 +90,15 @@ export type AuthorizeOutcome =
       refreshTtlSec?: number;
     }
   /** Consent already satisfied (or just granted): a code was issued, redirect it to the RP. */
-  | { kind: 'code_issued'; redirectUri: string; code: string; state?: string };
+  | { kind: 'code_issued'; redirectUri: string; code: string; state?: string }
+  /**
+   * Resource `admin` and the user has no second factor yet (run 89, D89.6): 403 page with a link
+   * to `/account/mfa`, which returns to `/authorize?request_id=<requestId>` (a login context).
+   */
+  | { kind: 'mfa_required'; requestId: string };
+
+/** Admin gate decision (D89.5/D89.6): ok, sign in again (enrolled), or enroll first. */
+type AdminGate = 'ok' | 'reauth' | 'enroll';
 
 /**
  * The `/authorize` parameters this IdP recognises (DEBT-204/205). RFC 6749 §3.1: a recognised
@@ -148,6 +163,7 @@ export class AuthorizeService {
     private readonly sessions: SessionService,
     private readonly config: ConfigService,
     private readonly memberships: UserTenantService,
+    private readonly users: UserService,
   ) {
     this.issuer = config.getOrThrow<AppConfig>('app').issuer;
     this.adminAud = adminResourceIdentifier(this.issuer);
@@ -330,6 +346,31 @@ export class AuthorizeService {
       // here. `access_denied` is the same code as a user refusal: the RP learns no reason.
       await this.assertMember(session.userId, client, audit);
 
+      // Run 89 (D89.5/D89.6): `admin` needs a second factor not older than the current enrollment,
+      // decided before consent. Enrolled => sign in again through step 2 (`reauthAfter = now`, so
+      // the old session cannot resume it); not enrolled => enroll first. Never a code here.
+      const gate = await this.adminGate(resource, session);
+      if (gate !== 'ok') {
+        if (prompt.has('none')) {
+          throw new AuthorizeRedirectError('login_required', 'Authentication is required.');
+        }
+        const { requestId } = await this.createContext(
+          'login',
+          client,
+          redirectUri,
+          scope,
+          resource,
+          params,
+          gate === 'reauth' ? Date.now() : undefined,
+          undefined,
+          bindingHash,
+        );
+        await this.recordAuthorize(client, audit, session.userId, `mfa_${gate}`);
+        return gate === 'reauth'
+          ? { kind: 'login_required', requestId }
+          : { kind: 'mfa_required', requestId };
+      }
+
       // Signed in + request valid (B4.2, spec section 9.4). Decide consent.
       // The owner is `session.userId` (authenticated), never any client-supplied value.
       const requestedScopes = scope.split(' ').filter(Boolean);
@@ -439,9 +480,11 @@ export class AuthorizeService {
       if (!resource) return null;
     }
     // DEBT-116 (MT2): the membership may have been suspended/removed since the screen rendered.
-    // Re-check against the re-resolved client's tenant BEFORE any consent write or code.
+    // Re-check against the re-resolved client's tenant BEFORE any consent write or code. Run 89:
+    // the `admin` gate too (an MFA reset while the screen was open).
     try {
       await this.assertMember(session.userId, client, audit);
+      await this.assertAdminMfa(ctx.resource, session);
     } catch (err) {
       if (err instanceof AuthorizeRedirectError) {
         err.redirectUri = ctx.redirectUri;
@@ -465,6 +508,26 @@ export class AuthorizeService {
     return { redirectUri: ctx.redirectUri, code, state: ctx.originalState };
   }
 
+  /**
+   * D89.5 at `/authorize`: `ADMIN_MFA_REQUIRED` + resource `admin` => the session's second factor
+   * must cover the CURRENT enrollment. Read lazily (only for `admin`); a DB fault propagates.
+   */
+  private async adminGate(resource: string | undefined, session: SessionView): Promise<AdminGate> {
+    if (resource !== this.adminAud || !this.config.getOrThrow<MfaConfig>('mfa').adminRequired) {
+      return 'ok';
+    }
+    const enrolledAt = await this.users.mfaEnrolledAt(session.userId);
+    if (adminMfaSatisfied(session, enrolledAt)) return 'ok';
+    return enrolledAt ? 'reauth' : 'enroll';
+  }
+
+  /** Every code mint re-applies the gate (defense in depth): unsatisfied => `login_required`. */
+  private async assertAdminMfa(resource: string | undefined, session: SessionView): Promise<void> {
+    if ((await this.adminGate(resource, session)) !== 'ok') {
+      throw new AuthorizeRedirectError('login_required', 'Re-authentication is required.');
+    }
+  }
+
   /** Mint an authorization code for a validated fresh request (covered path, no stored context). */
   private async issueCode(
     client: Client,
@@ -474,6 +537,7 @@ export class AuthorizeService {
     params: AuthorizeParams,
     session: SessionView,
   ): Promise<string> {
+    await this.assertAdminMfa(resource, session);
     const { code } = await this.codes.create({
       clientId: client.clientId,
       redirectUri,
@@ -485,6 +549,7 @@ export class AuthorizeService {
       authTime: session.authTime,
       sessionRef: session.ref,
       ...(session.amr ? { amr: session.amr } : {}),
+      ...(session.mfaAt !== undefined ? { mfaAt: session.mfaAt } : {}),
     });
     // Track this RP against the session so a later logout can notify it (front-channel, B4.7).
     await this.sessions.recordClientForSession(session.ref, client.clientId);
@@ -496,6 +561,7 @@ export class AuthorizeService {
     ctx: AuthorizeRequestContext,
     session: SessionView,
   ): Promise<string> {
+    await this.assertAdminMfa(ctx.resource, session);
     const { code } = await this.codes.create({
       clientId: ctx.clientId,
       redirectUri: ctx.redirectUri,
@@ -507,6 +573,7 @@ export class AuthorizeService {
       authTime: session.authTime,
       sessionRef: session.ref,
       ...(session.amr ? { amr: session.amr } : {}),
+      ...(session.mfaAt !== undefined ? { mfaAt: session.mfaAt } : {}),
     });
     // Track this RP against the session so a later logout can notify it (front-channel, B4.7).
     await this.sessions.recordClientForSession(session.ref, ctx.clientId);

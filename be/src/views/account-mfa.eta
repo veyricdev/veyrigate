@@ -1,0 +1,22 @@
+<h1><%= it.title %></h1><% if (it.error) { %><p role="alert"><%= it.error %></p><% } %>
+<% if (it.setup) { %>
+<p>Add this account to your authenticator app, then enter the 6-digit code it shows.</p>
+<p>Setup key: <code><%= it.key %></code></p>
+<p><a href="<%= it.otpauth %>">Open in an authenticator app</a></p>
+<form method="post" action="/account/mfa/confirm"><input type="hidden" name="_csrf" value="<%= it.csrf %>"><% if (it.returnTo) { %><input type="hidden" name="returnTo" value="<%= it.returnTo %>"><% } %><label>Code<input name="code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="16" required></label><button type="submit">Turn on</button></form>
+<p>Every session, including this one, is signed out once it is on.</p>
+<% } else if (it.enrolled) { %>
+<p>Two-step verification is on since <%= it.enrolledAt %>. Recovery codes left: <%= it.recoveryLeft %>.</p>
+<% if (!it.hasPassword && !it.fresh) { %><p><%= it.noPasswordMessage %></p><% } else { %>
+<h2>Turn off</h2>
+<form method="post" action="/account/mfa/disable"><input type="hidden" name="_csrf" value="<%= it.csrf %>"><% if (it.hasPassword) { %><label>Current password<input name="current_password" type="password" maxlength="128" autocomplete="current-password" required></label><% } %><label>Authenticator code or recovery code<input name="code" type="text" autocomplete="one-time-code" maxlength="32" required></label><button type="submit">Turn off two-step verification</button></form>
+<h2>New recovery codes</h2>
+<form method="post" action="/account/mfa/recovery"><input type="hidden" name="_csrf" value="<%= it.csrf %>"><% if (it.hasPassword) { %><label>Current password<input name="current_password" type="password" maxlength="128" autocomplete="current-password" required></label><% } %><label>Authenticator code or recovery code<input name="code" type="text" autocomplete="one-time-code" maxlength="32" required></label><button type="submit">Create new recovery codes</button></form>
+<% } %>
+<% } else { %>
+<p>Two-step verification is off. Turn it on to sign in with your password and a code from an authenticator app.</p>
+<% if (!it.hasPassword && !it.fresh) { %><p><%= it.noPasswordMessage %></p><% } else { %>
+<form method="post" action="/account/mfa/start"><input type="hidden" name="_csrf" value="<%= it.csrf %>"><% if (it.returnTo) { %><input type="hidden" name="returnTo" value="<%= it.returnTo %>"><% } %><% if (it.hasPassword && !it.fresh) { %><label>Current password<input name="current_password" type="password" maxlength="128" autocomplete="current-password" required></label><% } %><button type="submit">Set up two-step verification</button></form>
+<% } %>
+<% } %>
+<p><a href="/">Back</a></p>

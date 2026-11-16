@@ -23,7 +23,14 @@ describe('admin-recover parseRecoverArgs', () => {
       unlock: false,
       allowExistingSuperAdmin: false,
       dryRun: false,
+      resetMfa: false,
     });
+  });
+
+  it('run 89 T4: --reset-mfa is an allowlisted switch', () => {
+    expect(parseRecoverArgs(argv(...OK, '--reset-mfa'))).toMatchObject({ resetMfa: true });
+    expect(() => parseRecoverArgs(argv(...OK, '--reset-mfa', '--reset-mfa'))).toThrow(/repeated/);
+    expect(() => parseRecoverArgs(argv(...OK, '--reset-mfa=yes'))).toThrow(/unknown argument/);
   });
 
   it('accepts the three switches and pnpm `--`', () => {

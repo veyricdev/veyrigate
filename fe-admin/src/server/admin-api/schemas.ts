@@ -76,6 +76,8 @@ export const AdminUserSchema = z.object({
   membershipStatus: z.enum(["active", "suspended"]),
   roles: z.array(z.string()),
   createdAt: z.string().nullable(),
+  // Run 89 T4 AC4: second-factor state only (never a secret or recovery code).
+  mfa: z.object({ enrolled: z.boolean(), enrolledAt: z.iso.datetime().nullable() }), // BE `Date` => toISOString (UTC `Z`)
 });
 export type AdminUser = z.infer<typeof AdminUserSchema>;
 

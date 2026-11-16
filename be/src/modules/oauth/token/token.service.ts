@@ -4,7 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import type { Model } from 'mongoose';
 import { Types } from 'mongoose';
 import { randomUUID } from 'node:crypto';
-import type { AppConfig, TokenConfig } from '../../../config/configuration';
+import type { AppConfig, MfaConfig, TokenConfig } from '../../../config/configuration';
 import { generateToken, sha256 } from '../../../common/crypto/crypto.util';
 import { TokenSigner } from '../../keys/token-signer';
 import { AuditAction } from '../../security/audit/audit-action.enum';
@@ -55,6 +55,24 @@ export function adminTargetForbidden(
   return resource === adminIdentifier && !isAdminCapableClient(client);
 }
 
+/**
+ * The `admin` resource gate (run 89, D89.5), one predicate for `/authorize`, `/token` (code) and
+ * refresh: the grant carries a completed second factor (`'mfa'` in `amr` + `mfaAt`) AND the user is
+ * still enrolled AND that factor is not older than the CURRENT enrollment (a session, code or family
+ * from before a reset + re-enrollment is useless for `admin`). `enrolledAt` null = not enrolled.
+ */
+export function adminMfaSatisfied(
+  grant: { amr?: readonly string[]; mfaAt?: number },
+  enrolledAt: Date | null,
+): boolean {
+  return (
+    !!grant.amr?.includes('mfa') &&
+    typeof grant.mfaAt === 'number' &&
+    enrolledAt !== null &&
+    grant.mfaAt >= enrolledAt.getTime()
+  );
+}
+
 /** The successful `/token` response body (RFC 6749 ?5.1 + OIDC). */
 export interface TokenResponse {
   access_token: string;
@@ -91,7 +109,7 @@ export class TokenService {
     @InjectModel('RefreshToken') private readonly refreshTokens: Model<Record<string, unknown>>,
     private readonly signer: TokenSigner,
     private readonly audit: AuditService,
-    config: ConfigService,
+    private readonly config: ConfigService,
   ) {
     this.issuer = config.getOrThrow<AppConfig>('app').issuer;
     const token = config.getOrThrow<TokenConfig>('token');
@@ -189,6 +207,8 @@ export class TokenService {
         issuedAt: now,
         expiresAt: new Date(now.getTime() + this.refreshTokenTtl * 1000),
         ...(data.sessionRef !== undefined ? { sessionRef: data.sessionRef } : {}),
+        // D89.5: the family carries the code's second-factor time (the refresh gate reads it).
+        ...(data.mfaAt !== undefined ? { mfaAt: data.mfaAt } : {}),
         ip: audit.ip,
         userAgent: audit.userAgent,
       });
@@ -283,6 +303,14 @@ export class TokenService {
     return { accessToken, ...(idToken ? { idToken } : {}) };
   }
 
+  /**
+   * `ADMIN_MFA_REQUIRED` (D89.4/D89.5), read when an `admin` grant is decided (not at construction).
+   * A config without the `mfa` namespace throws: fail-closed, never "not required".
+   */
+  get adminMfaRequired(): boolean {
+    return this.config.getOrThrow<MfaConfig>('mfa').adminRequired;
+  }
+
   /** Access-token lifetime in seconds (for the refresh grant's `expires_in`). */
   get accessTokenLifetime(): number {
     return this.accessTokenTtl;
@@ -366,6 +394,7 @@ export class TokenService {
     expiresAt: Date;
     _id?: Types.ObjectId;
     sessionRef?: string;
+    mfaAt?: number;
     ip?: string;
     userAgent?: string;
   }): Promise<{ token: string; _id: Types.ObjectId }> {
@@ -383,6 +412,7 @@ export class TokenService {
       issuedAt: input.issuedAt,
       expiresAt: input.expiresAt,
       ...(input.sessionRef !== undefined ? { sessionRef: input.sessionRef } : {}),
+      ...(input.mfaAt !== undefined ? { mfaAt: input.mfaAt } : {}),
       ...(input.ip !== undefined ? { ip: input.ip } : {}),
       ...(input.userAgent !== undefined ? { userAgent: input.userAgent } : {}),
     });

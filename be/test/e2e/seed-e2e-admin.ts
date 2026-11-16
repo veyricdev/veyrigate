@@ -18,6 +18,9 @@ import {
   type ClientCredential,
 } from '../../src/modules/clients/client-credential.service';
 import type { ConfigService } from '@nestjs/config';
+import { base32Decode } from '../../src/modules/mfa/base32';
+import { MfaKeyring, parseMfaKeys } from '../../src/modules/mfa/mfa-crypto';
+import { enrollForTest } from '../helpers/mfa';
 
 /**
  * E2E-only admin seed (run 39 Task 0, Q-39.1): `pnpm -C be seed:e2e-admin`, run by the Playwright
@@ -38,6 +41,11 @@ import type { ConfigService } from '@nestjs/config';
  *      Every refresh token of that user is deleted (DEBT-608).
  *   5. (run 73, X3) when `E2E_X3=1`, two public clients `x3-alpha`/`x3-beta` (fe-sso-test shape)
  *      bound to the X3 https origins (same-site / cross-site RP of the cookie topology suite).
+ *   6. (run 89 T6 AC3) second factor converged every run: `E2E_ADMIN_TOTP_SECRET` /
+ *      `E2E_USER_TOTP_SECRET` set => that user is enrolled with the fixed base32 seed, sealed with
+ *      `MFA_ENCRYPTION_KEYS` (no `lastStep`, no failures, `enrolledAt = now`, no recovery code);
+ *      empty/unset => `mfa` removed (X3 signs `E2E_USER` in with a password only). The
+ *      `E2E_MFA_USER_*` user (enroll / reset specs) is converged like step 4 and always WITHOUT MFA.
  * Nothing secret is written to stdout/stderr.
  */
 
@@ -104,6 +112,44 @@ export function readE2eUserConfig(
   return { email, password };
 }
 
+export interface E2eMfaConfig {
+  keyring: MfaKeyring;
+  adminSecret?: Buffer;
+  userSecret?: Buffer;
+  mfaUser?: E2eUserConfig;
+}
+
+/** Run 89 (T6 AC3): seeds + keyring, read before connecting. Never echoes a seed or a key. */
+export function readE2eMfaConfig(env: Record<string, string | undefined>): E2eMfaConfig {
+  const keys = env.MFA_ENCRYPTION_KEYS;
+  if (!keys) throw new Error('seed-e2e-admin: MFA_ENCRYPTION_KEYS is required');
+  const seed = (name: string): Buffer | undefined => {
+    const raw = env[name];
+    if (!raw) return undefined;
+    const b = base32Decode(raw);
+    if (b.length < 16) throw new Error(`seed-e2e-admin: ${name} must be base32 of >= 16 bytes`);
+    return b;
+  };
+  const mfaUser = readE2eUserConfig({
+    ...env,
+    E2E_USER_EMAIL: env.E2E_MFA_USER_EMAIL,
+    E2E_USER_PASSWORD: env.E2E_MFA_USER_PASSWORD,
+  });
+  if (
+    mfaUser &&
+    env.E2E_USER_EMAIL &&
+    normalizeEmail(mfaUser.email) === normalizeEmail(env.E2E_USER_EMAIL)
+  ) {
+    throw new Error('seed-e2e-admin: E2E_MFA_USER_EMAIL must differ from E2E_USER_EMAIL');
+  }
+  return {
+    keyring: new MfaKeyring(parseMfaKeys(keys)),
+    adminSecret: seed('E2E_ADMIN_TOTP_SECRET'),
+    userSecret: seed('E2E_USER_TOTP_SECRET'),
+    mfaUser,
+  };
+}
+
 /** X3 RPs (run 73): fe-sso-test's public PKCE shape on `app.alpha.localhost` / `app.beta.localhost`. */
 export function buildX3Clients(): Omit<Client, 'frontchannelLogoutUri'>[] {
   // The template's resource ids are issuer-independent; only the client part is reused.
@@ -128,6 +174,7 @@ export async function seedE2eAdmin(
   feAdminSecret: string,
   e2eUser?: E2eUserConfig,
   x3 = false,
+  mfa?: E2eMfaConfig,
 ): Promise<void> {
   // Second guard before any write (a caller may reach this without `assertE2eSeedTarget`).
   if (nodeEnv !== 'test') throw new Error('seed-e2e-admin: only NODE_ENV=test');
@@ -168,6 +215,38 @@ export async function seedE2eAdmin(
   if (e2eUser) await seedE2eUser(connection, e2eUser);
   else console.log('seed-e2e-admin: E2E user skipped (E2E_USER_EMAIL/E2E_USER_PASSWORD unset)');
   if (x3) await seedX3Clients(connection);
+  if (mfa) {
+    await convergeMfa(connection, mfa.keyring, cfg.email, mfa.adminSecret, 'admin');
+    if (e2eUser)
+      await convergeMfa(connection, mfa.keyring, e2eUser.email, mfa.userSecret, 'E2E user');
+    if (mfa.mfaUser) {
+      await seedE2eUser(connection, mfa.mfaUser);
+      await convergeMfa(connection, mfa.keyring, mfa.mfaUser.email, undefined, 'E2E MFA user');
+    }
+  }
+}
+
+/** Run 89 (T6 AC3): enroll with `secret` (fresh `enrolledAt`, no `lastStep`, no recovery codes) or remove `mfa`. */
+async function convergeMfa(
+  connection: Connection,
+  keyring: MfaKeyring,
+  email: string,
+  secret: Buffer | undefined,
+  who: string,
+): Promise<void> {
+  const userModel = connection.models.User ?? connection.model('User');
+  const user = await userModel
+    .findOne({ email: normalizeEmail(email) })
+    .lean<{ _id: Types.ObjectId } | null>()
+    .exec();
+  if (!user) throw new Error(`seed-e2e-admin: ${who} missing before the MFA step`);
+  if (secret) {
+    await enrollForTest(connection, keyring, user._id.toHexString(), secret, { codes: [] });
+    console.log(`seed-e2e-admin: ${who} MFA enrolled`);
+  } else {
+    await upsert(() => userModel.updateOne({ _id: user._id }, { $unset: { mfa: 1 } }).exec());
+    console.log(`seed-e2e-admin: ${who} MFA off`);
+  }
 }
 
 async function seedX3Clients(connection: Connection): Promise<void> {
@@ -295,6 +374,7 @@ async function main(): Promise<void> {
   const env = validateEnv(process.env);
   const admin = readAdminSeedConfig(process.env);
   const e2eUser = readE2eUserConfig(process.env);
+  const mfa = readE2eMfaConfig(process.env);
 
   const connection = await mongoose
     .createConnection(mongoUri, { autoIndex: false, serverSelectionTimeoutMS: 5000 })
@@ -311,6 +391,7 @@ async function main(): Promise<void> {
       feAdminSecret,
       e2eUser,
       process.env.E2E_X3 === '1',
+      mfa,
     );
   } finally {
     await connection.close();

@@ -218,6 +218,58 @@ describe("table", () => {
     expect(screen.getAllByText(/Security alert/)).toHaveLength(2);
   });
 
+  it("run 89: the alerting two-step verification events are marked; the others are not", async () => {
+    const mfa = (eventId: string, action: AuditEvent["action"]) => ({ ...EVENT, eventId, action });
+    list.mockResolvedValue(
+      page([
+        mfa("a", "ADMIN_USER_MFA_RESET"),
+        mfa("b", "MFA_DISABLED"),
+        mfa("c", "AUTH_MFA_THROTTLED"),
+        mfa("d", "AUTH_MFA_LOCKED"),
+        { ...mfa("e", "ADMIN_USER_MFA_RESET"), result: "failure" as const, reason: "revoke_failed" },
+        ...(["AUTH_MFA_FAILED", "MFA_ENROLLED", "MFA_RECOVERY_REGENERATED", "MFA_RECOVERY_USED", "AUTH_REAUTH_FAILED"] as const).map((a) =>
+          mfa(a, a),
+        ),
+      ]),
+    );
+    renderAt("/audit");
+    const all = await rows();
+    const labelOf = (i: number) => within(all[i]!).queryByText(/Security alert/)?.textContent ?? null;
+    expect([0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(labelOf)).toEqual([
+      "Security alert: two-step verification reset by an administrator",
+      "Security alert: two-step verification turned off",
+      "Security alert: repeated wrong two-step verification codes",
+      "Security alert: two-step verification locked after wrong codes",
+      "Security alert: two-step verification reset refused or incomplete",
+      null,
+      null,
+      null,
+      null,
+      null,
+    ]);
+  });
+
+  it("run 89: every new action is a filter option and survives the URL", async () => {
+    const actions = [
+      "AUTH_MFA_FAILED",
+      "AUTH_MFA_THROTTLED",
+      "MFA_ENROLLED",
+      "MFA_DISABLED",
+      "MFA_RECOVERY_REGENERATED",
+      "MFA_RECOVERY_USED",
+      "AUTH_REAUTH_FAILED",
+      "ADMIN_USER_MFA_RESET",
+      "AUTH_MFA_LOCKED",
+    ];
+    renderAt("/audit?action=ADMIN_USER_MFA_RESET");
+    await table();
+    const select = screen.getByLabelText<HTMLSelectElement>("Action");
+    expect(select.value).toBe("ADMIN_USER_MFA_RESET");
+    expect(lastCall().data.action).toBe("ADMIN_USER_MFA_RESET");
+    const options = [...select.options].map((o) => o.value);
+    for (const a of actions) expect(options).toContain(a);
+  });
+
   it("HTML in metadata, user agent and reason is rendered as text (no new img/script)", async () => {
     const xss = '<img src=x onerror="window.__pwned=1">';
     list.mockResolvedValue(

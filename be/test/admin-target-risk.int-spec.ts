@@ -49,7 +49,9 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { UiController } from '../src/modules/ui/ui.controller';
+import { UiSessionHelper } from '../src/modules/ui/ui-session.helper';
 import { withDbSuffix } from './int-hooks';
+import { mfaTestProviders } from './helpers/mfa';
 
 /**
  * Run 30 retest (tester): variants of the DEBT-172 runtime guard not covered by
@@ -104,6 +106,8 @@ describe('run 30 QA (tester): DEBT-172 runtime guard variants', () => {
         };
       if (ns === 'client') return { secretGraceTtl: 60 };
       if (ns === 'consent') return { policyVersion: '1', termsVersion: '1' };
+      // Run 89 (D89.4): the admin MFA gate is off in hand-composed modules, like `full-app`.
+      if (ns === 'mfa') return { adminRequired: false };
       throw new Error(`Unexpected config namespace: ${ns}`);
     },
   } as unknown as ConfigService;
@@ -163,6 +167,8 @@ describe('run 30 QA (tester): DEBT-172 runtime guard variants', () => {
         AuthorizationCodeService,
         ConsentService,
         CsrfService,
+        UiSessionHelper,
+        ...mfaTestProviders(),
         CsrfGuard,
         TokenService,
         RefreshTokenService,

@@ -1,0 +1,1 @@
+<h1><%= it.title %></h1><p>The admin console requires two-step verification. Set up an authenticator app on your account first; you will then sign in again with a code and continue here.</p><p><a href="<%= it.enrollUrl %>">Set up two-step verification</a></p>

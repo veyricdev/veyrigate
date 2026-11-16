@@ -8,6 +8,7 @@ import type {
   AdminConsentView,
   AdminCredentialView,
   AdminFamilyView,
+  AdminMfaView,
   AdminResourceView,
   AdminUserView,
   CredentialStatus,
@@ -130,6 +131,14 @@ export class ResourcePageViewDto {
   nextCursor!: string | null;
 }
 
+export class AdminMfaViewDto implements AdminMfaView {
+  @ApiProperty({ type: Boolean })
+  enrolled!: boolean;
+
+  @ApiProperty(NULLABLE_DATE)
+  enrolledAt!: Date | null;
+}
+
 export class AdminUserViewDto implements AdminUserView {
   @ApiProperty({ type: String })
   id!: string;
@@ -154,6 +163,9 @@ export class AdminUserViewDto implements AdminUserView {
 
   @ApiProperty(NULLABLE_DATE)
   createdAt!: Date | null;
+
+  @ApiProperty({ type: AdminMfaViewDto })
+  mfa!: AdminMfaViewDto;
 }
 
 export class UserPageViewDto {

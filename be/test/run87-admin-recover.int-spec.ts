@@ -17,6 +17,7 @@ import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
 import { DEFAULT_TENANT_ID } from '../src/modules/identity/tenant.service';
 import { ADMIN_LOCKED_UNTIL } from '../src/modules/identity/user.service';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
+import { TEST_MFA_ENCRYPTION_KEYS } from './helpers/mfa';
 
 /**
  * Run 87 T2 (DEBT-252, D87.12–D87.15): `admin-recover` restores a super_admin in production without
@@ -102,6 +103,7 @@ describe('run 87 T2: admin-recover (recoverSuperAdmin) on real Mongo', () => {
     unlock: false,
     allowExistingSuperAdmin: false,
     dryRun: false,
+    resetMfa: false,
     ...extra,
   });
 
@@ -206,6 +208,7 @@ describe('run 87 T2: admin-recover (recoverSuperAdmin) on real Mongo', () => {
         'approvedBy',
         'forced',
         'host',
+        'mfaReset', // run 89 T4 AC5
         'requestedBy',
         'ticket',
         'unlocked',
@@ -349,6 +352,74 @@ describe('run 87 T2: admin-recover (recoverSuperAdmin) on real Mongo', () => {
     expect(await snapshot()).toEqual(before);
   });
 
+  // ---------------------------------------------------------------- run 89 T4 AC5 (D89.17)
+  const FAKE_MFA = {
+    secret: { kid: 'k1', iv: 'aXY=', ct: 'Y3Q=', tag: 'dGFn' },
+    enrolledAt: new Date(Date.now() - 86_400_000),
+    recoverySalt: 'ab'.repeat(16),
+    recovery: [],
+    failures: 50,
+  };
+  const withMfaAndFamilies = async (id: string) => {
+    await conn
+      .collection('users')
+      .updateOne({ _id: new Types.ObjectId(id) }, { $set: { mfa: FAKE_MFA } });
+    for (const familyId of ['fam-a', 'fam-b']) {
+      await conn.collection('refreshtokens').insertOne({
+        tokenHash: `${id}-${familyId}`,
+        familyId: `${id}-${familyId}`,
+        userId: new Types.ObjectId(id),
+        clientId: 'fe-admin',
+        scope: ['admin.read'],
+        resource: 'https://idp.example.com/admin/',
+        issuedAt: new Date(),
+        expiresAt: new Date(Date.now() + 3_600_000),
+        revokedAt: null,
+      });
+    }
+  };
+  const liveFamilies = (id: string) =>
+    conn
+      .collection('refreshtokens')
+      .countDocuments({ userId: new Types.ObjectId(id), revokedAt: null });
+  const mfaOf = async (id: string) =>
+    (await conn.collection('users').findOne({ _id: new Types.ObjectId(id) }))?.mfa;
+
+  it('run 89 AC5 --reset-mfa => mfa removed + every refresh family revoked + ADMIN_RECOVERED {mfaReset:true}, all in the transaction; plan shows it', async () => {
+    const t = await mkUser();
+    await withMfaAndFamilies(t.id);
+    const { result, out } = await runDone(args(t.email, { resetMfa: true }));
+    expect(result).toMatchObject({ status: 'recovered', userId: t.id });
+    expect(out).toContain('mfa: enrolled -> reset');
+    expect(await mfaOf(t.id)).toBeUndefined();
+    expect(await liveFamilies(t.id)).toBe(0);
+    const [ev] = await recovered();
+    expect(ev.metadata).toMatchObject({ mfaReset: true });
+    expectClean(out, t.email);
+  });
+
+  it('run 89 AC5 without --reset-mfa => mfa and families untouched, mfaReset:false', async () => {
+    const t = await mkUser();
+    await withMfaAndFamilies(t.id);
+    const { result, out } = await runDone(args(t.email));
+    expect(result).toMatchObject({ status: 'recovered' });
+    expect(out).toContain('mfa: enrolled (kept)');
+    expect(await mfaOf(t.id)).toBeDefined();
+    expect(await liveFamilies(t.id)).toBe(2);
+    const [ev] = await recovered();
+    expect(ev.metadata).toMatchObject({ mfaReset: false });
+  });
+
+  it('run 89 AC5 --reset-mfa and the audit insert fails => transaction aborted: mfa and families unchanged', async () => {
+    const t = await mkUser();
+    await withMfaAndFamilies(t.id);
+    jest.spyOn(audits, 'create').mockRejectedValue(new Error('audit down') as never);
+    const r = await run(args(t.email, { resetMfa: true }));
+    await expect(r.result).rejects.toThrow('audit down');
+    expect(await mfaOf(t.id)).toMatchObject({ failures: 50 });
+    expect(await liveFamilies(t.id)).toBe(2);
+  });
+
   it('AC9 two CLIs for DIFFERENT users released together (x20) => exactly 1 success + 1 super_admin_exists', async () => {
     for (let i = 0; i < 20; i++) {
       await conn.collection('usertenants').deleteMany({});
@@ -453,6 +524,7 @@ describe('run 87 T2: built admin-recover CLI argument checks (no connection)', (
     SMTP_URL: 'smtp://127.0.0.1:9',
     ADMIN_SEED_EMAIL: 'seed-admin@fixture.test',
     CSRF_SECRET: 'cli-recover-csrf-not-a-real-secret',
+    MFA_ENCRYPTION_KEYS: TEST_MFA_ENCRYPTION_KEYS,
     RATE_LIMIT_WINDOW: '60',
     RATE_LIMIT_MAX: '100000',
     CLIENT_AUTH_FAIL_IP_MAX: '100000',
@@ -482,6 +554,15 @@ describe('run 87 T2: built admin-recover CLI argument checks (no connection)', (
     expect(r.stdout + r.stderr).not.toContain(SECRET);
     expect(r.stdout + r.stderr).not.toContain(EMAIL);
   }, 40_000);
+
+  it('run 89 AC5 --dry-run --reset-mfa => plan line "mfa: reset", exit 0, 0 sockets', async () => {
+    const r = await cli([...GOOD, '--reset-mfa', '--dry-run']);
+    expect([r.status, r.stderr]).toEqual([0, '']);
+    expect(accepted).toBe(0);
+    expect(r.stdout).toContain('mfa: reset');
+    expect(r.stdout).toContain('dry-run: no connection made');
+    expect(r.stdout).not.toContain(EMAIL);
+  }, 30_000);
 
   it('AC10 --dry-run (NODE_ENV=production) => target + "dry-run: no connection made", exit 0, 0 sockets', async () => {
     const r = await cli(['--', ...GOOD, '--dry-run']);

@@ -419,6 +419,7 @@ describe('Runbook drill (run 40 B7.5): runbook-ops §1 key, §2 reuse, §3 admin
         unlock: true,
         allowExistingSuperAdmin: false,
         dryRun: false,
+        resetMfa: false,
       },
       {
         input,
@@ -432,6 +433,7 @@ describe('Runbook drill (run 40 B7.5): runbook-ops §1 key, §2 reuse, §3 admin
     expect(result).toMatchObject({ status: 'recovered', userId: targetId });
     expect(out.join('\n')).not.toContain(email);
     const session = await auth.login(email, OLD_PASSWORD, {});
+    if (session.kind !== 'session') throw new Error('unexpected MFA step');
     const recovered = await login(targetId, adminClient, FLOW_ADMIN_AUD, ADMIN_SCOPE, session.id);
     expect((await admin('GET', '/admin/keys', recovered.access_token)).statusCode).toBe(200);
     const trail = await admin('GET', '/admin/audit?action=ADMIN_RECOVERED', recovered.access_token);

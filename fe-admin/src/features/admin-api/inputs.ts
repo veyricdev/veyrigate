@@ -191,6 +191,15 @@ export const AUDIT_ACTIONS = [
   "ADMIN_RECOVERED",
   "ADMIN_BOOTSTRAPPED",
   "TRUSTED_DEVICE_REVOKED",
+  "AUTH_MFA_FAILED",
+  "AUTH_MFA_THROTTLED",
+  "MFA_ENROLLED",
+  "MFA_DISABLED",
+  "MFA_RECOVERY_REGENERATED",
+  "MFA_RECOVERY_USED",
+  "AUTH_REAUTH_FAILED",
+  "ADMIN_USER_MFA_RESET",
+  "AUTH_MFA_LOCKED",
 ] as const;
 /** `targetType` values the BE writes today (free string in the BE query: this is the UI choice). */
 export const AUDIT_TARGET_TYPES = ["user", "client", "resource", "session", "signing_key"] as const;

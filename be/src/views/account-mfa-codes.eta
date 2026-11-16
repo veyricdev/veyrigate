@@ -1,0 +1,1 @@
+<h1><%= it.title %></h1><p><%= it.message %></p><ul><% it.codes.forEach(function (c) { %><li><code><%= c %></code></li><% }) %></ul><p>Each code works once. Keep them somewhere safe, away from this device.</p><p><a href="<%= it.continueUrl %>">Continue</a></p>

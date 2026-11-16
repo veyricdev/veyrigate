@@ -40,6 +40,7 @@ vi.mock("@/features/admin-api/users", () => ({
   revokeUserSessions: vi.fn(),
   revokeUserFamily: vi.fn(),
   revokeUserConsent: vi.fn(),
+  resetUserMfa: vi.fn(),
   setUserRoles: vi.fn(),
 }));
 
@@ -66,6 +67,7 @@ const USER: AdminUser = {
   membershipStatus: "active",
   roles: [],
   createdAt: "2026-10-01T00:00:00.000Z",
+  mfa: { enrolled: false, enrolledAt: null },
 };
 const ADMIN_LOCK = "9999-12-31T23:59:59.999Z";
 const FAMILY: AdminFamily = {
@@ -171,7 +173,7 @@ describe("users list", () => {
     mocks.list.mockResolvedValue(ok({ items: [{ ...USER, locked: true, lockedUntil: ADMIN_LOCK, roles: ["tenant_admin"] }], nextCursor: null }) as never);
     renderAt("/users");
     const table = await screen.findByRole("table", { name: "Users" });
-    expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Email", "Lock", "Membership", "Roles", "Created"]);
+    expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Email", "Lock", "Two-step verification", "Membership", "Roles", "Created"]);
     expect(within(table).getByRole("link", { name: EMAIL }).getAttribute("href")).toBe(`/users/${ID}`);
     expect(within(table).getByText("Locked by an administrator (until unlocked)")).toBeTruthy();
     expect(within(table).getByText("tenant_admin")).toBeTruthy();

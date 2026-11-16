@@ -32,6 +32,8 @@ describe('AuthenticationService', () => {
     verifyEmail: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
     clearFailedLoginsIfUnlocked: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
     setPassword: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
+    // Run 89: not enrolled => the pre-run-89 session path.
+    mfaEnrolledAt: jest.fn<(...args: unknown[]) => Promise<unknown>>(async () => null),
   };
   const tokenModel = {
     create: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
@@ -290,5 +292,26 @@ describe('AuthenticationService', () => {
     const actions = audit.record.mock.calls.map(([e]) => (e as { action: AuditAction }).action);
     expect(actions).not.toContain(AuditAction.AUTH_LOGIN_SUCCESS);
     expect(actions).toContain(AuditAction.AUTH_LOGIN_FAILED);
+  });
+
+  it('DEBT-637: an enrollment lands between the step-1 read and establish => the password-only session dies, generic 401', async () => {
+    const withHash = {
+      ...user,
+      passwordHash: await import('../../common/crypto/crypto.util').then(({ hashPassword }) =>
+        hashPassword('correct password'),
+      ),
+    };
+    users.findByEmailForAuthentication.mockResolvedValueOnce(withHash);
+    sessions.establish.mockResolvedValue({ id: 'raced-id', session: { ref: 'r' } });
+    users.clearFailedLoginsIfUnlocked.mockResolvedValue(user);
+    users.findByIdForAuthentication.mockResolvedValue(withHash);
+    users.mfaEnrolledAt.mockResolvedValueOnce(null).mockResolvedValueOnce(new Date());
+    await expect(
+      service.login('a@example.com', 'correct password', { trustDevice: true }),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(sessions.revoke).toHaveBeenCalledWith('raced-id');
+    expect(throttle.onSuccess).not.toHaveBeenCalled();
+    const actions = audit.record.mock.calls.map(([e]) => (e as { action: AuditAction }).action);
+    expect(actions).not.toContain(AuditAction.AUTH_LOGIN_SUCCESS);
   });
 });

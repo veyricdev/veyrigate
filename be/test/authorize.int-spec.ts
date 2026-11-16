@@ -35,6 +35,7 @@ import {
 import { AuthorizationCodeService } from '../src/modules/oauth/code/authorization-code.service';
 import { ConsentService, type Consent } from '../src/modules/oauth/consent/consent.service';
 import { UserTenantService, type UserTenant } from '../src/modules/identity/user-tenant.service';
+import { UserService } from '../src/modules/identity/user.service';
 import { authzBinding, seedOAuthUser } from './oauth-fixtures';
 import { dropIntDb, INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 import { sha256 } from '../src/common/crypto/crypto.util';
@@ -126,6 +127,7 @@ describe('Authorize (/authorize) on real Mongo + Redis (B4.1, spec §9.1-9.2)', 
       sessionsRp,
       config(),
       new UserTenantService(connection.model<UserTenant>('UserTenant')),
+      new UserService(connection.model('User') as never),
     );
     // Run 35 (DEBT-116): the signed-in owner is a real active member of the client's tenant.
     signedIn.userId = await seedOAuthUser(connection, { tenantId: 'tenant-A' });
@@ -511,6 +513,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
         SessionCookie,
         AuditService,
         UserTenantService,
+        UserService,
         HtmlExceptionFilter,
         { provide: RedisService, useValue: new RedisService(redis) },
         { provide: ConfigService, useValue: config },

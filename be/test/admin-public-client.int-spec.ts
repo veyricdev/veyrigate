@@ -52,8 +52,10 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { UiController } from '../src/modules/ui/ui.controller';
+import { UiSessionHelper } from '../src/modules/ui/ui-session.helper';
 import { IntrospectController } from '../src/modules/oauth/introspect/introspect.controller';
 import { UserinfoController } from '../src/modules/oauth/userinfo/userinfo.controller';
+import { mfaTestProviders } from './helpers/mfa';
 
 /**
  * DEBT-172 (run 30 retry 1) + DEBT-174/173(3) (run 31): runtime guard — a client that is not
@@ -116,6 +118,8 @@ describe.each(MISFITS)(
           };
         if (ns === 'client') return { secretGraceTtl: 60 };
         if (ns === 'consent') return { policyVersion: '1', termsVersion: '1' };
+        // Run 89 (D89.4): the admin MFA gate is off in hand-composed modules, like `full-app`.
+        if (ns === 'mfa') return { adminRequired: false };
         throw new Error(`Unexpected config namespace: ${ns}`);
       },
     } as unknown as ConfigService;
@@ -202,6 +206,8 @@ describe.each(MISFITS)(
           AuthorizationCodeService,
           ConsentService,
           CsrfService,
+          UiSessionHelper,
+          ...mfaTestProviders(),
           CsrfGuard,
           TokenService,
           RefreshTokenService,

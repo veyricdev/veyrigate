@@ -58,7 +58,9 @@ import { SESSION_CLOCK, SessionService } from '../src/modules/sessions/session.s
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { UiController } from '../src/modules/ui/ui.controller';
+import { UiSessionHelper } from '../src/modules/ui/ui-session.helper';
 import { authzBinding } from './oauth-fixtures';
+import { mfaTestProviders } from './helpers/mfa';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -142,6 +144,8 @@ describe('Admin API guard (B6.1) + step-up (B6.2) on real Mongo + Redis', () => 
         };
       if (ns === 'client') return { secretGraceTtl: 60 };
       if (ns === 'consent') return { policyVersion: '1', termsVersion: '1' };
+      // Run 89 (D89.4): the admin MFA gate is off in hand-composed modules, like `full-app`.
+      if (ns === 'mfa') return { adminRequired: false };
       throw new Error(`Unexpected config namespace: ${ns}`);
     },
   } as unknown as ConfigService;
@@ -272,6 +276,8 @@ describe('Admin API guard (B6.1) + step-up (B6.2) on real Mongo + Redis', () => 
         AuthorizationCodeService,
         ConsentService,
         CsrfService,
+        UiSessionHelper,
+        ...mfaTestProviders(),
         CsrfGuard,
         TokenService,
         RefreshTokenService,

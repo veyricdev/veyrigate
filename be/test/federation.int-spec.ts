@@ -74,7 +74,14 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import { CsrfGuard, CsrfService } from '../src/modules/ui/csrf.service';
 import { HtmlExceptionFilter } from '../src/modules/ui/html-exception.filter';
 import { UiController } from '../src/modules/ui/ui.controller';
+import { UiSessionHelper } from '../src/modules/ui/ui-session.helper';
 import { authzBinding } from './oauth-fixtures';
+import { mfaTestProviders } from './helpers/mfa';
+import { MfaController } from '../src/modules/ui/mfa.controller';
+import { MfaService } from '../src/modules/mfa/mfa.service';
+import { MfaLoginService } from '../src/modules/mfa/mfa-login.service';
+import { totpAt, totpStep } from '../src/modules/mfa/totp';
+import { generateRecoveryCodes } from '../src/modules/mfa/recovery-codes';
 
 /**
  * Run 32 (B5.1 + B5.2): federation broker end to end on real Mongo + Redis, with Google/GitHub
@@ -441,13 +448,21 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
         }),
         MongooseModule.forFeature(MODELS),
       ],
-      controllers: [AuthorizeController, TokenController, UiController, FederationController],
+      controllers: [
+        AuthorizeController,
+        TokenController,
+        UiController,
+        FederationController,
+        MfaController,
+      ],
       providers: [
         AuthorizeService,
         AuthorizeRequestContextService,
         AuthorizationCodeService,
         ConsentService,
         CsrfService,
+        UiSessionHelper,
+        ...mfaTestProviders(),
         CsrfGuard,
         TokenService,
         RefreshTokenService,
@@ -2082,7 +2097,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       const established = await moduleRef
         .get(AuthenticationService)
         .login(local.email, 'brand new password 1', {});
-      expect(established.session.userId).toBe(local.sub);
+      expect(established.kind === 'session' && established.session.userId).toBe(local.sub);
       expect(
         await auditModel.countDocuments({
           action: 'AUTH_PASSWORD_RESET',
@@ -2090,6 +2105,116 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
           result: 'success',
         }),
       ).toBe(1);
+    });
+
+    // ---------------------------------------------------------------- run 89 T3 (D89.14/D89.15)
+    const MFA_SEED = Buffer.from('r89-federation-seed!', 'ascii');
+    const enrollNow = async (userId: string) => {
+      // Enrolled with a step well in the past, so every code of the current window is still new.
+      const r = await moduleRef
+        .get(MfaService)
+        .enroll(userId, MFA_SEED, totpStep(Date.now()) - 10, generateRecoveryCodes());
+      expect(r.ok).toBe(true);
+    };
+    const finishMfa = async (ticket: string, offset = 0) => {
+      const form = await app.inject({
+        method: 'GET',
+        url: '/login/mfa',
+        cookies: { idp_mfa: ticket },
+      });
+      expect(form.statusCode).toBe(200);
+      return app.inject({
+        method: 'POST',
+        url: '/login/mfa',
+        cookies: { idp_mfa: ticket },
+        payload: {
+          _csrf: form.body.match(/name="_csrf" value="([^"]+)"/)![1],
+          code: totpAt(MFA_SEED, totpStep(Date.now()) + offset),
+        },
+      });
+    };
+
+    it('run 89 AC8 federation callback, user enrolled => ticket + /login/mfa, NO session before the code; then amr fed+otp+mfa, upstream auth_time kept', async () => {
+      const sub = `${RUN}-mfa-${generateToken(6)}`;
+      const first = await rpAuthorize();
+      const provision = await socialLogin('google', first.requestId, {
+        claims: { sub, email: `${sub}@example.com`, auth_time: nowS() },
+      });
+      const userId = (await sessions.get(cookieOf(provision.res, SESSION_COOKIE)!.value))!.userId;
+      await enrollNow(userId);
+      const before = (await sessions.listByUser(userId)).length;
+
+      const upstream = nowS() - 20;
+      const { requestId } = await rpAuthorize();
+      const leg = await socialLogin('google', requestId, {
+        claims: { sub, email: `${sub}@example.com`, auth_time: upstream },
+      });
+      expect(leg.res.statusCode).toBe(302);
+      expect(leg.res.headers.location).toBe('/login/mfa');
+      expect(cookieOf(leg.res, SESSION_COOKIE)).toBeUndefined();
+      const ticket = cookieOf(leg.res, 'idp_mfa')!;
+      expect(ticket.httpOnly).toBe(true);
+      expect((await sessions.listByUser(userId)).length).toBe(before);
+
+      const done = await finishMfa(ticket.value);
+      expect(done.statusCode).toBe(302);
+      expect(done.headers.location).toBe(`/authorize?request_id=${encodeURIComponent(requestId)}`);
+      const s = (await sessions.get(cookieOf(done, SESSION_COOKIE)!.value))!;
+      expect(s.amr).toEqual(['fed', 'otp', 'mfa']);
+      expect(Math.floor(s.authTime / 1000)).toBe(upstream);
+      expect(typeof s.mfaAt).toBe('number');
+    });
+
+    it('run 89 DEBT-637 an enrollment racing the callback (read null, then enrolled after establish) => the fed-only session dies, 503 retry', async () => {
+      const sub = `${RUN}-race-${generateToken(6)}`;
+      const first = await rpAuthorize();
+      const provision = await socialLogin('google', first.requestId, {
+        claims: { sub, email: `${sub}@example.com`, auth_time: nowS() },
+      });
+      const userId = (await sessions.get(cookieOf(provision.res, SESSION_COOKIE)!.value))!.userId;
+      await sessions.revokeAllForUser(userId);
+      const spy = jest
+        .spyOn(users, 'mfaEnrolledAt')
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(new Date());
+      const { requestId } = await rpAuthorize();
+      const leg = await socialLogin('google', requestId, {
+        claims: { sub, email: `${sub}@example.com`, auth_time: nowS() },
+      });
+      spy.mockRestore();
+      expect(leg.res.statusCode).toBe(503);
+      expect(cookieOf(leg.res, SESSION_COOKIE)).toBeUndefined();
+      expect(await sessions.listByUser(userId)).toHaveLength(0);
+    });
+
+    it('run 89 AC8 federation, user NOT enrolled => unchanged (session at once)', async () => {
+      const sub = `${RUN}-nomfa-${generateToken(6)}`;
+      const { requestId } = await rpAuthorize();
+      const leg = await socialLogin('google', requestId, {
+        claims: { sub, email: `${sub}@example.com`, auth_time: nowS() },
+      });
+      expect(cookieOf(leg.res, SESSION_COOKIE)).toBeDefined();
+      expect(cookieOf(leg.res, 'idp_mfa')).toBeUndefined();
+    });
+
+    it('run 89 AC9 /auth/link with the right password, account enrolled => NOT linked, MFA ticket instead of a session', async () => {
+      const local = await localUser();
+      await enrollNow(local.sub);
+      const leg = await linkLeg(local.email);
+      const res = await submitLink(leg, PASSWORD);
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toBe('/login/mfa');
+      expect(cookieOf(res, SESSION_COOKIE)).toBeUndefined();
+      expect(cookieOf(res, 'idp_mfa')).toBeDefined();
+      await expectNotLinked(leg.sub, local.sub);
+      const done = await finishMfa(cookieOf(res, 'idp_mfa')!.value);
+      expect(done.statusCode).toBe(302);
+      expect((await sessions.get(cookieOf(done, SESSION_COOKIE)!.value))!.amr).toEqual([
+        'pwd',
+        'otp',
+        'mfa',
+      ]);
+      await expectNotLinked(leg.sub, local.sub);
     });
   });
 
@@ -2809,6 +2934,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
         controllers: [FederationController],
         providers: [
           { provide: FederationService, useValue: moduleRef.get(FederationService) },
+          { provide: MfaLoginService, useValue: moduleRef.get(MfaLoginService) },
           { provide: RateLimitService, useValue: moduleRef.get(RateLimitService) },
           { provide: CsrfService, useValue: moduleRef.get(CsrfService) },
           { provide: ConfigService, useValue: secureCfg },

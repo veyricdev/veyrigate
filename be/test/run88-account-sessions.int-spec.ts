@@ -405,7 +405,7 @@ describe('run 88 T2: /account/sessions (real app)', () => {
       metadata: { scope: 'session', via: 'self', failedStep: 'pre_revoke' },
     });
 
-    jest.spyOn(sessions, 'revokeByDevice').mockRejectedValueOnce(new Error('redis down'));
+    jest.spyOn(sessions, 'revokeOwnedRef').mockRejectedValueOnce(new Error('redis down'));
     const second = await post(a, '/account/sessions/revoke', { ref: b.ref });
     expect(second.statusCode).toBeGreaterThanOrEqual(500);
     expect((await audits(u.sub, AuditAction.SESSION_REVOKED)).at(-1)).toMatchObject({
