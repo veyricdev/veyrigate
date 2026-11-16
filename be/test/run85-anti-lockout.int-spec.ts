@@ -242,7 +242,7 @@ describe('run 85 T4: anti-lockout login throttle (real app, http)', () => {
     s.expectThrottled(await s.login(victim.email, WRONG, '198.18.0.99'));
 
     await s.full.app.get(AuthenticationService).forgotPassword(victim.email);
-    await new Promise((resolve) => setImmediate(resolve));
+    await s.full.app.get(AuthenticationService).settled(); // run 90 C2
     const mail = s.full.outbox.filter((m) => m.to === victim.email).at(-1)!;
     const token = tokenFromMailLink(mail.text);
     const NEW = 'r85-new-password-after-reset';

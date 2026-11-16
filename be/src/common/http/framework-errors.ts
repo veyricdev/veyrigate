@@ -3,6 +3,7 @@ import { FastifyAdapter } from '@nestjs/platform-fastify';
 import { httpDuration } from '../metrics/metrics';
 import { METHODS } from '../metrics/metrics.http';
 import { buildCsp } from './csp';
+import { requestIdFrom } from './request-id';
 
 /**
  * Errors Fastify raises BEFORE routing (DEBT-239, run 59): a malformed percent-encoding
@@ -57,7 +58,15 @@ export function frameworkErrors(
   );
 }
 
-/** The single way the app entries (`main.ts`, E2E entry, `test/full-app.ts`) build their adapter. */
+/**
+ * The single way the app entries (`main.ts`, E2E entry, `test/full-app.ts`) build their adapter. The
+ * request id (DEBT-095) comes from `requestIdFrom`, and every routed response echoes it.
+ */
 export function createFastifyAdapter(trustProxy?: false | string[]): FastifyAdapter {
-  return new FastifyAdapter({ trustProxy, frameworkErrors });
+  const adapter = new FastifyAdapter({ trustProxy, frameworkErrors, genReqId: requestIdFrom });
+  adapter.getInstance().addHook('onRequest', (request, reply, done) => {
+    void reply.header('x-request-id', request.id);
+    done();
+  });
+  return adapter;
 }

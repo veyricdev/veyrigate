@@ -1,7 +1,7 @@
-import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, Logger, UnauthorizedException } from '@nestjs/common';
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import { ConfigService } from '@nestjs/config';
-import { Test } from '@nestjs/testing';
+import { Test, type TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { AuthenticationService } from './authentication.service';
 import { LoginThrottleService } from './login-throttle.service';
@@ -58,6 +58,7 @@ describe('AuthenticationService', () => {
     clearAccount: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
   };
   let service: AuthenticationService;
+  let module: TestingModule;
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -68,7 +69,7 @@ describe('AuthenticationService', () => {
     throttle.forgetDevices.mockResolvedValue(undefined);
     throttle.clearAccount.mockResolvedValue(undefined);
     audit.record.mockResolvedValue(undefined);
-    const module = await Test.createTestingModule({
+    module = await Test.createTestingModule({
       providers: [
         AuthenticationService,
         { provide: UserService, useValue: users },
@@ -225,10 +226,107 @@ describe('AuthenticationService', () => {
   it('treats a duplicate created by a concurrent registration as the generic success path', async () => {
     users.findByEmail.mockResolvedValue(null);
     users.createWithPasswordHash.mockRejectedValue(new DuplicateError('User'));
+    const log = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
 
     await expect(service.register('race@example.com', 'correct password')).resolves.toBeUndefined();
+    await service.settled();
     expect(memberships.addMembership).not.toHaveBeenCalled();
     expect(tokenModel.create).not.toHaveBeenCalled();
+    expect(log).not.toHaveBeenCalled();
+    log.mockRestore();
+  });
+
+  describe('existence-dependent writes leave the response path (DEBT-659/660, run 90 C2)', () => {
+    /** A promise the test resolves by hand: the write it stands for is still running until then. */
+    function gate() {
+      let open!: () => void;
+      const done = new Promise<void>((resolve) => (open = resolve));
+      return { done, open };
+    }
+    /** Resolves to 'returned' when `p` settles first, 'blocked' when it is still pending after 2 s. */
+    const race = (p: Promise<unknown>) =>
+      Promise.race([
+        p.then(() => 'returned'),
+        new Promise((r) => setTimeout(() => r('blocked'), 2000)),
+      ]);
+
+    it('/register returns while the user/membership/token writes are still pending', async () => {
+      users.findByEmail.mockResolvedValue(null);
+      const create = gate();
+      users.createWithPasswordHash.mockImplementation(async () => {
+        await create.done;
+        return { ...user, email: 'new@example.com' };
+      });
+      memberships.addMembership.mockResolvedValue(undefined);
+
+      expect(await race(service.register('new@example.com', 'correct password'))).toBe('returned');
+      expect(users.createWithPasswordHash).toHaveBeenCalledTimes(1);
+      expect(memberships.addMembership).not.toHaveBeenCalled();
+      expect(tokenModel.create).not.toHaveBeenCalled();
+
+      create.open();
+      await service.settled();
+      expect(memberships.addMembership).toHaveBeenCalledWith(user.sub, expect.any(String));
+      expect(tokenModel.create).toHaveBeenCalledTimes(1);
+      expect(module.get(MAILER).send).toHaveBeenCalledTimes(1);
+    });
+
+    it('/forgot returns while the reset token write is still pending', async () => {
+      users.findByEmail.mockResolvedValue(user);
+      const write = gate();
+      tokenModel.create.mockImplementation(async () => {
+        await write.done;
+        return undefined;
+      });
+
+      expect(await race(service.forgotPassword(user.email))).toBe('returned');
+      expect(tokenModel.create).toHaveBeenCalledTimes(1);
+      expect(module.get(MAILER).send).not.toHaveBeenCalled();
+
+      write.open();
+      await service.settled();
+      expect(module.get(MAILER).send).toHaveBeenCalledTimes(1);
+    });
+
+    it('a failed background write is logged without the email and never reaches the caller', async () => {
+      const log = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+      users.findByEmail.mockResolvedValue(null);
+      users.createWithPasswordHash.mockResolvedValue({ ...user, email: 'new@example.com' });
+      memberships.addMembership.mockRejectedValue(new Error('mongo down new@example.com'));
+
+      await expect(
+        service.register('new@example.com', 'correct password'),
+      ).resolves.toBeUndefined();
+      await service.settled();
+      expect(tokenModel.create).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(String(log.mock.calls[0][0])).toContain('Registration');
+      expect(JSON.stringify(log.mock.calls)).not.toContain('new@example.com');
+
+      log.mockClear();
+      users.findByEmail.mockResolvedValue(user);
+      tokenModel.create.mockRejectedValue(new Error(`E11000 ${user.email}`));
+      await expect(service.forgotPassword(user.email)).resolves.toBeUndefined();
+      await service.settled();
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(String(log.mock.calls[0][0])).toContain('Password reset');
+      expect(JSON.stringify(log.mock.calls)).not.toContain(user.email);
+      log.mockRestore();
+    });
+
+    it('shutdown waits for pending writes (beforeApplicationShutdown)', async () => {
+      users.findByEmail.mockResolvedValue(user);
+      const write = gate();
+      tokenModel.create.mockImplementation(async () => {
+        await write.done;
+        return undefined;
+      });
+      await service.forgotPassword(user.email);
+
+      expect(await race(service.beforeApplicationShutdown())).toBe('blocked');
+      write.open();
+      expect(await race(service.beforeApplicationShutdown())).toBe('returned');
+    });
   });
 
   it('a throttled attempt is a 429 with the fixed text, no Argon2 result, no user write (DEBT-575)', async () => {

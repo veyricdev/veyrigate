@@ -1,6 +1,7 @@
 import type IORedis from 'ioredis';
 import type { Model } from 'mongoose';
 import { REDIS_CLIENT } from '../src/database/redis/redis.constants';
+import { AuthenticationService } from '../src/modules/authentication/authentication.service';
 import { UserService } from '../src/modules/identity/user.service';
 import { bootFullApp, type FullApp, type InjectResponse } from './full-app';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
@@ -116,6 +117,7 @@ describe('run 84 T1: deliverable email grammar on register / forgot (real app)',
     const before = await totals();
     const res = await post('/register', { email, password: PASSWORD });
     expect(res.statusCode).toBe(201);
+    await full.app.get(AuthenticationService).settled(); // run 90 C2
     expect(res.body).toContain('Check your email');
     const after = await totals();
     expect(after).toEqual({
@@ -133,6 +135,7 @@ describe('run 84 T1: deliverable email grammar on register / forgot (real app)',
     const before = await totals();
     const res = await post('/forgot', { email });
     expect(res.statusCode).toBe(201);
+    await full.app.get(AuthenticationService).settled(); // run 90 C2
     expect(res.body).toContain('Check your email');
     expect(await totals()).toEqual({ ...before, reset: before.reset + 1, mails: before.mails + 1 });
     expect(full.outbox.at(-1)!.to).toBe(email.toLowerCase());

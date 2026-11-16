@@ -243,7 +243,7 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
         })
       ).statusCode,
     ).toBe(201);
-    await new Promise((resolve) => setImmediate(resolve));
+    await moduleRef.get(AuthenticationService).settled(); // run 90 C2: user + mail are detached
     const link = messages.find((message) => message.to === email)?.text.match(/https:\/\/\S+/)?.[0];
     expect(link).toBeDefined();
     const token = tokenFromMailLink(link!);
@@ -500,7 +500,7 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
     /** Register over HTTP and return the verification token from the captured mail. */
     const registerAndToken = async (email: string) => {
       expect((await submit('/register', { email, password: PASSWORD })).statusCode).toBe(201);
-      await new Promise((resolve) => setImmediate(resolve));
+      await moduleRef.get(AuthenticationService).settled(); // run 90 C2: user + mail are detached
       const link = messages.find((m) => m.to === email)?.text.match(/https:\/\/\S+/)?.[0];
       expect(link).toBeDefined();
       return tokenFromMailLink(link!);

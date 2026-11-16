@@ -16,6 +16,7 @@ import {
   sha256,
   verifyPassword,
 } from '../../common/crypto/crypto.util';
+import { errorForLog } from '../../common/logger/error-log';
 import type { AppConfig } from '../../config/configuration';
 import { DEFAULT_TENANT_ID } from '../identity/tenant.service';
 import { UserTenantService } from '../identity/user-tenant.service';
@@ -117,6 +118,35 @@ export class AuthenticationService {
     this.issuer = config.getOrThrow<AppConfig>('app').issuer;
   }
 
+  /**
+   * Writes that depend on whether the account exists, run off the response path (DEBT-659/660, run 90
+   * C2): `/register` and `/forgot` answer in the same time for a known and an unknown email.
+   */
+  private readonly pending = new Set<Promise<void>>();
+
+  /**
+   * Starts `work` now and returns at once. A failure is logged (error class + frames, never the
+   * message, which may carry the email) and never reaches the caller: the page is the same either way.
+   */
+  private detach(what: string, work: () => Promise<void>): void {
+    const run: Promise<void> = work()
+      .catch((err: unknown) =>
+        this.logger.error(`${what} background write failed: ${errorForLog(err)}`),
+      )
+      .finally(() => this.pending.delete(run));
+    this.pending.add(run);
+  }
+
+  /** Resolves once every detached write has finished (shutdown drain; int tests). */
+  async settled(): Promise<void> {
+    while (this.pending.size > 0) await Promise.allSettled([...this.pending]);
+  }
+
+  /** SIGTERM (`enableShutdownHooks`): finish detached writes before Mongo closes. */
+  beforeApplicationShutdown(): Promise<void> {
+    return this.settled();
+  }
+
   async register(email: string, password: string): Promise<void> {
     // DEBT-574: checked before the account lookup, so the answer never depends on whether it exists.
     assertAcceptablePassword(password, { email });
@@ -124,22 +154,26 @@ export class AuthenticationService {
     // Equalise the expensive branch even when no user will be created.
     const passwordHash = await hashPassword(password);
     if (existing) return;
-    let user;
-    try {
-      user = await this.users.createWithPasswordHash(email, passwordHash);
-    } catch (error) {
-      if (error instanceof DuplicateError) return;
-      throw error;
-    }
-    await this.memberships.addMembership(user.sub, DEFAULT_TENANT_ID);
-    await this.issueToken(
-      this.verifyTokens,
-      user.sub,
-      user.email,
-      '/verify-email',
-      VERIFY_TTL_MS,
-      true,
-    );
+    // DEBT-659: creating the user, its membership and the verify token (~20 ms) only happens for a
+    // new email, so it runs detached; the answer is the same generic page either way.
+    this.detach('Registration', async () => {
+      let user;
+      try {
+        user = await this.users.createWithPasswordHash(email, passwordHash);
+      } catch (error) {
+        if (error instanceof DuplicateError) return; // a concurrent registration won: nothing to do
+        throw error;
+      }
+      await this.memberships.addMembership(user.sub, DEFAULT_TENANT_ID);
+      await this.issueToken(
+        this.verifyTokens,
+        user.sub,
+        user.email,
+        '/verify-email',
+        VERIFY_TTL_MS,
+        true,
+      );
+    });
   }
 
   async verifyEmail(token: string): Promise<void> {
@@ -303,8 +337,11 @@ export class AuthenticationService {
   async forgotPassword(email: string): Promise<void> {
     const user = await this.users.findByEmail(email);
     await hashPassword(generateToken());
+    // DEBT-660: the reset token write only happens for a known email, so it runs detached.
     if (user)
-      await this.issueToken(this.resetTokens, user.sub, user.email, '/reset', RESET_TTL_MS, false);
+      this.detach('Password reset', () =>
+        this.issueToken(this.resetTokens, user.sub, user.email, '/reset', RESET_TTL_MS, false),
+      );
   }
 
   async resetPassword(token: string, password: string): Promise<void> {

@@ -152,7 +152,11 @@ describe('run 86 tester (T6): token fragment, POST /logout, key pre-publish edge
 
     const get = (url: string, headers: Record<string, string> = {}) =>
       full.app.inject({ method: 'GET', url, headers }) as Promise<InjectResponse>;
-    const flushMail = () => new Promise((resolve) => setImmediate(resolve));
+    // Run 90 C2 (DEBT-659/660): register/forgot write their token + mail detached; wait for them too.
+    const flushMail = async () => {
+      await full.app.get(AuthenticationService).settled();
+      await new Promise((resolve) => setImmediate(resolve));
+    };
     const newSession = async () =>
       (await full.app.get(SessionService).create(userId, DEFAULT_TENANT_ID)).id;
     const sessionAlive = async (id: string) =>

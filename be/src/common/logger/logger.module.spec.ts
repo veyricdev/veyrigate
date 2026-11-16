@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import { createServer, get as httpGet, type Server } from 'node:http';
 import { Writable } from 'node:stream';
 import { pinoHttp } from 'pino-http';
+import { requestIdFrom } from '../http/request-id';
 import { buildPinoHttpOptions, serializeRequest, serializeResponse } from './logger.module';
 
 describe('request log serializer', () => {
@@ -82,6 +83,10 @@ describe('response log serializer', () => {
 });
 
 describe('pino-http wiring (no DB)', () => {
+  it('has no request id generator of its own: Fastify genReqId is the one source (DEBT-095)', () => {
+    expect(buildPinoHttpOptions('test')).not.toHaveProperty('genReqId');
+  });
+
   let server: Server;
   let port: number;
   let logs = '';
@@ -97,7 +102,13 @@ describe('pino-http wiring (no DB)', () => {
     // exact options production uses.
     const logger = pinoHttp(buildPinoHttpOptions('test') as never, memStream);
     server = createServer((req, res) => {
+      // Under Fastify, middie hands pino-http the raw request with `id` already set by the adapter's
+      // `genReqId` (DEBT-095): pino-http keeps it and never reads the header itself.
+      (req as { id?: string }).id = requestIdFrom(req);
       logger(req, res);
+      // The adapter's echo (DEBT-095). A header set before `writeHead` also makes node keep the
+      // `writeHead` headers in `getHeaders()`, which is what the response serializer reads.
+      res.setHeader('x-request-id', String((req as { id?: string }).id));
       res.writeHead(302, {
         Location: 'https://rp.example/cb?code=SECRET_CODE&state=SECRET_STATE#frag',
         'Set-Cookie': 'idp_session=SECRET_SID',

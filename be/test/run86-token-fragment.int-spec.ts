@@ -32,7 +32,11 @@ describe('run 86 T1: one-time token in the URL fragment (real app)', () => {
     await full?.close();
   }, INT_SETUP_TIMEOUT_MS);
 
-  const flushMail = () => new Promise((resolve) => setImmediate(resolve));
+  // Run 90 C2 (DEBT-659/660): register/forgot write their token + mail detached; wait for them too.
+  const flushMail = async () => {
+    await full.app.get(AuthenticationService).settled();
+    await new Promise((resolve) => setImmediate(resolve));
+  };
   const get = (url: string) => full.app.inject({ method: 'GET', url }) as Promise<InjectResponse>;
   const submit = async (page: string, fields: Record<string, string>) => {
     const form = await get(page);

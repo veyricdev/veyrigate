@@ -2,7 +2,7 @@
 // lives under be/), the app from be/dist (run `pnpm -C be build` first). Never writes a token, password,
 // hash, real email or credentialed URI to the evidence; secrets live in memory only.
 import { spawn } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, openSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
@@ -22,9 +22,10 @@ export const DIST = join(BE_DIR, 'dist');
 export const EVIDENCE_DIR = join(REPO, 'docs', 'agile', 'sso-idp', 'runs', '87-X6-drills', 'evidence');
 export const MONGO_HOST = 'mongodb://127.0.0.1:27017';
 export const MONGO_ADMIN_URI = `${MONGO_HOST}/?directConnection=true`;
-export const DRILL_DB = /^vg-drill-(src|restore|rotate-local|rotate-vault)$/;
+/** Drill databases + the run-90 pentest database (D90.3): nothing else is ever written or dropped. */
+export const DRILL_DB = /^(vg-drill-(src|restore|rotate-local|rotate-vault)|vg-pentest)$/;
 export const DRILL_REDIS_DBS = new Set([7, 8]);
-export const DRILL_PORTS = new Set([4987, 4988]);
+export const DRILL_PORTS = new Set([4987, 4988, 4989, 4990]);
 export const HTTP_TIMEOUT_MS = 5000;
 export const BOOT_TIMEOUT_MS = 30_000;
 /** fe-admin as `db:seed` creates it (seed.ts buildFeAdminClient). */
@@ -40,6 +41,11 @@ export const redisUri = (n) => {
   return `redis://127.0.0.1:6379/${n}`;
 };
 export const hex = (n = 32) => randomBytes(n).toString('hex');
+/**
+ * Fixed, public, non-secret AES-256-GCM key of stored TOTP seeds for drill/pentest BEs (run 90 A1, DEBT-649):
+ * required in every NODE_ENV since run 89; differs from the `.env.example` key and the E2E key.
+ */
+export const DRILL_MFA_ENCRYPTION_KEYS = `k1:${Buffer.from('veyrigate-drl-mfa-key-not-secret', 'utf8').toString('base64')}`;
 export const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 export const now = () => Date.now();
 
@@ -154,18 +160,24 @@ export function stoppable(child) {
   };
 }
 
-/** Boot be/dist/main.js; resolves once /health and /ready answer 200 (<= 30 s). */
-export async function startBe(name, port, env, cwd) {
+/**
+ * Boot <dist>/main.js; resolves once /health and /ready answer 200 (<= 30 s). `dist` (pentest mutants, D90.5) and
+ * `onOutput` (in-memory log scan, HYG-BELOG) are optional; drills use neither.
+ */
+export async function startBe(name, port, env, cwd, { dist = DIST, onOutput } = {}) {
   if (!DRILL_PORTS.has(port)) throw new Error(`refusing port ${port}`);
   const child = track(
-    spawn(process.execPath, [join(DIST, 'main.js')], {
+    spawn(process.execPath, [join(dist, 'main.js')], {
       env: childEnv({ ...env, PORT: String(port) }),
       cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
     }),
   );
   let tail = '';
-  const keep = (d) => (tail = (tail + d).slice(-4000));
+  const keep = (d) => {
+    tail = (tail + d).slice(-4000);
+    onOutput?.(d);
+  };
   child.stdout.setEncoding('utf8').on('data', keep);
   child.stderr.setEncoding('utf8').on('data', keep);
   const life = stoppable(child);
@@ -207,6 +219,9 @@ export function beEnv({ port, db, redisDb, keyDir, extra = {} }) {
     SMTP_URL: 'smtp://127.0.0.1:9', // nothing is mailed in a drill
     ADMIN_SEED_EMAIL: 'drill-admin@drill.invalid',
     CSRF_SECRET: hex(),
+    MFA_ENCRYPTION_KEYS: DRILL_MFA_ENCRYPTION_KEYS,
+    // A drill measures rotation/backup, not MFA (D90.1; valid outside production, D89.4). The pentest overrides it.
+    ADMIN_MFA_REQUIRED: 'false',
     RATE_LIMIT_WINDOW: '60',
     RATE_LIMIT_MAX: '100000',
     CLIENT_AUTH_FAIL_IP_MAX: '100000',
@@ -248,6 +263,58 @@ export class CookieJar {
   }
 }
 
+// ------------------------------------------------------------------ TOTP (run 90 A1)
+
+const B32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+export const TOTP_PERIOD_SEC = 30;
+export function base32Decode(input) {
+  let bits = 0;
+  let value = 0;
+  const out = [];
+  for (const ch of input.replace(/[\s=-]/g, '').toUpperCase()) {
+    const v = B32.indexOf(ch);
+    if (v < 0) throw new Error('base32: invalid character');
+    value = (value << 5) | v;
+    bits += 5;
+    if (bits >= 8) {
+      out.push((value >>> (bits - 8)) & 0xff);
+      bits -= 8;
+    }
+  }
+  return Buffer.from(out);
+}
+/** RFC 4226 HOTP (HMAC-SHA-1, dynamic truncation) on node:crypto; independent of be/src. */
+export function hotp(key, counter, digits = 6) {
+  const msg = Buffer.alloc(8);
+  msg.writeBigUInt64BE(BigInt(counter));
+  const mac = createHmac('sha1', key).update(msg).digest();
+  const off = mac[mac.length - 1] & 0x0f;
+  return String((mac.readUInt32BE(off) & 0x7fffffff) % 10 ** digits).padStart(digits, '0');
+}
+export const totpStep = (ms = Date.now()) => Math.floor(ms / 1000 / TOTP_PERIOD_SEC);
+export const totpAt = (secretB32, step) => hotp(base32Decode(secretB32), step);
+// Self-check on import (AC2): RFC 6238 appendix B, SHA-1 seed "12345678901234567890", T=59 s => 94287082.
+if (hotp(Buffer.from('12345678901234567890', 'ascii'), totpStep(59_000), 8) !== '94287082' ||
+  hotp(Buffer.from('12345678901234567890', 'ascii'), totpStep(59_000)) !== '287082') {
+  throw new Error('TOTP self-check failed (RFC 6238 vector T=59)');
+}
+/**
+ * The IdP accepts steps c-1..c+1 of its clock, each at most once per user and only above the last one used (D89.10).
+ * Returns the smallest such step strictly above `lastStep` (c-1 only while > 5 s are left in step c), waiting for the
+ * clock when it would be beyond c+1 (same allocator as e2e/tests/support/totp.ts). The caller keeps it as `lastStep`.
+ */
+export async function nextStep(lastStep) {
+  for (;;) {
+    const t = Date.now();
+    const c = totpStep(t);
+    const left = TOTP_PERIOD_SEC * 1000 - (t % (TOTP_PERIOD_SEC * 1000));
+    const floor = left > 5000 ? c - 1 : c;
+    const next = Math.max(lastStep === undefined ? floor : lastStep + 1, floor);
+    if (next <= c + 1) return next;
+    await sleep((next - 1) * TOTP_PERIOD_SEC * 1000 + 1000 - t);
+  }
+}
+
 export const basic = (id, secret) => `Basic ${Buffer.from(`${id}:${secret}`).toString('base64')}`;
 const form = (o) => new URLSearchParams(o).toString();
 const FORM = 'application/x-www-form-urlencoded';
@@ -257,7 +324,7 @@ const csrfOf = (html) => /name="_csrf" value="([^"]+)"/.exec(html)?.[1];
  * Browser-equivalent authorization code + PKCE for a confidential client: /authorize -> /login ->
  * consent (approved) -> code -> /token. Returns the token response (in memory only).
  */
-export async function codeFlow(base, { email, password, clientId, secret, redirectUri, scope, resource, jar = new CookieJar() }) {
+export async function codeFlow(base, { email, password, clientId, secret, redirectUri, scope, resource, totp, jar = new CookieJar() }) {
   const verifier = randomBytes(32).toString('base64url');
   const challenge = createHash('sha256').update(verifier).digest('base64url');
   const q = new URLSearchParams({
@@ -287,6 +354,21 @@ export async function codeFlow(base, { email, password, clientId, secret, redire
     }),
   );
   location = res.headers.get('location') ?? '';
+  if (res.status === 302 && location.startsWith('/login/mfa') && totp) {
+    // Step 2 (D89.7): `totp` = { secret, lastStep } (lastStep updated in place: one step per user, D89.10).
+    const page = jar.take(await http(`${base}/login/mfa`, { headers: { cookie: jar.header() } }));
+    const c3 = csrfOf(await page.text());
+    if (page.status !== 200 || !c3) throw new Error(`login/mfa: expected the form, got ${page.status}`);
+    totp.lastStep = await nextStep(totp.lastStep);
+    res = jar.take(
+      await http(`${base}/login/mfa`, {
+        method: 'POST',
+        headers: { cookie: jar.header(), 'content-type': FORM },
+        body: form({ _csrf: c3, code: totpAt(totp.secret, totp.lastStep) }),
+      }),
+    );
+    location = res.headers.get('location') ?? '';
+  }
   if (res.status !== 302 || !location.startsWith('/authorize')) throw new Error(`login: expected 302 /authorize, got ${res.status}`);
   res = jar.take(await http(`${base}${location}`, { headers: { cookie: jar.header() } }));
   if (res.status === 200) {
@@ -410,7 +492,7 @@ export async function cleanupNamespace({ conn, dbs, redisDbs }) {
 }
 
 export async function postCheck({ conn, redisDbs, e2eBefore }) {
-  const left = (await listDbs(conn)).filter((d) => d.startsWith('vg-drill-'));
+  const left = (await listDbs(conn)).filter((d) => d.startsWith('vg-drill-') || d.startsWith('vg-pentest'));
   const sizes = {};
   for (const n of redisDbs) {
     const r = new IORedis(redisUri(n), { lazyConnect: true, maxRetriesPerRequest: 1 });
@@ -470,20 +552,21 @@ export function assertClean(text, secrets) {
   if (/\$argon2/.test(text)) hits.push('argon2');
   if (/"[^"]*(password|secret)[^"]*"\s*:\s*"/i.test(text)) hits.push('password/secret key with a string value');
   if (/mongodb(\+srv)?:\/\/[^/\s"]*@/.test(text)) hits.push('credentialed URI');
+  if (/otpauth:/i.test(text)) hits.push('otpauth URI');
   for (const s of secrets.filter((x) => typeof x === 'string' && x.length >= 8)) {
     if (text.includes(s)) hits.push('a secret value of this run');
   }
   if (hits.length) throw new Error(`evidence exposure check failed: ${[...new Set(hits)].join(', ')}`);
 }
 
-export function writeEvidence(drill, evidence, lines, secrets) {
+export function writeEvidence(drill, evidence, lines, secrets, dir = EVIDENCE_DIR) {
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
   const json = `${JSON.stringify(evidence, null, 2)}\n`;
   const log = `${lines.join('\n')}\n`;
   assertClean(json, secrets);
   assertClean(log, secrets);
-  if (!existsSync(EVIDENCE_DIR)) mkdirSync(EVIDENCE_DIR, { recursive: true });
-  const base = join(EVIDENCE_DIR, `${drill}-${stamp}`);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const base = join(dir, `${drill}-${stamp}`);
   writeFileSync(`${base}.json`, json);
   writeFileSync(`${base}.log`, log);
   return `${base}.json`;

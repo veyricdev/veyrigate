@@ -49,7 +49,11 @@ describe('run 85 T3: common-password policy on register/reset (real app)', () =>
       payload: { _csrf: csrfOf(form), ...fields },
     }) as Promise<InjectResponse>;
   };
-  const flushMail = () => new Promise((resolve) => setImmediate(resolve));
+  // Run 90 C2 (DEBT-659/660): register/forgot write their token + mail detached; wait for them too.
+  const flushMail = async () => {
+    await full.app.get(AuthenticationService).settled();
+    await new Promise((resolve) => setImmediate(resolve));
+  };
 
   it('register with a common password: 400, no user, no mail, same page as for an existing email', async () => {
     const fresh = `r85p-${randomUUID()}@example.com`;

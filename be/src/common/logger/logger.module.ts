@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { randomUUID } from 'node:crypto';
 import { LoggerModule as PinoLoggerModule } from 'nestjs-pino';
 import type { AppConfig } from '../../config/configuration';
 
@@ -8,8 +7,10 @@ import type { AppConfig } from '../../config/configuration';
  * Structured logging with nestjs-pino (B1.3, INV-20).
  *
  * Redacts sensitive fields so credentials/tokens never reach the logs, and
- * surfaces the `genReqId` request id (`req.id`) on every HTTP log line so
- * access logs stay correlatable with audit entries. In development the output
+ * surfaces the request id (`req.id`) on every HTTP log line so access logs stay
+ * correlatable with audit entries. That id has ONE source (DEBT-095): the Fastify
+ * adapter's `genReqId` (`common/http/request-id`); pino-http keeps an existing
+ * `req.id`, so no generator is configured here. In development the output
  * is pretty-printed; in production it stays as JSON.
  */
 
@@ -49,7 +50,7 @@ export function serializeRequest(req: { id?: unknown; method?: string; url?: str
   method?: string;
   url?: string;
 } {
-  // `id` is the non-secret `genReqId` value (correlates access log <-> audit).
+  // `id` is the non-secret request id (`common/http/request-id`; correlates access log <-> audit).
   return { id: req.id, method: req.method, url: req.url?.split('?', 1)[0] };
 }
 
@@ -83,15 +84,6 @@ export function buildPinoHttpOptions(nodeEnv: string) {
   const isDev = nodeEnv === 'development';
   return {
     level: isDev ? 'debug' : 'info',
-    genReqId: (
-      req: { headers: Record<string, string | string[] | undefined> },
-      res: { setHeader: (name: string, value: string) => void },
-    ) => {
-      const existing = req.headers['x-request-id'];
-      const id = (Array.isArray(existing) ? existing[0] : existing) ?? randomUUID();
-      res.setHeader('x-request-id', id);
-      return id;
-    },
     redact: { paths: REDACT_PATHS, remove: true },
     serializers: { req: serializeRequest, res: serializeResponse },
     transport: isDev ? { target: 'pino-pretty', options: { singleLine: true } } : undefined,

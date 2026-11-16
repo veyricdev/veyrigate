@@ -131,7 +131,11 @@ describe('run 85 T5: change password /account/password (real app)', () => {
       .find({ action: AuditAction.AUTH_PASSWORD_CHANGED, actorId: sub })
       .lean<Array<Record<string, unknown>>>()
       .exec();
-  const flushMail = () => new Promise((resolve) => setImmediate(resolve));
+  // Run 90 C2 (DEBT-659/660): register/forgot write their token + mail detached; wait for them too.
+  const flushMail = async () => {
+    await full.app.get(AuthenticationService).settled();
+    await new Promise((resolve) => setImmediate(resolve));
+  };
 
   it('(1) no session: GET => 302 /login?returnTo; POST without CSRF => 403, with anon CSRF => 302 /login', async () => {
     const get = await getPage();
