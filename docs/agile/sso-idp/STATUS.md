@@ -28,7 +28,7 @@
 | [86](runs/86-X6-release2b/summary.md) | M8 | X6 đợt 2b: token fragment, pre-publish key BE+FE, logout POST, CSP `base-uri`, `networkOf` (DEBT-393/572/577/583/599/605–607) | ✅ int 2246 + vault 32 + E2E 42 + X3 42 + be 979 + fe-admin 1626 | `51818d6` |
 | [87](runs/87-X6-drills/summary.md) | M8 | X6 diễn tập: backup/restore + rotate khẩn cấp, CLI khôi phục super_admin, pin digest (DEBT-252/253/589/590/608/613–617/620/621) | ✅ int 2275 + vault 32 + E2E 42×2 + X3 42 + be 1018 + fe-admin 1626 + drill 36/23/30 | `0555cdd` |
 | [88](runs/88-X6-release3/summary.md) | M8 | X6 đợt 3: `db:bootstrap` production, `/account/sessions`, consent + `/account/apps` (DEBT-164/165/581/582/586/627) | ✅ int 2320 + E2E 44×2 + X3 42 + be 1069 + fe-admin 1626 + §16 110/110 | `de14146` |
-| [89](runs/89-X6-mfa/summary.md) | M8 | X6 MFA: TOTP + mã khôi phục, bước 2 login, MFA bắt buộc console admin, reset MFA (DEBT-628…632/637…647) | ✅ int 2393 + E2E 52×2 + X3 42 + be 1188 + fe-admin 1653 | `<hash>` |
+| [89](runs/89-X6-mfa/summary.md) | M8 | X6 MFA: TOTP + mã khôi phục, bước 2 login, MFA bắt buộc console admin, reset MFA (DEBT-628…632/637…647) | ✅ int 2393 + E2E 52×2 + X3 42 + be 1188 + fe-admin 1653 | `eba5260` |
 
 ## Chặn / cần người quyết định
 
