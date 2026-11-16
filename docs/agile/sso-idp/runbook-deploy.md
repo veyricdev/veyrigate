@@ -154,6 +154,7 @@ fail-closed (thao tác ghi phiên/code lỗi rõ ràng) thay vì âm thầm mấ
 
 ## 4. Thứ tự deploy đề xuất
 
+0. Từ run 90 (D90.16, trước mỗi bản phát hành, trên máy dev/CI nội bộ, không phải production): `pnpm -C be build && timeout 25m node be/scripts/pentest/pentest.mjs` phải exit 0 (mọi check `must` xanh); ghi tên evidence `docs/agile/sso-idp/runs/<run>/evidence/pentest-*.json` vào ticket. Chạy SAU các bước cần Mailpit (E2E), vì lượt pentest gửi vài trăm thư (DEBT-664). Chưa có trong CI (DEBT-650).
 1. Backfill `resource` (2a).
 2. Kiểm duplicate (2b) — rỗng mới tiếp.
 2'. Kiểm duplicate ClientCredential (2d) — rỗng mới tiếp.
