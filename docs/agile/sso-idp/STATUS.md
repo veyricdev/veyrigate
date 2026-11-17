@@ -30,7 +30,7 @@
 | [88](runs/88-X6-release3/summary.md) | M8 | X6 đợt 3: `db:bootstrap` production, `/account/sessions`, consent + `/account/apps` (DEBT-164/165/581/582/586/627) | ✅ int 2320 + E2E 44×2 + X3 42 + be 1069 + fe-admin 1626 + §16 110/110 | `de14146` |
 | [89](runs/89-X6-mfa/summary.md) | M8 | X6 MFA: TOTP + mã khôi phục, bước 2 login, MFA bắt buộc console admin, reset MFA (DEBT-628…632/637…647) | ✅ int 2393 + E2E 52×2 + X3 42 + be 1188 + fe-admin 1653 | `eba5260` |
 | [90](runs/90-X6-pentest-signoff/summary.md) | M8 | X6 pentest nội bộ + ký mục F: harness `be/scripts/pentest/`, sửa P1 dò email theo thời gian, request id (DEBT-095/649/652…657/659/660/668) | ✅ pentest 254/254 + int 2403 + E2E 52×2 + X3 42 + be 1213 + fe-admin 1653 | `8dfa821`…`7938d27` |
-| [91](runs/91-X6-golive-hardening/summary.md) | M8 | X6 điều kiện go-live + hardening sau pentest: alert ghi nền, chống chiếm tài khoản trước, thu hồi khi code dùng lại, `response_mode`/`no-store`/request id (DEBT-651/662/663/665/666/667/671/672) | ✅ pentest 261/261 + int 2444 + E2E 52×2 + X3 42 + be 1247 | `c39b19a`…`<hash>` |
+| [91](runs/91-X6-golive-hardening/summary.md) | M8 | X6 điều kiện go-live + hardening sau pentest: alert ghi nền, chống chiếm tài khoản trước, thu hồi khi code dùng lại, `response_mode`/`no-store`/request id (DEBT-651/662/663/665/666/667/671/672) | ✅ pentest 261/261 + int 2444 + E2E 52×2 + X3 42 + be 1247 | `c39b19a`…`51f95fe` |
 
 ## Chặn / cần người quyết định
 
