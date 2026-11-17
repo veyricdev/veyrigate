@@ -23,6 +23,3 @@ coverage/
 
 # OS
 .DS_Store
-
-# Drill/pentest single-run lock (be/scripts/drills/lib.mjs acquireLock; removed on exit)
-be/.vg-drill.lock

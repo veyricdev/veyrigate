@@ -26,13 +26,6 @@ const MAX_STATE_LENGTH = 512;
 const DEFAULT_REDIRECT = '/login?loggedOut=1';
 
 /**
- * RP-initiated + front-channel logout helpers (B4.7, spec §9.8). It verifies the `id_token_hint`,
- * computes the post-logout redirect by EXACT-MATCH against the hinted client, and builds the list
- * of front-channel RPs to notify. It never mutates session/token state — that is the
- * controller/`SessionService`/`RefreshTokenService`. Every untrusted input fails closed to the
- * default redirect (`/login?loggedOut=1`) so GET and POST reach the identical decision.
- */
-/**
  * Keep only string values (CodeQL #9, D92.9): a repeated query param reaches GET `/logout` as an
  * array, which is treated as absent (never joined, never length-checked as an array).
  */
@@ -46,6 +39,13 @@ export function stringLogoutParams(params: LogoutParams): LogoutParams {
   };
 }
 
+/**
+ * RP-initiated + front-channel logout helpers (B4.7, spec §9.8). It verifies the `id_token_hint`,
+ * computes the post-logout redirect by EXACT-MATCH against the hinted client, and builds the list
+ * of front-channel RPs to notify. It never mutates session/token state — that is the
+ * controller/`SessionService`/`RefreshTokenService`. Every untrusted input fails closed to the
+ * default redirect (`/login?loggedOut=1`) so GET and POST reach the identical decision.
+ */
 @Injectable()
 export class LogoutService {
   readonly defaultRedirect = DEFAULT_REDIRECT;

@@ -1,7 +1,7 @@
 name: CI
 
 # Chặn merge khi CI đỏ: cần bật branch protection trên GitHub
-# (Settings → Branches → require status checks "quality", "int", "e2e", "secrets", "promtool", "fe-admin-image", "be-image" + CodeQL).
+# (Settings → Branches → require status checks "quality", "int", "e2e", "pentest", "secrets", "promtool", "fe-admin-image", "be-image" + CodeQL).
 # Không cấu hình được trong repo (DEBT-227).
 on:
   push:
@@ -270,6 +270,88 @@ jobs:
           name: playwright-report
           path: e2e/playwright-report
           retention-days: 7
+
+  # Black-box pentest harness (run 93, D93.4-D93.6, DEBT-650): be/scripts/pentest/pentest.mjs against be/dist on
+  # every push/PR, in parallel with e2e (no `needs`, no secrets). `--timing off` drops the AUTHN-ENUM-TIME-* timing
+  # group (median diffs are noise on a shared 2-vCPU runner, DEBT-658) and records AUTHN-ENUM-SHAPE-* (same
+  # status/body/headers) instead; the full run WITH timing stays manual (runbook-deploy §4 step 0). Exit 0 green;
+  # 1 a `must` check failed / exposure filter / refused; 2 time budget. A failing `should` check does not change
+  # the exit code. Evidence passes the exposure filter (D90.17) before it is written; uploaded as an artifact.
+  # Services + Mongo rs0 are copied from the e2e job (same digests, same ports = the harness constants).
+  pentest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      redis:
+        image: redis:7.4.10-bookworm@sha256:e9b2e45ecd47fbb69b877cf8d045d5cccaaaed52524b6e098b4abe8212994f73 # 7.4.10-bookworm, pinned 2026-11-12 (DEBT-590)
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+      mailpit:
+        image: axllent/mailpit:v1.21@sha256:81370195cd4a0eab9604d17c2617a7525b0486f9365555253b6c5376c6350f1a # v1.21, pinned 2026-11-12 (DEBT-590)
+        ports:
+          - 1025:1025
+          - 8025:8025
+        options: >-
+          --health-cmd "/mailpit readyz"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Enable corepack (pnpm)
+        run: corepack enable
+
+      - name: Get pnpm store path
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-
+
+      - name: Install
+        run: pnpm i --frozen-lockfile
+
+      - name: Start Mongo replica set (rs0)
+        run: |
+          # mongo 7.0.43, pinned 2026-11-12 (DEBT-590)
+          docker run -d --name vg-ci-mongo -p 27017:27017 mongo:7.0.43@sha256:1f995ad6fdb93244a1addab1b58f934a0bc2f5643c38e02f5e9d7f0c7d227a7b --replSet rs0
+          until docker exec vg-ci-mongo mongosh --quiet --eval 'db.adminCommand("ping").ok' >/dev/null 2>&1; do sleep 1; done
+          docker exec vg-ci-mongo mongosh --quiet --eval 'rs.initiate({_id:"rs0",members:[{_id:0,host:"localhost:27017"}]})'
+          for i in $(seq 1 60); do
+            [ "$(docker exec vg-ci-mongo mongosh --quiet --eval 'db.hello().isWritablePrimary')" = "true" ] && exit 0
+            sleep 1
+          done
+          echo "Mongo rs0 never became PRIMARY" >&2; exit 1
+
+      - name: Build BE
+        run: pnpm -C be build
+
+      - name: Run pentest harness (--timing off)
+        timeout-minutes: 10
+        # Harness budget (exit 2 + evidence) ends before the step timeout, so a hang still leaves evidence.
+        env:
+          PENTEST_BUDGET_MIN: "8"
+        run: node be/scripts/pentest/pentest.mjs --timing off --evidence "$RUNNER_TEMP/pentest-evidence"
+
+      # Also on failure/cancel: the evidence says which check failed (written only after the exposure filter).
+      - name: Upload pentest evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pentest-evidence
+          path: ${{ runner.temp }}/pentest-evidence
+          retention-days: 14
+          if-no-files-found: warn
 
   # Secret scan (B7.4, run 38): gitleaks over the WHOLE git history (fetch-depth: 0), same version as
   # the optional pre-commit hook (.pre-commit-config.yaml). Run from the upstream image pinned by

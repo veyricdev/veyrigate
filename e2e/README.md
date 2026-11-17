@@ -91,6 +91,10 @@ Firefox and WebKit, with one RP on the same site as the IdP and one on a differe
 | `https://app.beta.localhost:8443` | RP `x3-beta`, cross-site | fe-sso-test Vite `127.0.0.1:5274` |
 
 - `*.localhost` resolves to loopback in all three browsers: no `hosts` change, no proxy flag.
+- All four servers (BE, both Vites, `x3/tls-proxy.mjs`) start with `node` directly, never through
+  `pnpm run` (DEBT-678/681): the BE runs `node node_modules/ts-node/dist/bin.js test/e2e/e2e-main.ts`
+  in `be/` after the pnpm one-shot steps. They inherit the runner env plus `webServer.env`, without
+  the pnpm shim's `NODE_PATH`/`npm_*` variables (same for the default suite).
 - `x3/tls-proxy.mjs` (Node built-ins only) listens on **127.0.0.1:8443 only** and routes by `Host`.
   At start it generates a self-signed cert with **`openssl`** into `e2e/.x3-tls/` (git-ignored,
   2 days). The cert is never installed anywhere; browsers use `ignoreHTTPSErrors`. If `openssl` is

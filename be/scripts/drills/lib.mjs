@@ -7,7 +7,7 @@ import { closeSync, existsSync, mkdirSync, openSync, rmSync, writeFileSync } fro
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { connect as netConnect } from 'node:net';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -591,12 +591,15 @@ export function budget(ms) {
 }
 
 /**
- * One drill at a time on this host (both drills share Redis db 7 / port 4987): an exclusive lock file. A crash
- * leaves it behind; the message says which file to remove after checking no drill runs.
- * CodeQL #36 (run 92): in the operator's checkout (be/), not the shared world-writable tmpdir where another
- * local user could pre-create or link the name; created exclusively (O_EXCL), owner-only (0600).
+ * One drill/pentest at a time (they share Redis db 7 / port 4987): an exclusive lock file. A crash leaves it
+ * behind; the message says which file to remove after checking no drill runs.
+ * DEBT-676 (run 93, D93.8): in the OS user's home, so one lock per OS user on the host across every checkout (was
+ * be/ = per checkout). Not the shared world-writable tmpdir where another local user could pre-create or link the
+ * name (CodeQL #36); created exclusively (O_EXCL, refuses a planted file or symlink), owner-only (0600). Do not run
+ * under sudo (HOME changes); a second OS user is still stopped by assertNamespace. Drills/pentest never run on a
+ * production host (127.0.0.1 dev infrastructure only).
  */
-export const LOCK_FILE = join(BE_DIR, '.vg-drill.lock');
+export const LOCK_FILE = join(homedir(), '.vg-drill.lock');
 export function acquireLock(drill) {
   try {
     const fd = openSync(LOCK_FILE, 'wx', 0o600);

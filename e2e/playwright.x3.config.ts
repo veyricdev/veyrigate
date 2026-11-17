@@ -60,11 +60,17 @@ export default defineConfig({
     { name: "firefox", use: { ...devices["Desktop Firefox"], ignoreHTTPSErrors: true } },
     { name: "webkit", use: { ...devices["Desktop Safari"], ignoreHTTPSErrors: true } },
   ],
+  // DEBT-681 (run 93): every long-running server starts with `node` directly, as in
+  // `playwright.config.ts` (DEBT-678); one-shot steps before the BE still use pnpm. Why pnpm hurts is a
+  // HYPOTHESIS (pnpm 12.6.0 changelog: it forwards termination signals to its script, so the script
+  // likely runs outside the process group Playwright SIGKILLs on Linux and holds the stdout/stderr pipes).
+  // Confirmation criterion: with DEBUG=pw:webserver, one `Terminated the WebServer` line per server = 4
+  // here (BE, vite alpha, vite beta, tls-proxy). X3 does not run in CI, so this is checked on Windows only.
   webServer: [
     {
       command:
         "pnpm -C be build && node be/test/e2e/assert-dist-clean.mjs && pnpm -C be db:sync-indexes && " +
-        `${seedE2eAdmin} && pnpm -C be db:seed-dev && pnpm -C be start:e2e`,
+        `${seedE2eAdmin} && pnpm -C be db:seed-dev && cd be && node node_modules/ts-node/dist/bin.js test/e2e/e2e-main.ts`,
       cwd: repoRoot,
       url: `http://127.0.0.1:${X3_BE_PORT}/ready`,
       timeout: 320_000,

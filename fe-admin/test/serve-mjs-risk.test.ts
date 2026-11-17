@@ -7,6 +7,7 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import http from "node:http";
 import net from "node:net";
 import { devNull } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -43,6 +44,34 @@ export default {
     const { pathname } = new URL(request.url);
     if (process.env.FIXTURE_BROKEN) { console.error("env invalid: SESSION_SECRET"); return new Response("Internal Server Error", { status: 500 }); }
     if (pathname === "/healthz") return new Response("ok");
+    // DEBT-679 (run 93): app/BFF response streams that the client may abandon mid-body.
+    if (pathname === "/slow-stream" || pathname === "/error-stream") {
+      const chunk = new TextEncoder().encode("y".repeat(64 * 1024));
+      let n = 0;
+      return new Response(new ReadableStream({
+        async pull(controller) {
+          if (n++ > 0) await new Promise((r) => setTimeout(r, 50));
+          if (pathname === "/error-stream" && n === 3) return controller.error(new Error("upstream reset"));
+          if (n > 200) return controller.close();
+          controller.enqueue(chunk);
+        },
+      }), { headers: { "content-type": "text/plain" } });
+    }
+    if (pathname === "/fast-stream") {
+      let n = 0;
+      return new Response(new ReadableStream({
+        pull(controller) {
+          if (n++ >= 10) return controller.close();
+          controller.enqueue(new TextEncoder().encode("w".repeat(60 * 1024)));
+        },
+      }), { headers: { "content-type": "text/plain" } });
+    }
+    // The BFF does not pass upstream bodies through today (admin-api reads JSON): this route guards
+    // the day a passthrough is added.
+    if (pathname === "/proxy") {
+      const upstream = await fetch(process.env.FIXTURE_UPSTREAM);
+      return new Response(upstream.body, { status: upstream.status, headers: { "content-type": "text/plain" } });
+    }
     return new Response("app-404", { status: 404, headers: { "x-from": "app" } });
   },
 };
@@ -105,11 +134,29 @@ async function ready(port: number, child: ChildProcess, deadlineMs = 15_000) {
 
 let port = 0;
 let server: ReturnType<typeof start>;
+// Slow local upstream for the BFF passthrough case: 64 KB chunks every 50 ms (~13 MB), like a backend
+// answer the BFF forwards without buffering.
+let upstream: http.Server;
+let upstreamPort = 0;
 
 beforeAll(async () => {
   writeFixture();
+  upstream = http.createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "text/plain" });
+    let n = 0;
+    const timer = setInterval(() => {
+      if (n++ > 200 || res.destroyed) {
+        clearInterval(timer);
+        return res.end();
+      }
+      res.write("z".repeat(64 * 1024));
+    }, 50);
+    res.on("close", () => clearInterval(timer));
+  });
+  await new Promise<void>((r) => upstream.listen(0, "127.0.0.1", r));
+  upstreamPort = (upstream.address() as net.AddressInfo).port;
   port = await freePort();
-  server = start(port);
+  server = start(port, { FIXTURE_UPSTREAM: `http://127.0.0.1:${upstreamPort}/` });
   expect(await ready(port, server.child), server.log.text).toBe(true);
 }, 30_000);
 
@@ -118,6 +165,8 @@ afterAll(async () => {
     server.child.kill();
     await server.exited;
   }
+  upstream?.closeAllConnections();
+  await new Promise((r) => upstream?.close(r));
   rmSync(ROOT, { recursive: true, force: true });
 });
 
@@ -137,7 +186,8 @@ describe("serve.mjs assets middleware", () => {
   // undici then closed it again: an uncaught ERR_INVALID_STATE that killed the process. curl is the client
   // of the image smoke and exists on the CI runner and on Windows 10+; missing => the test fails.
   it("the process survives curl fetching assets (closes the socket right after the body)", async () => {
-    for (const path of [ASSET, BIG_ASSET, ASSET]) {
+    // BIG_ASSET 5 times (run 93): one fetch hit the run 92 crash only about every other run.
+    for (const path of [ASSET, BIG_ASSET, BIG_ASSET, BIG_ASSET, BIG_ASSET, BIG_ASSET, ASSET]) {
       const { stdout } = await execFileP("curl", ["-sS", "-o", devNull, "-w", "%{http_code}", `http://127.0.0.1:${port}/assets/${path}`]);
       expect(stdout).toBe("200");
     }
@@ -202,6 +252,60 @@ describe("serve.mjs assets middleware", () => {
     expect(res.body).not.toContain("serveStatic");
     if (res.status === 200) expect(res.headers["x-content-type-options"]).toBe("nosniff");
   });
+});
+
+/** Send a GET, wait for the first body byte (past the header block), then destroy the socket. */
+function abortAfterFirstByte(path: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const sock = net.connect(port, "127.0.0.1");
+    let buf = Buffer.alloc(0);
+    let done = false;
+    const finish = (gotBody: boolean) => {
+      if (done) return;
+      done = true;
+      sock.destroy();
+      resolve(gotBody);
+    };
+    sock.on("data", (d) => {
+      buf = Buffer.concat([buf, d]);
+      const split = buf.indexOf("\r\n\r\n");
+      if (split >= 0 && buf.length > split + 4) finish(true);
+    });
+    sock.on("error", () => finish(false));
+    sock.on("close", () => finish(false));
+    sock.write(`GET ${path} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n\r\n`);
+  });
+}
+
+// DEBT-679 (run 93, D93.1): run 92 only fixed the static assets. App and BFF responses are web streams
+// too (SSR, `fetch()` passthrough of an upstream body); a client leaving mid-body, or the stream itself
+// failing mid-body, must not kill the process (uncaught ERR_INVALID_STATE as in run 92).
+// The mid-body cases use a raw socket (close after the first body byte), not curl as D93.1 says: curl
+// reads to the end. That probe does NOT hit the run 92 class (close right after the LAST byte while a
+// read is pending), so the curl case below covers it for a finite, fast app stream.
+describe("serve.mjs app response streams", () => {
+  it.each([
+    ["slow large app stream, client closes after the first byte", "/slow-stream"],
+    ["BFF passthrough of a slow upstream fetch() body, client closes after the first byte", "/proxy"],
+    ["app stream errors mid-body (controller.error)", "/error-stream"],
+  ])("%s => process alive, no ERR_INVALID_STATE, next /healthz 200", async (_name, path) => {
+    for (let i = 0; i < 3; i++) expect(await abortAfterFirstByte(path), path).toBe(true);
+    await new Promise((r) => setTimeout(r, 600));
+    expect(server.child.exitCode, server.log.text).toBeNull();
+    expect(server.log.text).not.toContain("ERR_INVALID_STATE");
+    expect((await raw(port, "GET", "/healthz")).status).toBe(200);
+  }, 20_000);
+
+  it("curl fetching a fast finite app stream (~600 KB) => 200, process alive, next /healthz 200", async () => {
+    for (let i = 0; i < 3; i++) {
+      const { stdout } = await execFileP("curl", ["-sS", "-o", devNull, "-w", "%{http_code}", `http://127.0.0.1:${port}/fast-stream`]);
+      expect(stdout).toBe("200");
+    }
+    await new Promise((r) => setTimeout(r, 600));
+    expect(server.child.exitCode, server.log.text).toBeNull();
+    expect(server.log.text).not.toContain("ERR_INVALID_STATE");
+    expect((await raw(port, "GET", "/healthz")).status).toBe(200);
+  }, 30_000);
 });
 
 describe("serve.mjs boot", () => {

@@ -1,0 +1,106 @@
+# Log run 93
+
+- 2026-11-17T07:26:28Z orchestrator: mở run sau run 92 (người dùng "tiếp tục"). Chọn việc làm được trong repo: DEBT-679 (BFF crash khi client huỷ stream), DEBT-681, DEBT-258 (go-live 3), DEBT-650 (pentest trong CI), DEBT-674/676/677. Go-live (1)/DEBT-670 cần môi trường thật ⇒ ngoài phạm vi. Analyst bỏ qua; gửi tech-lead fold.
+- 2026-11-17T07:33:09Z tech-lead fold: **PASS** có điều kiện D93.1–D93.12 (cuối tasks.md, chi tiết review-techlead.md). Đã vá 5 lỗ hổng bằng quyết định:
+  - harness chỉ có `--only`, nhóm thời gian nằm trong AUTHN ⇒ thêm cờ `--timing off`, dùng check `AUTHN-ENUM-SHAPE-*` thay thế (D93.4);
+  - evidence cố định ở runs/90 ⇒ thêm `--evidence <dir>`, CI đẩy lên artifact (D93.5);
+  - lô C không chạy harness cục bộ; gate E chạy `--timing off` → kiểm SMTP 220 → bản đầy đủ (D93.6/D93.10);
+  - X3 có 4 webServer ⇒ tiêu chí là 4 dòng Terminated, không phải 3 (D93.2);
+  - spec khoá chạy với HOME/USERPROFILE giả (D93.8).
+  Chốt:
+  - T4: job `pentest` riêng, chạy **mỗi push/PR**, timeout 15', ước tính 5–6', song song với e2e nên không tăng wall-clock; mutation m1–m4 không chạy trong CI (mở DEBT-682);
+  - T3: phạm vi theo dòng (runbook-ops §0/§3c/§4b, runbook-deploy 68/79/113/157/524), script ops đã đúng từ run 87;
+  - T5: khoá ở homedir hợp lệ vì drill/pentest không chạy trên host production;
+  - T1: 3 ca gồm passthrough `fetch()` của BFF và lỗi upstream giữa body.
+  Lô: A (frontend-dev T1+T2) song song B (backend-dev T3); C→D (backend-dev T4→T5) sau khi A xong X3. Không sửa code, không commit.
+- 2026-11-17 backend-dev lô B (T3, DEBT-258) xong, chỉ docs:
+  - runbook-ops §0 mongosh = URI không credential + `-u <user>` (prompt); khối cổng §0 + §4b b5: `read -rs -p 'MONGO_URI: ' MONGO_URI && echo && export MONGO_URI &&` (thêm `&&` ⇒ read EOF/Ctrl-D thì không chạy pnpm, đã thử: exit 1) + câu giải thích lệnh ghép/subshell/`/proc/<pid>/environ`/thay thế `$(cat <file 0600>)`; §3c `MONGO_URI` + `ADMIN_SEED_PASSWORD` qua `read -rs`. `bash -n` 2 khối OK.
+  - runbook-deploy 68/79/113 (§2a/2c), 524 (§12), 640 (§15, prose) ⇒ URI không credential + `-u <user>`; 157 (§4 b0) theo D93.4–D93.6 (`--evidence`, job CI `pentest --timing off`, bỏ "Chưa có trong CI").
+  - Giữ nguyên (D93.3): runbook-ops YAML 0600 (giờ dòng 352), `ops/backup/mongo-{backup,restore}.sh` (`--config` 0600, từ chối `MONGO_URI` có `@`, mongosh qua stdin — đã kiểm lại), `docker-smoke.sh:62/242`, release-checklist:329.
+  - Grep 1 `grep -nE "export MONGO_URI='|mongosh \"?<MONGO_URI>|ADMIN_SEED_PASSWORD='" docs/agile/sso-idp/runbook-*.md` ⇒ 0 dòng (exit 1).
+  - Grep 2 ⇒ 4 dòng: runbook-ops.md:352 (YAML, = dòng 345 cũ), docker-smoke.sh:62, :242, **be/scripts/drills/backup-restore-drill.mjs:216** — ngoài danh sách D93.3 nhưng chấp nhận: ca âm AC3 dựng URI `drill:<hex ngẫu nhiên>@127.0.0.1` truyền qua env để chứng minh script TỪ CHỐI URI có credential; không phải secret, không lên argv. Không sửa.
+  - Đóng DEBT-258 ⇒ go-live (3) đạt mức repo. Không đụng file lô A. Không commit. → senior-reviewer lô B.
+- 2026-11-17 senior-reviewer lô B (T3, DEBT-258): **PASS**, chi tiết ở review-senior.md mục "Lô B". 0 🔴.
+  - Đã tự kiểm:
+    - `bash -n` khối §0 và §3c: OK.
+    - Mô phỏng EOF: exit 1, không chạy lệnh sau.
+    - Nhập rỗng: `node --env-file-if-exists` không ghi đè biến env rỗng và zod `MONGO_URI` có `min(1)` ⇒ exit 1, không rơi về `be/.env`.
+    - `ops/backup/*.sh`: `--config` 0600 và từ chối `*@*`, nhất quán với runbook.
+    - Grep 1: 0 dòng. Grep 2: 4 dòng.
+  - Chấp nhận 2 lệch D93.3: thêm `&&`; sửa thêm runbook-deploy:640.
+  - Chấp nhận dòng 4 của grep 2: `backup-restore-drill.mjs:216` là ca âm AC3, hex ngẫu nhiên, truyền qua env.
+  - 🟡 B-1, ràng buộc lô C: runbook-deploy:157 đang mô tả trước cờ `--evidence`/`--timing off`, job `pentest`, artifact `pentest-evidence` và `AUTHN-ENUM-SHAPE-*`. Ở HEAD, `pentest.mjs` chưa nhận `--evidence` (sẽ exit 1 kèm usage).
+    - Lô C phải khớp đúng các tên trên, mặc định `--timing on`, `--evidence` tương đối thì resolve theo cwd.
+    - Không commit dòng 157 khi chưa có lô C.
+  - 🟡 B-2: §0 bỏ gợi ý `ADMIN_SEED_*`, nên khi đổi khối sang `db:seed` người trực dễ `export ADMIN_SEED_PASSWORD='…'` inline. Cần thêm nửa câu "secret khác cũng `read -rs` như §3c". Sửa trong run 93, không sửa thì orchestrator mở DEBT.
+  - 💭 3: ghi chú file 0600 chỉ chứa URI; DEBT-258 thiếu 2b; dòng 42 dài.
+  - → tester/orchestrator; senior lô C đối chiếu B-1.
+- 2026-11-17T07:38:50Z orchestrator: áp 🟡 B-2 senior (runbook-ops §0: secret khác cũng `read -rs` như §3c). B-1 (runbook-deploy §4 bước 0 mô tả trước `--evidence`/`--timing off`/job `pentest`/artifact `pentest-evidence`/`AUTHN-ENUM-SHAPE-*`) ⇒ ràng buộc khớp nguyên văn cho lô C.
+- 2026-11-17T07:48:30Z frontend-dev lô A (T1+T2): **T1 DEBT-679 XANH ngay, không sửa `serve.mjs`** — 3 ca D93.1 trong `fe-admin/test/serve-mjs-risk.test.ts` (`/slow-stream` 64 KB/50 ms, `/proxy` passthrough `fetch()` từ upstream `node:http` chậm, `/error-stream` `controller.error()` ở chunk 3), mỗi ca 3 lần huỷ socket sau byte body đầu, chờ 600 ms ⇒ `exitCode` null, không `ERR_INVALID_STATE`, `/healthz` 200. Thử thêm (không giữ) 40 lần/ca, huỷ ngay khi nhận header, nhịp 0–120 ms: vẫn xanh. Lý do: srvx 0.11.22 `streamBody` cancel reader kèm `.catch`; lỗi run 92 chỉ do bọc lại body asset tĩnh. Không cần `process.on` ⇒ không có test âm.
+  - `pnpm -C fe-admin test` 69 file / **1657 passed** (1654 + 3); `lint` exit 0; `typecheck` exit 0; `build` ✓ built.
+  - **T2 DEBT-681**: X3 BE ⇒ `cd be && node node_modules/ts-node/dist/bin.js test/e2e/e2e-main.ts`; comment giả thuyết pnpm 12.6 + tiêu chí (3 dòng `playwright.config.ts`, 4 dòng X3, X3 chỉ Windows) ở cả hai config; `e2e/README.md` ghi chú không còn `NODE_PATH`/`npm_*` của shim pnpm.
+  - `pnpm -C e2e typecheck` exit 0; `DEBUG=pw:webserver timeout 30m pnpm -C e2e e2e:x3` ⇒ **42 passed (9.5m)**, exit 0, **4** dòng `pw:webserver Terminated the WebServer` (07:47:49.637–07:47:50.706Z); netstat sau run: 4100/5273/5274/8443 không LISTEN. Không chạy song song int; Mailpit không dùng.
+  - Đóng DEBT-679, DEBT-681 trong backlog. Không commit. ⇒ senior-reviewer lô A; lô C có thể bắt đầu (X3 đã xong).
+- 2026-11-17 senior-reviewer lô A (T1 DEBT-679, T2 DEBT-681): **PASS**, 0 🔴, chi tiết review-senior.md mục "Lô A".
+  - vitest `serve-mjs-risk.test.ts` ×3: 36/36. srvx 0.11.22 `streamBody` không có rejection hở; 3 ca đi đúng đường `streamBody`. SSR thật dùng `renderToReadableStream` (react-dom 19.3.0 node), `dist/server` không `toWeb`.
+  - Mutation (scratchpad): `serve.mjs` hỏng kiểu run 92 + curl ⇒ exit 1 `ERR_INVALID_STATE`; cùng bản hỏng + đầu dò huỷ-sau-byte-đầu của test ⇒ xanh. Đường app với `Readable.toWeb` + curl ⇒ sống. ⇒ đóng DEBT-679 có căn cứ, nhưng 3 ca mới không RED được với lớp lỗi run 92.
+  - T2 tương đương `start:e2e`; x3.log 4 dòng Terminated, 42 passed.
+  - 🟡 A-1: thêm 1 ca curl tải hết một stream app web hữu hạn (đúng D93.1 "client curl"); 🟡 A-2: README "env comes only from webServer.env" sai (Playwright kế thừa `process.env`). Không sửa trong run ⇒ orchestrator mở DEBT.
+  - → tester (gate E) / orchestrator.
+- 2026-11-17T08:20:00Z frontend-dev lô A retry (senior 🟡 A-1/A-2 + nit):
+  - **Lệch D93.1 ghi nhận:** 3 ca giữa body dùng socket thô huỷ sau byte body đầu, không dùng curl (curl đọc hết body). Senior chứng minh đầu dò này không bắt lớp lỗi run 92. Comment trong test ghi rõ; ca `/proxy` ghi "BFF hiện đọc JSON, route phòng khi thêm passthrough".
+  - **A-1:** thêm route `/fast-stream` (web `ReadableStream` hữu hạn 10×60 KB, không chờ) + ca `curl -sS -o <devNull> -w %{http_code}` ×3 ⇒ 200, process sống, không ERR_INVALID_STATE, `/healthz` 200. Nit: tách toán tử phẩy ở upstream.
+  - **Mutation** (`serve.mjs` sửa tạm rồi khôi phục, `git status fe-admin/serve.mjs` sạch):
+    - M1 hỏng kiểu run 92 (asset `new Response(found.body, …)`): vitest file 37/37 xanh lượt 1, lượt 2 đỏ ca curl asset của run 92. Ca mới không đỏ được với M1 vì M1 chỉ chạm đường asset.
+    - Script senior `redcheck2.mjs` (cần `MSYS_NO_PATHCONV=1` trong Git Bash), ×3: `/assets/big.js` curl broken ⇒ `exitCode=1 ERR_INVALID_STATE=true` 3/3; `/web` curl broken ⇒ sống 3/3.
+    - M2 middleware bọc lại mọi body app `new Response(r.body, …)` ⇒ 37/37 xanh. M3 bọc qua `Readable.toWeb(Readable.fromWeb(r.body))` ⇒ 37/37 xanh. Không dựng được mutation nào trên đường app làm ca mới ĐỎ: lớp lỗi run 92 chỉ có ở `NodeResponse` của srvx static.
+    - Phụ: ca curl asset của run 92 chỉ bắt M1 1/2 lượt (1 lần BIG_ASSET), script senior bắt 5/5 curl. Đề nghị orchestrator cân nhắc DEBT nâng số lần curl BIG_ASSET; không sửa ở đây (ngoài phạm vi).
+  - **A-2:** `e2e/README.md` sửa thành "inherit the runner env plus `webServer.env`, without the pnpm shim's `NODE_PATH`/`npm_*`".
+  - Verify: `vitest run test/serve-mjs-risk.test.ts` ×3 ⇒ 37/37 cả 3 lượt; fe-admin `lint` exit 0, `typecheck` exit 0. Ghi chú đóng DEBT-679 trong backlog dẫn bằng chứng mutation. Không commit.
+- 2026-11-17 backend-dev lô C (T4, DEBT-650) xong code; harness KHÔNG chạy cục bộ (DEBT-664, D93.6/D93.10):
+  - `pentest.mjs`: cờ `--evidence <dir>` (`resolve()` theo cwd, mặc định giữ runs/90) + `--timing on|off` (mặc định `on`); giá trị rỗng/thiếu/`--timing` khác on|off ⇒ usage, exit 1 trước mọi kết nối; `evidence.profile.timing`, dòng log `timing checks skipped (--timing off, D93.4)`, `limitations` theo chế độ. `checks.mjs` AUTHN: `off` ⇒ mỗi case 5 cặp xen kẽ + **1 cặp khởi động bị loại** (lệch nhỏ D93.4: cùng kỷ luật lượt đo, tránh fail giả do response đầu), ghi `must` `AUTHN-ENUM-SHAPE-<case>` (shapeOf: status/body/headers), không ghi `AUTHN-ENUM-TIME-*`; phần còn lại AUTHN + nhóm khác không đổi. Exit: chỉ `must.fail`/error/namespace bẩn/exposure đổi exit, `should` không.
+  - `ci.yml` job `pentest` (sau `e2e`): 15', không `needs`/secret/env, services + checkout/node/corepack/pnpm cache/install + Mongo rs0 **giống hệt** e2e (so bằng js-yaml 4.3.2: `services identical: true`, `mongo step identical: true`, step 0–5 identical), `pnpm -C be build`, step `node be/scripts/pentest/pentest.mjs --timing off --evidence "$RUNNER_TEMP/pentest-evidence"` 10', upload `pentest-evidence` `if: always()` 14 ngày `if-no-files-found: warn` cùng SHA pin; dòng 4 thêm `pentest` vào danh sách required checks. Harness không dùng `docker exec veyrigate-mongo` (chỉ drill) ⇒ chạy được với `vg-ci-mongo`.
+  - Verify: `node --check` pentest/checks/mutate/ctx OK; dry-run args `--help`, `--timing bogus`, `--timing`, `--evidence`, `--evidence --timing off`, `--timing off --evidence`, `--evidence ''`, `--bogus x` ⇒ đều usage + exit=1. B-1 đối chiếu runbook-deploy §4 bước 0: khớp cả 4 điểm, không sửa runbook. **Chỉ CI xác nhận được**: job chạy xanh, thời lượng, artifact, `must.fail=0`, số SHAPE thay TIME (D93.11).
+- 2026-11-17 backend-dev lô D (T5) xong:
+  - DEBT-677: `logout.service.ts` chuyển `stringLogoutParams` + doc lên trên JSDoc `LogoutService` (diff 7+/7−, thuần di chuyển).
+  - DEBT-676: `LOCK_FILE = join(homedir(), '.vg-drill.lock')` + comment D93.8; bỏ dòng `.gitignore`. `drills-lock.spec.ts` child với HOME/USERPROFILE tạm: RED trước sửa (`dir` = be/, `inBe` true) → GREEN; `~/.vg-drill.lock` thật không tồn tại trước/sau.
+  - DEBT-674: `codeql.yml` init `config` inline `paths-ignore` theo D93.7 (parse js-yaml OK, `queries: security-extended` giữ). Số cảnh báo sau: chỉ đo sau push.
+  - Verify: `pnpm -C be typecheck` exit 0; `lint` exit 0; `timeout 15m pnpm -C be test` 65 suites / **1285 passed**; int `test/run92-codeql.int-spec.ts` (logout #9) 14/14. Đóng DEBT-674/676/677. Không commit. → senior-reviewer lô C+D.
+- 2026-11-17T08:35:00Z frontend-dev lô A retry 2 (orchestrator: không mở DEBT): ca curl asset run 92 trong `fe-admin/test/serve-mjs-risk.test.ts` giờ curl `BIG_ASSET` 5 lần (`[ASSET, BIG×5, ASSET]`) rồi mới assert sống / không ERR_INVALID_STATE / `/healthz` 200.
+  - M1 (`serve.mjs` hỏng kiểu run 92, sửa tạm bằng sed rồi khôi phục; `git status --short fe-admin/serve.mjs` rỗng): file test **ĐỎ 3/3 lượt**. Ca curl asset fail ở cả 3 lượt (~2.1 s); process chết nên 35 failed | 2 passed (37), Duration 20.19/20.22/20.26 s.
+  - `serve.mjs` hiện tại: **XANH 3/3** (37/37). Duration trước sửa 4.42/4.56/4.44 s, sau sửa 4.58/4.61/4.53 s (thêm khoảng 0.1 s).
+  - fe-admin `lint` exit 0, `typecheck` exit 0. Không commit.
+- 2026-11-17 senior-reviewer lô C+D: **PASS** (0 🔴, 1 🟡). Chi tiết: `review-senior.md`, mục "Lô C + D".
+  - **B-1 khớp đủ 4 điểm** ⇒ runbook-deploy:157 commit được cùng lô C.
+    - `--evidence` resolve theo cwd; cờ `--timing off` đúng chữ.
+    - Job `pentest`, artifact `pentest-evidence`.
+    - Khi `off` chỉ ghi `AUTHN-ENUM-SHAPE-*`.
+    - Mặc định `on`.
+  - **Đã kiểm:**
+    - js-yaml: services và bước Mongo rs0 giống hệt `e2e`; cổng khớp hằng harness; kế thừa `contents: read`; không secret.
+    - `codeql.yml`: config parse đúng.
+    - `node --check` 3 file: OK.
+    - `jest drills-lock.spec.ts` 1/1; khoá thật `~/.vg-drill.lock` không bị tạo.
+    - `logout.service.ts`: di chuyển thuần.
+    - `assertClean` chạy với mọi giá trị `--evidence`.
+    - Exit code chỉ phụ thuộc check `must`.
+    - Loại cặp khởi động không che oracle theo từng email.
+    - Dry-run với tham số sai: bị classifier chặn. Theo code, parser chạy trước mọi kết nối.
+  - **🟡 C-1:** step timeout 10' < budget nội bộ 20'.
+    - Harness treo trong CI ⇒ step bị huỷ, không có evidence.
+    - Comment của job ("2 time budget", "evidence on cancel") vì thế nói quá.
+    - Sửa comment hoặc mở DEBT (orchestrator chọn). Reviewer không ghi `backlog.md`.
+  - → tester gate E (D93.10).
+- 2026-11-17T08:04:18Z orchestrator: áp 🟡 C-1 senior — `pentest.mjs` budget đọc `PENTEST_BUDGET_MIN` (mặc định 20'), CI đặt 8' < step timeout 10' ⇒ hết budget vẫn exit 2 + evidence trước khi Actions huỷ step.
+- 2026-11-17T09:01Z tester gate E (D93.10): **PASS**. Chi tiết: `test-report.md`.
+  - be: unit 1285; typecheck exit 0; lint exit 0.
+  - fe-admin 1658; build OK. e2e typecheck OK.
+  - int FULL 2458/2458; `vg-int-*` 0 → 0.
+  - E2E 53/53, 3 dòng Terminated. X3 42/42, 4 dòng Terminated.
+  - Harness `--timing off` (evidence ở scratchpad): must 261/261, SHAPE 4, TIME 0, `profile.timing off`.
+  - Lượt đầy đủ: must 261/261, TIME 4. Evidence chính thức `runs/90…/evidence/pentest-20261117T085701Z.json`. Số must khớp: off = đầy đủ − 4 TIME + 4 SHAPE.
+  - `mutate.mjs all`: m1–m4 đỏ đúng 7/7; `be/dist` sha256 không đổi.
+  - Grep evidence: 0 secret.
+  - Dọn: `vg-pentest` vắng, db7 0, cổng trống.
+  - **SMTP:** còn 220 sau lượt off; **không 220 sau lượt đầy đủ** (DEBT-664). Không restart container. Người dùng cần restart `veyrigate-mailpit-1` trước việc cần thư.
+  - Không sửa code, không commit. → orchestrator commit + D93.11.

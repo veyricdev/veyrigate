@@ -3,6 +3,9 @@ name: CodeQL
 # SAST (B7.4, run 38): CodeQL `security-extended` over the TS/JS sources (be, fe-*, e2e). The repo is
 # public, so code scanning is free. No build is needed for JS/TS (`build-mode: none`). Results go to
 # the Security tab; first-run triage is tracked by DEBT-225.
+# Run 93 (DEBT-674, D93.7): test code is not scanned (`paths-ignore`; 17 of the 40 run-92 alerts were test code,
+# dismissed one by one as "used in tests"). Still scanned: be/src (minus colocated specs), be/scripts, fe-admin/src,
+# fe-sso-test/src, ops.
 on:
   push:
     branches: [develop, main]
@@ -35,6 +38,15 @@ jobs:
           languages: javascript-typescript
           build-mode: none
           queries: security-extended
+          config: |
+            paths-ignore:
+              - be/test/**
+              - fe-admin/test/**
+              - fe-sso-test/test/**
+              - e2e/**
+              - '**/*.spec.ts'
+              - '**/*.test.ts'
+              - '**/*.test.tsx'
 
       - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:

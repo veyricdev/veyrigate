@@ -48,6 +48,8 @@ export default defineConfig({
   // changelog), so the script presumably runs outside the group and outlives a SIGKILLed pnpm,
   // holding the pipe. Started with `node`, the server is in the killed group (Windows: taskkill /T).
   // One-shot steps before the server still use pnpm (they have exited by then).
+  // The pnpm process-group mechanism is a HYPOTHESIS (pnpm 12.6.0 changelog), not proven. Confirmation
+  // criterion: with DEBUG=pw:webserver, 3 `Terminated the WebServer` lines (one per server; CI #48).
   webServer: [
     {
       // Build once, prove dist is clean, sync indexes, seed, then run the E2E entry (mock Google).

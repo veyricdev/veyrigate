@@ -65,7 +65,7 @@ Nếu không backfill, lookup `find()`/`isCovered()` theo `resource:''` sẽ KH�
 ép re-consent (fail-closed nhưng gây UX xấu). Chạy backfill trước khi sync:
 
 ```js
-// mongosh <MONGO_URI>
+// mongosh "mongodb://<hosts>/<DB>?replicaSet=rs0&authSource=admin" -u <user>   (URI không credential, mongosh hỏi mật khẩu — DEBT-258)
 db.consents.updateMany({ resource: { $exists: false } }, { $set: { resource: '' } });
 ```
 
@@ -76,7 +76,7 @@ index sẽ **FAIL (E11000)**. `syncAllIndexes` fail-closed: ném lỗi, **không
 Kiểm trước:
 
 ```js
-// mongosh <MONGO_URI> — liệt kê nhóm vi phạm (count > 1) theo khoá mới
+// mongosh "mongodb://<hosts>/<DB>?replicaSet=rs0&authSource=admin" -u <user> — liệt kê nhóm vi phạm (count > 1) theo khoá mới
 db.consents.aggregate([
   { $group: {
       _id: { userId: '$userId', clientId: '$clientId', resource: { $ifNull: ['$resource', ''] } },
@@ -110,7 +110,7 @@ Phục hồi (theo thứ tự, không bỏ bước):
 ### 2c. Xác minh sau sync
 
 ```js
-// mongosh <MONGO_URI>
+// mongosh "mongodb://<hosts>/<DB>?replicaSet=rs0&authSource=admin" -u <user>   (URI không credential, mongosh hỏi mật khẩu — DEBT-258)
 db.consents.getIndexes();
 // Kỳ vọng: _id_ + userId_1_clientId_1_resource_1 (unique: true); KHÔNG còn userId_1_clientId_1.
 ```
@@ -154,7 +154,7 @@ fail-closed (thao tác ghi phiên/code lỗi rõ ràng) thay vì âm thầm mấ
 
 ## 4. Thứ tự deploy đề xuất
 
-0. Từ run 90 (D90.16, trước mỗi bản phát hành, trên máy dev/CI nội bộ, không phải production): `pnpm -C be build && timeout 25m node be/scripts/pentest/pentest.mjs` phải exit 0 (mọi check `must` xanh); ghi tên evidence `docs/agile/sso-idp/runs/<run>/evidence/pentest-*.json` vào ticket. Chạy SAU các bước cần Mailpit (E2E), vì lượt pentest gửi vài trăm thư (DEBT-664). Chưa có trong CI (DEBT-650).
+0. Từ run 90 (D90.16, trước mỗi bản phát hành, trên máy dev/CI nội bộ, không phải production): `pnpm -C be build && timeout 25m node be/scripts/pentest/pentest.mjs --evidence docs/agile/sso-idp/runs/<run>/evidence` phải exit 0 (mọi check `must` xanh); ghi tên evidence `docs/agile/sso-idp/runs/<run>/evidence/pentest-*.json` vào ticket. Chạy SAU các bước cần Mailpit (E2E), vì lượt pentest gửi vài trăm thư (DEBT-664). Từ run 93 (D93.4–D93.6, DEBT-650): job CI `pentest` chạy harness mỗi push/PR với `--timing off` (bỏ nhóm đo thời gian `AUTHN-ENUM-TIME-*`, không ổn định trên runner dùng chung — DEBT-658; thay bằng `AUTHN-ENUM-SHAPE-*`), evidence là artifact CI `pentest-evidence` ⇒ CI xanh **không thay** lượt đầy đủ có đo thời gian chạy tay ở bước này.
 1. Backfill `resource` (2a).
 2. Kiểm duplicate (2b) — rỗng mới tiếp.
 2'. Kiểm duplicate ClientCredential (2d) — rỗng mới tiếp.
@@ -521,7 +521,7 @@ có thể lệch. **Chạy 3 truy vấn chỉ đọc dưới đây trên DB prod
 truy vấn chỉ `find`/`aggregate` không `$out`/`$merge`, không ghi gì):
 
 ```js
-// mongosh "<MONGO_URI>/<DB>" --quiet --file run75-check.js
+// mongosh "mongodb://<hosts>/<DB>?replicaSet=rs0&authSource=admin" -u <user> --quiet --file run75-check.js
 const ISSUER = 'https://id.example.com'; // = env ISSUER của BE
 const OIDC = ['openid', 'profile', 'email', 'offline_access'];
 const ADMIN = new URL('/admin/', ISSUER).href;
@@ -637,7 +637,7 @@ vô hại (mongoose strict không đọc, view admin không lộ) ⇒ dọn **m�
 (`lockedUntil` tương lai nhưng ≠ sentinel admin) vẫn chặn login tới khi hết hạn (≤ 15', run 85), rồi bị login thành công
 gỡ như cũ; khối dưới chỉ dọn bản **đã hết hạn**. Không bao giờ đụng sentinel admin `9999-12-31T23:59:59.999Z`.
 
-mongosh với URI production (secret store), mọi lệnh qua `d`; người chứng kiến đọc to dòng `DB:`. Dán từng khối:
+mongosh tới production bằng URI không credential + `-u <user>` (mật khẩu từ secret store, nhập ở prompt — DEBT-258), mọi lệnh qua `d`; người chứng kiến đọc to dòng `DB:`. Dán từng khối:
 
 ```js
 // (i) dry-run — chỉ đếm, ghi số vào ticket deploy
