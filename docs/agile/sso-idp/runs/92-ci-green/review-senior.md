@@ -213,3 +213,24 @@ net: -1 lines possible.
 ### ✂️ Ponytail
 
 Lean already. Ship. (Một file 33 dòng, mỗi mục là 1 comment + 1 fingerprint, đúng mức tối thiểu D92.8 yêu cầu.)
+
+## Lô A retry 1 (be-image, CI #43: Mongo smoke thành rs0) — `be/scripts/docker-smoke.sh`, chưa commit
+### Kết luận: PASS (kiểm tĩnh; hành vi thật chỉ chứng minh được trên CI, DEBT-675)
+### Tổng quan
+Sửa đúng nguyên nhân gốc (app production từ chối Mongo standalone, DEBT-483) thay vì nới check. Cách làm giống ci.yml `int`/`e2e`: rs0 một node, auth bật, keyFile chỉ tồn tại trong container. Credential rs-init đọc từ env của container mongo, nên không nằm trong argv hay log.
+### 🔴 Blocker
+- (không có)
+### Security invariants / trust boundaries đã kiểm
+- **Secret:** keyFile sinh trong `/tmp` của container mongo, không ra host, không vào log. Mật khẩu root không có trong `--eval` (JS đọc `process.env` trong container), stdout/stderr của mongosh bị bỏ, chỉ giữ `true`/`false`. `fail 0` không in giá trị nào. Check 11/12/13 vẫn grep `MONGO_PASSWORD`.
+- **Entrypoint mongo:7:** `--entrypoint sh -c '…; exec docker-entrypoint.sh "$@"' sh mongod …`, nên `$0=sh` và `$@=mongod --replSet rs0 --keyFile …`. Lệnh chạy dưới root (image không đặt USER), rồi entrypoint tự `gosu mongodb`. Bản standalone tạm bỏ `--replSet`, tạo root user qua localhost exception rồi khởi động lại với `--replSet`. Đây là mẫu phổ biến của image. keyFile có owner mongodb và mode 400 (umask 077, trước đó 600 root). Image dựa trên Ubuntu nên `base64 -w 0` và `head -c` có sẵn từ coreutils. 512 byte cho ra 684 ký tự base64 (≤ 1024), có một ký tự `=` padding, thuộc tập ký tự keyFile chấp nhận.
+- **Vòng init:** các trạng thái trung gian đều chỉ dẫn tới thử lại, không gây lỗi giả. Khi standalone tạm chưa có user thì auth fail. Khi đã có user thì gặp `NoReplicationEnabled`, bị rethrow. Lệnh initiate chỉ chạy khi gặp đúng `NotYetInitialized`, nên idempotent. Vòng chỉ dừng khi `isWritablePrimary === true`, hoặc khi container mongo chết thì break rồi `fail 0`.
+- **isSelf:** member `vg-b73b-mongo:27017` được phân giải qua `--hostname` (`/etc/hosts`) và DNS của network, khớp với tên mà app và driver dùng (`replicaSet=rs0` nhận đúng host từ `hello`).
+- **Các check sau:** check 4 (`/ready`) bây giờ cần PRIMARY, đã được đảm bảo trước khi app chạy. Check 7/8 chỉ dừng Redis, Mongo không bị ảnh hưởng. Check 9 dùng canary URI có `replicaSet=rs0` và fail ở bước env trước khi kết nối. Check 12/13 chạy `--network none` với dry-run, dòng `target:` cắt ở `?` nên không đổi.
+- **Quoting:** `$RS_INIT` nằm trong nháy kép, JS không có `'`, `|| true` an toàn với `pipefail`/`set -e`.
+### 🟡 Nên sửa
+- docker-smoke.sh:L127-132: comment ghi "up to 90 s" nhưng mỗi vòng còn tốn thời gian khởi động mongosh. Nếu mongod nhận kết nối mà treo, `connect()` sẽ chờ theo serverSelectionTimeout mặc định 30 s, nên trường hợp xấu nhất kéo dài nhiều phút. Hiện chỉ có job timeout chặn. Cân nhắc thêm `serverSelectionTimeoutMS=2000` vào URI trong `RS_INIT`, hoặc `timeout 10 docker exec …`, để giới hạn thời gian đúng như comment.
+- docker-smoke.sh:L133: khi `fail 0 "Mongo rs0 never became PRIMARY"` thì CI không có manh mối gì. Log mongod không chứa mật khẩu hay nội dung keyFile, nên có thể in `docker logs vg-b73b-mongo 2>&1 | tail -n 20 | cut -c1-400 >&2` trước `fail`, giống cách check 2 đang làm.
+### 💭 Nit
+- `head -c 513` (chia hết cho 3) sẽ không sinh padding `=`. Không bắt buộc.
+### ✂️ Ponytail
+Gọn rồi, có thể ship. (Thêm `--hostname` là thừa so với DNS của network nhưng giúp phân giải host của chính node khi chạy isSelf, nên giữ.)

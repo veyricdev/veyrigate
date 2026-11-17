@@ -11,6 +11,9 @@
 # secret, Vault app token) are generated per run, passed with `-e NAME` or stdin (never on a command
 # line, never in a host file) and never printed. Vault container logs are never printed (dev mode logs
 # its unseal key).
+# Mongo runs as a one-node replica set `rs0` (production refuses a standalone Mongo, DEBT-483; same
+# shape as the `int`/`e2e` jobs of ci.yml) with auth, hence an internal keyFile generated inside the
+# Mongo container (never on the host) and a member host `vg-b73b-mongo:27017` the app resolves.
 set -euo pipefail
 # Git Bash on Windows: keep /app, /tmp, ... as container paths (only for docker, curl needs host paths).
 docker() { MSYS_NO_PATHCONV=1 command docker "$@"; }
@@ -56,7 +59,7 @@ export VAULT_DEV_ROOT_TOKEN_ID="$VAULT_ROOT" MONGO_INITDB_ROOT_USERNAME=smoke MO
 
 # App env (fake, unreachable SMTP/issuer; .invalid never resolves).
 export ISSUER=https://idp.example.invalid
-export MONGO_URI="mongodb://smoke:${MONGO_PASSWORD}@vg-b73b-mongo:27017/sso-idp?authSource=admin"
+export MONGO_URI="mongodb://smoke:${MONGO_PASSWORD}@vg-b73b-mongo:27017/sso-idp?authSource=admin&replicaSet=rs0"
 export REDIS_URL=redis://vg-b73b-redis:6379/0
 export ACCESS_TOKEN_TTL=900 REFRESH_TOKEN_TTL=2592000 SESSION_IDLE_TTL=28800 SESSION_ABSOLUTE_TTL=2592000
 export SMTP_URL=smtp://127.0.0.1:1 ADMIN_SEED_EMAIL=admin@example.invalid
@@ -78,8 +81,13 @@ ENV_ARGS=(-e ISSUER -e MONGO_URI -e REDIS_URL -e ACCESS_TOKEN_TTL -e REFRESH_TOK
 
 remove_all
 docker network create "$NET" >/dev/null
-docker run -d --name vg-b73b-mongo --network "$NET" -e MONGO_INITDB_ROOT_USERNAME -e MONGO_INITDB_ROOT_PASSWORD \
-  "$MONGO_IMAGE" >/dev/null
+# replSet + auth needs a keyFile (mongod refuses otherwise): generated in the container's own /tmp,
+# owned by mongodb, mode 400, then the image's entrypoint runs unchanged (it creates the root user on a
+# temporary standalone first, then starts `mongod --replSet rs0 --keyFile ...`).
+docker run -d --name vg-b73b-mongo --hostname vg-b73b-mongo --network "$NET" \
+  -e MONGO_INITDB_ROOT_USERNAME -e MONGO_INITDB_ROOT_PASSWORD --entrypoint sh "$MONGO_IMAGE" -c \
+  'umask 077; head -c 512 /dev/urandom | base64 -w 0 >/tmp/mongo-keyfile && chown mongodb:mongodb /tmp/mongo-keyfile && chmod 400 /tmp/mongo-keyfile && exec docker-entrypoint.sh "$@"' \
+  sh mongod --replSet rs0 --keyFile /tmp/mongo-keyfile >/dev/null
 docker run -d --name vg-b73b-redis --network "$NET" "$REDIS_IMAGE" >/dev/null
 # Dev Vault with a generated TLS CA (production requires an https VAULT_ADDR); the certificate names the
 # container hostname, so the app verifies it with only that CA added (NODE_EXTRA_CA_CERTS).
@@ -102,6 +110,30 @@ APP_TOKEN="$(vault_root token create -policy=idp-signer -ttl=1h -field=token)"
 mask "$APP_TOKEN"
 vault_root read -format=json transit/keys/idp-signer >"$TMP/vault-key.json"
 docker exec vg-b73b-vault cat /vault/file/vault-ca.pem >"$TMP/vault-ca.pem"
+
+# Initiate rs0 and wait for PRIMARY (up to 90 s; the image first runs a temporary standalone to create
+# the root user, so this retries until the final replSet mongod answers). The credentials come from the
+# Mongo container's own env (never argv); mongosh output is discarded except the final true/false.
+RS_INIT='
+  const u = process.env.MONGO_INITDB_ROOT_USERNAME, p = process.env.MONGO_INITDB_ROOT_PASSWORD;
+  const d = connect("mongodb://" + u + ":" + p + "@127.0.0.1:27017/admin?authSource=admin&directConnection=true&serverSelectionTimeoutMS=2000&connectTimeoutMS=2000");
+  try { d.adminCommand({ replSetGetStatus: 1 }); } catch (e) {
+    if (e.codeName !== "NotYetInitialized") throw e;
+    d.adminCommand({ replSetInitiate: { _id: "rs0", members: [{ _id: 0, host: "vg-b73b-mongo:27017" }] } });
+  }
+  print(d.hello().isWritablePrimary === true);
+'
+primary=""
+for _ in $(seq 1 90); do
+  primary="$(timeout 10 docker exec vg-b73b-mongo mongosh --quiet --nodb --eval "$RS_INIT" 2>/dev/null | tail -n 1 || true)"
+  [ "$primary" = "true" ] && break
+  [ "$(docker inspect -f '{{.State.Running}}' vg-b73b-mongo 2>/dev/null)" = "true" ] || break
+  sleep 1
+done
+if [ "$primary" != "true" ]; then
+  docker logs vg-b73b-mongo 2>&1 | tail -n 20 | cut -c1-400 >&2 || true
+  fail 0 "Mongo rs0 never became PRIMARY"
+fi
 
 # The app runs the image command (`node dist/main.js`) as soon as the token file exists (Vault Agent
 # sink in production). The token goes in through stdin into the container's tmpfs, never through env,
@@ -207,7 +239,7 @@ pass 8 "docker stop with Redis down => exit 0 in ${took} s"
 # 9. a missing variable => exit != 0 within 20 s, log names it, never prints a value (canary)
 CANARY="$(secret 20)"
 mask "$CANARY"
-METRICS_TOKEN="$CANARY" MONGO_URI="mongodb://smoke:${CANARY}@vg-b73b-mongo:27017/sso-idp?authSource=admin" \
+METRICS_TOKEN="$CANARY" MONGO_URI="mongodb://smoke:${CANARY}@vg-b73b-mongo:27017/sso-idp?authSource=admin&replicaSet=rs0" \
   docker run -d --name vg-be-smoke-noenv --network "$NET" "${HARDEN[@]}" "${ENV_ARGS[@]}" -e METRICS_TOKEN \
   "$IMAGE" >/dev/null
 exit_code="$(timeout 20 docker wait vg-be-smoke-noenv || echo timeout)"
