@@ -797,6 +797,7 @@ Mục tiêu app này: **kiểm chứng IdP từ phía RP** — vừa là demo, v
   - **D91.10** `x-request-id` của client chỉ nhận từ địa chỉ thuộc `TRUST_PROXY` (CIDR qua `node:net` `BlockList`); proxy phải ghi đè header.
   - **D91.11** Shutdown chờ việc tách rời tối đa 5 s, sau đó log số việc còn dở và trả về (grace period mặc định 30 s của orchestrator còn dư).
   - **D91.12** `no-store` cho mọi trang HTML phụ thuộc phiên/CSRF qua helper chung; harness kiểm toàn bộ route HTML.
+  - **D92.1–D92.15** (run 92 CI xanh + CodeQL, chi tiết `runs/92-ci-green/tasks.md` § Quyết định D92.x; D92.15 trong `log.md`): CI timeout quality 30'/int 45'/e2e 60' (step Run E2E 50'); int build trước + `maxWorkers:1` `workerIdleMemoryLimit` 1 GB, heap 3072 chỉ trên CI; Redis service cho quality, Mailpit cho e2e, cầu chì e2e CI `maxFailures` 5 + `globalTimeout` 45'; smoke image chỉ kiểm trên CI (sinh `MFA_ENCRYPTION_KEYS`, Mongo rs0 auth+keyFile); gitleaks chỉ `.gitleaksignore` theo fingerprint có lý do, không nới rule/path, giá trị trên dòng mới phải dựng lúc chạy; CodeQL: sửa true positive kèm test âm, dismiss chỉ khi có bằng chứng (false positive / used in tests / won't fix, lý do ≤ 280 ký tự trong `codeql-triage.md`); không rewrite lịch sử git; D92.15 `sk_live_` ở run82-tester là canary ⇒ ignore.
 
   ---
 - **Không tự quyết (cần người dùng)**: push lên remote; cài Node 22.23.4 trên máy dev (Q62.2); xoá image Docker cũ; xoá DB test/dev; sửa `be/.env`.
