@@ -86,7 +86,7 @@ docker network create "$NET" >/dev/null
 # temporary standalone first, then starts `mongod --replSet rs0 --keyFile ...`).
 docker run -d --name vg-b73b-mongo --hostname vg-b73b-mongo --network "$NET" \
   -e MONGO_INITDB_ROOT_USERNAME -e MONGO_INITDB_ROOT_PASSWORD --entrypoint sh "$MONGO_IMAGE" -c \
-  'umask 077; head -c 512 /dev/urandom | base64 -w 0 >/tmp/mongo-keyfile && chown mongodb:mongodb /tmp/mongo-keyfile && chmod 400 /tmp/mongo-keyfile && exec docker-entrypoint.sh "$@"' \
+  'umask 077; head -c 512 /dev/urandom | base64 -w 0 >/tmp/mongo-keyfile && chown mongodb /tmp/mongo-keyfile && chmod 400 /tmp/mongo-keyfile && exec docker-entrypoint.sh "$@"' \
   sh mongod --replSet rs0 --keyFile /tmp/mongo-keyfile >/dev/null
 docker run -d --name vg-b73b-redis --network "$NET" "$REDIS_IMAGE" >/dev/null
 # Dev Vault with a generated TLS CA (production requires an https VAULT_ADDR); the certificate names the
