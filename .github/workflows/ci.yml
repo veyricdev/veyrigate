@@ -254,7 +254,12 @@ jobs:
           done
           echo "Mongo rs0 never became PRIMARY" >&2; exit 1
 
+      # Step fuse < job 60' (run 92, DEBT-678): the upload step below still runs if this one hangs.
+      # DEBUG: task start/finish and webServer "Terminating"/"Terminated" lines place any shutdown stall.
       - name: Run E2E (Playwright builds/seeds/starts BE + FE)
+        timeout-minutes: 50
+        env:
+          DEBUG: pw:test:task,pw:webserver
         run: pnpm -C e2e e2e
 
       # Also when cancelled or timed out (run 92, D92.5).

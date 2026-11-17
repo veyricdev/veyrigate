@@ -234,3 +234,32 @@ Sửa đúng nguyên nhân gốc (app production từ chối Mongo standalone, D
 - `head -c 513` (chia hết cho 3) sẽ không sinh padding `=`. Không bắt buộc.
 ### ✂️ Ponytail
 Gọn rồi, có thể ship. (Thêm `--hostname` là thừa so với DNS của network nhưng giúp phân giải host của chính node khi chạy isSelf, nên giữ.)
+
+## Lô A retry 2b (DEBT-678, CI #47: treo ở teardown webServer) — `e2e/playwright.config.ts`, `e2e/README.md`, `.github/workflows/ci.yml`, chưa commit
+### Kết luận: PASS (kiểm tĩnh + `pnpm -C e2e typecheck` 0; hết treo trên Linux chỉ CI chứng minh được)
+### Tổng quan
+Chẩn đoán lần này đúng chỗ: CI #47 có dòng `totp allocator` (worker đã thoát), sau đó là `Timed out waiting 2700s for the teardown for plugin setup` (2700 s đúng bằng `globalTimeout` 45' chỉ bật khi CI). Vậy test xong khoảng 13', rồi teardown webServer treo khoảng 32'. Cách sửa nhỏ, nhắm thẳng vào cơ chế treo, giữ nguyên chuỗi build/seed. Có thêm DEBUG để lần CI sau tự chứng minh hoặc bác giả thuyết.
+### Cơ chế (tự đọc `node_modules/.pnpm/playwright-core@1.64.0/.../lib/coreBundle.js:10023`, `playwright@1.64.0/.../lib/runner/index.js:~860-900`)
+- `launchProcess`: `detached: process.platform !== "win32"` và `shell: true`, nên `sh -c` làm trưởng nhóm process. `stdio: "stdin"` cho ra 3 pipe.
+- webServer không đặt `gracefulShutdown`, nên `attemptToGracefullyClose` throw. Khi đó `killProcess()` chạy `process.kill(-pid, "SIGKILL")` (Windows: `taskkill /T /F`), rồi `await waitForCleanup`. Promise này chỉ resolve ở sự kiện `close` (process thoát VÀ mọi pipe stdio đóng) và **không có hạn chờ**. Chỉ cần một process ngoài nhóm còn giữ stdout/stderr là treo mãi, khớp CI #47. Windows diệt theo cây nên không treo, khớp kết quả local sạch.
+- pnpm 12.6.0 (corepack, `%LOCALAPPDATA%/node/corepack/v1/pnpm/12.6.0`): chuỗi là `pnpm.mjs` → `spawnSync(pnpm-native)` → script. CHANGELOG.md:97 có ghi "properly forwards termination signals when running non-interactively without a terminal". Đây là chỗ dựa duy nhất. Không đọc được mã Linux, vì máy chỉ có `pnpm-native.exe` (Windows) và trong binary không có chuỗi `setsid/setpgid/process_group`, điều này đúng với dự đoán cho bản Windows. Nghĩa là **"script của pnpm nằm ngoài group" vẫn là suy luận, chưa chứng minh**. Dù vậy cách sửa vẫn đúng ở cả hai nhánh: server dài hạn nay là con trực tiếp của `sh` (trưởng nhóm), cùng group, nên chết theo SIGKILL group bất kể pnpm làm gì.
+- `sh -c 'A && … && cd be && node …'`: `cd` là builtin, `node` được fork hoặc exec bởi chính `sh`, không có `setsid`, nên cùng group. ts-node `dist/bin.js` không `esm` trong tsconfig nên chạy in-process (nếu có respawn thì cũng là con thường, cùng group). Vite 8 (rolldown native, in-process) cũng vậy. Không tìm thấy `detached`/`setsid` trong `be/test/e2e`, `be/src`, `fe-admin/src/server`, `e2e/config`. `mock-google.ts:182` chỉ có `server.unref()`, không phải process.
+### Tương đương hành vi với script cũ
+- BE: `start:e2e` = `ts-node test/e2e/e2e-main.ts`, cwd `be` (trước là `pnpm -C be`), giống hệt. `be/node_modules/ts-node/dist/bin.js` có tồn tại, là đích của shim `.bin/ts-node`. Env vẫn là `beEnv()` qua `webServer.env`, áp cho cả `sh` nên các bước seed cũng nhận. Không có `node-options`/`.npmrc`/`devEngines.runtime`/`use-node-version`. `engines.node` chỉ là ràng buộc, không pin runtime, nên `node` trên PATH chính là node mà pnpm dùng trước đây.
+- FE: `dev` = `vite`, cwd `fe-sso-test`, args rỗng, giống. fe-admin: `dev` = `vite dev`, cwd `fe-admin`, giống. Port và strictPort vẫn nằm trong vite config, không đổi.
+- Khác biệt còn lại: (a) mất các biến `npm_*`/`INIT_CWD`/`PATH+.bin` mà `pnpm run` thêm vào. Grep không thấy BE/vite config/e2e config đọc chúng. (b) mất `NODE_PATH` mà shim `.bin` đặt (gồm `node_modules/.pnpm/node_modules`, tức các gói hoist). Nếu có phantom dependency, nó sẽ lộ ra ở đây. Local Windows với config mới đã chạy 53 passed, và thuật toán resolve trên Linux giống Windows, nên rủi ro thấp (xem 🟡).
+- Windows: `cmd /c "… && cd be && node node_modules/…"` hoạt động vì repoRoot cùng ổ và node chấp nhận `/`. Vẫn diệt bằng `taskkill /T` như cũ. Bằng chứng: log 06:55Z ghi 53 passed, 3 cặp Terminating/Terminated đều < 0,4 s, cổng trống.
+### 🔴 Blocker
+- (không có)
+### Security invariants / trust boundaries đã kiểm
+- Exposure: `DEBUG=pw:webserver` làm Playwright đẩy toàn bộ stdout/stderr của 3 server ra log CI (`debugWebServer.enabled` → `onStdOut`). Env E2E đều là placeholder công khai, không phải secret (`e2e/config/env.ts` header, D89.4). Output seed chỉ in clientId và trạng thái, không in credential. Vì vậy không lộ secret thật. Không có trust boundary runtime nào bị chạm, đây chỉ là harness test và CI.
+- Fail-safe: nếu giả thuyết sai, `globalTimeout` 45' (đã chứng minh ở CI #47 là thoát được, exit 1) cộng step `timeout-minutes: 50` < job 60 vẫn chặn treo, và bước upload artifact chạy với `if: always()`. Kết quả xấu nhất vẫn là CI đỏ, không phải xanh giả.
+### 🟡 Nên sửa
+- `e2e/playwright.config.ts:44-50` (comment) đang viết như sự thật: "pnpm 12 forwards … so the script presumably runs outside the group". Từ "presumably" có rồi, nhưng cần nói rõ đây là giả thuyết chưa chứng minh trên Linux, và tiêu chí xác nhận là dòng `pw:webserver Terminated the WebServer` ×3 trong log CI. Khi CI xanh thì ghi lại vào DEBT-678 hoặc log. Nếu CI vẫn treo, người sau sẽ không bị comment dắt sai hướng.
+- `NODE_PATH` không còn (khác biệt (b) ở trên): ghi một dòng vào README hoặc comment, kiểu "server chạy không có NODE_PATH của shim pnpm, nên phantom dep sẽ lỗi ở đây chứ không phải ở prod", để ai gặp `Cannot find module` trên CI biết tìm ở đâu. Không cần sửa code.
+- `e2e/playwright.x3.config.ts:66-67` vẫn dùng `pnpm -C be start:e2e` (và chưa có FE). Bản này không chạy trên CI nên không chặn, nhưng chạy trên Linux thì sẽ treo y hệt. Nên áp cùng mẫu cho đồng bộ, hoặc ghi nợ DEBT.
+### 💭 Nit
+- `e2e/README.md:12-13` có dòng vượt độ rộng của các dòng xung quanh (reflow).
+- Đường dẫn cứng `node_modules/vite/bin/vite.js` và `node_modules/ts-node/dist/bin.js` phụ thuộc vào layout bên trong gói. Cả hai đã ổn định qua nhiều major. Chấp nhận được, và đã có tiền lệ `rp-server.ts`.
+### ✂️ Ponytail
+Lean already. Ship. (Diff thực chất chỉ 3 lệnh và 3 dòng YAML. Phương án `gracefulShutdown` cũng không cứu được, vì nhánh timeout của nó vẫn rơi vào `killProcess` + `waitForCleanup` không hạn chờ.)

@@ -41,11 +41,18 @@ export default defineConfig({
     video: "off",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  // DEBT-678 (run 92): each long-running server is started with `node` directly, not through
+  // `pnpm run`. On Linux Playwright stops a webServer by SIGKILL to its process group and then waits,
+  // with no timeout, for the stdout/stderr pipes to close. CI #47 hung there ("teardown for plugin
+  // setup" until globalTimeout); pnpm 12 forwards termination signals to its script (12.6.0
+  // changelog), so the script presumably runs outside the group and outlives a SIGKILLed pnpm,
+  // holding the pipe. Started with `node`, the server is in the killed group (Windows: taskkill /T).
+  // One-shot steps before the server still use pnpm (they have exited by then).
   webServer: [
     {
       // Build once, prove dist is clean, sync indexes, seed, then run the E2E entry (mock Google).
       command:
-        "pnpm -C be build && node be/test/e2e/assert-dist-clean.mjs && pnpm -C be db:sync-indexes && pnpm -C be db:seed-dev && pnpm -C be seed:e2e-admin && pnpm -C be start:e2e",
+        "pnpm -C be build && node be/test/e2e/assert-dist-clean.mjs && pnpm -C be db:sync-indexes && pnpm -C be db:seed-dev && pnpm -C be seed:e2e-admin && cd be && node node_modules/ts-node/dist/bin.js test/e2e/e2e-main.ts",
       cwd: repoRoot,
       url: `http://127.0.0.1:${BE_PORT}/ready`,
       // DEBT-464 (run 68): 68.5 s idle, 104 s under a 28-thread CPU load (build ~34-38 s,
@@ -57,8 +64,8 @@ export default defineConfig({
       env: beEnv(),
     },
     {
-      command: "pnpm -C fe-sso-test dev",
-      cwd: repoRoot,
+      command: "node node_modules/vite/bin/vite.js",
+      cwd: resolve(repoRoot, "fe-sso-test"),
       url: `http://localhost:${FE_PORT}/`,
       timeout: 120_000,
       reuseExistingServer: process.env.E2E_REUSE === "1",
@@ -67,8 +74,8 @@ export default defineConfig({
       env: feEnv(),
     },
     {
-      command: "pnpm -C fe-admin dev",
-      cwd: repoRoot,
+      command: "node node_modules/vite/bin/vite.js dev",
+      cwd: resolve(repoRoot, "fe-admin"),
       url: `${FE_ADMIN_URL}/`,
       timeout: 120_000,
       reuseExistingServer: process.env.E2E_REUSE === "1",
