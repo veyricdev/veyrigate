@@ -104,3 +104,4 @@
   - Dọn: `vg-pentest` vắng, db7 0, cổng trống.
   - **SMTP:** còn 220 sau lượt off; **không 220 sau lượt đầy đủ** (DEBT-664). Không restart container. Người dùng cần restart `veyrigate-mailpit-1` trước việc cần thư.
   - Không sửa code, không commit. → orchestrator commit + D93.11.
+- 2026-11-17T09:19:51Z orchestrator: CI #50 (`b6ae1f2`) 9/9 job xanh (pentest 3'40", e2e 12'53"), artifact pentest-evidence 10,2 KB; CodeQL 0/40 ⇒ đóng run 93 (summary, STATUS, plan §12 D93.x, DEBT-650 đóng).
