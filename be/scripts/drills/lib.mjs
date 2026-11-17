@@ -593,11 +593,13 @@ export function budget(ms) {
 /**
  * One drill at a time on this host (both drills share Redis db 7 / port 4987): an exclusive lock file. A crash
  * leaves it behind; the message says which file to remove after checking no drill runs.
+ * CodeQL #36 (run 92): in the operator's checkout (be/), not the shared world-writable tmpdir where another
+ * local user could pre-create or link the name; created exclusively (O_EXCL), owner-only (0600).
  */
-export const LOCK_FILE = join(tmpdir(), 'vg-drill.lock');
+export const LOCK_FILE = join(BE_DIR, '.vg-drill.lock');
 export function acquireLock(drill) {
   try {
-    const fd = openSync(LOCK_FILE, 'wx');
+    const fd = openSync(LOCK_FILE, 'wx', 0o600);
     writeFileSync(fd, `${drill} pid ${process.pid} ${new Date().toISOString()}\n`);
     closeSync(fd);
   } catch {

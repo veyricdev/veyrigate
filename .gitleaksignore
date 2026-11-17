@@ -1,0 +1,28 @@
+# gitleaks fingerprints of historical findings verified as fixtures/fake values (run 92, D92.8).
+# Format: <full commit sha>:<file>:<rule>:<line>. One finding per line, reason above it, never the value.
+# Do not allowlist paths or add regexes to .gitleaks.toml. A new hit on an edited line => replace the
+# fixture with a value built at runtime, do not add another ignore. #3 (run82-tester, stripe rule) was
+# held under the D92.8 stop rule and then accepted as a canary by the orchestrator (D92.15), listed last.
+
+# #1 private-key be/scripts/pentest/checks.mjs: allow-list description quoting the fake "header + MATERIAL" fixture of fe-admin tests, no key body and no END marker in the file, verified run 92
+8dfa821754383bc9e3871b0e6b4ef1b0b64ce533:be/scripts/pentest/checks.mjs:private-key:1004
+# #2 generic-api-key e2e/tests/totp.spec.ts: RFC 6238 public test vector (base32 of the RFC seed "1234...890"), verified run 92
+eba5260bf8437e2c1b9fd60fddc674ab7017e36a:e2e/tests/totp.spec.ts:generic-api-key:35
+# #4 generic-api-key be/test/seed-e2e-admin.int-spec.ts: throwaway password of a negative case on the in-process integration DB (seed must throw before any write), verified run 92
+ceeb3d6df8bd7f09b1e5270a04adc481de003157:be/test/seed-e2e-admin.int-spec.ts:generic-api-key:210
+# #5 generic-api-key fe-admin/test/admin-secrets.test.ts: labelled canary constant (sequential digits) asserted never to be echoed, BE faked, verified run 92
+15cba2dbf0fd1b7c9d9a573c3b8d13e6fe7e2ac7:fe-admin/test/admin-secrets.test.ts:generic-api-key:10
+# #6 generic-api-key fe-admin/test/secrets-fn.test.ts: labelled canary constant (sequential digits), BE fetch mocked with vi.fn, verified run 92
+15cba2dbf0fd1b7c9d9a573c3b8d13e6fe7e2ac7:fe-admin/test/secrets-fn.test.ts:generic-api-key:7
+# #7 generic-api-key fe-admin/test/client-secrets.test.tsx: labelled canary constant (sequential hex), secrets API mocked, verified run 92
+15cba2dbf0fd1b7c9d9a573c3b8d13e6fe7e2ac7:fe-admin/test/client-secrets.test.tsx:generic-api-key:33
+# #8 generic-api-key fe-admin/test/client-secrets-risk.test.tsx: same canary constant as #7, secrets API mocked, verified run 92
+15cba2dbf0fd1b7c9d9a573c3b8d13e6fe7e2ac7:fe-admin/test/client-secrets-risk.test.tsx:generic-api-key:33
+# #9 private-key docs/agile/sso-idp/runs/02-R3-R5/test-report.md: prose naming a PEM header of a temp fake file used to test gitleaks in run 2, no key body and no END marker in the doc, verified run 92
+cc93b7ef5f666da88172f60c1b232cc8e70d5118:docs/agile/sso-idp/runs/02-R3-R5/test-report.md:private-key:119
+# #10 private-key docs/agile/sso-idp/test-report.md: same run 2 prose as #9 (before the per-run folder move), no key body, verified run 92
+4c2104aa81506c7d34c0571fa2b0e7e294933f88:docs/agile/sso-idp/test-report.md:private-key:119
+# #11 generic-api-key .agents/plugins/superpowers/tests/brainstorm-server/ws-protocol.test.js: RFC 6455 section 4.2.2 public handshake example nonce (vendored, DEBT-673), verified run 92
+83f5ba398b58862b4ada67949d0949ca6e08d0a6:.agents/plugins/superpowers/tests/brainstorm-server/ws-protocol.test.js:generic-api-key:53
+# #3 stripe-access-token be/test/run82-tester.int-spec.ts: canary constant in DEBT-533 "hostile client config values never echo" test (MARK group), 13 chars after prefix (not a real Stripe key format), repo has no Stripe integration; verified by orchestrator run 92 (D92.15)
+adf130a11da8ecb5102c9f2f5be0195225eb0f45:be/test/run82-tester.int-spec.ts:stripe-access-token:417

@@ -75,6 +75,13 @@ process.once("exit", () => {
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+/**
+ * Upper bound of one allocator wait (run 92, D92.5): 2 periods + the 1 s margin. A longer wait means
+ * steps are burnt faster than the clock gives them (e.g. a refused-code loop): fail fast with a clear
+ * error instead of sleeping the suite into the CI timeout.
+ */
+export const MAX_WAIT_MS = 2 * PERIOD_SEC * 1000 + 1000;
+
 export async function nextCode(secretB32: string, now: () => number = Date.now): Promise<string> {
   const t = now();
   const c = stepAt(t);
@@ -85,6 +92,12 @@ export async function nextCode(secretB32: string, now: () => number = Date.now):
   if (next > c + 1) {
     const until = (next - 1) * PERIOD_SEC * 1000 + 1000;
     const ms = Math.max(0, until - now());
+    if (ms > MAX_WAIT_MS) {
+      throw new Error(
+        `nextCode: the next free TOTP step is ${Math.ceil(ms / 1000)} s away (> ${MAX_WAIT_MS / 1000} s): ` +
+          "steps are used faster than one per period (refused codes?)",
+      );
+    }
     waited += ms;
     await sleep(ms);
   }

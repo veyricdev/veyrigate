@@ -1095,6 +1095,8 @@ describe('Admin API B6.3a (clients, secrets, resources) on real Mongo + Redis', 
         { resourceId: `${rid}-a`, identifier: 'https://r1.example.com/#frag' },
         { resourceId: `${rid}-b`, identifier: '/relative' },
         { resourceId: 'Bad Id', identifier: 'https://bad.example.com/' },
+        // CodeQL #8 (run 92): an operator object as resourceId never reaches the Mongo filter.
+        { resourceId: { $ne: null }, identifier: 'https://ne.example.com/' },
         { resourceId: `${rid}-c`, identifier: 'https://c.example.com/', scopes: ['a b'] },
         { resourceId: `${rid}-d`, identifier: 'https://d.example.com/', tenantId: TENANT_A },
         // DEBT-324/329: whitespace / control / format characters anywhere, scheme outside

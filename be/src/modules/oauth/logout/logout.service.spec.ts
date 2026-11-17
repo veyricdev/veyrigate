@@ -76,6 +76,29 @@ describe('LogoutService (B4.7)', () => {
       expect(out).toBe('https://rp1.example/out');
     });
 
+    // CodeQL #9 (D92.9): a repeated query param arrives as an array; it is treated as absent.
+    it('drops a non-string (repeated) state instead of joining it', async () => {
+      hintOf('rp1');
+      const out = await service.resolvePostLogoutRedirect(
+        params({ state: ['a', 'b'] as unknown as string }),
+        'user-1',
+      );
+      expect(out).toBe('https://rp1.example/out');
+    });
+
+    it.each(['idTokenHint', 'postLogoutRedirectUri', 'clientId'] as const)(
+      'a repeated %s is treated as absent => default redirect, no throw',
+      async (key) => {
+        hintOf('rp1');
+        const repeated = ['rp1', 'https://rp1.example/out'] as unknown as string;
+        const out = await service.resolvePostLogoutRedirect(
+          params({ clientId: 'rp1', [key]: repeated }),
+          'user-1',
+        );
+        expect(out).toBe(key === 'clientId' ? 'https://rp1.example/out' : DEFAULT);
+      },
+    );
+
     it('falls back to default without a hint', async () => {
       expect(
         await service.resolvePostLogoutRedirect(

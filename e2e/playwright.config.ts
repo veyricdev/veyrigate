@@ -31,6 +31,9 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: 0,
   workers: 1,
+  // Run 92 (D92.5) fuses, CI only: a systemic failure (every sign-in stuck at /login/mfa) used to run
+  // each test to its own 90-240 s timeout until the 6 h job limit. Locally every failure is listed.
+  ...(process.env.CI ? { maxFailures: 5, globalTimeout: 45 * 60_000 } : {}),
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : [["list"]],
   use: {
     baseURL: `http://localhost:${FE_PORT}`,

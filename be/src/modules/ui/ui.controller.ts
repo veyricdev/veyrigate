@@ -31,7 +31,11 @@ import { SessionCookie } from '../sessions/session.cookie';
 import { deviceLabelFromUserAgent } from '../sessions/device-label';
 import { SessionService } from '../sessions/session.service';
 import { RefreshTokenService } from '../oauth/token/refresh-token.service';
-import { LogoutService, type LogoutParams } from '../oauth/logout/logout.service';
+import {
+  LogoutService,
+  type LogoutParams,
+  stringLogoutParams,
+} from '../oauth/logout/logout.service';
 import { AuthorizeRequestContextService } from '../oauth/authorize/authorize-request-context.service';
 import {
   enabledProviderNames,
@@ -93,6 +97,14 @@ class LogoutDto extends FormDto {
   // does not 400, then ignored (never reflected, never logged).
   @IsOptional() @IsString() @Length(0, 4096) logout_hint?: string;
   @IsOptional() @IsString() @Length(0, 256) ui_locales?: string;
+}
+
+/** GET `/logout` query as received: each value may be a string or an array (repeated param). */
+interface LogoutQuery {
+  id_token_hint?: string;
+  post_logout_redirect_uri?: string;
+  state?: string;
+  client_id?: string;
 }
 
 type UiRequest = HttpRequest;
@@ -221,17 +233,16 @@ export class UiController {
   @Get('/logout') async logoutForm(
     @Req() req: UiRequest,
     @Res() reply: UiReply,
-    @Query('id_token_hint') idTokenHint?: string,
-    @Query('post_logout_redirect_uri') postLogoutRedirectUri?: string,
-    @Query('state') state?: string,
-    @Query('client_id') clientId?: string,
+    // Raw query (interface type => no ValidationPipe coercion): a repeated param stays an array so
+    // `stringLogoutParams` drops it, instead of `String(['a','b'])` = 'a,b' (CodeQL #9, run 92).
+    @Query() query: LogoutQuery,
   ) {
     // GET NEVER destroys state (spec §9.8, anti-CSRF): render the confirmation form only.
     return this.renderLogoutConfirm(req, reply, {
-      idTokenHint,
-      postLogoutRedirectUri,
-      state,
-      clientId,
+      idTokenHint: query.id_token_hint,
+      postLogoutRedirectUri: query.post_logout_redirect_uri,
+      state: query.state,
+      clientId: query.client_id,
     });
   }
 
@@ -242,7 +253,8 @@ export class UiController {
    * and a CSRF token, so it must never be cached.
    */
   private async renderLogoutConfirm(req: UiRequest, reply: UiReply, params: LogoutParams) {
-    const { idTokenHint, postLogoutRedirectUri, state, clientId } = params;
+    // A repeated query param (array) is treated as absent, never reflected (CodeQL #9).
+    const { idTokenHint, postLogoutRedirectUri, state, clientId } = stringLogoutParams(params);
     reply.header('Cache-Control', 'no-store');
 
     // Do NOT reflect a `post_logout_redirect_uri` that would not survive validation into the form

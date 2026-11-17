@@ -2,7 +2,11 @@ import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import type { Model } from 'mongoose';
 import { DuplicateError, mapDuplicate } from '../identity/identity.errors';
-import { validateResourceFormat, validateResourceIdentifier } from './resource.validator';
+import {
+  InvalidResourceError,
+  validateResourceFormat,
+  validateResourceIdentifier,
+} from './resource.validator';
 
 /**
  * DEBT-323: `updateScopes` with `expectedScopes` found the resource, but its scopes are no longer
@@ -52,6 +56,10 @@ export class ResourceService {
    * refused by a pre-check (race accepted: super_admin only); `identifier` by its unique index.
    */
   async createUnique(input: CreateResourceInput): Promise<Resource> {
+    // CodeQL #8 (D92.9): a non-string `resourceId` never reaches the filter. Fixed text, no echo.
+    if (typeof input.resourceId !== 'string') {
+      throw new InvalidResourceError('resourceId must be a string');
+    }
     validateResourceIdentifier(input.identifier);
     if (await this.resources.exists({ resourceId: input.resourceId })) {
       throw new DuplicateError('Resource');

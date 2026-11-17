@@ -27,10 +27,13 @@ async function assets(request, next) {
   if (!new URL(request.url).pathname.startsWith("/assets/")) return next();
   const found = await statics(request, () => undefined);
   if (!found) return next();
-  const headers = new Headers(found.headers);
-  headers.set("x-content-type-options", "nosniff");
-  headers.set("cache-control", "public, max-age=31536000, immutable");
-  return new Response(found.body, { status: found.status, headers });
+  // Set the headers on srvx's own response, which pipes the file stream to the socket. Never re-wrap
+  // `found.body` in a new Response (run 92): that turns the file into a web byte stream, and a client
+  // closing the socket right after the last byte (curl) cancels it while a read is pending; undici then
+  // closes the cancelled stream and the throw (ERR_INVALID_STATE) kills the process.
+  found.headers.set("x-content-type-options", "nosniff");
+  found.headers.set("cache-control", "public, max-age=31536000, immutable");
+  return found;
 }
 
 const server = serve({ fetch: app.fetch, gracefulShutdown: true, middleware: [assets] });

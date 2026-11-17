@@ -66,10 +66,15 @@ export VAULT_TOKEN_FILE=/tmp/vault/token NODE_EXTRA_CA_CERTS=/tmp/vault/ca.pem
 CSRF_SECRET="$(secret)"
 mask "$CSRF_SECRET"
 export CSRF_SECRET
+# TOTP seed encryption key (required since run 89): generated per run, never the .env.example/E2E key.
+MFA_ENCRYPTION_KEYS="k1:$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('base64'))")"
+mask "$MFA_ENCRYPTION_KEYS"
+mask "${MFA_ENCRYPTION_KEYS#k1:}"
+export MFA_ENCRYPTION_KEYS
 HARDEN=(--read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges)
 ENV_ARGS=(-e ISSUER -e MONGO_URI -e REDIS_URL -e ACCESS_TOKEN_TTL -e REFRESH_TOKEN_TTL -e SESSION_IDLE_TTL
   -e SESSION_ABSOLUTE_TTL -e SMTP_URL -e ADMIN_SEED_EMAIL -e RATE_LIMIT_WINDOW -e RATE_LIMIT_MAX
-  -e KEY_PROVIDER -e VAULT_ADDR -e VAULT_TRANSIT_KEY -e VAULT_TOKEN_FILE -e NODE_EXTRA_CA_CERTS)
+  -e KEY_PROVIDER -e VAULT_ADDR -e VAULT_TRANSIT_KEY -e VAULT_TOKEN_FILE -e NODE_EXTRA_CA_CERTS -e MFA_ENCRYPTION_KEYS)
 
 remove_all
 docker network create "$NET" >/dev/null
@@ -209,6 +214,7 @@ exit_code="$(timeout 20 docker wait vg-be-smoke-noenv || echo timeout)"
 [ "$exit_code" != "timeout" ] && [ "$exit_code" != "0" ] || fail 9 "missing CSRF_SECRET: exit '$exit_code'"
 docker logs vg-be-smoke-noenv >"$TMP/log" 2>&1
 grep -q CSRF_SECRET "$TMP/log" || fail 9 "log does not name CSRF_SECRET"
+if grep -q MFA_ENCRYPTION_KEYS "$TMP/log"; then fail 9 "log names MFA_ENCRYPTION_KEYS, not only CSRF_SECRET"; fi
 if grep -qF -- "$CANARY" "$TMP/log"; then fail 9 "log contains the canary value"; fi
 pass 9 "missing CSRF_SECRET => exit $exit_code, named, canary absent"
 
@@ -222,11 +228,11 @@ pass 10 "KEY_PROVIDER=local in production => exit $exit_code"
 
 # 11. the whole log of the app run (boot, Vault, Redis outage, shutdown) holds none of the secrets
 docker logs vg-be-smoke-ok >"$TMP/log" 2>&1
-for value in "$MONGO_PASSWORD" "$CSRF_SECRET" "$VAULT_ROOT"; do
+for value in "$MONGO_PASSWORD" "$CSRF_SECRET" "$VAULT_ROOT" "${MFA_ENCRYPTION_KEYS#k1:}"; do
   if grep -qF -- "$value" "$TMP/log"; then fail 11 "app log contains a secret value"; fi
 done
 if grep -qE 'hvs\.|X-Vault-Token|/tmp/vault/token' "$TMP/log"; then fail 11 "app log mentions the Vault token or its file"; fi
-pass 11 "app log: no Mongo password, CSRF secret, Vault token or token path"
+pass 11 "app log: no Mongo password, CSRF secret, MFA key, Vault token or token path"
 
 # 12. break-glass CLI runs from the production image (run 87, DEBT-252, D87.15b): --dry-run with the app env
 # and no network => exit 0, prints the target, never connects nor echoes the password or the email
@@ -236,7 +242,7 @@ out="$(docker run --rm --network none "${HARDEN[@]}" "${ENV_ARGS[@]}" -e CSRF_SE
   fail 12 "admin-recover --dry-run exited != 0"
 printf '%s\n' "$out" | grep -qx 'target: vg-b73b-mongo:27017/sso-idp' || fail 12 "admin-recover printed no target line"
 printf '%s\n' "$out" | grep -qx 'dry-run: no connection made' || fail 12 "admin-recover printed no dry-run line"
-if printf '%s' "$out" | grep -qF -e "$MONGO_PASSWORD" -e recover@example.invalid; then fail 12 "admin-recover echoed a secret or the email"; fi
+if printf '%s' "$out" | grep -qF -e "$MONGO_PASSWORD" -e "${MFA_ENCRYPTION_KEYS#k1:}" -e recover@example.invalid; then fail 12 "admin-recover echoed a secret or the email"; fi
 pass 12 "admin-recover --dry-run in the image => exit 0, target printed, no connection"
 
 # 13. production bootstrap CLI from the image (run 88, DEBT-164/165, D88.14b): --dry-run with the app env
@@ -254,7 +260,7 @@ printf '%s\n' "$out" | grep -qx 'target: vg-b73b-mongo:27017/sso-idp' || fail 13
 printf '%s\n' "$out" | grep -qx 'fe-admin redirectUris: https://admin.example.invalid/auth/callback' ||
   fail 13 "bootstrap printed no URI plan"
 printf '%s\n' "$out" | grep -qx 'dry-run: no connection made' || fail 13 "bootstrap printed no dry-run line"
-if printf '%s' "$out" | grep -qF -e "$MONGO_PASSWORD"; then fail 13 "bootstrap echoed a secret"; fi
+if printf '%s' "$out" | grep -qF -e "$MONGO_PASSWORD" -e "${MFA_ENCRYPTION_KEYS#k1:}"; then fail 13 "bootstrap echoed a secret"; fi
 pass 13 "bootstrap --dry-run in the image (no ADMIN_SEED_EMAIL) => exit 0, target + plan, no connection"
 
 echo "docker-smoke: 13/13 passed for $IMAGE"

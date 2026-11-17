@@ -4,17 +4,21 @@
 // paths byte-exact (no client normalisation): traversal must never reach `dist/server`, the fixture
 // root (`package.json`, `serve.mjs`) or files outside `dist/client/assets`; only GET/HEAD are served
 // as assets, with nosniff + immutable; a failing boot self-check exits 1 without printing env values.
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import net from "node:net";
+import { devNull } from "node:os";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+const execFileP = promisify(execFile);
 const FE_ADMIN = fileURLToPath(new URL("..", import.meta.url));
 // Under fe-admin/node_modules (gitignored): `srvx` resolves from fe-admin/node_modules as in the image.
 const ROOT = `${FE_ADMIN}node_modules/.cache/serve-mjs-risk-${process.pid}-${randomBytes(4).toString("hex")}`;
 const ASSET = "app-Ab12Cd34.js";
+const BIG_ASSET = "big-Ef56Gh78.js"; // several socket chunks, like the real index bundle (~400 KB)
 const MARK = {
   asset: "ASSET_BODY_MARK",
   server: "SERVER_BUNDLE_MARK",
@@ -28,6 +32,7 @@ function writeFixture() {
   copyFileSync(`${FE_ADMIN}serve.mjs`, `${ROOT}/serve.mjs`);
   writeFileSync(`${ROOT}/package.json`, JSON.stringify({ type: "module", description: MARK.pkg, dependencies: {} }));
   writeFileSync(`${ROOT}/dist/client/assets/${ASSET}`, `console.log("${MARK.asset}");\n`);
+  writeFileSync(`${ROOT}/dist/client/assets/${BIG_ASSET}`, `// ${"x".repeat(512 * 1024)}\n`);
   writeFileSync(`${ROOT}/dist/client/robots.txt`, MARK.robots);
   // Stand-in for the Start bundle: healthz unless FIXTURE_BROKEN, everything else a marked 404.
   writeFileSync(
@@ -125,6 +130,22 @@ describe("serve.mjs assets middleware", () => {
     expect(res.headers["x-content-type-options"]).toBe("nosniff");
     expect(res.headers["cache-control"]).toBe("public, max-age=31536000, immutable");
   });
+
+  // Run 92 (CI fe-admin-image check 6 "connection reset"): re-wrapping the static Response body in a new
+  // Response made it a web byte stream; a client closing the socket while a read was still pending (curl,
+  // right after the last byte; the raw clients here are too slow to hit it) cancelled the stream and
+  // undici then closed it again: an uncaught ERR_INVALID_STATE that killed the process. curl is the client
+  // of the image smoke and exists on the CI runner and on Windows 10+; missing => the test fails.
+  it("the process survives curl fetching assets (closes the socket right after the body)", async () => {
+    for (const path of [ASSET, BIG_ASSET, ASSET]) {
+      const { stdout } = await execFileP("curl", ["-sS", "-o", devNull, "-w", "%{http_code}", `http://127.0.0.1:${port}/assets/${path}`]);
+      expect(stdout).toBe("200");
+    }
+    await new Promise((r) => setTimeout(r, 300));
+    expect(server.child.exitCode, server.log.text).toBeNull();
+    expect(server.log.text).not.toContain("ERR_INVALID_STATE");
+    expect((await raw(port, "GET", "/assets/khong-ton-tai.js")).headers["x-from"]).toBe("app");
+  }, 30_000);
 
   it("HEAD => 200, same headers, no body; gzip-encoded GET keeps the headers", async () => {
     const head = await raw(port, "HEAD", `/assets/${ASSET}`);

@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { base32Decode, hotp, nextCode, stepAt, totpAt } from "./support/totp";
+import { base32Decode, hotp, markStale, MAX_WAIT_MS, nextCode, stepAt, totpAt } from "./support/totp";
 
 /**
  * Run 89 T6 AC1: the E2E TOTP helper (`node:crypto` only) against the RFC vectors, no browser.
@@ -40,4 +40,20 @@ test("step allocator: a burst gets c-1, c, c+1, never the same step twice (AC2)"
   // Late in a step (< 5 s left) c-1 is skipped: the IdP could already be in step c+1.
   const other = "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP";
   expect(await nextCode(other, () => t + 26_000)).toBe(totpAt(other, 1_000_000));
+});
+
+test("step allocator: a wait over 2 periods throws at once instead of sleeping (run 92, D92.5)", async () => {
+  const secret = "A".repeat(16) + "B".repeat(16); // built at runtime: no literal for gitleaks (D92.8)
+  const t = 1_000 * 30 * 2_000_000 + 2_000; // 2 s into step 2 000 000
+  // A refused code skips past c (markStale): the next free step is c+2.
+  markStale(secret, () => t);
+  // 1 s into step c+1: c+2 is in the IdP window, no wait.
+  await expect(nextCode(secret, () => t + 29_000)).resolves.toBe(totpAt(secret, 2_000_002));
+  // Steps burnt ahead: c+2 used, then two more refusals => next free step c+5, > 61 s away.
+  markStale(secret, () => t + 30_000 * 2);
+  markStale(secret, () => t + 30_000 * 3);
+  const before = Date.now();
+  await expect(nextCode(secret, () => t)).rejects.toThrow(/next free TOTP step is \d+ s away \(> 61 s\)/);
+  expect(Date.now() - before, "no sleep before throwing").toBeLessThan(1_000);
+  expect(MAX_WAIT_MS).toBe(61_000);
 });

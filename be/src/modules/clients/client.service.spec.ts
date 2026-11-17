@@ -80,3 +80,39 @@ describe('ClientService.updateForTenant disable stamp (DEBT-161)', () => {
     );
   });
 });
+
+/** CodeQL #7 (D92.9): a non-string client id never reaches the Mongo filter; it is an unknown client. */
+describe('ClientService.findByClientId non-string input', () => {
+  const cfg = {
+    getOrThrow: () => ({ nodeEnv: 'test', issuer: 'http://localhost:4000' }),
+  } as unknown as ConfigService;
+
+  it.each([
+    ['operator object', { $ne: null }],
+    ['array', ['c1', 'c2']],
+    ['number', 1],
+  ])('%s => null without calling findOne', async (_n, value) => {
+    let findOne = 0;
+    const model = {
+      findOne: () => {
+        findOne++;
+        return { lean: () => ({ exec: async () => ({ clientId: 'c1' }) }) };
+      },
+    } as unknown as Model<Client>;
+    const svc = new ClientService(model, cfg);
+    expect(await svc.findByClientId(value as unknown as string)).toBeNull();
+    expect(findOne).toBe(0);
+  });
+
+  it('a string still reaches findOne', async () => {
+    let filter: unknown;
+    const model = {
+      findOne: (f: unknown) => {
+        filter = f;
+        return { lean: () => ({ exec: async () => null }) };
+      },
+    } as unknown as Model<Client>;
+    expect(await new ClientService(model, cfg).findByClientId('c1')).toBeNull();
+    expect(filter).toEqual({ clientId: 'c1', disabledAt: null });
+  });
+});

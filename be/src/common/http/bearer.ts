@@ -17,6 +17,10 @@ export function bearerToken(req: HttpRequest): string | undefined {
   if (!raw) {
     return undefined;
   }
-  const match = /^Bearer[ ]+(.+)$/i.exec(raw);
-  return match ? match[1].trim() : undefined;
+  // Linear parse (CodeQL #1): `Bearer` + >= 1 space + >= 1 more char, no line terminator, trimmed.
+  // Same accepted set as the former `/^Bearer[ ]+(.+)$/i`, without its O(n^2) backtracking.
+  if (!/^bearer $/i.test(raw.slice(0, 7))) return undefined;
+  const rest = raw.slice(7);
+  if (rest.length === 0 || /[\n\r\u2028\u2029]/.test(rest)) return undefined;
+  return rest.trim();
 }

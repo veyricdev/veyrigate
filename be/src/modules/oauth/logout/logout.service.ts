@@ -32,6 +32,20 @@ const DEFAULT_REDIRECT = '/login?loggedOut=1';
  * controller/`SessionService`/`RefreshTokenService`. Every untrusted input fails closed to the
  * default redirect (`/login?loggedOut=1`) so GET and POST reach the identical decision.
  */
+/**
+ * Keep only string values (CodeQL #9, D92.9): a repeated query param reaches GET `/logout` as an
+ * array, which is treated as absent (never joined, never length-checked as an array).
+ */
+export function stringLogoutParams(params: LogoutParams): LogoutParams {
+  const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
+  return {
+    idTokenHint: str(params.idTokenHint),
+    postLogoutRedirectUri: str(params.postLogoutRedirectUri),
+    state: str(params.state),
+    clientId: str(params.clientId),
+  };
+}
+
 @Injectable()
 export class LogoutService {
   readonly defaultRedirect = DEFAULT_REDIRECT;
@@ -53,9 +67,10 @@ export class LogoutService {
    * (e.g. a POST hidden field): GET and POST both call this with the raw params.
    */
   async resolvePostLogoutRedirect(
-    params: LogoutParams,
+    rawParams: LogoutParams,
     sessionUserId: string | undefined,
   ): Promise<string> {
+    const params = stringLogoutParams(rawParams);
     const uri = params.postLogoutRedirectUri;
     if (!uri || !params.idTokenHint) return DEFAULT_REDIRECT;
 

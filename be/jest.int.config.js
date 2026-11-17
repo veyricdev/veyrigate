@@ -8,4 +8,9 @@ module.exports = {
   testTimeout: 20000,
   globalSetup: './test/int-preflight.mjs',
   globalTeardown: './test/int-teardown.mjs',
+  // Run 92 (D92.3b): one worker at a time (still sequential: shared DBs + vg:int-lock), recycled when
+  // its heap passes 1 GB. In band, every file's Nest/mongoose module graph stayed reachable: heap grew
+  // ~30 MB per file to 3.8 GB (OOM on the 7 GB CI runner). `--runInBand` would disable both.
+  maxWorkers: 1,
+  workerIdleMemoryLimit: '1GB',
 };

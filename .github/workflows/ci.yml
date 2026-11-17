@@ -20,6 +20,17 @@ permissions:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # fe-admin tests (BFF session store, run 92) use a real Redis at the local default
+    # redis://localhost:6479/0 (fe-admin/test/support/redis.ts), same as `vg-test-redis`: no TEST_REDIS_URL.
+    services:
+      redis:
+        image: redis:7.4.10-bookworm@sha256:e9b2e45ecd47fbb69b877cf8d045d5cccaaaed52524b6e098b4abe8212994f73 # 7.4.10-bookworm, pinned 2026-11-12 (DEBT-590)
+        ports:
+          - 6479:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -78,7 +89,8 @@ jobs:
   # directConnection=true.
   int:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 45 until the first green run is measured, then ceil(1.5 x measured) (run 92, D92.2).
+    timeout-minutes: 45
     services:
       redis:
         image: redis:7.4.10-bookworm@sha256:e9b2e45ecd47fbb69b877cf8d045d5cccaaaed52524b6e098b4abe8212994f73 # 7.4.10-bookworm, pinned 2026-11-12 (DEBT-590)
@@ -131,7 +143,15 @@ jobs:
           done
           echo "Mongo rs0 never became PRIMARY" >&2; exit 1
 
+      # The CLI specs (db-cli-dry-run, run71/87/88) run the built `dist` that ships (run 92, D92.3).
+      - name: Build BE
+        run: pnpm -C be build
+
+      # Heap cap = safety net only (run 92, D92.3c): the 7 GB runner also hosts Mongo, Redis, Mailpit,
+      # Vault and Sentinel, so never above 4096.
       - name: Integration tests (security suite)
+        env:
+          NODE_OPTIONS: --max-old-space-size=3072
         run: pnpm -C be test:int
 
       # Vault Transit KeyProvider (run 53): throwaway dev Vault, digest-pinned, loopback only. The
@@ -172,6 +192,7 @@ jobs:
   # Playwright bật trace retain-on-failure + forbidOnly.
   e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
       # Credential user dev (giả, non-secret). Phải KHÁC ADMIN_SEED_EMAIL (e2e/config/env.ts).
       DEV_SEED_EMAIL: dev@example.com
@@ -183,6 +204,16 @@ jobs:
           - 6379:6379
         options: >-
           --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+      # Mail specs (account-self-service, mfa, password-change, token-fragment) read Mailpit at
+      # http://localhost:8025; the BE sends to smtp://localhost:1025 (run 92, D92.5).
+      mailpit:
+        image: axllent/mailpit:v1.21@sha256:81370195cd4a0eab9604d17c2617a7525b0486f9365555253b6c5376c6350f1a # v1.21, pinned 2026-11-12 (DEBT-590)
+        ports:
+          - 1025:1025
+          - 8025:8025
+        options: >-
+          --health-cmd "/mailpit readyz"
           --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -226,8 +257,9 @@ jobs:
       - name: Run E2E (Playwright builds/seeds/starts BE + FE)
         run: pnpm -C e2e e2e
 
+      # Also when cancelled or timed out (run 92, D92.5).
       - name: Upload Playwright report on failure
-        if: ${{ failure() }}
+        if: ${{ !success() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-report
@@ -238,7 +270,8 @@ jobs:
   # the optional pre-commit hook (.pre-commit-config.yaml). Run from the upstream image pinned by
   # digest (not gitleaks-action: it needs a license for org-owned repos). `--redact` keeps any hit
   # out of the job log; `--exit-code 1` fails the job on a finding. Known fake values are
-  # allowlisted, each with a reason, in .gitleaks.toml (picked up from the scanned repo root).
+  # allowlisted, each with a reason, in .gitleaks.toml (picked up from the scanned repo root); historical
+  # fixture hits by fingerprint in .gitleaksignore, passed explicitly (run 92, D92.8: not the image cwd).
   secrets:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -253,7 +286,7 @@ jobs:
         run: >-
           docker run --rm -v "$PWD:/repo"
           zricethezav/gitleaks:v8.21.2@sha256:0e99e8821643ea5b235718642b93bb32486af9c8162c8b8731f7cbdc951a7f46
-          git /repo --redact --exit-code 1 --no-banner --verbose
+          git /repo --redact --exit-code 1 --no-banner --verbose --gitleaks-ignore-path /repo
 
   # Prometheus rules (DEBT-219): `promtool check rules` + `promtool test rules` from the upstream
   # image pinned by digest (v3.15.0). Locally the Jest `ops-rules.spec` covers names/annotations only.

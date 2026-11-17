@@ -114,6 +114,11 @@ for leak in example.invalid ECONN ENOTFOUND '    at ' "$OIDC_CLIENT_SECRET" "$SE
 done
 pass 8 "/auth/login 503, CSP, no-store, no detail"
 
+# 8b. the server survived checks 5-8 (run 92: a served asset used to crash it, check 6 then saw a reset)
+[ "$(docker inspect -f '{{.State.Running}} {{.State.Health.Status}}' vg-fea-smoke-ok)" = "true healthy" ] ||
+  { docker logs vg-fea-smoke-ok 2>&1 | tail -n 20 | cut -c1-400 >&2; fail 8b "container not running/healthy after checks 5-8"; }
+pass 8b "container still running and healthy"
+
 # 9. oversized server-function body => 413 before the router
 head -c 70000 /dev/zero | tr '\0' 'a' >"$TMP/big"
 code="$(curl -sS -o /dev/null -D "$TMP/h" -w '%{http_code}' -X POST -H 'Sec-Fetch-Site: same-origin' \
@@ -183,4 +188,4 @@ exit_code="$(timeout 20 docker wait vg-fea-smoke-listen || echo timeout)"
 docker logs vg-fea-smoke-listen 2>&1 | grep -q "fe-admin: listen failed: EADDRNOTAVAIL" || fail 14 "log does not name the listen error"
 pass 14 "listen error => exit $exit_code, EADDRNOTAVAIL logged"
 
-echo "docker-smoke: 16/16 passed for $IMAGE"
+echo "docker-smoke: 17/17 passed for $IMAGE"

@@ -230,6 +230,8 @@ export class ClientService {
    * also matches documents written before the field existed.
    */
   async findByClientId(clientId: string): Promise<Client | null> {
+    // CodeQL #7 (D92.9): a non-string (operator object, array) never reaches the filter: unknown.
+    if (typeof clientId !== 'string') return null;
     const client = await this.clients.findOne({ clientId, disabledAt: null }).lean<Client>().exec();
     if (!client) return null;
     // `.lean()` bypasses Mongoose defaults, so a document written before `grantTypes` existed
