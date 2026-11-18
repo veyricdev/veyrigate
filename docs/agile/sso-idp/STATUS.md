@@ -29,7 +29,7 @@
 | [91](runs/91-X6-golive-hardening/summary.md) | M8 | X6 điều kiện go-live + hardening sau pentest: alert ghi nền, chống chiếm tài khoản trước, thu hồi khi code dùng lại, `response_mode`/`no-store`/request id (DEBT-651/662/663/665/666/667/671/672) | ✅ pentest 261/261 + int 2444 + E2E 52×2 + X3 42 + be 1247 | `c39b19a`…`51f95fe` |
 | [92](runs/92-ci-green/summary.md) | M8 | CI GitHub xanh (gitleaks, Redis/Mailpit service, int OOM, smoke image, e2e teardown treo) + triage 40 CodeQL (DEBT-678/680) | ✅ CI #48 8/8 + CodeQL 0 mở + int 2458 + E2E 53 + X3 42 + be 1285 + fe-admin 1654 | `e45a35c`…`f360ad0` |
 | [93](runs/93-golive-hardening2/summary.md) | M8 | Pentest trong CI, runbook không URI trên argv (go-live 3), serve.mjs stream abort, X3 node, khoá drill homedir, CodeQL paths-ignore (DEBT-258/650/674/676/677/679/681) | ✅ CI #50 9/9 + pentest 261/261 + int 2458 + E2E 53 + X3 42 + be 1285 + fe-admin 1658 | `b6ae1f2`…`7063295` |
-| [94](runs/94-debt-sweep/summary.md) | M8 | Đặt lại mật khẩu 2 bước (vé), SMTP pool, mutation trong CI, docs RP/RS, ngoại lệ audit picomatch (DEBT-661/664/669/682/685–688/690) | ✅ CI #53 9/9 + pentest 268/268 + int 2475 + E2E 53 + X3 42 + be 1289 + fe-admin 1658 | `91e7749`…`<hash>` |
+| [94](runs/94-debt-sweep/summary.md) | M8 | Đặt lại mật khẩu 2 bước (vé), SMTP pool, mutation trong CI, docs RP/RS, ngoại lệ audit picomatch (DEBT-661/664/669/682/685–688/690) | ✅ CI #53 9/9 + pentest 268/268 + int 2475 + E2E 53 + X3 42 + be 1289 + fe-admin 1658 | `91e7749`…`b729acd` |
 
 ## Chặn / cần người quyết định
 
