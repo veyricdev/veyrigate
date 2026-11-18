@@ -1,0 +1,9 @@
+# Summary — run 95 debt sweep 2 (M8, lane BE/ops) — ✅ PASS
+
+- **Phạm vi**: A `admin-recover --reset-mfa` thu hồi phiên Redis + thiết bị tin cậy của user sau commit Mongo, sweep lại refresh family, audit `SESSION_REVOKED`, exit 3 khi Mongo xong mà Redis/sweep lỗi; runbook-ops §3d/§11 theo từng nhánh (DEBT-634/692). B mailer chặn 200 thư đang gửi, metric `sso_mail_queue_depth` + `sso_mail_dropped_total{reason}`, alert `SsoMailDropped`, helper `fakeSmtp` (DEBT-683/689). C mọi redirect sau POST form ⇒ 303, GET giữ 302 (RFC 9700 §4.12, DEBT-570). Orchestrator: smoke image không còn đỏ giả do `grep -q` + `pipefail` (DEBT-693), dọn DEBT-579.
+- **Verify local (gate D)**: be 1296, int 2510, E2E 53 (3 Terminated), X3 42 (4 Terminated), `mutate.mjs all` 7/7 đỏ đúng, harness on + off must 268/268 (`pentest-20261118T062133Z`), drill rotate local 23/23 (`codeFlow` 303), SMTP 220 sau mọi lượt, evidence 0 secret.
+- **Verify CI**: **CI #56 (`5304149`) 9/9 xanh (promtool nhận `SsoMailDropped`, pentest + step mutation, int 10', e2e 12'57")**; bản sửa smoke (DEBT-693) xác nhận ở CI của commit đóng run
+- **Commit**: `5304149` (lô A–D), `<smoke>` (smoke + đóng run).
+- **Vòng lặp**: tech-lead fold 1 (D95.1–D95.21, sửa 4 lỗ AC: đo được thay "SSO tới RP khác", không đếm đôi `auth_mail`, quy tắc theo method, đường khi không còn admin); BE dev A + retry 1 (🟡 DEBT-692 runbook exit 3), B, C (thêm `drills/lib.mjs` ngoài D95.16); senior A/B/C PASS; tester D PASS. CI #55 (`d23666a`, docs run 94) đỏ be-image do check 10 chập chờn ⇒ DEBT-693.
+- **Debt**: đóng DEBT-570/579/634/683/689/692/693; mở DEBT-691 (exit 3 chưa có lệnh chạy lại riêng bước Redis).
+- **Quyết định**: D95.1–D95.21 (`tasks.md`) — tóm tắt trong `plan.md` §12. ⚠ Deploy: RP không phải đổi gì (redirect 303 sau POST); alert mới `SsoMailDropped` cần nạp vào Prometheus thật cùng DEBT-670.

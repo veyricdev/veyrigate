@@ -165,7 +165,10 @@ APP_URL=http://admin.example.invalid docker run -d --name vg-fea-smoke-http "${H
   -e APP_URL -e SESSION_SECRET "$IMAGE" >/dev/null
 exit_code="$(timeout 20 docker wait vg-fea-smoke-http || echo timeout)"
 [ "$exit_code" != "timeout" ] && [ "$exit_code" != "0" ] || fail 12 "http APP_URL: exit '$exit_code'"
-docker logs vg-fea-smoke-http 2>&1 | grep -q APP_URL || fail 12 "log does not name APP_URL"
+# Log to a file, not a pipe: with pipefail, `grep -q` exiting early can SIGPIPE `docker logs`
+# and turn a match into a false FAIL (be smoke check 10, CI #55, DEBT-693).
+docker logs vg-fea-smoke-http >"$TMP/log" 2>&1
+grep -q APP_URL "$TMP/log" || fail 12 "log does not name APP_URL"
 pass 12 "http APP_URL => exit $exit_code"
 
 # 13. image hygiene: no env/key files, no sources/tests/dev deps, no secret in history/env
@@ -185,7 +188,8 @@ HOST=192.0.2.1 docker run -d --name vg-fea-smoke-listen "${HARDEN[@]}" "${ENV_AR
   "$IMAGE" >/dev/null
 exit_code="$(timeout 20 docker wait vg-fea-smoke-listen || echo timeout)"
 [ "$exit_code" != "timeout" ] && [ "$exit_code" != "0" ] || fail 14 "listen error: exit '$exit_code'"
-docker logs vg-fea-smoke-listen 2>&1 | grep -q "fe-admin: listen failed: EADDRNOTAVAIL" || fail 14 "log does not name the listen error"
+docker logs vg-fea-smoke-listen >"$TMP/log" 2>&1
+grep -q "fe-admin: listen failed: EADDRNOTAVAIL" "$TMP/log" || fail 14 "log does not name the listen error"
 pass 14 "listen error => exit $exit_code, EADDRNOTAVAIL logged"
 
 echo "docker-smoke: 17/17 passed for $IMAGE"

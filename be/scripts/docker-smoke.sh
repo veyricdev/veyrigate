@@ -255,7 +255,10 @@ KEY_PROVIDER=local docker run -d --name vg-be-smoke-local --network "$NET" "${HA
   -e CSRF_SECRET -e KEY_LOCAL_DIR=/tmp/keys "$IMAGE" >/dev/null
 exit_code="$(timeout 20 docker wait vg-be-smoke-local || echo timeout)"
 [ "$exit_code" != "timeout" ] && [ "$exit_code" != "0" ] || fail 10 "KEY_PROVIDER=local: exit '$exit_code'"
-docker logs vg-be-smoke-local 2>&1 | grep -q 'KEY_PROVIDER must be vault' || fail 10 "log does not name KEY_PROVIDER"
+# Log to a file, not a pipe: with pipefail, `grep -q` exiting at the first match can SIGPIPE
+# `docker logs` (exit 141) and turn a match into a false FAIL (CI #55, DEBT-693).
+docker logs vg-be-smoke-local >"$TMP/log" 2>&1
+grep -q 'KEY_PROVIDER must be vault' "$TMP/log" || fail 10 "log does not name KEY_PROVIDER"
 pass 10 "KEY_PROVIDER=local in production => exit $exit_code"
 
 # 11. the whole log of the app run (boot, Vault, Redis outage, shutdown) holds none of the secrets
