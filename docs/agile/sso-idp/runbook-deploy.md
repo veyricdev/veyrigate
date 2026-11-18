@@ -155,6 +155,7 @@ fail-closed (thao tác ghi phiên/code lỗi rõ ràng) thay vì âm thầm mấ
 ## 4. Thứ tự deploy đề xuất
 
 0. Từ run 90 (D90.16, trước mỗi bản phát hành, trên máy dev/CI nội bộ, không phải production): `pnpm -C be build && timeout 25m node be/scripts/pentest/pentest.mjs --evidence docs/agile/sso-idp/runs/<run>/evidence` phải exit 0 (mọi check `must` xanh); ghi tên evidence `docs/agile/sso-idp/runs/<run>/evidence/pentest-*.json` vào ticket. Chạy SAU các bước cần Mailpit (E2E), vì lượt pentest gửi vài trăm thư (DEBT-664). Từ run 93 (D93.4–D93.6, DEBT-650): job CI `pentest` chạy harness mỗi push/PR với `--timing off` (bỏ nhóm đo thời gian `AUTHN-ENUM-TIME-*`, không ổn định trên runner dùng chung — DEBT-658; thay bằng `AUTHN-ENUM-SHAPE-*`), evidence là artifact CI `pentest-evidence` ⇒ CI xanh **không thay** lượt đầy đủ có đo thời gian chạy tay ở bước này.
+0'. Từ run 96 (DEBT-675): commit phát hành phải có lượt CI `ci.yml` **xanh 9/9 trên đúng commit đó** (đặc biệt `be-image` và `fe-admin-image`: smoke image 11/14 check chỉ chạy trên CI, máy dev dùng hạ tầng chung không tạo container). Ghi số lượt CI vào ticket. CI đỏ hoặc bị huỷ (push mới đè, `cancel-in-progress`) ⇒ chạy lại trên commit phát hành, không phát hành từ commit khác. Branch protection `develop` bắt buộc 9 job này cho PR.
 1. Backfill `resource` (2a).
 2. Kiểm duplicate (2b) — rỗng mới tiếp.
 2'. Kiểm duplicate ClientCredential (2d) — rỗng mới tiếp.
