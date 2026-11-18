@@ -43,6 +43,8 @@ interface OneTimeTokenDoc {
   expiresAt: Date;
   usedAt: Date | null;
   attempts?: number;
+  /** Reset only (run 94, D94.4): sha256 of the ticket the token was exchanged for. */
+  ticketHash?: string | null;
 }
 type MailTemplate = (to: string, link: string, minutes: number, code: string) => MailMessage;
 export interface AuthContext {
@@ -94,6 +96,8 @@ export type RevokeStep = 'pre_revoke' | 'sessions' | 'sweep';
 
 const VERIFY_TTL_MS = 24 * 60 * 60 * 1000;
 const RESET_TTL_MS = 30 * 60 * 1000;
+/** Reset ticket lifetime (run 94, D94.3/D94.5): the cookie `maxAge` uses the same value. */
+export const RESET_TICKET_TTL_SEC = 15 * 60;
 /** Longest wait for detached writes at shutdown (D91.11); the orchestrator grace period is longer. */
 const SHUTDOWN_DRAIN_MS = 5000;
 const GENERIC_LOGIN_ERROR = 'Email or password is incorrect.';
@@ -440,18 +444,72 @@ export class AuthenticationService {
       );
   }
 
-  async resetPassword(token: string, password: string): Promise<void> {
-    // DEBT-574: before `consume` (a refused password keeps the token). The email is not known yet:
+  /**
+   * DEBT-661 (run 94, D94.3/D94.4): exchange the mailed reset token for a ticket, on the user's
+   * `Continue` click (never on page load, D94.2). One atomic update burns the token (it no longer
+   * matches `ticketHash: null`) and stores sha256(ticket) on the same document with a 15' expiry.
+   * Returns the ticket, or null for any unknown/expired/used/exchanged/malformed token (one answer).
+   * A Mongo error propagates (5xx). Neither the token nor the ticket is ever logged.
+   */
+  async claimResetTicket(token: string): Promise<string | null> {
+    const ticket = generateToken();
+    const now = Date.now();
+    const doc = await this.resetTokens
+      .findOneAndUpdate(
+        {
+          tokenHash: sha256(token),
+          usedAt: null,
+          ticketHash: null,
+          expiresAt: { $gt: new Date(now) },
+        },
+        // Pipeline update: the ticket never outlives the token (min of both expiries).
+        [
+          {
+            $set: {
+              ticketHash: sha256(ticket),
+              expiresAt: { $min: ['$expiresAt', new Date(now + RESET_TICKET_TTL_SEC * 1000)] },
+            },
+          },
+        ],
+        { updatePipeline: true },
+      )
+      .lean<OneTimeTokenDoc>()
+      .exec();
+    return doc ? ticket : null;
+  }
+
+  /** True when the reset ticket is live (unused, unexpired); `GET /reset` picks the form from it. */
+  async isLiveResetTicket(ticket: string): Promise<boolean> {
+    const live = await this.resetTokens.exists({
+      ticketHash: sha256(ticket),
+      usedAt: null,
+      expiresAt: { $gt: new Date() },
+    });
+    return live !== null;
+  }
+
+  /**
+   * Finish a reset with the ticket of `claimResetTicket` (run 94). False = unknown, used or expired
+   * ticket (the caller answers its one fixed 400); a refused password throws (the ticket is kept).
+   */
+  async resetPassword(ticket: string, password: string): Promise<boolean> {
+    // DEBT-574: before consuming (a refused password keeps the ticket). The email is not known yet:
     // list + product words only.
     assertAcceptablePassword(password);
     const passwordHash = await hashPassword(password);
-    const consumed = await this.consume(this.resetTokens, token);
+    const now = new Date();
+    const consumed = await this.resetTokens
+      .findOneAndUpdate(
+        { ticketHash: sha256(ticket), usedAt: null, expiresAt: { $gt: now } },
+        { $set: { usedAt: now } },
+        { returnDocument: 'after' },
+      )
+      .lean<OneTimeTokenDoc>()
+      .exec();
     const updated = consumed
       ? await this.users.setPassword(String(consumed.userId), passwordHash)
       : null;
-    if (!consumed || !updated) {
-      throw new BadRequestException('This link is invalid or expired.');
-    }
+    if (!consumed || !updated) return false;
     // §9.8 / INV-11 / INV-28: terminate every session AND every refresh family of the user so a
     // leaked/old credential cannot survive the reset. `setPassword` MUST run before any revoke: if
     // we revoked first, an attacker who knows the old password could log in in between and keep a
@@ -475,11 +533,19 @@ export class AuthenticationService {
       action: AuditAction.AUTH_PASSWORD_RESET,
       result: 'success',
     });
+    // DEBT-687: the notification goes first (detached), so a failing burn below cannot skip it.
     this.sendPasswordChanged(updated.email);
+    // DEBT-685: every other live reset token or ticket of the user (an older/newer mail, a ticket in
+    // another browser) dies with this reset, so no link left in a history can reset again. After the
+    // revokes (a failure here must not skip them); an error propagates (5xx), never silent.
+    await this.resetTokens
+      .updateMany({ userId: consumed.userId, usedAt: null }, { $set: { usedAt: now } })
+      .exec();
     // DEBT-575: the owner proved control of the mailbox => drop the per-email login bucket.
     await this.throttle
       .clearAccount(updated.email)
       .catch(() => this.logger.warn('reset: clearing the login account bucket failed'));
+    return true;
   }
 
   /**
@@ -676,18 +742,6 @@ export class AuthenticationService {
         this.logger.error('Authentication email delivery failed');
       })
       .catch(() => undefined);
-  }
-
-  private consume(model: Model<OneTimeTokenDoc>, token: string): Promise<OneTimeTokenDoc | null> {
-    const now = new Date();
-    return model
-      .findOneAndUpdate(
-        { tokenHash: sha256(token), usedAt: null, expiresAt: { $gt: now } },
-        { $set: { usedAt: now } },
-        { returnDocument: 'after' },
-      )
-      .lean<OneTimeTokenDoc>()
-      .exec();
   }
 
   /** Argon2 verification of a login attempt (one call = one Argon2 run; tests count it). */

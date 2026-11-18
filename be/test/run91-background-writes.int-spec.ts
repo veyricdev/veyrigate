@@ -7,6 +7,7 @@ import { SessionService } from '../src/modules/sessions/session.service';
 import { bootFullApp, type FullApp } from './full-app';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 import { tokenFromMailLink } from './helpers/mail-token';
+import { resetWithToken } from './helpers/reset-ticket';
 
 /**
  * Run 91 lot A on the real app (`AppModule` + `createFastifyAdapter`).
@@ -163,7 +164,7 @@ describe('run 91 lot A (background write failures, verification mail recovery)',
       expect(link).toContain('/reset#token=');
       expect(link).not.toContain('/verify-email');
 
-      const reset = await post('/reset', { token: tokenFromMailLink(link), password: VICTIM_C });
+      const reset = await resetWithToken(full.app, tokenFromMailLink(link), VICTIM_C);
       expect(reset.statusCode).toBe(201);
       expect((await userOf(addr)).emailVerifiedAt).toBeInstanceOf(Date);
       expect((await sessions.listByUser(_id.toString())).map((s) => s.ref)).not.toContain(
@@ -260,10 +261,7 @@ describe('run 91 lot A (background write failures, verification mail recovery)',
       const mail = mailsTo(addr)
         .filter((m) => /\/reset#token=/.test(m.text))
         .at(-1)!;
-      const res = await post('/reset', {
-        token: tokenFromMailLink(mail.text),
-        password: `${PASSWORD} new`,
-      });
+      const res = await resetWithToken(full.app, tokenFromMailLink(mail.text), `${PASSWORD} new`);
       expect(res.statusCode).toBe(201);
     };
 

@@ -43,6 +43,8 @@ const EXPECTED: Record<string, { key: Record<string, number>; unique?: boolean; 
     PasswordResetToken: [
       { key: { tokenHash: 1 }, unique: true },
       { key: { expiresAt: 1 }, ttl: 0 },
+      // Run 94 (DEBT-661, D94.4): partial `{ticketHash: {$type: "string"}}` (run94-reset-ticket spec).
+      { key: { ticketHash: 1 }, unique: true },
     ],
     EmailVerificationToken: [
       { key: { tokenHash: 1 }, unique: true },

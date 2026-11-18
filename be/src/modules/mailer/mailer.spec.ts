@@ -80,6 +80,73 @@ describe('SmtpMailer timeout (B1.10)', () => {
 });
 
 /**
+ * Run 94 (DEBT-664, D94.9): a burst of sends shares a pool of at most 5 SMTP connections, every
+ * message still arrives, and shutdown closes every connection.
+ */
+describe('SmtpMailer pool (run 94)', () => {
+  let server: Server;
+  const open = new Set<Socket>();
+  let peak = 0;
+  let received = 0;
+
+  beforeAll(async () => {
+    server = createServer((s) => {
+      open.add(s);
+      peak = Math.max(peak, open.size);
+      s.on('close', () => open.delete(s));
+      s.on('error', () => undefined);
+      let buf = '';
+      let inData = false;
+      s.write('220 sink.test ESMTP\r\n');
+      s.on('data', (chunk) => {
+        buf += chunk.toString('latin1');
+        let i: number;
+        while ((i = buf.indexOf('\r\n')) >= 0) {
+          const line = buf.slice(0, i);
+          buf = buf.slice(i + 2);
+          if (inData) {
+            if (line === '.') {
+              inData = false;
+              received++;
+              s.write('250 queued\r\n');
+            }
+            continue;
+          }
+          const verb = line.slice(0, 4).toUpperCase();
+          if (verb === 'DATA') {
+            inData = true;
+            s.write('354 go\r\n');
+          } else if (verb === 'QUIT') s.end('221 bye\r\n');
+          else s.write('250 ok\r\n');
+        }
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  });
+
+  afterAll(async () => {
+    open.forEach((s) => s.destroy());
+    await new Promise((r) => server.close(r));
+  });
+
+  it('20 parallel sends: <= 5 connections at once, 20 delivered, none left open after shutdown', async () => {
+    const { port } = server.address() as AddressInfo;
+    const mailer = new SmtpMailer(`smtp://127.0.0.1:${port}`, 'no-reply@localhost');
+    await Promise.all(
+      Array.from({ length: 20 }, (_, i) =>
+        mailer.send({ to: `u${i}@example.test`, subject: 's', text: 't', html: '<p>t</p>' }),
+      ),
+    );
+    expect(received).toBe(20);
+    expect(peak).toBeGreaterThan(0);
+    expect(peak).toBeLessThanOrEqual(5);
+    mailer.onApplicationShutdown();
+    for (let i = 0; i < 50 && open.size > 0; i++) await new Promise((r) => setTimeout(r, 20));
+    expect(open.size).toBe(0);
+  }, 15000);
+});
+
+/**
  * Run 83 T1 AC2: the envelope (RCPT TO) is what decides where a verify/reset mail lands. A fake SMTP
  * server records every RCPT TO; hostile `to` values built on the nodemailer addressparser advisories
  * must never smuggle a recipient at evil.test (or the send must reject).

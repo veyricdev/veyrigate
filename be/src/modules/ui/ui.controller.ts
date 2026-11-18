@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -17,17 +18,21 @@ import {
 import { Transform } from 'class-transformer';
 import { IsEmail, IsOptional, IsString, Length } from 'class-validator';
 import { ConfigService } from '@nestjs/config';
+import { sha256 } from '../../common/crypto/crypto.util';
 import { buildCsp, safeCspOrigin } from '../../common/http/csp';
 import type { HttpReply, HttpRequest } from '../../common/http/http.types';
 import { IsDeliverableEmail } from '../../common/validation/email-address';
 import type { AppConfig } from '../../config/configuration';
-import { AuthenticationService } from '../authentication/authentication.service';
+import {
+  AuthenticationService,
+  RESET_TICKET_TTL_SEC,
+} from '../authentication/authentication.service';
 import { LoginThrottleService } from '../authentication/login-throttle.service';
 import { MfaLoginService } from '../mfa/mfa-login.service';
 import { normalizeEmail } from '../identity/user.service';
 import { AuditAction } from '../security/audit/audit-action.enum';
 import { AuditService } from '../security/audit/audit.service';
-import { SessionCookie } from '../sessions/session.cookie';
+import { hostCookieName, SessionCookie } from '../sessions/session.cookie';
 import { deviceLabelFromUserAgent } from '../sessions/device-label';
 import { SessionService } from '../sessions/session.service';
 import { RefreshTokenService } from '../oauth/token/refresh-token.service';
@@ -77,7 +82,8 @@ class TokenDto extends FormDto {
 class VerifyDto extends TokenDto {
   @IsString() @Length(1, 128) password!: string;
 }
-class ResetDto extends TokenDto {
+/** Run 94 (D94.3): the reset token is gone from this body; the ticket rides in its cookie. */
+class ResetDto extends FormDto {
   @IsString() @Length(8, 128) password!: string;
 }
 class ChangePasswordDto extends FormDto {
@@ -109,6 +115,11 @@ interface LogoutQuery {
 
 type UiRequest = HttpRequest;
 type UiReply = HttpReply;
+
+/** Reset ticket cookie (DEBT-661, D94.5): `__Host-idp_reset` when Secure. */
+const RESET_TICKET_COOKIE = 'idp_reset';
+const RESET_INVALID = 'This link is invalid or expired.';
+const TICKET_SHAPE = /^[A-Za-z0-9_-]{43}$/;
 
 @Controller()
 @UseFilters(HtmlExceptionFilter)
@@ -227,8 +238,15 @@ export class UiController {
   @Get('/verify-email') verifyForm(@Req() req: UiRequest, @Res() reply: UiReply) {
     return this.form(req, reply, 'verify.eta', { title: 'Verify email' });
   }
-  @Get('/reset') resetForm(@Req() req: UiRequest, @Res() reply: UiReply) {
-    return this.form(req, reply, 'reset.eta', { title: 'Choose a new password' });
+  // DEBT-661 (D94.3): a live ticket cookie => the password form (no token field); otherwise the
+  // code form posting to `/reset/code`, and a dead ticket cookie is cleared.
+  @Get('/reset') async resetForm(@Req() req: UiRequest, @Res() reply: UiReply) {
+    const ticket = this.readResetTicket(req);
+    const live = ticket !== undefined && (await this.auth.isLiveResetTicket(ticket));
+    if (!live && req.cookies?.[this.resetCookie] !== undefined) this.clearResetTicket(reply);
+    return this.form(req, reply, live ? 'reset.eta' : 'reset-code.eta', {
+      title: 'Choose a new password',
+    });
   }
   @Get('/logout') async logoutForm(
     @Req() req: UiRequest,
@@ -343,11 +361,38 @@ export class UiController {
       message: 'Your email has been verified.',
     });
   }
+  /**
+   * DEBT-661 (D94.3): `Continue` on the code form. The token is exchanged for a 15' ticket cookie
+   * and dies, so the link left in the browser history is useless afterwards. Every refused token
+   * (unknown, expired, used, already exchanged, malformed) gets the same 400 and no cookie.
+   */
+  @Post('/reset/code')
+  @UseGuards(CsrfGuard)
+  async resetCodePost(@Body() body: TokenDto, @Req() req: UiRequest, @Res() reply: UiReply) {
+    await this.ui.limit('reset', req, body.token);
+    const ticket = await this.auth.claimResetTicket(body.token);
+    if (!ticket) throw new BadRequestException(RESET_INVALID);
+    reply.setCookie(this.resetCookie, ticket, {
+      httpOnly: true,
+      secure: this.sessionCookie.secure,
+      sameSite: 'lax',
+      path: '/',
+      maxAge: RESET_TICKET_TTL_SEC,
+    });
+    return reply.redirect('/reset', 303);
+  }
   @Post('/reset')
   @UseGuards(CsrfGuard)
   async resetPost(@Body() body: ResetDto, @Req() req: UiRequest, @Res() reply: UiReply) {
-    await this.ui.limit('reset', req, body.token);
-    await this.auth.resetPassword(body.token, body.password);
+    const ticket = this.readResetTicket(req);
+    // No ticket => IP/device dimensions only (no shared account bucket for every ticketless post).
+    await this.ui.limit('reset', req, ticket && sha256(ticket));
+    // A refused password throws and keeps the ticket (DEBT-574); a dead ticket loses its cookie.
+    if (!ticket || !(await this.auth.resetPassword(ticket, body.password))) {
+      this.clearResetTicket(reply);
+      throw new BadRequestException(RESET_INVALID);
+    }
+    this.clearResetTicket(reply);
     return reply.view('message.eta', {
       title: 'Password changed',
       message: 'Your password has been changed.',
@@ -595,6 +640,21 @@ export class UiController {
     });
   }
 
+  private get resetCookie(): string {
+    return hostCookieName(RESET_TICKET_COOKIE, this.sessionCookie.secure);
+  }
+  private readResetTicket(req: UiRequest): string | undefined {
+    const v = req.cookies?.[this.resetCookie];
+    return v && TICKET_SHAPE.test(v) ? v : undefined;
+  }
+  private clearResetTicket(reply: UiReply): void {
+    reply.clearCookie(this.resetCookie, {
+      httpOnly: true,
+      secure: this.sessionCookie.secure,
+      sameSite: 'lax',
+      path: '/',
+    });
+  }
   private form(req: UiRequest, reply: UiReply, template: string, data: Record<string, unknown>) {
     // Every form page carries a CSRF token (and often a one-time token): never cache it (B7.4).
     reply.header('Cache-Control', 'no-store');

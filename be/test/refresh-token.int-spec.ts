@@ -39,6 +39,7 @@ import { ConsentService } from '../src/modules/oauth/consent/consent.service';
 import { seedCodeGrant } from './oauth-fixtures';
 import { MAILER, type MailMessage } from '../src/modules/mailer/mailer';
 import { isAccessTokenLive } from '../src/modules/oauth/access-token-liveness';
+import { resetByToken } from './helpers/reset-ticket';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -1662,7 +1663,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       const { userId, refreshToken } = await seedUserSessionAndFamily();
       const token = await seedResetToken(userId);
 
-      await authSvc.resetPassword(token, 'a-brand-new-password');
+      await resetByToken(authSvc, token, 'a-brand-new-password');
 
       const after = await refreshReq(refreshToken);
       expect(after.statusCode).toBe(400);
@@ -1687,7 +1688,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       const { userId, sessionRef, accessToken } = await seedUserSessionAndFamily();
       const token = await seedResetToken(userId);
 
-      await authSvc.resetPassword(token, 'another-strong-password');
+      await resetByToken(authSvc, token, 'another-strong-password');
 
       // The session is actively ended (tombstone written by sessions.revokeAllForUser).
       expect(await sessionSvc.isEnded(sessionRef)).toBe(true);
@@ -1731,7 +1732,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
       const { userId, sessionRef, refreshToken } = await seedUserSessionAndFamily();
       const token = await seedResetToken(userId);
 
-      await authSvc.resetPassword(token, 'post-reset-strong-password');
+      await resetByToken(authSvc, token, 'post-reset-strong-password');
 
       // Simulate the tombstone's TTL elapsing: the `sid` liveness gate now passes again.
       await redis.del(`sess_end:${sessionRef}`);
@@ -1825,7 +1826,7 @@ describe('refresh grant + rotation + reuse + /revoke on real Mongo + Redis (B4.5
         });
 
       // Start reset; it will park at the gated session-revoke step (families already pre-revoked).
-      const resetP = authSvc.resetPassword(resetToken, 'sweep-new-password');
+      const resetP = resetByToken(authSvc, resetToken, 'sweep-new-password');
       await parked;
 
       // The session is STILL live here (tombstone not yet written) → the /token re-check keeps the

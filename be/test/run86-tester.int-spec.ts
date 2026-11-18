@@ -28,6 +28,7 @@ import {
   type InjectResponse,
 } from './full-app';
 import { tokenFromMailLink } from './helpers/mail-token';
+import { resetWithToken } from './helpers/reset-ticket';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 import { seedConsent } from './oauth-fixtures';
 import { TEST_MFA_ENCRYPTION_KEYS } from './helpers/mfa';
@@ -164,7 +165,7 @@ describe('run 86 tester (T6): token fragment, POST /logout, key pre-publish edge
 
     /** GET the form (anonymous CSRF cookie) then POST it urlencoded. */
     const submit = async (page: string, fields: Record<string, string | string[]>) => {
-      const form = await get(page);
+      const form = await get(page === '/reset/code' ? '/reset' : page); // run 94: the code form posts there
       const anon = setCookies(form)
         .find((c) => c.startsWith(`${ANON_COOKIE}=`))!
         .split(';')[0];
@@ -292,12 +293,13 @@ describe('run 86 tester (T6): token fragment, POST /logout, key pre-publish edge
         },
       );
 
+      // Run 94 (D94.3): the token goes to `/reset/code`; `/reset` refuses a token-shaped body.
       it.each([
-        ['an unknown token', { token: MARK, password: NEW_PASSWORD }],
-        ['a too-short password', { token: MARK, password: 'x' }],
-        ['a repeated token field', { token: [MARK, MARK], password: NEW_PASSWORD }],
-      ])('POST /reset with %s => 4xx and the submitted token is not echoed', async (_n, fields) => {
-        const res = await submit('/reset', fields);
+        ['an unknown token', '/reset/code', { token: MARK }],
+        ['a too-short password', '/reset', { token: MARK, password: 'x' }],
+        ['a repeated token field', '/reset/code', { token: [MARK, MARK] }],
+      ])('POST with %s => 4xx and the submitted token is not echoed', async (_n, path, fields) => {
+        const res = await submit(path, fields);
         expect(res.statusCode).toBeGreaterThanOrEqual(400);
         expect(res.statusCode).toBeLessThan(500);
         expect(res.body).not.toContain(MARK);
@@ -325,12 +327,12 @@ describe('run 86 tester (T6): token fragment, POST /logout, key pre-publish edge
           swapFirst(code),
           code.toUpperCase() === code ? code.toLowerCase() : code.toUpperCase(),
         ]) {
-          const res = await submit('/reset', { token: variant, password: NEW_PASSWORD });
+          const res = await submit('/reset/code', { token: variant });
           expect(res.statusCode).toBeGreaterThanOrEqual(400);
           expect(res.statusCode).toBeLessThan(500);
-          expect(res.body).not.toContain('Password changed');
+          expect(res.headers['set-cookie'] ?? '').not.toContain('idp_reset=');
         }
-        const ok = await submit('/reset', { token: code, password: NEW_PASSWORD });
+        const ok = await resetWithToken(full.app, code, NEW_PASSWORD);
         expect(ok.statusCode).toBe(201);
         expect(ok.body).toContain('Password changed');
         expect(
@@ -347,7 +349,7 @@ describe('run 86 tester (T6): token fragment, POST /logout, key pre-publish edge
         ['tab + CRLF', '\t\r\n'],
       ])('%s around the code is trimmed (String#trim) => accepted', async (_n, ws) => {
         const { code } = await resetCode();
-        const ok = await submit('/reset', { token: `${ws}${code}${ws}`, password: NEW_PASSWORD });
+        const ok = await resetWithToken(full.app, `${ws}${code}${ws}`, NEW_PASSWORD);
         expect(ok.statusCode).toBe(201);
       });
 

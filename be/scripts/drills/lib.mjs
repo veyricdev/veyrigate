@@ -434,6 +434,27 @@ export async function countsOf(conn, name) {
   return out;
 }
 
+/** Collections of `name` with a TTL index (`expireAfterSeconds`): Mongo removes their expired documents on its own. */
+export async function ttlCollections(conn, name) {
+  const db = conn.getClient().db(name);
+  const out = [];
+  for (const c of (await db.listCollections({}, { nameOnly: true }).toArray()).map((x) => x.name)) {
+    if ((await db.collection(c).indexes()).some((i) => i.expireAfterSeconds !== undefined)) out.push(c);
+  }
+  return out;
+}
+
+/**
+ * DEBT-688 (run 94): two `countsOf` fingerprints match, or every difference is a DROP in a TTL collection (the
+ * owner's expired documents removed by Mongo during the run). A rise, a new/missing collection, or any change in a
+ * collection without TTL still counts as changed.
+ */
+export function sameButExpired(before, after, ttl) {
+  if (!before || !after) return JSON.stringify(before) === JSON.stringify(after);
+  const names = new Set([...Object.keys(before), ...Object.keys(after)]);
+  return [...names].every((c) => before[c] === after[c] || (ttl.includes(c) && c in before && c in after && after[c] < before[c]));
+}
+
 export async function portFree(port) {
   return new Promise((r) => {
     const s = netConnect({ host: '127.0.0.1', port }, () => {
@@ -507,7 +528,7 @@ export async function postCheck({ conn, redisDbs, e2eBefore }) {
   return {
     drillDbsLeft: left,
     redisDbSizes: sizes,
-    e2eUnchanged: JSON.stringify(e2eBefore) === JSON.stringify(e2eAfter),
+    e2eUnchanged: sameButExpired(e2eBefore, e2eAfter, e2eAfter ? await ttlCollections(conn, 'sso-idp-e2e') : []),
   };
 }
 

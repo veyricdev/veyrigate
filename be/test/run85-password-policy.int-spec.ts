@@ -5,6 +5,7 @@ import { UserService } from '../src/modules/identity/user.service';
 import { bootFullApp, type FullApp, type InjectResponse } from './full-app';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 import { tokenFromMailLink } from './helpers/mail-token';
+import { CookieJar, exchangeResetToken, postNewPassword } from './helpers/reset-ticket';
 
 /**
  * Run 85 T3 (DEBT-574, D85.4) on the REAL app over HTTP: `/register` and `/reset` refuse a password
@@ -88,14 +89,17 @@ describe('run 85 T3: common-password policy on register/reset (real app)', () =>
     const mail = full.outbox.filter((m) => m.to === email).at(-1)!;
     const token = tokenFromMailLink(mail.text);
 
-    const refused = await submit('/forgot', '/reset', { token, password: COMMON });
+    // Run 94 (D94.3): exchange the token for the ticket cookie, then post the password.
+    const jar = new CookieJar();
+    expect((await exchangeResetToken(full.app, token, jar)).statusCode).toBe(303);
+    const refused = await postNewPassword(full.app, COMMON, jar);
     expect(refused.statusCode).toBe(400);
     expect(refused.body).not.toContain(COMMON);
     expect(
       await full.conn.model('PasswordResetToken').countDocuments({ usedAt: { $ne: null } }),
     ).toBe(0);
 
-    const ok = await submit('/forgot', '/reset', { token, password: 'n3w#Strong!Pass-77' });
+    const ok = await postNewPassword(full.app, 'n3w#Strong!Pass-77', jar);
     expect(ok.statusCode).toBe(201);
   });
 });

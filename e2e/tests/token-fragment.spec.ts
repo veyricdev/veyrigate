@@ -6,10 +6,12 @@ import { BE_PORT, ISSUER } from "../config/env";
  * One-time token in the URL fragment (run 86 T1, DEBT-577, D86.1–D86.3) on the real IdP UI with
  * Mailpit. The spec owns a dedicated user (register + verify through the fragment link). Then:
  *  - JS on: forgot => mail link `/reset#token=<43>` => the page fills and hides the code field and
- *    drops the fragment (`replaceState`); no request the browser makes carries the token; the new
- *    password signs in;
- *  - JS off: the same link shows the "Code from the email" field; the code printed in the mail
- *    resets the password.
+ *    drops the fragment (`replaceState`); no request URL or Referer carries the token; `Continue`
+ *    exchanges the token for the ticket cookie (run 94, DEBT-661) => the password form; the link
+ *    opened in another context is then invalid, in the same context it shows the password form;
+ *    the new password signs in;
+ *  - JS off: the same link shows the "Code from the email" field; the code printed in the mail,
+ *    `Continue`, then the password form resets the password.
  * URL waits use pathname/port predicates only (DEBT-108).
  */
 
@@ -97,7 +99,8 @@ test("setup: register and verify through the fragment link", async ({ browser })
 });
 
 test("JS on: the fragment fills and hides the code field, is dropped, never sent; reset works", async ({ browser }) => {
-  const page = await (await browser.newContext()).newPage();
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
   await forgot(page);
   const reset = await mailLink(email, "/reset", seen);
   seen.add(reset.id);
@@ -107,20 +110,43 @@ test("JS on: the fragment fills and hides the code field, is dropped, never sent
   expect(link.hash).toMatch(/^#token=[A-Za-z0-9_-]{43}$/);
 
   const sent: string[] = [];
-  page.on("request", (req) => sent.push(req.url()));
+  page.on("request", (req) => sent.push(req.url(), req.headers()["referer"] ?? ""));
   await page.goto(reset.link);
   await expect.poll(() => new URL(page.url()).hash).toBe("");
   expect(new URL(page.url()).pathname).toBe("/reset");
   const field = page.locator("#token");
   await expect(field).toHaveValue(reset.code);
   await expect(page.locator("#token-manual")).toBeHidden();
-  expect(sent.some((u) => u.includes(reset.code)), "token in a request URL").toBe(false);
 
-  const form = page.locator('form[action="/reset"]');
-  await form.getByLabel("New password").fill(SECOND);
-  await form.getByRole("button", { name: "Change password" }).click();
+  // Run 94 (DEBT-661, D94.2/D94.3): nothing is exchanged on load; `Continue` swaps the token for the
+  // ticket cookie and lands on `/reset` (no fragment) with the password form.
+  await page.locator('form[action="/reset/code"]').getByRole("button", { name: "Continue" }).click();
+  await page.waitForURL((url) => isIdp(url) && url.pathname === "/reset" && url.hash === "");
+  const pwForm = page.locator('form[action="/reset"]');
+  await expect(pwForm.getByLabel("New password")).toBeVisible();
+  await expect(page.locator('input[name="token"]')).toHaveCount(0);
+  expect(sent.some((u) => u.includes(reset.code)), "token in a request URL or Referer").toBe(false);
+
+  // The link left in the history is dead: a new browser context gets the invalid page.
+  const other = await (await browser.newContext()).newPage();
+  await other.goto(reset.link);
+  const refused = other.waitForResponse((r) => new URL(r.url()).pathname === "/reset/code");
+  await other.getByRole("button", { name: "Continue" }).click();
+  expect((await refused).status()).toBe(400);
+  await expect(other.getByRole("heading", { name: "Request failed" })).toBeVisible();
+  await expect(other.locator('form[action="/reset"]')).toHaveCount(0);
+  await other.context().close();
+
+  // The same context reopening the link holds the ticket: straight to the password form (leave
+  // `/reset` first so the goto is a real load, not a same-document fragment change).
+  await page.goto("about:blank");
+  await page.goto(reset.link);
+  await expect(page.locator('form[action="/reset/code"]')).toHaveCount(0);
+  await expect(pwForm.getByLabel("New password")).toBeVisible();
+  await pwForm.getByLabel("New password").fill(SECOND);
+  await pwForm.getByRole("button", { name: "Change password" }).click();
   await expect(page.getByRole("heading", { name: "Password changed" })).toBeVisible();
-  await page.context().close();
+  await ctx.close();
   await signsIn(browser, SECOND);
 });
 
@@ -130,11 +156,14 @@ test("JS off: the code field is visible and the code from the mail resets the pa
   const reset = await mailLink(email, "/reset", seen);
   seen.add(reset.id);
   await page.goto(reset.link);
-  const form = page.locator('form[action="/reset"]');
-  const code = form.getByLabel("Code from the email");
+  const codeForm = page.locator('form[action="/reset/code"]');
+  const code = codeForm.getByLabel("Code from the email");
   await expect(code).toBeVisible();
   await expect(code).toHaveValue("");
   await code.fill(reset.code);
+  await codeForm.getByRole("button", { name: "Continue" }).click();
+  await page.waitForURL((url) => isIdp(url) && url.pathname === "/reset");
+  const form = page.locator('form[action="/reset"]');
   await form.getByLabel("New password").fill(THIRD);
   await form.getByRole("button", { name: "Change password" }).click();
   await expect(page.getByRole("heading", { name: "Password changed" })).toBeVisible();

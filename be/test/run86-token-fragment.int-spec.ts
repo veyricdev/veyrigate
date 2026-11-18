@@ -5,6 +5,7 @@ import { UserService } from '../src/modules/identity/user.service';
 import { FULL_APP_ISSUER, bootFullApp, type FullApp, type InjectResponse } from './full-app';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 import { tokenFromMailLink } from './helpers/mail-token';
+import { resetWithToken } from './helpers/reset-ticket';
 
 /**
  * Run 86 T1 (DEBT-577, D86.1–D86.3) on the REAL app: the verify/reset token rides in the URL
@@ -39,7 +40,7 @@ describe('run 86 T1: one-time token in the URL fragment (real app)', () => {
   };
   const get = (url: string) => full.app.inject({ method: 'GET', url }) as Promise<InjectResponse>;
   const submit = async (page: string, fields: Record<string, string>) => {
-    const form = await get(page);
+    const form = await get(page === '/reset/code' ? '/reset' : page); // run 94: the code form posts there
     const anon = setCookies(form)
       .find((c) => c.startsWith('idp_csrf='))!
       .split(';')[0];
@@ -117,13 +118,14 @@ describe('run 86 T1: one-time token in the URL fragment (real app)', () => {
     expect(res.body).toContain('/^#token=([A-Za-z0-9_-]{43})$/');
   });
 
-  it('AC5: POST /reset consumes a pasted code with surrounding spaces once; replay fails', async () => {
+  it('AC5: POST /reset/code takes a pasted code with surrounding spaces once; replay fails', async () => {
     const email = await newUser();
     const code = tokenFromMailLink((await resetMail(email)).text);
-    const ok = await submit('/reset', { token: `  ${code}\n`, password: NEW });
+    // Run 94 (D94.3): the code is exchanged for the ticket cookie, then the password is posted.
+    const ok = await resetWithToken(full.app, `  ${code}\n`, NEW);
     expect(ok.statusCode).toBe(201);
     expect(ok.body).toContain('Password changed');
-    const replay = await submit('/reset', { token: code, password: `${NEW}2` });
+    const replay = await submit('/reset/code', { token: code });
     expect(replay.statusCode).toBeGreaterThanOrEqual(400);
     const login = await full.app
       .get(AuthenticationService)

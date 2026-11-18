@@ -278,9 +278,11 @@ jobs:
   # 1 a `must` check failed / exposure filter / refused; 2 time budget. A failing `should` check does not change
   # the exit code. Evidence passes the exposure filter (D90.17) before it is written; uploaded as an artifact.
   # Services + Mongo rs0 are copied from the e2e job (same digests, same ports = the harness constants).
+  # Run 94 (DEBT-682, D94.11): + the product mutations `mutate.mjs all` on every push, and on a PR that changes a
+  # mutation-relevant file.
   pentest:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 40
     services:
       redis:
         image: redis:7.4.10-bookworm@sha256:e9b2e45ecd47fbb69b877cf8d045d5cccaaaed52524b6e098b4abe8212994f73 # 7.4.10-bookworm, pinned 2026-11-12 (DEBT-590)
@@ -299,6 +301,8 @@ jobs:
           --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2 # HEAD^1 = base parent of a PR merge commit (mutation detect step, D94.11)
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -352,6 +356,48 @@ jobs:
           path: ${{ runner.temp }}/pentest-evidence
           retention-days: 14
           if-no-files-found: warn
+
+      # DEBT-682 (D94.11): no paths-filter action. Only a pull_request is filtered by its diff; every push runs the
+      # mutations (concurrency cancel-in-progress may cancel an earlier push whose diff a later run would then never
+      # see), and so does any case where the changed files cannot be listed.
+      # Keep the source paths in sync with `MUTATIONS[].file` in be/scripts/pentest/mutate.mjs.
+      - name: Detect mutation-relevant changes
+        id: mut
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          pattern='^be/scripts/pentest/|^be/scripts/drills/lib\.mjs$|^\.github/workflows/ci\.yml$|^be/tsconfig[^/]*\.json$'
+          pattern+='|^be/src/modules/oauth/authorize/authorize\.service\.ts$|^be/src/modules/ui/csrf\.service\.ts$'
+          pattern+='|^be/src/modules/ui/mfa\.controller\.ts$|^be/src/bootstrap\.ts$'
+          pattern+='|^be/src/modules/identity/tenant-context/tenant-scoped\.repository\.ts$|^be/src/common/http/request-id\.ts$'
+          files=''
+          reason=''
+          if [ "$EVENT" = pull_request ]; then
+            # GITHUB_SHA is the merge commit; parent 1 = base.
+            files=$(git diff --name-only HEAD^1 HEAD) || reason='pull_request: no diff against HEAD^1'
+          else
+            reason="event $EVENT (only pull_request is filtered)"
+          fi
+          if [ -n "$reason" ]; then
+            echo "run=true ($reason)"
+            echo run=true >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          matched=$(printf '%s\n' "$files" | grep -E "$pattern" || true)
+          if [ -n "$matched" ]; then
+            echo 'run=true; mutation-relevant files changed:'
+            printf '%s\n' "$matched" | sed 's/^/  /'
+            echo run=true >> "$GITHUB_OUTPUT"
+          else
+            echo 'run=false: no mutation-relevant file changed'
+            echo run=false >> "$GITHUB_OUTPUT"
+          fi
+
+      # Every mutant must turn its expected check red; exit != 0 (a mutant stays green, be/dist changed, files left) fails the job.
+      - name: Mutation harness (DEBT-682)
+        if: steps.mut.outputs.run == 'true'
+        timeout-minutes: 20
+        run: node be/scripts/pentest/mutate.mjs all
 
   # Secret scan (B7.4, run 38): gitleaks over the WHOLE git history (fetch-depth: 0), same version as
   # the optional pre-commit hook (.pre-commit-config.yaml). Run from the upstream image pinned by

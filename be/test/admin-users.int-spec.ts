@@ -62,6 +62,7 @@ import { tokenFromMailLink } from './helpers/mail-token';
 import { MFA_KEYRING } from '../src/modules/mfa/mfa-crypto';
 import { MfaService } from '../src/modules/mfa/mfa.service';
 import { testKeyring } from './helpers/mfa';
+import { resetByToken } from './helpers/reset-ticket';
 
 const MONGO_URI =
   process.env.TEST_MONGO_URI ??
@@ -625,7 +626,7 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
         (await call('POST', `/admin/users/${target}/lock`, await tok(tadminA))).statusCode,
       ).toBe(200);
       // Same generic forgot/reset path as any user (§9.12): nothing reveals the lock.
-      await auth.resetPassword(await forgotToken(target), NEW_PASSWORD);
+      await resetByToken(auth, await forgotToken(target), NEW_PASSWORD);
 
       expect((await lockedUntilOf(target))?.getTime()).toBe(ADMIN_LOCKED_UNTIL.getTime());
       expect(await canLogin(target, NEW_PASSWORD)).toBe(false);
@@ -642,7 +643,7 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
         { $set: { lockedUntil: new Date(Date.now() + 15 * MIN), failedLoginCount: 5 } },
       );
       expect(await canLogin(target)).toBe(false);
-      await auth.resetPassword(await forgotToken(target), NEW_PASSWORD);
+      await resetByToken(auth, await forgotToken(target), NEW_PASSWORD);
       expect(await lockedUntilOf(target)).toBeNull();
       expect(await canLogin(target, NEW_PASSWORD)).toBe(true);
     });

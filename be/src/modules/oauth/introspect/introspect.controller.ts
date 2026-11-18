@@ -69,8 +69,9 @@ const INACTIVE = { active: false } as const;
  * unrelated caller never drives a DB/session lookup keyed by someone else's token. Every other
  * outcome is the identical `{active:false}` (200).
  *
- * Liveness note (spec §214, DEBT-037): an access token is self-contained and not denylisted by
- * `jti`, but `/introspect` reflects signature + `exp` + client/`aud`/user existence AND — when the
+ * Liveness note (spec §214, DEBT-037): an access token is self-contained; the only `jti` denylist is
+ * `at_revoked:{jti}`, written when an authorization code is replayed by its client (D91.8, DEBT-651).
+ * `/introspect` reflects signature + `exp` + client/`aud`/user existence AND — when the
  * token carries a `sid` — whether that session was actively ended (local/global logout, device
  * revoke, password reset) via the `sess_end:{sid}` tombstone. A session that merely expired
  * naturally does NOT make the access token inactive (offline_access survives); a token with no

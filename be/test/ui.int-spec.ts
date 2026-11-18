@@ -45,7 +45,9 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
     login: jest.fn(async () => ({ id: 'fresh-session', session: { ref: 'fresh-ref' } })),
     forgotPassword: jest.fn(async () => undefined),
     verifyEmail: jest.fn(async () => undefined),
-    resetPassword: jest.fn(async () => undefined),
+    resetPassword: jest.fn(async () => true),
+    claimResetTicket: jest.fn(async () => null),
+    isLiveResetTicket: jest.fn(async () => false),
     // DEBT-150: the real 3-step revoke (all steps run, first error wins) over the mocks below.
     revokeAllUserCredentials: jest.fn(
       (
@@ -500,13 +502,15 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
     ['/register', { email: 'new@example.com', password: 'correct password' }],
     ['/forgot', { email: 'user@example.com' }],
     ['/verify-email', { token: 'verification-token', password: 'correct password' }],
-    ['/reset', { token: 'reset-token', password: 'correct password' }],
+    // Run 94 (D94.3): `/reset` takes the password only, with the ticket cookie.
+    ['/reset', { password: 'correct password' }],
   ] as const)('shared message outcomes retain login action for POST %s', async (url, payload) => {
     const page = await form(url);
+    const ticket = url === '/reset' ? `; idp_reset=${'t'.repeat(43)}` : '';
     const response = await app.inject({
       method: 'POST',
       url,
-      headers: { cookie: page.cookie },
+      headers: { cookie: page.cookie + ticket },
       payload: { _csrf: page.csrf, ...payload },
     });
 
@@ -576,7 +580,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
 
   // `/logout` left this list in run 86 (DEBT-572, D86.4): a POST with no `_csrf` key renders the
   // confirmation page (see "POST logout without `_csrf` renders the confirmation").
-  it.each(['/register', '/login', '/forgot', '/verify-email', '/reset'])(
+  it.each(['/register', '/login', '/forgot', '/verify-email', '/reset/code', '/reset'])(
     'rejects POST %s without CSRF before invoking the action',
     async (url) => {
       const response = await app.inject({ method: 'POST', url, payload: {} });
@@ -588,14 +592,15 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
       expect(auth.forgotPassword).not.toHaveBeenCalled();
       expect(auth.verifyEmail).not.toHaveBeenCalled();
       expect(auth.resetPassword).not.toHaveBeenCalled();
+      expect(auth.claimResetTicket).not.toHaveBeenCalled();
       expect(sessions.revoke).not.toHaveBeenCalled();
     },
   );
 
-  it.each(['/register', '/login', '/forgot', '/verify-email', '/reset', '/logout'])(
+  it.each(['/register', '/login', '/forgot', '/verify-email', '/reset/code', '/reset', '/logout'])(
     'rejects POST %s with an invalid CSRF before invoking the action',
     async (url) => {
-      const page = await form(url);
+      const page = await form(url === '/reset/code' ? '/reset' : url);
       const response = await app.inject({
         method: 'POST',
         url,
@@ -610,6 +615,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
       expect(auth.forgotPassword).not.toHaveBeenCalled();
       expect(auth.verifyEmail).not.toHaveBeenCalled();
       expect(auth.resetPassword).not.toHaveBeenCalled();
+      expect(auth.claimResetTicket).not.toHaveBeenCalled();
       expect(sessions.revoke).not.toHaveBeenCalled();
     },
   );
@@ -626,6 +632,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
     }
     expect(auth.verifyEmail).not.toHaveBeenCalled();
     expect(auth.resetPassword).not.toHaveBeenCalled();
+    expect(auth.claimResetTicket).not.toHaveBeenCalled();
   });
 
   it.each(['/forgot', '/verify-email', '/reset', '/logout'])(

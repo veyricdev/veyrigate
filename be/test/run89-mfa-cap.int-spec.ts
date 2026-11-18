@@ -11,6 +11,7 @@ import { bootFullApp, type FullApp, type InjectResponse } from './full-app';
 import { enrollForTest } from './helpers/mfa';
 import { tokenFromMailLink } from './helpers/mail-token';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
+import { resetByToken } from './helpers/reset-ticket';
 
 /**
  * Run 89 DEBT-640 (D89.25) on the REAL app: a cap on CONSECUTIVE wrong second-factor codes per user
@@ -152,7 +153,7 @@ describe('run 89 DEBT-640: consecutive second-factor failure cap (real app)', ()
     await auth.forgotPassword(u.email);
     await auth.drainBackgroundWrites(); // run 90 C2
     const mail = full.outbox.slice(before).find((m) => m.to === u.email)!;
-    await auth.resetPassword(tokenFromMailLink(mail.text), 'r89c-New#Pass-2');
+    await resetByToken(auth, tokenFromMailLink(mail.text), 'r89c-New#Pass-2');
     expect(await failuresOf(u.sub)).toBe(MFA_FAILURE_CAP);
     const blocked = await signIn(u.email, code(), 'r89c-New#Pass-2');
     expect(blocked.statusCode).toBe(400);

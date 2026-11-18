@@ -240,7 +240,9 @@ describe('run 53c tester: Redis / key provider down — wider surface, families,
       for (const [url, fields] of [
         ['/register', { email: `x-${randomUUID()}@fixture.test`, password: PASSWORD }],
         ['/forgot', { email }],
-        ['/reset', { token: randomBytes(32).toString('base64url'), password: PASSWORD }],
+        // Run 94 (D94.3): the token is exchanged on `/reset/code`; `/reset` takes the password only.
+        ['/reset/code', { token: randomBytes(32).toString('base64url') }],
+        ['/reset', { password: PASSWORD }],
       ] as const) {
         f.push(
           ...contract(

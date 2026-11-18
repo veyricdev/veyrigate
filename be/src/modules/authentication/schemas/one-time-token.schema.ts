@@ -19,4 +19,11 @@ function createOneTimeTokenSchema(): Schema {
 }
 
 export const PasswordResetTokenSchema = createOneTimeTokenSchema();
+// DEBT-661 (run 94, D94.4): the reset token is exchanged once for a ticket (cookie `idp_reset`);
+// sha256(ticket) lives on the same document. Partial: unexchanged tokens (null / no field) skip it.
+PasswordResetTokenSchema.add({ ticketHash: { type: String, default: null } });
+PasswordResetTokenSchema.index(
+  { ticketHash: 1 },
+  { unique: true, partialFilterExpression: { ticketHash: { $type: 'string' } } },
+);
 export const EmailVerificationTokenSchema = createOneTimeTokenSchema();

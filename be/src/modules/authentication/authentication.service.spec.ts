@@ -14,7 +14,7 @@ import { MAILER } from '../mailer/mailer';
 import { DuplicateError } from '../identity/identity.errors';
 import { AuditAction } from '../security/audit/audit-action.enum';
 import { registry } from '../../common/metrics/metrics';
-import { hashPassword } from '../../common/crypto/crypto.util';
+import { hashPassword, sha256 } from '../../common/crypto/crypto.util';
 
 describe('AuthenticationService', () => {
   const user = {
@@ -43,6 +43,7 @@ describe('AuthenticationService', () => {
     findOneAndUpdate: jest.fn<(...args: unknown[]) => unknown>(),
     exists: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
     updateOne: jest.fn<(...args: unknown[]) => unknown>(() => ({ exec: async () => ({}) })),
+    updateMany: jest.fn<(...args: unknown[]) => unknown>(() => ({ exec: async () => ({}) })),
   };
   const sessions = {
     establish: jest.fn<(...args: unknown[]) => Promise<unknown>>(),
@@ -98,7 +99,7 @@ describe('AuthenticationService', () => {
     service = module.get(AuthenticationService);
   });
 
-  it('consumes a reset token atomically only after validating password', async () => {
+  it('consumes a reset ticket atomically only after validating password', async () => {
     tokenModel.findOneAndUpdate.mockReturnValue({
       lean: () => ({ exec: async () => ({ userId: user.sub }) }),
     });
@@ -108,7 +109,7 @@ describe('AuthenticationService', () => {
     await service.resetPassword('secret-token', 'new password');
     expect(tokenModel.findOneAndUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
-        tokenHash: expect.any(String),
+        ticketHash: sha256('secret-token'),
         usedAt: null,
         expiresAt: { $gt: expect.any(Date) },
       }),
@@ -119,6 +120,36 @@ describe('AuthenticationService', () => {
       BadRequestException,
     );
     expect(tokenModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('DEBT-661: claimResetTicket burns an unexchanged token for a 15-minute ticket in one update', async () => {
+    tokenModel.findOneAndUpdate.mockReturnValue({
+      lean: () => ({ exec: async () => ({ userId: user.sub }) }),
+    });
+    const before = Date.now();
+    const ticket = await service.claimResetTicket('mail-token');
+    expect(ticket).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    const [filter, [update], options] = tokenModel.findOneAndUpdate.mock.calls[0] as [
+      Record<string, unknown>,
+      [{ $set: { ticketHash: string; expiresAt: { $min: [string, Date] } } }],
+      Record<string, unknown>,
+    ];
+    expect(options).toEqual({ updatePipeline: true });
+    // Run 94 retry: the ticket never outlives the token (min of both expiries).
+    expect(update.$set.expiresAt.$min[0]).toBe('$expiresAt');
+    expect(filter).toEqual({
+      tokenHash: sha256('mail-token'),
+      usedAt: null,
+      ticketHash: null,
+      expiresAt: { $gt: expect.any(Date) },
+    });
+    expect(update.$set.ticketHash).toBe(sha256(ticket!));
+    const ttl = update.$set.expiresAt.$min[1].getTime() - before;
+    expect(ttl).toBeGreaterThanOrEqual(15 * 60 * 1000);
+    expect(ttl).toBeLessThan(15 * 60 * 1000 + 5000);
+
+    tokenModel.findOneAndUpdate.mockReturnValue({ lean: () => ({ exec: async () => null }) });
+    await expect(service.claimResetTicket('mail-token')).resolves.toBeNull();
   });
 
   it('reset revokes refresh families AND sessions in order: family -> session -> family(sweep) -> audit (DEBT-050)', async () => {
@@ -216,13 +247,31 @@ describe('AuthenticationService', () => {
     );
   });
 
+  it('DEBT-687: burning the other reset tokens fails => 5xx (reject) AND the password-changed mail still goes', async () => {
+    tokenModel.findOneAndUpdate.mockReturnValue({
+      lean: () => ({ exec: async () => ({ userId: user.sub }) }),
+    });
+    users.setPassword.mockResolvedValue(user);
+    sessions.revokeAllForUser.mockResolvedValue(1);
+    refreshTokens.revokeAllForUser.mockResolvedValue(1);
+    tokenModel.updateMany.mockReturnValueOnce({
+      exec: async () => {
+        throw new Error('mongo down');
+      },
+    });
+    await expect(service.resetPassword('secret-token', 'new password')).rejects.toThrow(
+      'mongo down',
+    );
+    const mailer = module.get<{ send: jest.Mock }>(MAILER);
+    expect(mailer.send).toHaveBeenCalledTimes(1);
+    expect(mailer.send).toHaveBeenCalledWith(expect.objectContaining({ to: user.email }));
+  });
+
   it('reset does not revoke anything when the link is invalid (fail-closed) (DEBT-050)', async () => {
     tokenModel.findOneAndUpdate.mockReturnValue({
       lean: () => ({ exec: async () => null }),
     });
-    await expect(service.resetPassword('secret-token', 'new password')).rejects.toBeInstanceOf(
-      BadRequestException,
-    );
+    await expect(service.resetPassword('secret-token', 'new password')).resolves.toBe(false);
     expect(refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
     expect(sessions.revokeAllForUser).not.toHaveBeenCalled();
     expect(audit.record).not.toHaveBeenCalled();

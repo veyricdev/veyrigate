@@ -4,6 +4,8 @@ OIDC/OAuth2 Identity Provider — pnpm monorepo.
 
 Nguồn sự thật: [`docs/agile/sso-idp/spec.md`](docs/agile/sso-idp/spec.md) và [`docs/agile/sso-idp/plan.md`](docs/agile/sso-idp/plan.md).
 
+Tích hợp RP/RS (introspect cho thao tác nhạy cảm, thu hồi token, verify JWT cục bộ): [`docs/integration-rp-rs.md`](docs/integration-rp-rs.md).
+
 ## Cấu trúc
 
 | Package | Mô tả | Scaffold tại |

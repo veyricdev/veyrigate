@@ -82,6 +82,7 @@ import { MfaService } from '../src/modules/mfa/mfa.service';
 import { MfaLoginService } from '../src/modules/mfa/mfa-login.service';
 import { totpAt, totpStep } from '../src/modules/mfa/totp';
 import { generateRecoveryCodes } from '../src/modules/mfa/recovery-codes';
+import { resetByToken } from './helpers/reset-ticket';
 
 /**
  * Run 32 (B5.1 + B5.2): federation broker end to end on real Mongo + Redis, with Google/GitHub
@@ -2094,7 +2095,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       await moduleRef.get(AuthenticationService).drainBackgroundWrites(); // run 90 C2
       const token = mails[0]?.text.match(/token=([A-Za-z0-9_-]+)/)?.[1];
       expect(token).toBeTruthy();
-      await moduleRef.get(AuthenticationService).resetPassword(token!, 'brand new password 1');
+      await resetByToken(moduleRef.get(AuthenticationService), token!, 'brand new password 1');
       const established = await moduleRef
         .get(AuthenticationService)
         .login(local.email, 'brand new password 1', {});

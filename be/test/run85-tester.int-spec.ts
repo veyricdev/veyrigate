@@ -28,6 +28,7 @@ import {
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 import { seedConsent } from './oauth-fixtures';
 import { tokenFromMailLink } from './helpers/mail-token';
+import { resetByToken } from './helpers/reset-ticket';
 
 /**
  * Run 85 T6 — tester probes on the REAL app that the dev specs (run85-*.int-spec.ts) do not cover.
@@ -248,9 +249,11 @@ describe('run 85 T6 tester probes (real app, http)', () => {
     it('a device cookie that was trusted before a password reset is not trusted after it', async () => {
       const u = await newUser();
       const token = valueOf((await login(u.email, PASSWORD)).device)!;
-      await full.app
-        .get(AuthenticationService)
-        .resetPassword(await resetTokenFor(u.email), NEW_PASSWORD);
+      await resetByToken(
+        full.app.get(AuthenticationService),
+        await resetTokenFor(u.email),
+        NEW_PASSWORD,
+      );
       for (let i = 0; i < 20; i++) await login(u.email, WRONG, `198.18.42.${i % 5}`);
       // Replay of the old cookie with the NEW password: untrusted => account bucket => 429.
       const replay = await login(u.email, NEW_PASSWORD, ip(), `idp_dc=${token}`);
@@ -350,9 +353,11 @@ describe('run 85 T6 tester probes (real app, http)', () => {
           const res = await change(owner.jar, PASSWORD, NEW_PASSWORD);
           expect(res.statusCode).toBe(200);
         } else {
-          await full.app
-            .get(AuthenticationService)
-            .resetPassword(await resetTokenFor(u.email), NEW_PASSWORD);
+          await resetByToken(
+            full.app.get(AuthenticationService),
+            await resetTokenFor(u.email),
+            NEW_PASSWORD,
+          );
         }
         release.open();
         const a = await attacker;
@@ -371,7 +376,7 @@ describe('run 85 T6 tester probes (real app, http)', () => {
       const token = await resetTokenFor(u.email);
       const [changed, reset] = await Promise.allSettled([
         change(s.jar, PASSWORD, NEW_PASSWORD),
-        full.app.get(AuthenticationService).resetPassword(token, OTHER_PASSWORD),
+        resetByToken(full.app.get(AuthenticationService), token, OTHER_PASSWORD),
       ]);
       expect(changed.status).toBe('fulfilled');
       expect(reset.status).toBe('fulfilled');

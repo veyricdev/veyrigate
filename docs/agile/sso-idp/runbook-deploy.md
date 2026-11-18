@@ -734,3 +734,31 @@ Sau deploy:
 - Nên có **ít nhất hai** super_admin enroll xong trước khi rời ca: admin mất thiết bị mà không còn admin khác ⇒
   `admin-recover --reset-mfa` (runbook-ops §11).
 - Theo dõi alert mới: `AUTH_MFA_THROTTLED`, `AUTH_MFA_LOCKED`, `MFA_DISABLED`, `ADMIN_USER_MFA_RESET`.
+
+## 18. Triển khai run 94 — vé đặt lại mật khẩu (DEBT-661, D94.3–D94.7)
+
+Thay đổi: link trong thư vẫn là `/reset#token=<43>`, nhưng trang giờ có hai bước. Bước 1, người dùng bấm `Continue`
+(`POST /reset/code`): token bị tiêu thụ và đổi lấy vé 15' trong cookie `__Host-idp_reset` (HttpOnly, SameSite=Lax,
+`Path=/`). Bước 2 (`POST /reset`) chỉ nhận mật khẩu và vé. Link còn trong lịch sử trình duyệt hết hiệu lực ngay khi bấm
+`Continue`.
+
+Trước deploy:
+1. `db:sync-indexes` như mọi lần (dry-run trước, theo §16 / runbook-ops §0):
+   ```bash
+   docker run --rm --env-file <env app> "$IMG" node dist/database/mongo/sync-indexes.js --dry-run   # chỉ in đích
+   docker run --rm --env-file <env app> "$IMG" node dist/database/mongo/sync-indexes.js
+   ```
+   Run 94 chỉ **thêm** một index `passwordresettokens`: `{ticketHash: 1}` unique, partial
+   `{ticketHash: {$type: 'string'}}`. Không index nào bị xoá. Document cũ không có `ticketHash` nằm ngoài index.
+   App chạy đúng cả khi chưa có index (đổi vé dùng `findOneAndUpdate` nguyên tử trên `tokenHash`); index chỉ chặn trùng
+   vé và tăng tốc `GET /reset`.
+
+Sau deploy:
+- Link gửi **trước** deploy vẫn dùng được (cùng dạng, document cũ khớp `ticketHash: null`).
+- Tab form một bước cũ đang mở lúc deploy ⇒ bấm "Change password" được 400 "Request failed". Token **không** bị tiêu thụ:
+  người dùng mở lại link trong thư (hoặc nhập mã) và làm lại.
+- Nếu Mongo lỗi đúng lúc đổi vé (lệnh đã áp dụng nhưng mất phản hồi) ⇒ token đã chết mà không có vé ⇒ người dùng xin
+  link mới ở `/forgot`. Chấp nhận (D94.7).
+- `/register` cho tài khoản chưa xác minh không gửi thư "finish" mới khi còn token đặt lại sống; document đã đổi vé mà
+  chưa dùng (≤ 15') cũng tính là sống (D91.4). Chấp nhận.
+- Thư, `/forgot`, `/verify-email` và `token-fragment.js` không đổi.

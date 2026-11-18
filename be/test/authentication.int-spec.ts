@@ -121,12 +121,15 @@ describe('Authentication races on real Mongo (B2.4, C2-C6, C13)', () => {
       expiresAt: new Date(Date.now() + 60_000),
       usedAt: null,
     });
+    // Run 94 (D94.3): the token is exchanged once for a ticket; the race is on spending the ticket.
+    const ticket = (await auth.claimResetTicket(token))!;
     const results = await Promise.allSettled([
-      auth.resetPassword(token, 'new password one'),
-      auth.resetPassword(token, 'new password two'),
+      auth.resetPassword(ticket, 'new password one'),
+      auth.resetPassword(ticket, 'new password two'),
     ]);
-    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
-    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    // Run 94: a lost race answers `false` (the controller's fixed 400), never a second reset.
+    const outcomes = results.map((r) => (r.status === 'fulfilled' ? r.value : 'rejected'));
+    expect(outcomes.sort()).toEqual([false, true]);
     expect((await users.findById(user.sub))?.emailVerifiedAt).toBeInstanceOf(Date);
     expect(sessions.revokeAllForUser).toHaveBeenCalledTimes(1);
   });
