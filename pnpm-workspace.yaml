@@ -23,6 +23,12 @@ auditConfig:
     # jest-config (dev; merges this repo's own jest config, no attacker-controlled input); no runtime
     # path (`pnpm why -r deepmerge`). Re-review 2027-02-10 or when jest drops/bumps deepmerge (DEBT-552).
     - GHSA-gcqx-w48m-w2h4
+    # Run 94: picomatch <=4.0.7 ReDoS via repeated extglobs (high), no patched release exists. Reached
+    # only through build/test tooling (jest micromatch; TanStack Start vite plugins, tinyglobby, fdir)
+    # matching this repo's own static globs, no attacker-controlled pattern. `pnpm --filter @sso-idp/be
+    # why picomatch --prod` is empty and fe-admin/dist does not bundle it. Re-review 2027-02-18 or as
+    # soon as a patched picomatch ships (DEBT-690).
+    - GHSA-fc5q-39xc-vjpf
 
 # Release-age pins (run 41, fe-admin A1): transitive deps of @tanstack/react-start 1.168.60 resolved
 # to releases < 14 days old; pin to the newest release <= 2026-10-07 that still satisfies the
