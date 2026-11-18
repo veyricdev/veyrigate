@@ -160,7 +160,7 @@ describe('run 89 DEBT-645: MFA audits are visible to the tenant admin (real app)
     await signIn(u.email, '000000');
     expect(await seen('AUTH_MFA_FAILED', u.sub)).toBe(1);
     expect(await seen('AUTH_MFA_LOCKED', u.sub)).toBe(1);
-    expect((await signIn(u.email, u.codes[0])).statusCode).toBe(302);
+    expect((await signIn(u.email, u.codes[0])).statusCode).toBe(303);
     expect(await seen('MFA_RECOVERY_USED', u.sub)).toBe(1);
     expect(await seen('AUTH_LOGIN_SUCCESS', u.sub)).toBeGreaterThanOrEqual(1);
     for (let i = 0; i < 11; i++) await signIn(u.email, 'AAAA-BBBB-CCCC-DDDD');

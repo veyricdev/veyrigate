@@ -106,6 +106,7 @@ describe('ops/prometheus + ops/grafana vs the exported metrics (B7.2 Task 3)', (
       'SsoBackgroundWriteFailed',
       'SsoEmergencyKeyRotation',
       'SsoHttp5xxRatioHigh',
+      'SsoMailDropped',
       'SsoMongoBackupStale',
       'SsoTokenErrorRatioHigh',
       'SsoTokenReuseDetected',

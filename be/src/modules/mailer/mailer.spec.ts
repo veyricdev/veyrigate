@@ -1,9 +1,74 @@
+import { jest } from '@jest/globals';
 import { createServer, type Server, type Socket } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { IsEmail, validateSync } from 'class-validator';
+import { Logger } from '@nestjs/common';
 import { createTransport } from 'nodemailer';
-import { SmtpMailer } from './smtp.mailer';
+import { registry } from '../../common/metrics/metrics';
+import { MAX_PENDING_MAIL, SmtpMailer } from './smtp.mailer';
 import { resetPasswordMessage, verifyEmailMessage } from './templates';
+
+/** Current value of one series of the app registry (0 when the series does not exist yet). */
+async function metric(name: string, labels: Record<string, string> = {}): Promise<number> {
+  const m = registry.getSingleMetric(name);
+  if (!m) throw new Error(`metric ${name} not registered`);
+  const { values } = await m.get();
+  const hit = values.find((v) =>
+    Object.entries(labels).every(([k, want]) => String(v.labels[k]) === want),
+  );
+  return hit?.value ?? 0;
+}
+
+/**
+ * DEBT-689 (D95.13): a minimal SMTP sink shared by the pool and envelope suites. Greets, answers 250 to
+ * every verb, 354 to DATA, 221 to QUIT. `onRcpt` gets the RCPT TO argument, `onMessage` fires once per
+ * accepted message. `sockets` holds the connections still open.
+ */
+async function fakeSmtp(
+  hooks: { onRcpt?: (rcpt: string) => void; onMessage?: () => void } = {},
+): Promise<{ port: number; sockets: Set<Socket>; close(): Promise<void> }> {
+  const sockets = new Set<Socket>();
+  const server = createServer((s) => {
+    sockets.add(s);
+    s.on('close', () => sockets.delete(s));
+    s.on('error', () => undefined);
+    let buf = '';
+    let inData = false;
+    s.write('220 fake.test ESMTP\r\n');
+    s.on('data', (chunk) => {
+      buf += chunk.toString('latin1');
+      let i: number;
+      while ((i = buf.indexOf('\r\n')) >= 0) {
+        const line = buf.slice(0, i);
+        buf = buf.slice(i + 2);
+        if (inData) {
+          if (line === '.') {
+            inData = false;
+            hooks.onMessage?.();
+            s.write('250 queued\r\n');
+          }
+          continue;
+        }
+        const verb = line.slice(0, 4).toUpperCase();
+        if (verb === 'RCPT') hooks.onRcpt?.(line.replace(/^RCPT TO:/i, ''));
+        if (verb === 'DATA') {
+          inData = true;
+          s.write('354 go\r\n');
+        } else if (verb === 'QUIT') s.end('221 bye\r\n');
+        else s.write('250 ok\r\n');
+      }
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  return {
+    port: (server.address() as AddressInfo).port,
+    sockets,
+    close: async () => {
+      sockets.forEach((s) => s.destroy());
+      await new Promise((r) => server.close(r));
+    },
+  };
+}
 
 describe('Mailer templates (B1.10)', () => {
   const to = 'alice.secret@example.test';
@@ -77,6 +142,64 @@ describe('SmtpMailer timeout (B1.10)', () => {
     expect(elapsed).toBeGreaterThanOrEqual(4500);
     expect(elapsed).toBeLessThan(9000);
   }, 15000);
+
+  // DEBT-683 (D95.9-D95.12, D95.14 case 1): SMTP hangs, MAX_PENDING_MAIL + 5 sends.
+  it('caps pending mail: the 5 extra sends reject at once, shutdown drops and logs the rest', async () => {
+    const { port } = server.address() as AddressInfo;
+    const mailer = new SmtpMailer(`smtp://127.0.0.1:${port}`, 'no-reply@localhost');
+    const full0 = await metric('sso_mail_dropped_total', { reason: 'queue_full' });
+    const shut0 = await metric('sso_mail_dropped_total', { reason: 'shutdown' });
+    const settled: number[] = [];
+    const errors = new Map<number, string>();
+    const sends = Array.from({ length: MAX_PENDING_MAIL + 5 }, (_, i) =>
+      mailer.send({ to: `u${i}@example.test`, subject: 's', text: 't', html: '<p>t</p>' }).then(
+        () => void settled.push(i),
+        (e: Error) => {
+          settled.push(i);
+          errors.set(i, e.message);
+        },
+      ),
+    );
+    await new Promise((r) => setImmediate(r));
+    const extra = Array.from({ length: 5 }, (_, k) => MAX_PENDING_MAIL + k);
+    expect([...settled].sort((a, b) => a - b)).toEqual(extra);
+    for (const i of extra) expect(errors.get(i)).toBe('mailer: queue full');
+    expect(await metric('sso_mail_dropped_total', { reason: 'queue_full' })).toBe(full0 + 5);
+    expect(await metric('sso_mail_queue_depth')).toBe(MAX_PENDING_MAIL);
+
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      const started = Date.now();
+      mailer.onApplicationShutdown();
+      await Promise.all(sends);
+      expect(Date.now() - started).toBeLessThan(15000);
+      expect(warn).toHaveBeenCalledWith(
+        `mail queue closed with ${MAX_PENDING_MAIL} unsent message(s)`,
+      );
+      // No address or subject in the log line.
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('example.test');
+    } finally {
+      warn.mockRestore();
+    }
+    expect(settled).toHaveLength(MAX_PENDING_MAIL + 5);
+    expect(await metric('sso_mail_dropped_total', { reason: 'shutdown' })).toBe(
+      shut0 + MAX_PENDING_MAIL,
+    );
+    expect(await metric('sso_mail_dropped_total', { reason: 'queue_full' })).toBe(full0 + 5);
+    expect(await metric('sso_mail_queue_depth')).toBe(0);
+  }, 20000);
+
+  // D95.14 case 3: a refused recipient never counts as pending or dropped.
+  it('a refused recipient rejects as before and leaves the gauge and the counters alone', async () => {
+    const { port } = server.address() as AddressInfo;
+    const mailer = new SmtpMailer(`smtp://127.0.0.1:${port}`, 'no-reply@localhost');
+    const before = await registry.metrics();
+    await expect(
+      mailer.send({ to: 'a%b@example.test', subject: 's', text: 't', html: '<p>t</p>' }),
+    ).rejects.toThrow('mailer: recipient rejected');
+    expect(await registry.metrics()).toBe(before);
+    mailer.onApplicationShutdown();
+  });
 });
 
 /**
@@ -84,54 +207,22 @@ describe('SmtpMailer timeout (B1.10)', () => {
  * message still arrives, and shutdown closes every connection.
  */
 describe('SmtpMailer pool (run 94)', () => {
-  let server: Server;
-  const open = new Set<Socket>();
+  let smtp: Awaited<ReturnType<typeof fakeSmtp>>;
   let peak = 0;
   let received = 0;
 
   beforeAll(async () => {
-    server = createServer((s) => {
-      open.add(s);
-      peak = Math.max(peak, open.size);
-      s.on('close', () => open.delete(s));
-      s.on('error', () => undefined);
-      let buf = '';
-      let inData = false;
-      s.write('220 sink.test ESMTP\r\n');
-      s.on('data', (chunk) => {
-        buf += chunk.toString('latin1');
-        let i: number;
-        while ((i = buf.indexOf('\r\n')) >= 0) {
-          const line = buf.slice(0, i);
-          buf = buf.slice(i + 2);
-          if (inData) {
-            if (line === '.') {
-              inData = false;
-              received++;
-              s.write('250 queued\r\n');
-            }
-            continue;
-          }
-          const verb = line.slice(0, 4).toUpperCase();
-          if (verb === 'DATA') {
-            inData = true;
-            s.write('354 go\r\n');
-          } else if (verb === 'QUIT') s.end('221 bye\r\n');
-          else s.write('250 ok\r\n');
-        }
-      });
+    smtp = await fakeSmtp({
+      // Connections open when a recipient arrives: the pool never runs more than 5 at once.
+      onRcpt: () => void (peak = Math.max(peak, smtp.sockets.size)),
+      onMessage: () => void received++,
     });
-    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   });
 
-  afterAll(async () => {
-    open.forEach((s) => s.destroy());
-    await new Promise((r) => server.close(r));
-  });
+  afterAll(() => smtp.close());
 
   it('20 parallel sends: <= 5 connections at once, 20 delivered, none left open after shutdown', async () => {
-    const { port } = server.address() as AddressInfo;
-    const mailer = new SmtpMailer(`smtp://127.0.0.1:${port}`, 'no-reply@localhost');
+    const mailer = new SmtpMailer(`smtp://127.0.0.1:${smtp.port}`, 'no-reply@localhost');
     await Promise.all(
       Array.from({ length: 20 }, (_, i) =>
         mailer.send({ to: `u${i}@example.test`, subject: 's', text: 't', html: '<p>t</p>' }),
@@ -140,9 +231,12 @@ describe('SmtpMailer pool (run 94)', () => {
     expect(received).toBe(20);
     expect(peak).toBeGreaterThan(0);
     expect(peak).toBeLessThanOrEqual(5);
+    expect(await metric('sso_mail_queue_depth')).toBe(0);
     mailer.onApplicationShutdown();
-    for (let i = 0; i < 50 && open.size > 0; i++) await new Promise((r) => setTimeout(r, 20));
-    expect(open.size).toBe(0);
+    for (let i = 0; i < 50 && smtp.sockets.size > 0; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(smtp.sockets.size).toBe(0);
   }, 15000);
 });
 
@@ -152,54 +246,16 @@ describe('SmtpMailer pool (run 94)', () => {
  * must never smuggle a recipient at evil.test (or the send must reject).
  */
 describe('SmtpMailer envelope vs hostile addresses (run 83)', () => {
-  let server: Server;
-  const sockets: Socket[] = [];
+  let smtp: Awaited<ReturnType<typeof fakeSmtp>>;
   let rcpts: string[] = [];
 
   beforeAll(async () => {
-    server = createServer((s) => {
-      sockets.push(s);
-      let buf = '';
-      let inData = false;
-      s.write('220 fake.test ESMTP\r\n');
-      s.on('data', (chunk) => {
-        buf += chunk.toString('latin1');
-        let i: number;
-        while ((i = buf.indexOf('\r\n')) >= 0) {
-          const line = buf.slice(0, i);
-          buf = buf.slice(i + 2);
-          if (inData) {
-            if (line === '.') {
-              inData = false;
-              s.write('250 queued\r\n');
-            }
-            continue;
-          }
-          const verb = line.slice(0, 4).toUpperCase();
-          if (verb === 'EHLO' || verb === 'HELO') s.write('250 fake.test\r\n');
-          else if (verb === 'MAIL') s.write('250 ok\r\n');
-          else if (verb === 'RCPT') {
-            rcpts.push(line.replace(/^RCPT TO:/i, ''));
-            s.write('250 ok\r\n');
-          } else if (verb === 'DATA') {
-            inData = true;
-            s.write('354 go\r\n');
-          } else if (verb === 'QUIT') {
-            s.end('221 bye\r\n');
-          } else s.write('250 ok\r\n');
-        }
-      });
-      s.on('error', () => undefined);
-    });
-    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    smtp = await fakeSmtp({ onRcpt: (r) => void rcpts.push(r) });
   });
 
-  afterAll(async () => {
-    sockets.forEach((s) => s.destroy());
-    await new Promise((r) => server.close(r));
-  });
+  afterAll(() => smtp.close());
 
-  const smtpUrl = () => `smtp://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const smtpUrl = () => `smtp://127.0.0.1:${smtp.port}`;
   const message = (to: string) => ({ to, subject: 's', text: 't', html: '<p>t</p>' });
   /** Straight through nodemailer (no D84.1 guard): what its address parser puts in RCPT TO. */
   const viaTransport = async (to: string): Promise<void> => {

@@ -946,7 +946,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
       cookies: { [SESSION_COOKIE]: sessionId },
       payload: { _csrf: csrf, request_id: requestId, approve: 'true' },
     });
-    expect(post.statusCode).toBe(302);
+    expect(post.statusCode).toBe(303);
     const location = post.headers['location'] as string;
     expect(location).toContain('https://app.example.com/callback?');
     const url = new URL(location);
@@ -988,7 +988,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
       cookies: { [SESSION_COOKIE]: sessionId },
       payload: { _csrf: csrf, request_id: requestId, approve: 'false' },
     });
-    expect(post.statusCode).toBe(302);
+    expect(post.statusCode).toBe(303);
     const url = new URL(post.headers['location'] as string);
     expect(url.searchParams.get('error')).toBe('access_denied');
     expect(url.searchParams.get('state')).toBe('rp-state');
@@ -1033,7 +1033,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
       cookies: { [SESSION_COOKIE]: sessionId },
       payload: { _csrf: csrf, request_id: loginRequestId, approve: 'true' },
     });
-    expect(post.statusCode).toBe(302);
+    expect(post.statusCode).toBe(303);
     const url = new URL(post.headers['location'] as string);
     expect(url.searchParams.get('error')).toBe('login_required');
     expect(url.searchParams.get('state')).toBe('rp-state');
@@ -1152,7 +1152,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
       cookies: { [SESSION_COOKIE]: sessionId },
       payload: { _csrf: csrf, request_id: requestId, approve: 'true' },
     });
-    expect(first.statusCode).toBe(302);
+    expect(first.statusCode).toBe(303);
     const second = await httpApp.inject({
       method: 'POST',
       url: '/authorize/consent',
@@ -1176,8 +1176,8 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
     });
     // CsrfGuard identity falls back to the anon cookie; with neither session nor matching anon
     // token it is a forged submission => 403 (fail-closed). Either way: no code is ever issued.
-    expect([302, 403]).toContain(post.statusCode);
-    if (post.statusCode === 302) {
+    expect([303, 403]).toContain(post.statusCode);
+    if (post.statusCode === 303) {
       expect(post.headers['location']).toBe('/login');
     }
   });
@@ -1233,7 +1233,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
     // Whatever the outcome, consent must NEVER be attributed to user A.
     expect(await consentSvc.find(userA, `${RUN}-http`, undefined)).toBeNull();
     // If a code/consent was issued, it must belong to B (the authenticated session), not A.
-    if (post.statusCode === 302 && (post.headers['location'] as string)?.includes('code=')) {
+    if (post.statusCode === 303 && (post.headers['location'] as string)?.includes('code=')) {
       const consentB = await consentSvc.find(userB, `${RUN}-http`, undefined);
       expect(consentB).not.toBeNull();
     }
@@ -1536,7 +1536,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
       };
 
       const control = await post(a.sessionId, csrf, await login(), true);
-      expect(control.statusCode).toBe(302);
+      expect(control.statusCode).toBe(303);
       const url = new URL(control.headers['location'] as string);
       expect(url.searchParams.get('error')).toBe('login_required');
       expect(url.searchParams.get('state')).toBe('victim-state');
@@ -1591,7 +1591,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
       const a = await signedIn();
       const first = await screen(clientId, a.sessionId);
       const deny = await post(a.sessionId, first.csrf, first.requestId, false);
-      expect(deny.statusCode).toBe(302);
+      expect(deny.statusCode).toBe(303);
       const d = new URL(deny.headers['location'] as string);
       expect(d.searchParams.get('error')).toBe('access_denied');
       expect(d.searchParams.get('state')).toBe('victim-state');
@@ -1599,7 +1599,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
 
       const second = await screen(clientId, a.sessionId);
       const approve = await post(a.sessionId, second.csrf, second.requestId, true);
-      expect(approve.statusCode).toBe(302);
+      expect(approve.statusCode).toBe(303);
       const ok = new URL(approve.headers['location'] as string);
       expect(ok.searchParams.get('code')).toBeTruthy();
       expect(ok.searchParams.get('state')).toBe('victim-state');
@@ -1621,7 +1621,7 @@ describe('Authorize HTTP flow via AuthorizeController (B4.1, senior blocker)', (
       expect(JSON.parse(raw!).sessionRef).toBe(ref);
       const csrf = res.body.match(/name="_csrf" value="([^"]+)"/)?.[1] as string;
       const approve = await post(a.sessionId, csrf, requestId, true);
-      expect(approve.statusCode).toBe(302);
+      expect(approve.statusCode).toBe(303);
       expect(approve.headers['location']).not.toContain(ref);
       const audits = await auditModel().find({ actorId: a.userId }).lean();
       expect(audits.length).toBeGreaterThan(0);

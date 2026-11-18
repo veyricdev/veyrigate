@@ -94,7 +94,7 @@ export class AccountController {
     @Res() reply: HttpReply,
   ) {
     const session = await this.ui.liveSession(req, reply);
-    if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fsessions', 302);
+    if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fsessions', 303);
     await this.ui.limit('account_sessions', req, session.userId);
     const reauth = await this.reauth(req, session, body.current_password, 'session');
     if (!reauth.ok) return this.render(req, reply, session, { error: reauth.error }, reauth.status);
@@ -139,7 +139,7 @@ export class AccountController {
   @UseGuards(CsrfGuard)
   async revokeOthers(@Body() body: ReauthDto, @Req() req: HttpRequest, @Res() reply: HttpReply) {
     const session = await this.ui.liveSession(req, reply);
-    if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fsessions', 302);
+    if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fsessions', 303);
     await this.ui.limit('account_sessions', req, session.userId);
     const reauth = await this.reauth(req, session, body.current_password, 'others');
     if (!reauth.ok) return this.render(req, reply, session, { error: reauth.error }, reauth.status);
@@ -189,7 +189,7 @@ export class AccountController {
     @Res() reply: HttpReply,
   ) {
     const session = await this.ui.liveSession(req, reply);
-    if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fsessions', 302);
+    if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fsessions', 303);
     await this.ui.limit('account_sessions', req, session.userId);
     const reauth = await this.reauth(req, session, body.current_password, 'device');
     if (!reauth.ok) return this.render(req, reply, session, { error: reauth.error }, reauth.status);
@@ -219,7 +219,7 @@ export class AccountController {
     @Res() reply: HttpReply,
   ) {
     const session = await this.ui.liveSession(req, reply);
-    if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fsessions', 302);
+    if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fsessions', 303);
     await this.ui.limit('account_sessions', req, session.userId);
     const reauth = await this.reauth(req, session, body.current_password, 'devices');
     if (!reauth.ok) return this.render(req, reply, session, { error: reauth.error }, reauth.status);
@@ -270,7 +270,7 @@ export class AccountController {
     @Res() reply: HttpReply,
   ) {
     const session = await this.ui.liveSession(req, reply);
-    if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fapps', 302);
+    if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fapps', 303);
     await this.ui.limit('account_apps', req, session.userId);
     const id = body.consent_id ?? '';
     const now = new Date();

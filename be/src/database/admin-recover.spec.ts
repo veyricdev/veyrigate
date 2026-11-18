@@ -1,4 +1,4 @@
-import { formatCode, parseRecoverArgs } from './admin-recover';
+import { exitCodeOf, formatCode, parseRecoverArgs } from './admin-recover';
 
 /** Run 87 T2 (DEBT-252, D87.12): argument allowlist of `admin-recover` (AC5, AC10). */
 const argv = (...args: string[]) => ['node', 'admin-recover.js', ...args];
@@ -77,5 +77,13 @@ describe('admin-recover parseRecoverArgs', () => {
   it('formats the confirmation code as 4-4 digits', () => {
     expect(formatCode(1234)).toBe('0000-1234');
     expect(formatCode(98765432)).toBe('9876-5432');
+  });
+
+  it('run 95 D95.5: exit code 0 recovered, 1 refused, 3 committed but sessions not revoked', () => {
+    const ok = { status: 'recovered', userId: 'u', eventId: 'e' } as const;
+    expect(exitCodeOf({ ...ok, sessions: 'not_requested' })).toBe(0);
+    expect(exitCodeOf({ ...ok, sessions: { revoked: 0 } })).toBe(0);
+    expect(exitCodeOf({ ...ok, sessions: 'failed' })).toBe(3);
+    expect(exitCodeOf({ status: 'refused', reason: 'super_admin_exists' })).toBe(1);
   });
 });

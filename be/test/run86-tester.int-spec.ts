@@ -425,7 +425,7 @@ describe('run 86 tester (T6): token fragment, POST /logout, key pre-publish edge
         ] as const) {
           const res = await post(payload, type, `${SESSION_COOKIE}=${sid}`);
           expect(res.statusCode).toBeLessThan(500);
-          expect(res.statusCode).not.toBe(302);
+          expect(res.statusCode).not.toBe(303);
         }
         expect(await sessionAlive(sid)).toBe(true);
       });
@@ -480,7 +480,7 @@ describe('run 86 tester (T6): token fragment, POST /logout, key pre-publish edge
             state: 'st',
           }).toString(),
         });
-        expect(done.statusCode).toBe(302);
+        expect(done.statusCode).toBe(303);
         expect(done.headers['location']).toBe(`${POST_LOGOUT}?state=st`);
         expect(await sessionAlive(sid)).toBe(false);
       });
@@ -524,7 +524,7 @@ describe('run 86 tester (T6): token fragment, POST /logout, key pre-publish edge
               state: 'st',
             }).toString(),
           });
-          expect(done.statusCode).toBe(302);
+          expect(done.statusCode).toBe(303);
           expect(done.headers['location']).toBe('/login?loggedOut=1');
           expect(await sessionAlive(sid)).toBe(false);
         },
@@ -668,7 +668,7 @@ describe('run 86 tester (T6): token fragment, POST /logout, key pre-publish edge
       const sid = await newSession();
       const x = randomBytes(32).toString('base64url');
       const res = await postLogout(`${HOST_SESSION}=${sid}; ${HOST_ANON}=${x}`, csrf.token(x));
-      expect(res.statusCode).toBe(302);
+      expect(res.statusCode).toBe(303);
       expect(await alive(sid)).toBe(false);
     });
   });

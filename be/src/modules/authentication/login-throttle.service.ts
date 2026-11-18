@@ -304,5 +304,5 @@ export class LoginThrottleService {
 }
 
 const emailTag = (email: string): string => `lt:{e:${sha256(email)}}`;
-const trustKey = (userId: string): string => `dc:{u:${sha256(userId)}}`;
+export const trustKey = (userId: string): string => `dc:{u:${sha256(userId)}}`;
 const changeKey = (userId: string): string => `pwc:{u:${sha256(userId)}}`;

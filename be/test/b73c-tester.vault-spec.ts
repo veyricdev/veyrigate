@@ -246,7 +246,7 @@ describe('run 53c tester: real Vault down ⇒ admin/userinfo/introspect 503, log
           state: 'st',
         }).toString(),
       });
-      expect(out.statusCode).toBe(302);
+      expect(out.statusCode).toBe(303);
       expect(out.headers['location']).toBe('/login?loggedOut=1');
       expect(await full.app.get(SessionService).get(sessionId)).toBeNull();
 

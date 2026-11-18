@@ -1193,7 +1193,7 @@ describe('seed-dev: DEBT-100 consent for a 2nd resource (`other`) + INV-8 chain 
 
     // First consent: `demo` (button A already did this) => 302 with a code.
     const demo = await consentRoundTrip(id, FE_SCOPE, RESOURCE_URI);
-    expect(demo.statusCode).toBe(302);
+    expect(demo.statusCode).toBe(303);
     expect(new URL(demo.headers['location'] as string).searchParams.get('code')).toBeTruthy();
 
     // Second consent: `other` (the INV-8 aud-probe, button B). The stale key is violated =>
@@ -1226,9 +1226,9 @@ describe('seed-dev: DEBT-100 consent for a 2nd resource (`other`) + INV-8 chain 
 
     const { id } = await sessions.create(userId, DEFAULT_TENANT_ID);
     const demo = await consentRoundTrip(id, FE_SCOPE, RESOURCE_URI);
-    expect(demo.statusCode).toBe(302);
+    expect(demo.statusCode).toBe(303);
     const other = await consentRoundTrip(id, 'openid', OTHER_RESOURCE_URI);
-    expect(other.statusCode).toBe(302);
+    expect(other.statusCode).toBe(303);
     expect(new URL(other.headers['location'] as string).searchParams.get('code')).toBeTruthy();
     await sessions.revoke(id);
     await clientModel.db.collection('consents').deleteMany({});
@@ -1239,7 +1239,7 @@ describe('seed-dev: DEBT-100 consent for a 2nd resource (`other`) + INV-8 chain 
     // consent `other` -> /token -> access token aud=${ISSUER}/other/ -> GET /demo/me => 401.
     const { id } = await sessions.create(userId, DEFAULT_TENANT_ID);
     const post = await consentRoundTrip(id, 'openid', OTHER_RESOURCE_URI);
-    expect(post.statusCode).toBe(302);
+    expect(post.statusCode).toBe(303);
     const code = new URL(post.headers['location'] as string).searchParams.get('code')!;
     expect(code).toBeTruthy();
 

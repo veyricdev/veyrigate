@@ -357,7 +357,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
         payload: { _csrf: csrf!, request_id: requestId!, approve: 'true' },
       });
     }
-    expect(res.statusCode).toBe(302);
+    expect(res.statusCode).toBe(303);
     return new URL(res.headers.location as string);
   }
 
@@ -764,7 +764,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
         cookies: { idp_csrf: cookieOf(page, 'idp_csrf')!.value },
         payload: { _csrf: csrf, email, password: 'correct horse battery', returnTo },
       });
-      expect(res.statusCode).toBe(302);
+      expect(res.statusCode).toBe(303);
       const sessionId = cookieOf(res, SESSION_COOKIE)!.value;
       expect((await sessions.get(sessionId))?.amr).toEqual(['pwd']);
       const idToken = await exchange(await resumeToRp(res.headers.location as string, sessionId));
@@ -1599,7 +1599,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       );
 
       const res = await submitLink(leg, PASSWORD);
-      expect(res.statusCode).toBe(302);
+      expect(res.statusCode).toBe(303);
       expect(res.headers['cache-control']).toBe('no-store');
       expect(res.headers.location).toBe(
         `/authorize?request_id=${encodeURIComponent(leg.requestId)}`,
@@ -1758,7 +1758,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
     it('(f) replay of POST /auth/link after success => generic page, still exactly 1 FI and 1 audit', async () => {
       const local = await localUser();
       const leg = await linkLeg(local.email);
-      expect((await submitLink(leg, PASSWORD)).statusCode).toBe(302);
+      expect((await submitLink(leg, PASSWORD)).statusCode).toBe(303);
       const page = await linkPage({ idp_link: leg.link, idp_fed: leg.fed });
       expect(page.statusCode).toBe(400);
       const replay = await app.inject({
@@ -1874,7 +1874,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       const local = await localUser();
       const leg = await linkLeg(local.email, { prompt: 'login' });
       const res = await submitLink(leg, PASSWORD);
-      expect(res.statusCode).toBe(302);
+      expect(res.statusCode).toBe(303);
       const rp = await resumeToRp(
         res.headers.location as string,
         cookieOf(res, SESSION_COOKIE)!.value,
@@ -1900,7 +1900,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
           payload: { _csrf: csrf, password: PASSWORD },
         });
       const results = await Promise.all([post(), post(), post()]);
-      expect(results.filter((r) => r.statusCode === 302)).toHaveLength(1);
+      expect(results.filter((r) => r.statusCode === 303)).toHaveLength(1);
       expect(await fiModel.countDocuments({ userId: local.sub })).toBe(1);
       expect(await linkedAudits(local.sub)).toBe(1);
     });
@@ -1955,7 +1955,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       const leg = await linkLeg(local.email, { max_age: '60' });
       const before = nowS();
       const res = await submitLink(leg, PASSWORD);
-      expect(res.statusCode).toBe(302);
+      expect(res.statusCode).toBe(303);
       const sid = cookieOf(res, SESSION_COOKIE)!.value;
       const rp = await resumeToRp(res.headers.location as string, sid);
       expect(rp.searchParams.get('error')).toBeNull();
@@ -1976,7 +1976,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
         cookies: { idp_csrf: cookieOf(page, 'idp_csrf')!.value },
         payload: { _csrf: csrf, email: local.email, password: PASSWORD, returnTo },
       });
-      expect(res.statusCode).toBe(302);
+      expect(res.statusCode).toBe(303);
       const sid = cookieOf(res, SESSION_COOKIE)!.value;
       const rp = await resumeToRp(res.headers.location as string, sid);
       expect(rp.searchParams.get('error')).toBeNull();
@@ -2025,14 +2025,14 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
           cookies: { idp_csrf: cookieOf(page, 'idp_csrf')!.value },
           payload: { _csrf: csrf, email: local.email, password: PASSWORD, returnTo },
         });
-        expect(viaLogin.statusCode).toBe(302);
+        expect(viaLogin.statusCode).toBe(303);
         await expectNotLinked(leg.sub, local.sub);
         expect((await users.findById(local.sub))?.lockedUntil).toBeUndefined();
       } finally {
         await redis.del(key);
       }
       // 429 happened before consume: the same pending link still completes afterwards.
-      expect((await submitLink(leg, PASSWORD)).statusCode).toBe(302);
+      expect((await submitLink(leg, PASSWORD)).statusCode).toBe(303);
       expect(await fiModel.countDocuments({ providerId: leg.sub, userId: local.sub })).toBe(1);
     });
 
@@ -2050,7 +2050,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       };
       const legA = await legFor(a.email);
       const legB = await legFor(b.email);
-      expect((await submitLink(legB, PASSWORD)).statusCode).toBe(302);
+      expect((await submitLink(legB, PASSWORD)).statusCode).toBe(303);
       const res = await submitLink(legA, PASSWORD);
       expect(res.statusCode).toBe(400);
       expect(res.body).toContain('You are signed in, but the account could not be linked.');
@@ -2079,7 +2079,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
         },
         payload: { _csrf: csrf, password: PASSWORD },
       });
-      expect(res.statusCode).toBe(302);
+      expect(res.statusCode).toBe(303);
       const sid = cookieOf(res, SESSION_COOKIE)!.value;
       expect(sid).not.toBe(planted.id);
       expect(await sessions.get(planted.id)).toBeNull();
@@ -2159,7 +2159,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       expect((await sessions.listByUser(userId)).length).toBe(before);
 
       const done = await finishMfa(ticket.value);
-      expect(done.statusCode).toBe(302);
+      expect(done.statusCode).toBe(303);
       expect(done.headers.location).toBe(`/authorize?request_id=${encodeURIComponent(requestId)}`);
       const s = (await sessions.get(cookieOf(done, SESSION_COOKIE)!.value))!;
       expect(s.amr).toEqual(['fed', 'otp', 'mfa']);
@@ -2204,13 +2204,13 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
       await enrollNow(local.sub);
       const leg = await linkLeg(local.email);
       const res = await submitLink(leg, PASSWORD);
-      expect(res.statusCode).toBe(302);
+      expect(res.statusCode).toBe(303);
       expect(res.headers.location).toBe('/login/mfa');
       expect(cookieOf(res, SESSION_COOKIE)).toBeUndefined();
       expect(cookieOf(res, 'idp_mfa')).toBeDefined();
       await expectNotLinked(leg.sub, local.sub);
       const done = await finishMfa(cookieOf(res, 'idp_mfa')!.value);
-      expect(done.statusCode).toBe(302);
+      expect(done.statusCode).toBe(303);
       expect((await sessions.get(cookieOf(done, SESSION_COOKIE)!.value))!.amr).toEqual([
         'pwd',
         'otp',
@@ -2841,7 +2841,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
         cookies: { idp_csrf: cookieOf(page, 'idp_csrf')!.value },
         payload: { _csrf: csrf, email, password, returnTo },
       });
-      expect(res.statusCode).toBe(302);
+      expect(res.statusCode).toBe(303);
       return {
         location: res.headers.location as string,
         sid: cookieOf(res, SESSION_COOKIE)!.value,
@@ -3063,7 +3063,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
         },
         payload: { _csrf: csrf, password },
       });
-      expect(res.statusCode).toBe(302);
+      expect(res.statusCode).toBe(303);
       expect(cookieOf(res, HOST_LINK)).toMatchObject({ value: '', path: '/' });
       expect(await fiModel.countDocuments({ providerId: `${RUN}-s4`, userId: local.sub })).toBe(1);
     });

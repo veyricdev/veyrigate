@@ -190,7 +190,7 @@ export class FederationController {
         req.cookies?.[this.linkCookie],
         req.cookies?.[this.bindingCookie],
       );
-      // DEBT-084: the form POSTs, then 302s via `/authorize` to the RP; Chromium applies THIS
+      // DEBT-084: the form POSTs, then 303s via `/authorize` to the RP; Chromium applies THIS
       // page's `form-action` to the whole chain, so allow the single already-matched RP origin.
       reply.header(
         'Content-Security-Policy',
@@ -240,10 +240,10 @@ export class FederationController {
     );
     if (outcome.kind === 'mfa') {
       this.mfaLogin.setTicketCookie(reply, outcome.ticketId);
-      return reply.redirect('/login/mfa', 302);
+      return reply.redirect('/login/mfa', 303);
     }
     if (outcome.kind !== 'failed') this.sessionCookie.set(reply, outcome.sessionId);
-    if (outcome.kind === 'linked') return reply.redirect(outcome.location, 302);
+    if (outcome.kind === 'linked') return reply.redirect(outcome.location, 303);
     return this.linkFailedPage(reply, outcome);
   }
 

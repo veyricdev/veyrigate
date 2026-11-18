@@ -81,7 +81,7 @@ async function passwordStep(page: Page, account: Account, returnTo = "/"): Promi
   await form.getByRole("button", { name: "Sign in" }).click();
 }
 
-/** Submit `code` on `/login/mfa`; the POST status (302 = accepted, 400 = refused). */
+/** Submit `code` on `/login/mfa`; the POST status (303 = accepted, 400 = refused). */
 async function submitCode(page: Page, code: string): Promise<number> {
   const form = mfaForm(page);
   await form.getByLabel("Code").fill(code);
@@ -168,7 +168,7 @@ test("mfa: enroll (key, no QR) => 10 codes once + signed out; step 2 required; 5
       expect(status, `wrong code ${i + 1}`).toBe(400);
       await expect(b.page.getByRole("alert")).toHaveText(WRONG);
     } else {
-      expect(status, "5th wrong code restarts sign-in").toBe(302);
+      expect(status, "5th wrong code restarts sign-in").toBe(303);
     }
   }
   await b.page.waitForURL((u) => isIdp(u) && u.pathname === "/login", { waitUntil: "load" });
@@ -178,7 +178,7 @@ test("mfa: enroll (key, no QR) => 10 codes once + signed out; step 2 required; 5
   await passwordStep(b.page, account, "/account/mfa");
   await onStep2(b.page);
   const used = await nextCode(secret);
-  expect(await submitCode(b.page, used)).toBe(302);
+  expect(await submitCode(b.page, used)).toBe(303);
   await b.page.waitForURL((u) => isIdp(u) && u.pathname === "/account/mfa", { waitUntil: "load" });
   await expect(b.page.getByText("Recovery codes left: 10.")).toBeVisible();
   await expect(b.page.locator("li code")).toHaveCount(0);
@@ -190,7 +190,7 @@ test("mfa: enroll (key, no QR) => 10 codes once + signed out; step 2 required; 5
   await onStep2(c.page);
   expect(await submitCode(c.page, used), "replayed TOTP step").toBe(400);
   await expect(c.page.getByRole("alert")).toHaveText(WRONG);
-  expect(await submitCode(c.page, await nextCode(secret))).toBe(302);
+  expect(await submitCode(c.page, await nextCode(secret))).toBe(303);
   await onHome(c.page);
   await c.context.close();
 
@@ -198,7 +198,7 @@ test("mfa: enroll (key, no QR) => 10 codes once + signed out; step 2 required; 5
   const d1 = await fresh(browser);
   await passwordStep(d1.page, account);
   await onStep2(d1.page);
-  expect(await submitCode(d1.page, codes[0]!)).toBe(302);
+  expect(await submitCode(d1.page, codes[0]!)).toBe(303);
   await onHome(d1.page);
   await d1.context.close();
   const d2 = await fresh(browser);
@@ -206,7 +206,7 @@ test("mfa: enroll (key, no QR) => 10 codes once + signed out; step 2 required; 5
   await onStep2(d2.page);
   expect(await submitCode(d2.page, codes[0]!), "used recovery code").toBe(400);
   await expect(d2.page.getByRole("alert")).toHaveText(WRONG);
-  expect(await submitCode(d2.page, await nextCode(secret))).toBe(302);
+  expect(await submitCode(d2.page, await nextCode(secret))).toBe(303);
   await d2.page.waitForURL((u) => isIdp(u) && u.pathname === "/account/mfa", { waitUntil: "load" });
   await expect(d2.page.getByText("Recovery codes left: 9.")).toBeVisible();
 
@@ -226,7 +226,7 @@ test("mfa: enroll (key, no QR) => 10 codes once + signed out; step 2 required; 5
   expect(second.secret).not.toBe(secret);
   await passwordStep(d2.page, account, "/account/mfa");
   await onStep2(d2.page);
-  expect(await submitCode(d2.page, await nextCode(second.secret))).toBe(302);
+  expect(await submitCode(d2.page, await nextCode(second.secret))).toBe(303);
   await d2.page.waitForURL((u) => isIdp(u) && u.pathname === "/account/mfa", { waitUntil: "load" });
   await off.getByLabel("Current password").fill(account.password);
   await off.getByLabel("Authenticator code or recovery code").fill(second.codes[3]!);
@@ -267,7 +267,7 @@ test("mfa: federation (mock Google) of an enrolled account => step 2 page, no se
   await google(b.page);
   await onStep2(b.page);
   await expectNoSession(b.context);
-  expect(await submitCode(b.page, await nextCode(secret))).toBe(302);
+  expect(await submitCode(b.page, await nextCode(secret))).toBe(303);
   await approveConsentUntil(b.page, b.page.getByTestId("claim-sub"));
   await b.page.goto(`${ISSUER}/account/sessions`);
   await expect(b.page.getByText("+ authenticator").first()).toBeVisible();
@@ -361,7 +361,7 @@ test.describe.serial("mfa: E2E_MFA_USER and the admin console", () => {
     const again = await enroll(u.page, user.email);
     await passwordStep(u.page, user);
     await onStep2(u.page);
-    expect(await submitCode(u.page, await nextCode(again.secret))).toBe(302);
+    expect(await submitCode(u.page, await nextCode(again.secret))).toBe(303);
     await onHome(u.page);
     await u.context.close();
   });

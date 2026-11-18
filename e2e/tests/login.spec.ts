@@ -55,7 +55,7 @@ test("login → /authorize → /login → /token → claims (tokens never expose
     loginForm.getByRole("button", { name: "Sign in" }).click(),
   ]);
 
-  // If the consent screen is showing, approve it; that 302s to `/callback` → the FE.
+  // If the consent screen is showing, approve it; that 303s to `/callback` → the FE.
   if (await consentForm.isVisible()) {
     await Promise.all([
       page.waitForURL(`http://localhost:${FE_PORT}/`, { waitUntil: "load" }),

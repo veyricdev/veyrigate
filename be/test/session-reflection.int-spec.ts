@@ -467,7 +467,7 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
           { authorization: basic(APP_CLIENT, appSecret) },
         ),
       ]);
-      expect(logout.statusCode).toBe(302);
+      expect(logout.statusCode).toBe(303);
       expect([200, 400]).toContain(tok.statusCode); // never a 5xx
       expect(await sessions.get(id)).toBeNull();
       // Invariant: no refresh doc bound to the ended session is still active (round tagged).
@@ -559,7 +559,7 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
       expect(await liveFamilies(uid)).toBe(2);
 
       const res = await logoutAll(a.id);
-      expect(res.statusCode).toBe(302);
+      expect(res.statusCode).toBe(303);
       expect(setCookies(res).some((c) => c.startsWith(`${SESSION_COOKIE}=;`))).toBe(true);
 
       expect(await sessions.get(a.id)).toBeNull();
@@ -581,7 +581,7 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
 
       // Replay with the dead cookie: no-session branch, still 302 + clear, no second success audit.
       const again = await logoutAll(a.id);
-      expect(again.statusCode).toBe(302);
+      expect(again.statusCode).toBe(303);
       expect(await successAudits(uid, 'SESSION_REVOKED')).toHaveLength(1);
     });
 
@@ -610,7 +610,7 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
       expect(await successAudits(uid, 'SESSION_REVOKED')).toHaveLength(0);
 
       const retry = await logoutAll(a.id);
-      expect(retry.statusCode).toBe(302);
+      expect(retry.statusCode).toBe(303);
       expect(setCookies(retry).some((c) => c.startsWith(`${SESSION_COOKIE}=;`))).toBe(true);
     });
 
@@ -636,7 +636,7 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
       expect(await sessions.get(b.id)).not.toBeNull();
 
       const retry = await logoutAll(a.id);
-      expect(retry.statusCode).toBe(302);
+      expect(retry.statusCode).toBe(303);
       expect(await sessions.get(a.id)).toBeNull();
       expect(await sessions.get(b.id)).toBeNull();
       expect(await successAudits(uid, 'SESSION_REVOKED')).toHaveLength(1);
@@ -765,7 +765,7 @@ describe('session reflection e2e: logout/revoke -> /introspect + /userinfo (DEBT
         expect(await sessions.get(b.id)).not.toBeNull();
 
         const retry = await logoutOne(a.id);
-        expect(retry.statusCode).toBe(302);
+        expect(retry.statusCode).toBe(303);
         expect(await sessions.get(a.id)).toBeNull();
         expect((await rotate(a.refresh)).json().error).toBe('invalid_grant');
         expect(await liveFamilies(uid)).toBe(1); // only B's family is left

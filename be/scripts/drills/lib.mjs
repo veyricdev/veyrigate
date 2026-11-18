@@ -354,7 +354,7 @@ export async function codeFlow(base, { email, password, clientId, secret, redire
     }),
   );
   location = res.headers.get('location') ?? '';
-  if (res.status === 302 && location.startsWith('/login/mfa') && totp) {
+  if (res.status === 303 && location.startsWith('/login/mfa') && totp) {
     // Step 2 (D89.7): `totp` = { secret, lastStep } (lastStep updated in place: one step per user, D89.10).
     const page = jar.take(await http(`${base}/login/mfa`, { headers: { cookie: jar.header() } }));
     const c3 = csrfOf(await page.text());
@@ -369,9 +369,11 @@ export async function codeFlow(base, { email, password, clientId, secret, redire
     );
     location = res.headers.get('location') ?? '';
   }
-  if (res.status !== 302 || !location.startsWith('/authorize')) throw new Error(`login: expected 302 /authorize, got ${res.status}`);
+  if (res.status !== 303 || !location.startsWith('/authorize')) throw new Error(`login: expected 303 /authorize, got ${res.status}`);
   res = jar.take(await http(`${base}${location}`, { headers: { cookie: jar.header() } }));
+  let codeStatus = 302; // GET /authorize; 303 after POST /authorize/consent (run 95, D95.15)
   if (res.status === 200) {
+    codeStatus = 303;
     const html = await res.text();
     const requestId = /name="request_id" value="([^"]+)"/.exec(html)?.[1];
     const c2 = csrfOf(html);
@@ -386,7 +388,7 @@ export async function codeFlow(base, { email, password, clientId, secret, redire
   }
   location = res.headers.get('location') ?? '';
   const code = location.startsWith(redirectUri) ? new URL(location).searchParams.get('code') : null;
-  if (res.status !== 302 || !code) throw new Error(`no code (status ${res.status})`);
+  if (res.status !== codeStatus || !code) throw new Error(`no code (status ${res.status})`);
   const tok = await http(`${base}/token`, {
     method: 'POST',
     headers: { authorization: basic(clientId, secret), 'content-type': FORM },

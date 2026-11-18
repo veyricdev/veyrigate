@@ -569,7 +569,7 @@ describe('db:seed: seeded admin logs in, fe-admin gets aud=admin, /admin/me 200 
       headers: { cookie: anon },
       payload: { _csrf: csrf, email: ADMIN.email, password: ADMIN.password, returnTo },
     });
-    expect(login.statusCode).toBe(302);
+    expect(login.statusCode).toBe(303);
     expect(login.headers['location']).toBe(returnTo);
     const session = cookieOf(login.headers, SESSION_COOKIE)!;
     expect(session).toBeTruthy();
@@ -591,7 +591,7 @@ describe('db:seed: seeded admin logs in, fe-admin gets aud=admin, /admin/me 200 
         approve: 'true',
       },
     });
-    expect(consent.statusCode).toBe(302);
+    expect(consent.statusCode).toBe(303);
     const callback = new URL(consent.headers['location'] as string);
     expect(`${callback.origin}${callback.pathname}`).toBe(REDIRECT);
     const code = callback.searchParams.get('code')!;

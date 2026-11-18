@@ -110,7 +110,7 @@ describe('application logs never carry secrets (B7.4)', () => {
       { idp_csrf: anon },
       { _csrf: csrf, email: EMAIL, password: PASSWORD },
     );
-    expect(login.statusCode).toBe(302);
+    expect(login.statusCode).toBe(303);
     const sessionId = keep('session cookie', cookieOf(login, SESSION_COOKIE));
 
     const user = (await full.conn.model('User').findOne({ email: EMAIL }).lean()) as {

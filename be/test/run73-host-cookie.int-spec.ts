@@ -67,7 +67,7 @@ describe('run 73 DEBT-008: __Host- cookies when Secure (real app)', () => {
       password: ADMIN.password,
       returnTo: '/',
     });
-    expect(res.statusCode).toBe(302);
+    expect(res.statusCode).toBe(303);
     return cookieOf(res, '__Host-idp_session')!;
   }
 
@@ -124,7 +124,7 @@ describe('run 73 DEBT-008: __Host- cookies when Secure (real app)', () => {
     expect(await sessions.get(id)).not.toBeNull();
 
     const real = await post('/logout', pair(session), { _csrf: csrf });
-    expect(real.statusCode).toBe(302);
+    expect(real.statusCode).toBe(303);
     expect(await sessions.get(id)).toBeNull();
     const cleared = cookieOf(real, '__Host-idp_session');
     expectHostOnly(cleared);

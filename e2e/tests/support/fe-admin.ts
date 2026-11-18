@@ -28,7 +28,7 @@ export const mfaForm = (page: Page) => page.locator('form[action="/login/mfa"]')
 /**
  * Run 89 (T6 AC2/AC4): on the IdP `/login/mfa` page, enter the next TOTP code of `email` (allocator
  * of `totp.ts`). A refused code (the step was used by another process, `E2E_REUSE=1`) => skip to a
- * fresh step and retry ONCE. Resolves after the POST answered 302; the redirect chain continues.
+ * fresh step and retry ONCE. Resolves after the POST answered 303; the redirect chain continues.
  */
 export async function passSecondFactor(page: Page, email: string): Promise<void> {
   const secret = secretFor(email);
@@ -40,7 +40,7 @@ export async function passSecondFactor(page: Page, email: string): Promise<void>
       page.waitForResponse((r) => isIdp(new URL(r.url())) && new URL(r.url()).pathname === "/login/mfa" && r.request().method() === "POST"),
       form.getByRole("button", { name: "Verify" }).click(),
     ]);
-    if (res.status() === 302) return;
+    if (res.status() === 303) return;
     expect(res.status(), "a refused code re-renders step 2").toBe(400);
     await expect(page.getByRole("alert")).toBeVisible();
     markStale(secret);

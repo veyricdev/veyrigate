@@ -680,7 +680,7 @@ describe('Admin API guard (B6.1) + step-up (B6.2) on real Mongo + Redis', () => 
         cookies: { [SESSION_COOKIE]: oldId },
         payload: { _csrf: csrf!, email: adminEmail, password: PASSWORD, returnTo },
       });
-      expect(post.statusCode).toBe(302);
+      expect(post.statusCode).toBe(303);
       expect(post.headers['location']).toBe(returnTo);
       const setCookie = ([] as string[]).concat(post.headers['set-cookie'] ?? []);
       const newId = setCookie
@@ -760,7 +760,7 @@ describe('Admin API guard (B6.1) + step-up (B6.2) on real Mongo + Redis', () => 
           payload: { _csrf: csrf!, request_id: requestId, approve: 'true' },
         });
       const res = await consent();
-      expect(res.statusCode).toBe(302);
+      expect(res.statusCode).toBe(303);
       const location = new URL(res.headers['location'] as string);
       expect(`${location.origin}${location.pathname}`).toBe(REDIRECT);
       expect(location.searchParams.get('error')).toBe('login_required');
@@ -865,7 +865,7 @@ describe('Admin API guard (B6.1) + step-up (B6.2) on real Mongo + Redis', () => 
         cookies: { [SESSION_COOKIE]: oldId },
         payload: { _csrf: csrf, email: adminEmail, password: PASSWORD, returnTo },
       });
-      expect(post.statusCode).toBe(302);
+      expect(post.statusCode).toBe(303);
       const newId = ([] as string[])
         .concat(post.headers['set-cookie'] ?? [])
         .find((c) => c.startsWith(`${SESSION_COOKIE}=`))!

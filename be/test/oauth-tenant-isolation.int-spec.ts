@@ -89,9 +89,12 @@ describe('OAuth tenant isolation at /authorize + POST /authorize/consent (MT1/MT
   const consentsOf = (userId: string) =>
     conn.model('Consent').countDocuments({ userId: new Types.ObjectId(userId) });
 
-  /** 302 to the trusted redirect_uri with access_denied + state + iss, and no code. */
-  const expectAccessDenied = (res: { statusCode: number; headers: Record<string, unknown> }) => {
-    expect(res.statusCode).toBe(302);
+  /** 302 (GET /authorize) or 303 (POST /authorize/consent, run 95) to the trusted redirect_uri with access_denied + state + iss, and no code. */
+  const expectAccessDenied = (
+    res: { statusCode: number; headers: Record<string, unknown> },
+    status: 302 | 303 = 302,
+  ) => {
+    expect(res.statusCode).toBe(status);
     const loc = new URL(res.headers['location'] as string);
     expect(`${loc.origin}${loc.pathname}`).toBe(REDIRECT);
     expect(loc.searchParams.get('error')).toBe('access_denied');
@@ -232,7 +235,7 @@ describe('OAuth tenant isolation at /authorize + POST /authorize/consent (MT1/MT
         approve: 'true',
       },
     });
-    expect(post.statusCode).toBe(302);
+    expect(post.statusCode).toBe(303);
     expect(new URL(post.headers['location'] as string).searchParams.get('code')).toBeTruthy();
   });
 
@@ -258,7 +261,7 @@ describe('OAuth tenant isolation at /authorize + POST /authorize/consent (MT1/MT
         approve: 'true',
       },
     });
-    expectAccessDenied(post);
+    expectAccessDenied(post, 303);
     expect(await consentsOf(userB)).toBe(0);
     expect((await redis.keys('authz_code:*')).length).toBe(codesBefore);
     const denied = await auditModel
@@ -402,7 +405,7 @@ describe('OAuth tenant isolation at /authorize + POST /authorize/consent (MT1/MT
     const denyPage = await get(authorizeUrl(CLIENT_B), memberSid);
     expect(denyPage.statusCode).toBe(200);
     const deny = await consentPost(memberSid, denyPage, false);
-    expect(deny.statusCode).toBe(302);
+    expect(deny.statusCode).toBe(303);
     const denyLocation = deny.headers['location'] as string;
     expect(new URL(denyLocation).searchParams.has('error_description')).toBe(false);
 
@@ -424,7 +427,7 @@ describe('OAuth tenant isolation at /authorize + POST /authorize/consent (MT1/MT
         { $set: { status: 'suspended' } },
       );
     const atConsent = await consentPost(leaverSid, page, true);
-    expectAccessDenied(atConsent);
+    expectAccessDenied(atConsent, 303);
     expect(atConsent.headers['location']).toBe(denyLocation);
   });
 });

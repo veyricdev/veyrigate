@@ -182,7 +182,7 @@ describe('run 85 T6 tester probes (real app, http)', () => {
         const u = await newUser();
         const zscore = zscoreSpy();
         const ok = await login(u.email, PASSWORD, ip(), `idp_dc=${raw}`);
-        expect(ok.res.statusCode).toBe(302);
+        expect(ok.res.statusCode).toBe(303);
         expect(ok.session).toBeDefined();
         expect(zscore).not.toHaveBeenCalled();
         const issued = valueOf(ok.device)!;
@@ -208,7 +208,7 @@ describe('run 85 T6 tester probes (real app, http)', () => {
       for (let i = 0; i < 20; i++) await login(u.email, WRONG, `198.18.40.${i % 5}`);
       const encoded = token.replace(/A/g, '%41').replace(/-/g, '%2D');
       const res = await login(u.email, PASSWORD, ip(), `idp_dc=${encoded}`);
-      expect(res.res.statusCode).toBe(302);
+      expect(res.res.statusCode).toBe(303);
       // ...and the presented token is rotated out (D85.11).
       expect(await redis.zscore(trustKey(u.sub), sha256(token))).toBeNull();
     });
@@ -224,7 +224,7 @@ describe('run 85 T6 tester probes (real app, http)', () => {
       expect(stale.session).toBeUndefined();
       // Control: the same entry refreshed to "now" is trusted again.
       await redis.zadd(trustKey(u.sub), String(Date.now()), sha256(token));
-      expect((await login(u.email, PASSWORD, ip(), `idp_dc=${token}`)).res.statusCode).toBe(302);
+      expect((await login(u.email, PASSWORD, ip(), `idp_dc=${token}`)).res.statusCode).toBe(303);
     });
 
     it('trusted-device failures (D = 10) are charged neither to the network nor to the account bucket', async () => {
@@ -243,7 +243,7 @@ describe('run 85 T6 tester probes (real app, http)', () => {
         .exec();
       expect(throttled.map((a) => a.metadata?.scope)).toEqual(['device']);
       // Same network, no cookie: the 10 device failures did not touch N or A.
-      expect((await login(u.email, PASSWORD, from)).res.statusCode).toBe(302);
+      expect((await login(u.email, PASSWORD, from)).res.statusCode).toBe(303);
     });
 
     it('a device cookie that was trusted before a password reset is not trusted after it', async () => {

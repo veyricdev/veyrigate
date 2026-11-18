@@ -268,7 +268,7 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
       headers: { cookie: page.cookie },
       payload: { _csrf: page.csrf, email, password: 'correct password', returnTo: '/' },
     });
-    expect(login.statusCode).toBe(302);
+    expect(login.statusCode).toBe(303);
     const sessionCookie = String(login.headers['set-cookie']).split(';')[0];
     const sessionId = sessionCookie.split('=')[1];
     expect(await sessions.get(sessionId)).not.toBeNull();
@@ -281,7 +281,7 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
       headers: { cookie: sessionCookie },
       payload: { _csrf: logoutPage.csrf },
     });
-    expect(logout.statusCode).toBe(302);
+    expect(logout.statusCode).toBe(303);
     expect(await sessions.get(sessionId)).toBeNull();
     expect(
       await auditModel.exists({ action: AuditAction.SESSION_REVOKED, result: 'success' }),
@@ -463,7 +463,7 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
         { $set: { lockedUntil: new Date(Date.now() - 1000) } },
       );
       const res = await postLogin(user.email, LOGIN_PASSWORD);
-      expect(res.statusCode).toBe(302);
+      expect(res.statusCode).toBe(303);
       expect(sessionCookieSet(res.headers)).toBe(true);
       const doc = await userModel.findById(user.sub).lean();
       expect(doc!.lockedUntil).toBeUndefined();
@@ -589,7 +589,7 @@ describe('UI authentication request flow on real Mongo and Redis', () => {
 
       expect((await submit('/verify-email', { token, password: PASSWORD })).statusCode).toBe(201);
       const after = await submit('/login', { email, password: PASSWORD, returnTo: '/' });
-      expect(after.statusCode).toBe(302);
+      expect(after.statusCode).toBe(303);
       expect(observable(after).setCookies).toContain('idp_session');
       expect(await sessions.listByUser(user.sub)).toHaveLength(1);
     });

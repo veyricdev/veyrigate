@@ -2,9 +2,12 @@ import { AuditAction } from '../../modules/security/audit/audit-action.enum';
 import {
   observeAuditEvent,
   observeBackgroundWriteFailure,
+  observeMailDropped,
   observeTokenError,
   registry,
+  setMailQueueDepth,
   type BackgroundWrite,
+  type MailDropReason,
 } from './metrics';
 
 /** Current value of one series (undefined when the series does not exist). */
@@ -111,6 +114,29 @@ describe('metrics (B7.2 Task 2)', () => {
     observeBackgroundWriteFailure('forgot');
     expect(await value('sso_background_write_failures_total', { what: 'forgot' })).toBe(1);
     expect(await value('sso_background_write_failures_total', { what: 'register' })).toBe(0);
+  });
+
+  it('DEBT-683 (D95.11): mail dropped series start at 0; +n per call; an unknown reason adds nothing', async () => {
+    for (const reason of ['queue_full', 'shutdown']) {
+      expect(await value('sso_mail_dropped_total', { reason })).toBe(0);
+    }
+    const before = await registry.metrics();
+    expect(() => observeMailDropped('made_up_reason' as MailDropReason)).not.toThrow();
+    const after = await registry.metrics();
+    expect(after).not.toContain('made_up_reason');
+    expect(after.split('\n').length).toBe(before.split('\n').length);
+    observeMailDropped('queue_full');
+    observeMailDropped('shutdown', 3);
+    expect(await value('sso_mail_dropped_total', { reason: 'queue_full' })).toBe(1);
+    expect(await value('sso_mail_dropped_total', { reason: 'shutdown' })).toBe(3);
+  });
+
+  it('DEBT-683 (D95.11): sso_mail_queue_depth is a gauge set to the pending count', async () => {
+    expect(await value('sso_mail_queue_depth', {})).toBe(0);
+    setMailQueueDepth(7);
+    expect(await value('sso_mail_queue_depth', {})).toBe(7);
+    setMailQueueDepth(0);
+    expect(await value('sso_mail_queue_depth', {})).toBe(0);
   });
 
   it('never touches the client library global registry', async () => {

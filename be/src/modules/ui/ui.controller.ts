@@ -172,7 +172,7 @@ export class UiController {
     if ((await this.hasLiveSession(req, reply)) && !(await this.reauthRequested(safeReturn))) {
       return reply.redirect('/', 302);
     }
-    // DEBT-084: the login form POSTs here, then 302s to `/authorize?request_id`, then 302s to the RP.
+    // DEBT-084: the login form POSTs here, then 303s to `/authorize?request_id`, then 302s to the RP.
     // Chromium enforces the `form-action` of THIS page across that chain, so relax it to the single
     // RP origin already exact-matched in the resumable context (never the raw query). Fail-closed to
     // `'self'` on any doubt. The page carries a CSRF token + credentials field: never cache it.
@@ -285,7 +285,7 @@ export class UiController {
     const reflectUri =
       resolved === this.logoutRp.defaultRedirect ? undefined : postLogoutRedirectUri;
 
-    // DEBT-084: the logout form POSTs here, then 302s to `post_logout_redirect_uri`. Relax
+    // DEBT-084: the logout form POSTs here, then 303s to `post_logout_redirect_uri`. Relax
     // `form-action` to that single already-validated origin, but ONLY when `resolved` is a real RP
     // target (`!== defaultRedirect`) and yields a clean origin; otherwise keep `'self'` (INV-084-1/2).
     const logoutOrigin =
@@ -336,11 +336,11 @@ export class UiController {
         safeReturnTo(body.returnTo, this.issuer),
       );
       this.mfaLogin.setTicketCookie(reply, ticketId);
-      return reply.redirect('/login/mfa', 302);
+      return reply.redirect('/login/mfa', 303);
     }
     this.sessionCookie.set(reply, result.id);
     if (result.deviceToken) this.loginThrottle.setDeviceCookie(reply, result.deviceToken);
-    return reply.redirect(safeReturnTo(body.returnTo, this.issuer), 302);
+    return reply.redirect(safeReturnTo(body.returnTo, this.issuer), 303);
   }
   @Post('/forgot')
   @UseGuards(CsrfGuard)
@@ -421,7 +421,7 @@ export class UiController {
     @Res() reply: UiReply,
   ) {
     const session = await this.ui.liveSession(req, reply);
-    if (!session) return reply.redirect('/login', 302);
+    if (!session) return reply.redirect('/login', 303);
     await this.ui.limit('password_change', req, session.userId);
     const outcome = await this.auth.changePassword(
       session.userId,
@@ -500,9 +500,9 @@ export class UiController {
           this.logoutParams(body),
           undefined,
         );
-        return reply.redirect(target, 302);
+        return reply.redirect(target, 303);
       } catch {
-        return reply.redirect(this.logoutRp.defaultRedirect, 302);
+        return reply.redirect(this.logoutRp.defaultRedirect, 303);
       }
     }
 
@@ -599,11 +599,11 @@ export class UiController {
       if (iframes.length > 0) {
         return this.renderFrontchannel(reply, iframes, target);
       }
-      return reply.redirect(target, 302);
+      return reply.redirect(target, 303);
     } catch {
       // Legacy/hand-edited client data (bad redirect URI, un-parseable front-channel URI) or a
       // transient Mongo read must not block an already-completed logout. No hint/token is logged.
-      return reply.redirect(this.logoutRp.defaultRedirect, 302);
+      return reply.redirect(this.logoutRp.defaultRedirect, 303);
     }
   }
 

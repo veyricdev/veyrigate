@@ -129,7 +129,7 @@ describe('run 92 lot C: CodeQL triage negative tests', () => {
       const cookies: Record<string, string> = { [SESSION_COOKIE]: sid };
       if (anon) cookies[ANON_COOKIE] = anon.split(';')[0].slice(ANON_COOKIE.length + 1);
       const done = await submitLogoutForm(page, cookies);
-      expect(done.statusCode).toBe(302);
+      expect(done.statusCode).toBe(303);
       expect(await sessionAlive(sid)).toBe(false);
     });
 
@@ -171,7 +171,7 @@ describe('run 92 lot C: CodeQL triage negative tests', () => {
       const cookies: Record<string, string> = { [SESSION_COOKIE]: sid };
       if (anon) cookies[ANON_COOKIE] = anon.split(';')[0].slice(ANON_COOKIE.length + 1);
       const done = await submitLogoutForm(page, cookies);
-      expect(done.statusCode).toBe(302);
+      expect(done.statusCode).toBe(303);
       expect(done.headers['location']).toBe(POST_LOGOUT);
       expect(await sessionAlive(sid)).toBe(false);
     });

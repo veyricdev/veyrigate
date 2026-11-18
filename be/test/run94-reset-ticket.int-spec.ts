@@ -215,7 +215,7 @@ describe('run 94 T1: reset token -> ticket cookie (real app)', () => {
     expect(resetCookieLine(ok)).toMatch(/^idp_reset=;/);
     expect((await sessions.listByUser(user.sub)).map((s) => s.ref)).not.toContain(old.session.ref);
     expect(await login(email, GOOD)).toBe(401);
-    expect(await login(email, NEW)).toBe(302);
+    expect(await login(email, NEW)).toBe(303);
 
     // Replay the spent ticket itself (a fresh GET would already clear the dead cookie).
     const form = await app().inject({ method: 'GET', url: '/reset' });
@@ -227,7 +227,7 @@ describe('run 94 T1: reset token -> ticket cookie (real app)', () => {
       payload: { _csrf: csrfOf(form), password: `${NEW}x` },
     });
     expectInvalid(replay);
-    expect(await login(email, NEW)).toBe(302);
+    expect(await login(email, NEW)).toBe(303);
   });
 
   it('5: a password refused by the policy keeps the ticket; a good one then works', async () => {
@@ -239,7 +239,7 @@ describe('run 94 T1: reset token -> ticket cookie (real app)', () => {
     expect(refused.statusCode).toBe(400);
     expect(resetCookieLine(refused)).toBeUndefined();
     expect((await postNewPassword(app(), NEW, jar)).statusCode).toBe(201);
-    expect(await login(email, NEW)).toBe(302);
+    expect(await login(email, NEW)).toBe(303);
   });
 
   it('6: the old one-step body {_csrf, token, password} => 400; password unchanged; token still exchangeable', async () => {
@@ -254,7 +254,7 @@ describe('run 94 T1: reset token -> ticket cookie (real app)', () => {
       payload: { _csrf: csrfOf(form), token, password: NEW },
     });
     expect(res.statusCode).toBe(400);
-    expect(await login(email, GOOD)).toBe(302);
+    expect(await login(email, GOOD)).toBe(303);
     expect((await exchangeResetToken(app(), token)).statusCode).toBe(303);
   });
 
@@ -281,7 +281,7 @@ describe('run 94 T1: reset token -> ticket cookie (real app)', () => {
     });
     expectInvalid(res);
     expect(resetCookieLine(res)).toMatch(/^idp_reset=;/);
-    expect(await login(email, GOOD)).toBe(302);
+    expect(await login(email, GOOD)).toBe(303);
   });
 
   it('8: races: two exchanges of one token => one 303; two posts of one ticket => one success, one setPassword', async () => {
@@ -372,7 +372,7 @@ describe('run 94 T1: reset token -> ticket cookie (real app)', () => {
     expect(form.body).toContain('action="/reset/code"'); // ticket B no longer live
     const user = (await full.app.get(UserService).findByEmail(email))!;
     expect(await tokens().countDocuments({ userId: user.sub, usedAt: null })).toBe(0);
-    expect(await login(email, NEW)).toBe(302);
+    expect(await login(email, NEW)).toBe(303);
   });
 
   it('12b (DEBT-685): a new mail opened while a ticket is live dies with the reset of that ticket', async () => {

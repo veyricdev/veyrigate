@@ -520,7 +520,7 @@ describe('run 53c tester: Redis / key provider down — wider surface, families,
             state: 'st',
           },
         );
-        expect(res.statusCode).toBe(302);
+        expect(res.statusCode).toBe(303);
         expect(res.headers['location']).toBe('/login?loggedOut=1');
         expect(String(res.headers['set-cookie'])).toContain(`${SESSION_COOKIE}=;`);
         // GET form while keys are down: never reflects the target.

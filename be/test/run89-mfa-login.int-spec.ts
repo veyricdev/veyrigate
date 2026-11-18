@@ -135,7 +135,7 @@ describe('run 89 T3: MFA step 2 at /login (real app)', () => {
   it('AC14 not enrolled: /login signs in at once, no ticket (behaviour unchanged)', async () => {
     const u = await newUser(false);
     const s = await step1(u.email);
-    expect(s.res.statusCode).toBe(302);
+    expect(s.res.statusCode).toBe(303);
     expect(s.res.headers['location']).toBe('/account/sessions');
     expect(pairOf(s.res, 'idp_session')).toBeDefined();
     expect(s.ticket).toBeUndefined();
@@ -144,7 +144,7 @@ describe('run 89 T3: MFA step 2 at /login (real app)', () => {
   it('AC1 enrolled + right password => ticket cookie only (HttpOnly, Lax, Path=/, Max-Age 300), no session, no success, bucket kept, no device trust', async () => {
     const u = await newUser();
     const s = await step1(u.email);
-    expect(s.res.statusCode).toBe(302);
+    expect(s.res.statusCode).toBe(303);
     expect(s.res.headers['location']).toBe('/login/mfa');
     expect(pairOf(s.res, 'idp_session')).toBeUndefined();
     expect(pairOf(s.res, 'idp_dc')).toBeUndefined();
@@ -171,7 +171,7 @@ describe('run 89 T3: MFA step 2 at /login (real app)', () => {
     const u = await newUser();
     const s = await step1(u.email);
     const res = await step2(s, code());
-    expect(res.statusCode).toBe(302);
+    expect(res.statusCode).toBe(303);
     expect(res.headers['location']).toBe('/account/sessions');
     const sess = await sessionOf(res);
     expect(sess).toMatchObject({ userId: u.sub, amr: ['pwd', 'otp', 'mfa'] });
@@ -200,7 +200,7 @@ describe('run 89 T3: MFA step 2 at /login (real app)', () => {
   it('AC3 recovery code => amr pwd+mfa, MFA_RECOVERY_USED {left:9}; the same code again => refused', async () => {
     const u = await newUser();
     const res = await step2(await step1(u.email), u.codes[0].toLowerCase());
-    expect(res.statusCode).toBe(302);
+    expect(res.statusCode).toBe(303);
     expect(await sessionOf(res)).toMatchObject({ amr: ['pwd', 'mfa'] });
     const used = await audits(AuditAction.MFA_RECOVERY_USED, u.sub);
     expect(used).toHaveLength(1);
@@ -220,7 +220,7 @@ describe('run 89 T3: MFA step 2 at /login (real app)', () => {
       expect(r.body).toContain(WRONG);
     }
     const fifth = await step2(s, '000000');
-    expect(fifth.statusCode).toBe(302);
+    expect(fifth.statusCode).toBe(303);
     expect(fifth.headers['location']).toBe('/login?returnTo=%2Faccount%2Fapps');
     expect(await redis.exists(`mfa_pend:${sha256(s.id!)}`)).toBe(0);
     expect(await audits(AuditAction.AUTH_MFA_FAILED, u.sub)).toHaveLength(1);
@@ -241,7 +241,7 @@ describe('run 89 T3: MFA step 2 at /login (real app)', () => {
     const a = await step1(u.email);
     const b = await step1(u.email);
     const k = code();
-    expect((await step2(a, k)).statusCode).toBe(302);
+    expect((await step2(a, k)).statusCode).toBe(303);
     const replay = await step2(b, k);
     expect(replay.statusCode).toBe(400);
 
@@ -315,7 +315,7 @@ describe('run 89 T3: MFA step 2 at /login (real app)', () => {
       url: '/login/mfa',
       payload: { code: '1' },
     });
-    expect(none.statusCode).toBe(302);
+    expect(none.statusCode).toBe(303);
     expect(none.headers['location']).toBe('/login');
     const unknown = await full.app.inject({
       method: 'GET',
@@ -338,7 +338,7 @@ describe('run 89 T3: MFA step 2 at /login (real app)', () => {
     const res = await step2(s, code(), {
       cookie: `${s.ticket}; ${pairOf(victim.res, 'idp_session')}`,
     });
-    expect(res.statusCode).toBe(302);
+    expect(res.statusCode).toBe(303);
     expect((await sessionOf(res)).userId).toBe(u.sub);
   });
 
@@ -351,7 +351,7 @@ describe('run 89 T3: MFA step 2 at /login (real app)', () => {
     expect(failed.statusCode).toBeGreaterThanOrEqual(500);
     expect(await redis.exists(`mfa_pend:${sha256(s.id!)}`)).toBe(1);
     expect(await userSessions(u.sub)).toBe(0);
-    expect((await step2(s, code())).statusCode).toBe(302);
+    expect((await step2(s, code())).statusCode).toBe(303);
   });
 
   it('DEBT-647 (D89.30) /login/mfa relaxes form-action to the RP origin of a live /authorize context (GET and the 400 re-render); anything else stays self', async () => {

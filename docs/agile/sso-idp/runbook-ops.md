@@ -303,8 +303,16 @@ docker run --rm -i --env-file <env-app-production> <image> node dist/database/ad
 - Lỗi khác (`admin-recover failed: ...`, exit 1) ⇒ không ghi gì (transaction abort): Mongo không tới được (5 s), DB không có
   `default-tenant` (sai `MONGO_URI`), Mongo standalone (không có transaction), audit không ghi được. Tham số sai ⇒ exit 1
   trước khi kết nối, không echo giá trị.
-- CLI không đụng Redis, không thu hồi phiên. Sau khi phục hồi: user đăng nhập `prompt=login`; nghi lộ ⇒ đổi mật khẩu ở
-  `/account/password` (thu hồi mọi phiên, D85.6).
+- Recover thường (không `--reset-mfa`) không chạm Redis, không thu hồi phiên. Sau khi phục hồi: user đăng nhập
+  `prompt=login`; nghi lộ ⇒ đổi mật khẩu ở `/account/password` (thu hồi mọi phiên, D85.6). `--reset-mfa` thu hồi
+  phiên sau commit: xem §11 (run 95, D95.8).
+- Exit code (D95.5):
+
+  | Code | Nghĩa |
+  |---|---|
+  | `0` | recovered; nếu `--reset-mfa` thì phiên Redis + sweep family đã xong |
+  | `1` | từ chối / lỗi trước commit / tham số sai — không ghi gì (trừ audit failure) |
+  | `3` | **Mongo đã commit**, nhưng thu hồi phiên Redis lỗi / quá 10 s (`(redis)`) hoặc sweep family lỗi (`(sweep)`) (chỉ `--reset-mfa`) ⇒ §11 (xử lý khác nhau theo nhánh), **không chạy lại CLI** |
 - **Đường cuối, chỉ khi image không chạy được**: mongosh trên đúng 1 user đã tồn tại, mọi lệnh qua `d`, người chứng kiến đọc to
   `DB:`. ⚠ **Không sinh audit event** ⇒ biên bản ngoài hệ thống (thời gian, 2 người, lý do, lệnh):
 ```js
@@ -650,9 +658,26 @@ docker run --rm -i --env-file <env app> "$IMG" node dist/database/admin-recover.
 - Như §3d (hai người, mã xác nhận gõ lại); kế hoạch in thêm `mfa: enrolled -> reset`. Trong **một** transaction: cấp lại
   `super_admin`, gỡ `mfa`, thu hồi mọi refresh family (Mongo), audit `ADMIN_RECOVERED {mfaReset:true}`; dán dòng
   `{"alert":true,…}` vào kênh sự cố.
-- CLI **không** chạm Redis (DEBT-634): phiên cũ của user vẫn sống với RP khác tới khi hết hạn hoặc user enroll lại; console
-  `admin` vẫn từ chối các phiên đó (`mfaAt ≥ enrolledAt`, D89.5). Có admin khác ⇒ chạy thêm
-  `POST /admin/users/{id}/sessions/revoke`.
+- Sau commit (run 95, DEBT-634, D95.8) CLI thu hồi **mọi phiên** Redis + thiết bị tin cậy + sweep refresh family
+  (cùng đường với `POST /admin/users/{id}/sessions/revoke`), in `sessions revoked: <n>`, audit
+  `SESSION_REVOKED {via:'admin_recover', recoveredEventId, count}`. Kế hoạch (cả `--dry-run`) in thêm
+  `sessions: revoked in Redis after commit`.
+- **Exit 3** (audit `SESSION_REVOKED` failure `revoke_failed {failedStep}`) ⇒ Mongo **đã** đổi (super_admin cấp, MFA gỡ,
+  family thu hồi trong transaction). **Không chạy lại CLI.** Ghi ticket (exit code, dòng warning, `eventId`). Hai nhánh
+  (run 95, DEBT-692):
+  - `warning: recovered, but sessions were NOT revoked (redis): see runbook-ops section 11` (`failedStep:'sessions'`):
+    Redis lỗi **hoặc chỉ chậm** (quá 10 s). Redis chậm ⇒ phiên cũ **có thể vẫn sống** và dùng được ở RP khác; chỉ khi
+    Redis chết hẳn thì login/SSO mới không đọc được phiên. Sửa Redis theo §5, rồi:
+    - (a) còn admin khác ⇒ gọi `POST /admin/users/{id}/sessions/revoke` ngay;
+    - (b) không còn ⇒ user đăng nhập và enroll MFA ở `/account/mfa` trước mọi việc khác (enroll ⇒ thu hồi mọi phiên,
+      family và thiết bị tin cậy, D89.13).
+  - `warning: recovered, sessions revoked: <n>, but refresh families were NOT swept (sweep): see runbook-ops section 11`
+    (`failedStep:'sweep'`): phiên Redis + thiết bị tin cậy **đã** thu hồi; chỉ bước sweep family sau Redis (Mongo) lỗi,
+    nên một family do `/token` tạo giữa commit và revoke có thể còn sống. **Không** cần sửa Redis: kiểm Mongo (`/ready`,
+    replica set), rồi (a) hoặc (b) ở trên (cả hai đều sweep lại family).
+- Dòng `warning: trusted devices were not forgotten (redis)` (exit vẫn `0`/`3` theo bước khác): nếu không kèm dòng `(redis)` thì phiên đã thu hồi nhưng
+  thiết bị tin cậy còn ⇒ thiết bị đó chỉ được giới hạn thử `/login` nới hơn, không bỏ qua được mật khẩu/MFA. Khi Redis ổn,
+  gọi (a) hoặc làm (b) để xoá; ghi vào ticket.
 
 ## 12. Xoay `MFA_ENCRYPTION_KEYS` (run 89, D89.12)
 
@@ -710,3 +735,12 @@ Log **không** có email (cố ý, không lộ PII, không dò được tồn t�
      account" ngay, trừ khi còn token đặt lại sống (30 phút) — không gửi lại thư **xác minh**.
    Từ run 91 (D91.14) trang `/verify-email` đòi cả mật khẩu tài khoản; ai không biết mật khẩu (kể cả tài khoản do người khác
    tạo bằng email của mình) dùng `/forgot`.
+
+**Thư bị bỏ (run 95, DEBT-683)**: mailer SMTP giữ tối đa `MAX_PENDING_MAIL = 200` thư chưa xong (đang gửi + chờ trong pool);
+gauge `sso_mail_queue_depth`. Thư bị bỏ đếm ở `sso_mail_dropped_total{reason}`, alert `SsoMailDropped` (warning, nhãn `reason`).
+Mailer không log từng thư bị bỏ (caller đã log `Authentication email delivery failed` cho thư xác minh/đặt lại, và đếm `auth_mail`).
+
+| `reason` | Nguyên nhân | Thao tác |
+|---|---|---|
+| `queue_full` | SMTP chậm/chết, hoặc spam `/forgot`/`/register` vượt throttle | xử lý như `auth_mail` ở trên (kiểm SMTP; người dùng dùng `/forgot`) |
+| `shutdown` | thư còn chờ khi app dừng (deploy/restart); log WARN `mail queue closed with <n> unsent message(s)` | người dùng bị ảnh hưởng dùng `/forgot`; deploy lúc ít tải |

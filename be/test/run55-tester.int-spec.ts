@@ -188,8 +188,13 @@ describe('run 55 tester: OAuth sweep risk tests (DEBT-123/130/177/216) over real
     expect(res.body).not.toMatch(/[?&]code=/);
   }
 
-  function expectRedirect(res: InjectResponse, kind: 'code' | 'access_denied' | 'login_required') {
-    expect(res.statusCode).toBe(302);
+  // 303 after POST /authorize/consent, 302 from GET /authorize (run 95, D95.15).
+  function expectRedirect(
+    res: InjectResponse,
+    kind: 'code' | 'access_denied' | 'login_required',
+    status: 302 | 303 = 303,
+  ) {
+    expect(res.statusCode).toBe(status);
     const url = new URL(String(res.headers['location']));
     expect(url.origin + url.pathname).toBe(FLOW_REDIRECT);
     expect(url.searchParams.get('state')).toBe('victim-state');
@@ -343,7 +348,7 @@ describe('run 55 tester: OAuth sweep risk tests (DEBT-123/130/177/216) over real
           decide(sb, csrfB, requestId, true),
         ]);
         expectFirstPartyPage(rb);
-        if (ra.statusCode === 302) {
+        if (ra.statusCode === 303) {
           expectRedirect(ra, 'code');
           expect(await codeKeys()).toBe(codes + 1);
           expect(await consents(a)).toBe(1);
@@ -369,7 +374,7 @@ describe('run 55 tester: OAuth sweep risk tests (DEBT-123/130/177/216) over real
         cookies: { [SESSION_COOKIE]: sa },
         payload: { _csrf: first.csrf },
       });
-      expect(out.statusCode).toBe(302);
+      expect(out.statusCode).toBe(303);
       expect(await full.app.get(SessionService).get(sa)).toBeNull();
 
       const sb = await newSession(b);
@@ -482,7 +487,7 @@ describe('run 55 tester: OAuth sweep risk tests (DEBT-123/130/177/216) over real
       const clientId = await mkConsentClient();
       const a = await seedOAuthUser(full.conn, { tenantId: DEFAULT_TENANT_ID });
       const sa = await newSession(a);
-      expectRedirect(await resume(await stepUp(clientId, sa), sa), 'login_required');
+      expectRedirect(await resume(await stepUp(clientId, sa), sa), 'login_required', 302);
 
       const rid = await stepUp(clientId, sa);
       await dropUri(clientId);
@@ -498,7 +503,7 @@ describe('run 55 tester: OAuth sweep risk tests (DEBT-123/130/177/216) over real
       const clientId = await mkConsentClient();
       const a = await seedOAuthUser(full.conn, { tenantId: DEFAULT_TENANT_ID });
       const sa = await newSession(a);
-      expectRedirect(await resume(await stepUp(clientId, sa)), 'login_required');
+      expectRedirect(await resume(await stepUp(clientId, sa)), 'login_required', 302);
       const rid = await stepUp(clientId, sa);
       await dropUri(clientId);
       expectFirstPartyPage(await resume(rid));

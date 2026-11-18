@@ -101,7 +101,7 @@ export class MfaController {
   async loginMfaPage(@Req() req: HttpRequest, @Res() reply: HttpReply) {
     reply.header('Cache-Control', 'no-store'); // DEBT-663: depends on the MFA ticket (both exits)
     const ticket = this.mfaLogin.readTicket(req);
-    if (!(await this.mfaLogin.exists(ticket))) return this.backToLogin(reply);
+    if (!(await this.mfaLogin.exists(ticket))) return this.backToLogin(reply, 302);
     return this.loginForm(reply, ticket!, HttpStatus.OK);
   }
 
@@ -109,7 +109,7 @@ export class MfaController {
   async loginMfa(@Body() body: CodeDto, @Req() req: HttpRequest, @Res() reply: HttpReply) {
     await this.ui.limit('login_mfa', req);
     const ticket = this.mfaLogin.readTicket(req);
-    if (!ticket) return this.backToLogin(reply);
+    if (!ticket) return this.backToLogin(reply, 303);
     // CSRF identity = the ticket cookie (D89.8): a session cookie of anyone does not count.
     if (typeof body._csrf !== 'string' || !this.csrf.verify(ticket, body._csrf)) {
       throw new ForbiddenException('Invalid form submission.');
@@ -134,10 +134,10 @@ export class MfaController {
           HttpStatus.TOO_MANY_REQUESTS,
         );
       case 'expired':
-        return this.backToLogin(reply);
+        return this.backToLogin(reply, 303);
       case 'restart':
         this.mfaLogin.clearTicketCookie(reply);
-        return reply.redirect(`/login?returnTo=${encodeURIComponent(result.returnTo)}`, 302);
+        return reply.redirect(`/login?returnTo=${encodeURIComponent(result.returnTo)}`, 303);
       case 'failed':
         this.mfaLogin.clearTicketCookie(reply);
         reply.header('Cache-Control', 'no-store');
@@ -150,7 +150,7 @@ export class MfaController {
         this.mfaLogin.clearTicketCookie(reply);
         this.sessionCookie.set(reply, result.sessionId);
         if (result.deviceToken) this.loginThrottle.setDeviceCookie(reply, result.deviceToken);
-        return reply.redirect(safeReturnTo(result.returnTo, this.issuer), 302);
+        return reply.redirect(safeReturnTo(result.returnTo, this.issuer), 303);
     }
   }
 
@@ -175,7 +175,7 @@ export class MfaController {
   @UseGuards(CsrfGuard)
   async start(@Body() body: MfaFormDto, @Req() req: HttpRequest, @Res() reply: HttpReply) {
     const session = await this.ui.liveSession(req, reply);
-    if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fmfa', 302);
+    if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fmfa', 303);
     const back = this.safeBack(body.returnTo);
     await this.ui.limit('account_mfa', req, session.userId);
     const state = await this.mfa.state(session.userId);
@@ -200,7 +200,7 @@ export class MfaController {
   @UseGuards(CsrfGuard)
   async confirm(@Body() body: MfaFormDto, @Req() req: HttpRequest, @Res() reply: HttpReply) {
     const session = await this.ui.liveSession(req, reply);
-    if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fmfa', 302);
+    if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fmfa', 303);
     const back = this.safeBack(body.returnTo);
     await this.ui.limit('account_mfa', req, session.userId);
     const raw = await this.redis.client.get(enrollKey(session.ref));
@@ -248,7 +248,7 @@ export class MfaController {
   @UseGuards(CsrfGuard)
   async disable(@Body() body: MfaFormDto, @Req() req: HttpRequest, @Res() reply: HttpReply) {
     const session = await this.ui.liveSession(req, reply);
-    if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fmfa', 302);
+    if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fmfa', 303);
     await this.ui.limit('account_mfa', req, session.userId);
     const proof = await this.bothFactors(req, session, body, 'mfa_disable');
     if (!proof.ok) return this.render(req, reply, session, undefined, proof.error, proof.status);
@@ -280,7 +280,7 @@ export class MfaController {
   @UseGuards(CsrfGuard)
   async regenerate(@Body() body: MfaFormDto, @Req() req: HttpRequest, @Res() reply: HttpReply) {
     const session = await this.ui.liveSession(req, reply);
-    if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fmfa', 302);
+    if (!session) return reply.redirect('/login?returnTo=%2Faccount%2Fmfa', 303);
     await this.ui.limit('account_mfa', req, session.userId);
     const proof = await this.bothFactors(req, session, body, 'mfa_recovery');
     if (!proof.ok) return this.render(req, reply, session, undefined, proof.error, proof.status);
@@ -481,7 +481,7 @@ export class MfaController {
   }
 
   /**
-   * The step-2 form. DEBT-647 (D89.30): its POST ends in `302 /authorize?request_id` then `302` to
+   * The step-2 form. DEBT-647 (D89.30): its POST ends in `303 /authorize?request_id` then `302` to
    * the RP, so it gets the same per-response `form-action` as `GET /login` (the RP origin of the
    * ticket's live context, else `'self'`), on the first render and on every 400 re-render.
    */
@@ -496,9 +496,10 @@ export class MfaController {
     });
   }
 
-  private backToLogin(reply: HttpReply) {
+  /** `302` from GET, `303` from POST (DEBT-570, D95.15). */
+  private backToLogin(reply: HttpReply, status: 302 | 303) {
     this.mfaLogin.clearTicketCookie(reply);
-    return reply.redirect('/login', 302);
+    return reply.redirect('/login', status);
   }
 
   /** A `returnTo` that is a safe local path other than `/`, or undefined (strange values dropped). */

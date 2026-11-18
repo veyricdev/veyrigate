@@ -780,7 +780,7 @@ describe('run 56 tester: admin races + disable/enable over real HTTP', () => {
         ).statusCode,
       ).toBe(200);
       const d = await decide(c.sid, c.consent);
-      expect(d.statusCode).toBe(302);
+      expect(d.statusCode).toBe(303);
       expect(String(d.headers['location'])).toMatch(/[?&]code=/);
       // consent was just granted by the approve above => the resumed login ctx mints a code
       expect(String((await resume(c.rid, c.sid)).headers['location'])).toMatch(/[?&]code=/);
@@ -813,7 +813,7 @@ describe('run 56 tester: admin races + disable/enable over real HTTP', () => {
         ).statusCode,
       ).toBe(200);
       const d = await decide(a.sid, a.consent);
-      expect(d.statusCode).toBe(302);
+      expect(d.statusCode).toBe(303);
       expect(String((await resume(a.rid, a.sid)).headers['location'])).toMatch(/[?&]code=/);
     });
   });

@@ -75,3 +75,13 @@ groups:
         annotations:
           summary: A verification or password reset mail could not be sent
           description: The token was written but the SMTP send failed. Check SMTP and runbook-ops section 13.
+
+      # Run 95 (DEBT-683, D95.11): the SMTP mailer dropped mail, either because MAX_PENDING_MAIL sends were
+      # already pending (SMTP slow/down, or a burst) or because mail was still pending at shutdown.
+      - alert: SsoMailDropped
+        expr: sum by (reason) (increase(sso_mail_dropped_total[15m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: The SMTP mailer dropped mail without sending it
+          description: A full mail queue (queue_full) or a shutdown with mail pending (shutdown) lost verification, reset or notice mails. Check SMTP and runbook-ops section 13.

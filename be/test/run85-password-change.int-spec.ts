@@ -158,7 +158,7 @@ describe('run 85 T5: change password /account/password (real app)', () => {
       headers: { cookie: anon },
       payload: { _csrf: csrfOf(loginPage), current_password: PASSWORD, new_password: NEW_PASSWORD },
     });
-    expect(anonPost.statusCode).toBe(302);
+    expect(anonPost.statusCode).toBe(303);
     expect(String(anonPost.headers['location'])).toMatch(/^\/login/);
   });
 
@@ -323,7 +323,7 @@ describe('run 85 T5: change password /account/password (real app)', () => {
 
     // Old password refused, new one accepted.
     expect((await login(u.email, PASSWORD)).res.statusCode).toBe(401);
-    expect((await login(u.email, NEW_PASSWORD)).res.statusCode).toBe(302);
+    expect((await login(u.email, NEW_PASSWORD)).res.statusCode).toBe(303);
 
     expect(await audits(u.sub)).toEqual([
       expect.objectContaining({

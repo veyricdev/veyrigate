@@ -546,7 +546,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
   });
 
   it.each([
-    ['/login', { email: 'user@example.com', password: 'correct password', returnTo: '/' }, 302],
+    ['/login', { email: 'user@example.com', password: 'correct password', returnTo: '/' }, 303],
     ['/register', { email: 'new@example.com', password: 'correct password' }, 201],
   ] as const)(
     'submits the %s form after the browser clears a stale session cookie',
@@ -681,7 +681,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
         returnTo: '/account',
       },
     });
-    expect(response.statusCode).toBe(302);
+    expect(response.statusCode).toBe(303);
     expect(response.headers.location).toBe('/account');
     expect(response.headers['set-cookie']).toEqual(
       expect.stringContaining('idp_session=fresh-session'),
@@ -788,7 +788,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
       payload: { _csrf: page.csrf },
     });
 
-    expect(response.statusCode).toBe(302);
+    expect(response.statusCode).toBe(303);
     expect(response.headers.location).toBe('/login?loggedOut=1');
     expect(sessionSetCookie(response.headers['set-cookie'])).toContain('Max-Age=0');
     expect(sessions.get).toHaveBeenCalledTimes(1);
@@ -929,8 +929,8 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
     const first = await app.inject(request);
     const retry = await app.inject(request);
 
-    expect(first.statusCode).toBe(302);
-    expect(retry.statusCode).toBe(302);
+    expect(first.statusCode).toBe(303);
+    expect(retry.statusCode).toBe(303);
     expect(first.headers.location).toBe('/login?loggedOut=1');
     expect(retry.headers.location).toBe('/login?loggedOut=1');
     expect(sessionSetCookie(first.headers['set-cookie'])).toContain('Max-Age=0');
@@ -1137,7 +1137,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
         headers: { cookie: `idp_session=session-a; ${anon}` },
         payload: { _csrf: token, client_id: 'rp1' },
       });
-      expect(response.statusCode).toBe(302);
+      expect(response.statusCode).toBe(303);
       expect(sessionSetCookie(response.headers['set-cookie'])).toContain('Max-Age=0');
       expect(sessions.revoke).toHaveBeenCalledWith('session-a');
       expect(audit.record).toHaveBeenCalledWith(
@@ -1194,7 +1194,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
         payload: { _csrf: csrfFor('session-a') },
       });
 
-      expect(response.statusCode).toBe(302);
+      expect(response.statusCode).toBe(303);
       expect(refreshTokens.revokeForSession).toHaveBeenCalledWith(
         'user-1',
         'session-ref',
@@ -1225,7 +1225,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
         payload: { _csrf: csrfFor('session-a') },
       });
 
-      expect(response.statusCode).toBe(302);
+      expect(response.statusCode).toBe(303);
       expect(refreshTokens.revokeForSession).toHaveBeenCalledTimes(2);
       expect(audit.record).toHaveBeenCalledWith({
         actorType: 'user',
@@ -1249,7 +1249,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
         payload: { _csrf: csrfFor('session-a') },
       });
 
-      expect(response.statusCode).toBe(302);
+      expect(response.statusCode).toBe(303);
       expect(refreshTokens.revokeAllForUser).toHaveBeenCalledWith('user-1', expect.any(Date));
       expect(sessions.revokeAllForUser).toHaveBeenCalledWith('user-1');
       expect(refreshTokens.revokeForSession).not.toHaveBeenCalled();
@@ -1396,7 +1396,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
 
       // Retry: the once-rejection is spent, so the whole sequence completes idempotently.
       const retry = await app.inject(req);
-      expect(retry.statusCode).toBe(302);
+      expect(retry.statusCode).toBe(303);
       expect(retry.headers.location).toBe('/login?loggedOut=1');
       expect(sessionSetCookie(retry.headers['set-cookie'])).toContain('Max-Age=0');
       expect(live).toBe(false);
@@ -1439,7 +1439,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
       });
 
       const retry = await app.inject(req);
-      expect(retry.statusCode).toBe(302);
+      expect(retry.statusCode).toBe(303);
       expect(retry.headers.location).toBe('/login?loggedOut=1');
       expect(sessionSetCookie(retry.headers['set-cookie'])).toContain('Max-Age=0');
       expect(live).toBe(false);
@@ -1516,7 +1516,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
         payload: { _csrf: csrfFor('session-a') },
       });
 
-      expect(response.statusCode).toBe(302);
+      expect(response.statusCode).toBe(303);
       expect(response.headers.location).toBe('/login?loggedOut=1');
       expect(sessionSetCookie(response.headers['set-cookie'])).toContain('Max-Age=0');
       expect(sessions.revoke).toHaveBeenCalled(); // revoke already happened (fail-open is post-revoke)
@@ -1534,7 +1534,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
         payload: { _csrf: csrfFor('session-a') },
       });
 
-      expect(response.statusCode).toBe(302);
+      expect(response.statusCode).toBe(303);
       expect(response.headers.location).toBe('/login?loggedOut=1');
       expect(sessionSetCookie(response.headers['set-cookie'])).toContain('Max-Age=0');
       expect(sessions.revoke).not.toHaveBeenCalled();
@@ -1556,7 +1556,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
         },
       });
 
-      expect(response.statusCode).toBe(302);
+      expect(response.statusCode).toBe(303);
       expect(response.headers.location).toBe('https://rp.example/out?state=xyz');
       // POST re-resolves from the RAW params + the session user (never trusts the hidden field).
       expect(logoutRp.resolvePostLogoutRedirect).toHaveBeenCalledWith(
@@ -1585,7 +1585,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
         },
       });
 
-      expect(response.statusCode).toBe(302);
+      expect(response.statusCode).toBe(303);
       expect(response.headers.location).toBe('/login?loggedOut=1');
       expect(response.headers.location).not.toContain('evil.example');
     });
@@ -1637,7 +1637,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
         payload: { _csrf: csrfFor('session-a') },
       });
 
-      expect(response.statusCode).toBe(302);
+      expect(response.statusCode).toBe(303);
       expect(response.body).not.toContain('<iframe');
     });
 
@@ -1651,7 +1651,7 @@ describe('UI HTTP contract (B2.5, C2, C7-C12, C14)', () => {
         payload: { _csrf: csrfFor('gone') },
       });
 
-      expect(response.statusCode).toBe(302);
+      expect(response.statusCode).toBe(303);
       expect(response.headers.location).toBe('/login?loggedOut=1');
       expect(sessionSetCookie(response.headers['set-cookie'])).toContain('Max-Age=0');
       expect(refreshTokens.revokeForSession).not.toHaveBeenCalled();

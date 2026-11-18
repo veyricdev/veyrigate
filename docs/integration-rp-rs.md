@@ -11,6 +11,7 @@ Tóm tắt:
 | `ACCESS_TOKEN_TTL` | Giữ 900 s |
 | ID token | Không thu hồi được; chỉ dùng xác lập danh tính lúc đăng nhập |
 | Phát tán denylist tới RS | **Không có** |
+| Mã redirect | Redirect về `redirect_uri` sau màn consent và về `post_logout_redirect_uri` sau `POST /logout` là `303` (RP không phải đổi gì) |
 
 ## 1. RS: thao tác nhạy cảm dùng `/introspect`
 

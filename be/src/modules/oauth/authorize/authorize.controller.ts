@@ -51,11 +51,11 @@ const SCOPE_DESCRIPTIONS: Record<string, string> = {
  * the same `error.eta` used across the UI -- it is NEVER redirected. `HtmlExceptionFilter`
  * overrides the global JSON filter so any *unexpected* error on these routes renders a page instead
  * of leaking JSON. Known OAuth errors for an already-validated `redirect_uri` are delivered as a
- * 302 redirect with `error`/`state`/`iss`; a successful consent is delivered as a 302 with
+ * 302 redirect (303 from POST `/authorize/consent`) with `error`/`state`/`iss`; a successful consent is delivered as a 303 with
  * `code`/`state`/`iss`.
  *
  * DEBT-084 (supersedes DEBT-015): Chromium applies the consent PAGE's `form-action` to EVERY step
- * of the form submission, including the 302 from `/authorize/consent` to the RP — so helmet's global
+ * of the form submission, including the 303 from `/authorize/consent` to the RP — so helmet's global
  * `form-action 'self'` DOES block the final redirect (int-tests pass because they do not run a
  * browser). `respond()` therefore relaxes `form-action` on the consent response to the single
  * already exact-matched `redirectUri` origin only. DEBT-019/020 (CORS) do not apply: `/authorize`
@@ -111,7 +111,7 @@ export class AuthorizeController {
       const outcome = await this.authorize.handle(params, session, audit, sha256(binding));
       return this.respond(req, reply, outcome, binding);
     } catch (err) {
-      return this.handleError(reply, err);
+      return this.handleError(reply, err, 302);
     }
   }
 
@@ -122,7 +122,7 @@ export class AuthorizeController {
    * forged body cannot retarget the redirect or widen scope.
    */
   @Post('/authorize/consent')
-  @HttpCode(302)
+  @HttpCode(303)
   @UseGuards(CsrfGuard)
   async consent(
     @Body() body: ConsentDto,
@@ -134,7 +134,7 @@ export class AuthorizeController {
     // never issue a code; send the user back to login (resumable).
     const session = await this.liveSession(req);
     if (!session) {
-      return reply.redirect('/login', 302);
+      return reply.redirect('/login', 303);
     }
     const audit = { ip: req.ip, requestId: req.id };
     const approve = body.approve === 'true';
@@ -148,15 +148,15 @@ export class AuthorizeController {
       if (decision.denied) {
         return reply.redirect(
           this.buildRedirect(decision.redirectUri, { error: 'access_denied' }, decision.state),
-          302,
+          303,
         );
       }
       return reply.redirect(
         this.buildRedirect(decision.redirectUri, { code: decision.code! }, decision.state),
-        302,
+        303,
       );
     } catch (err) {
-      return this.handleError(reply, err);
+      return this.handleError(reply, err, 303);
     }
   }
 
@@ -214,7 +214,7 @@ export class AuthorizeController {
       // Render the consent screen. CSRF identity = session cookie (same as login); the guard on
       // POST verifies the same token, so the user must be signed-in here (B4.1 guaranteed that).
       const identity = this.sessionCookie.read(req)!;
-      // DEBT-084: the consent form POSTs to `/authorize/consent`, then 302s to the RP. Chromium
+      // DEBT-084: the consent form POSTs to `/authorize/consent`, then 303s to the RP. Chromium
       // enforces THIS page's `form-action` across that chain, so relax it to the single already
       // exact-matched `redirectUri` origin (never the raw query); fall back to `'self'` when the
       // stored URI does not yield a clean origin (INV-084-1/2). The page carries a CSRF token.
@@ -252,9 +252,10 @@ export class AuthorizeController {
     );
   }
 
-  private handleError(reply: HttpReply, err: unknown): unknown {
+  /** `status`: `302` from GET `/authorize`, `303` from POST `/authorize/consent` (DEBT-570, D95.15). */
+  private handleError(reply: HttpReply, err: unknown, status: 302 | 303): unknown {
     if (err instanceof AuthorizeRedirectError) {
-      return reply.redirect(this.buildErrorRedirect(err), 302);
+      return reply.redirect(this.buildErrorRedirect(err), status);
     }
     if (err instanceof AuthorizeErrorPage) {
       return reply.status(400).view('error.eta', {

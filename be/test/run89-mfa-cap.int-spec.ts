@@ -111,7 +111,7 @@ describe('run 89 DEBT-640: consecutive second-factor failure cap (real app)', ()
     const u = await newUser(3);
     expect((await signIn(u.email, '000000')).statusCode).toBe(400);
     expect(await failuresOf(u.sub)).toBe(4);
-    expect((await signIn(u.email, code())).statusCode).toBe(302);
+    expect((await signIn(u.email, code())).statusCode).toBe(303);
     expect(await failuresOf(u.sub)).toBeUndefined();
   });
 
@@ -140,10 +140,10 @@ describe('run 89 DEBT-640: consecutive second-factor failure cap (real app)', ()
     expect(await audits(u.sub, AuditAction.AUTH_MFA_LOCKED)).toHaveLength(1);
 
     const recovered = await signIn(u.email, u.codes[0]);
-    expect(recovered.statusCode).toBe(302);
+    expect(recovered.statusCode).toBe(303);
     expect(pairOf(recovered, 'idp_session')).toBeDefined();
     expect(await failuresOf(u.sub)).toBeUndefined();
-    expect((await signIn(u.email, code(1))).statusCode).toBe(302);
+    expect((await signIn(u.email, code(1))).statusCode).toBe(303);
   });
 
   it('D89.28 a password reset does NOT end the block (mailbox + password holder); a recovery code still does', async () => {
@@ -158,7 +158,7 @@ describe('run 89 DEBT-640: consecutive second-factor failure cap (real app)', ()
     const blocked = await signIn(u.email, code(), 'r89c-New#Pass-2');
     expect(blocked.statusCode).toBe(400);
     expect(blocked.body).toContain(SUSPENDED);
-    expect((await signIn(u.email, u.codes[0], 'r89c-New#Pass-2')).statusCode).toBe(302);
+    expect((await signIn(u.email, u.codes[0], 'r89c-New#Pass-2')).statusCode).toBe(303);
     expect(await failuresOf(u.sub)).toBeUndefined();
   });
 

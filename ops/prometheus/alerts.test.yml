@@ -227,3 +227,27 @@ tests:
       - eval_time: 4m
         alertname: SsoBackgroundWriteFailed
         exp_alerts: []
+  # Run 95 (DEBT-683): a queue_full drop (0 -> 3) fires one warning for that reason only; a flat 0 and a
+  # drop older than 15m are silent.
+  - interval: 1m
+    input_series:
+      - series: 'sso_mail_dropped_total{reason="queue_full",instance="a"}'
+        values: '0 0 0 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3'
+      - series: 'sso_mail_dropped_total{reason="shutdown",instance="a"}'
+        values: '0x25'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: SsoMailDropped
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: SsoMailDropped
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              reason: queue_full
+            exp_annotations:
+              summary: The SMTP mailer dropped mail without sending it
+              description: A full mail queue (queue_full) or a shutdown with mail pending (shutdown) lost verification, reset or notice mails. Check SMTP and runbook-ops section 13.
+      - eval_time: 24m
+        alertname: SsoMailDropped
+        exp_alerts: []

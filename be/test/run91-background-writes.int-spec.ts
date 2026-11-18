@@ -172,7 +172,7 @@ describe('run 91 lot A (background write failures, verification mail recovery)',
       );
       expect(await login(addr, ATTACKER)).toBe(401);
       expect(await login(addr, VICTIM_B)).toBe(401);
-      expect(await login(addr, VICTIM_C)).toBe(302);
+      expect(await login(addr, VICTIM_C)).toBe(303);
     });
 
     it('pre-hijack through the FIRST mail: a wrong password never verifies and keeps the token; after 5 wrong ones even the right password is refused', async () => {
@@ -210,7 +210,7 @@ describe('run 91 lot A (background write failures, verification mail recovery)',
       const res = await post('/verify-email', { token: verifyToken(addr), password: VICTIM_B });
       expect(res.statusCode).toBe(201);
       expect((await userOf(addr)).emailVerifiedAt).toBeInstanceOf(Date);
-      expect(await login(addr, VICTIM_B)).toBe(302);
+      expect(await login(addr, VICTIM_B)).toBe(303);
     });
 
     it('a live reset token is left => /register again issues nothing', async () => {

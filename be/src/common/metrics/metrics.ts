@@ -1,4 +1,4 @@
-import { Counter, Histogram, Registry } from '@prometheus-io/client';
+import { Counter, Gauge, Histogram, Registry } from '@prometheus-io/client';
 import { TOKEN_ERROR_CODES } from '../../modules/oauth/token/token.errors';
 import { AuditAction } from '../../modules/security/audit/audit-action.enum';
 import type { AuditEvent } from '../../modules/security/audit/audit.types';
@@ -18,6 +18,9 @@ export const HTTP_LABELS = ['method', 'route', 'status_class'] as const;
 /** Detached writes whose failure the caller never sees (DEBT-666, D91.2/D91.3). */
 export const BACKGROUND_WRITES = ['register', 'forgot', 'resend_verify', 'auth_mail'] as const;
 export type BackgroundWrite = (typeof BACKGROUND_WRITES)[number];
+/** Why the SMTP mailer dropped a mail without sending it (DEBT-683, D95.11). */
+export const MAIL_DROP_REASONS = ['queue_full', 'shutdown'] as const;
+export type MailDropReason = (typeof MAIL_DROP_REASONS)[number];
 
 const auditEvents = new Counter({
   name: 'sso_audit_events_total',
@@ -47,6 +50,19 @@ const backgroundWriteFailures = new Counter({
   registers: [registry],
 });
 
+const mailQueueDepth = new Gauge({
+  name: 'sso_mail_queue_depth',
+  help: 'Mails accepted by the SMTP mailer and not yet sent or failed.',
+  registers: [registry],
+});
+
+const mailDropped = new Counter({
+  name: 'sso_mail_dropped_total',
+  help: 'Mails dropped by the SMTP mailer (queue full, or still pending at shutdown), by reason.',
+  labelNames: ['reason'] as const,
+  registers: [registry],
+});
+
 export const httpDuration = new Histogram({
   name: 'sso_http_request_duration_seconds',
   help: 'HTTP request duration, by method, route template and status class.',
@@ -71,6 +87,7 @@ for (const endpoint of TOKEN_ENDPOINTS) {
   for (const error of TOKEN_ERROR_CODES) tokenErrors.inc({ endpoint, error }, 0);
 }
 for (const what of BACKGROUND_WRITES) backgroundWriteFailures.inc({ what }, 0);
+for (const reason of MAIL_DROP_REASONS) mailDropped.inc({ reason }, 0);
 
 /**
  * Count one PERSISTED audit event (called by `AuditService.record` after the write). Unknown
@@ -94,4 +111,14 @@ export function observeTokenError(endpoint: TokenEndpoint, code: string): void {
 /** Count one failed detached write or auth mail send (DEBT-666); an unknown `what` is ignored. */
 export function observeBackgroundWriteFailure(what: BackgroundWrite): void {
   if (isOneOf(BACKGROUND_WRITES, what)) backgroundWriteFailures.inc({ what });
+}
+
+/** Set the number of mails the SMTP mailer holds (sending or queued in the pool, DEBT-683). */
+export function setMailQueueDepth(n: number): void {
+  mailQueueDepth.set(n);
+}
+
+/** Count `n` mails dropped by the SMTP mailer (DEBT-683); an unknown reason is ignored. */
+export function observeMailDropped(reason: MailDropReason, n = 1): void {
+  if (isOneOf(MAIL_DROP_REASONS, reason)) mailDropped.inc({ reason }, n);
 }

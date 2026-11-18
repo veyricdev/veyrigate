@@ -389,7 +389,8 @@ describe('run 87 T2: admin-recover (recoverSuperAdmin) on real Mongo', () => {
     const t = await mkUser();
     await withMfaAndFamilies(t.id);
     const { result, out } = await runDone(args(t.email, { resetMfa: true }));
-    expect(result).toMatchObject({ status: 'recovered', userId: t.id });
+    // Run 95 (D95.4): no `revokeSessions` injected => the post-commit revoke counts as failed.
+    expect(result).toMatchObject({ status: 'recovered', userId: t.id, sessions: 'failed' });
     expect(out).toContain('mfa: enrolled -> reset');
     expect(await mfaOf(t.id)).toBeUndefined();
     expect(await liveFamilies(t.id)).toBe(0);
@@ -560,6 +561,7 @@ describe('run 87 T2: built admin-recover CLI argument checks (no connection)', (
     expect([r.status, r.stderr]).toEqual([0, '']);
     expect(accepted).toBe(0);
     expect(r.stdout).toContain('mfa: reset');
+    expect(r.stdout).toContain('sessions: revoked in Redis after commit'); // run 95 D95.4
     expect(r.stdout).toContain('dry-run: no connection made');
     expect(r.stdout).not.toContain(EMAIL);
   }, 30_000);

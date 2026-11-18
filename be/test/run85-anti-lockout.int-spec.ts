@@ -105,7 +105,7 @@ function suite(secure: boolean) {
     expect(sessionOf(res)).toBeUndefined();
   };
   const expectSignedIn = (res: InjectResponse) => {
-    expect(res.statusCode).toBe(302);
+    expect(res.statusCode).toBe(303);
     expect(sessionOf(res)).toBeDefined();
   };
   const audits = (action: AuditAction, targetId?: string) =>
