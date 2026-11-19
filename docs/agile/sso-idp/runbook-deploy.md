@@ -269,9 +269,15 @@ không đọc, dependabot-core#2057):
 update chờ 14 ngày như quy tắc ghim tay), nhóm minor/patch cho npm và github-actions, nhóm `node-image` (be +
 fe-admin một PR), bỏ qua Node major. Giới hạn:
 - `docker`: Dependabot **không có security update** ⇒ CVE Node/Debian khẩn = bump tay theo ngoại lệ bảo mật.
-- `npm`: pnpm 12 ghi `pnpm-lock.yaml` thành 2 YAML document ⇒ dependency graph không thấy phụ thuộc ⇒ **không
-  có alert/security update npm** (version update vẫn chạy, DEBT-500). Chặn bảo mật = CI `pnpm audit
-  --audit-level high` fail-closed + ngoại lệ tay (tiền lệ zod run 51).
+- `npm`: dependency graph **có** thấy phụ thuộc npm (alert #40 picomatch, PR security #2 nhóm `npm_and_yarn` —
+  run 96 sửa nhận định cũ của DEBT-500, DEBT-585), nhưng cổng bảo mật chính vẫn là CI `pnpm audit
+  --audit-level high` fail-closed. `ignore` trong `dependabot.yml` (typescript ≥ 7, TanStack Start ≥ 1.169,
+  router > 1.170.41 — DEBT-694/695) có thể chặn cả PR security của dải đó ⇒ không dựa vào Dependabot cho các gói
+  này; gỡ `ignore` cùng lúc đóng DEBT-694/695 (DEBT-699).
+- **Ngoại lệ bảo mật cho bản < 14 ngày** (`minimumReleaseAge: 20160` trong `pnpm-workspace.yaml`, D96.5): chỉ khi
+  advisory high/critical mà bản vá chỉ có ở bản mới. Thêm đúng `<gói>@<phiên bản>` vào
+  `minimumReleaseAgeExclude` kèm comment GHSA + số quyết định D + ngày hết hạn (ngày bản đó đủ 14 ngày), ghi vào
+  ticket, rồi xoá entry sau ngày hết hạn ở lần bump kế tiếp (tiền lệ zod run 51, run 83, DEBT-697/698).
 - `github-actions`: security update chạy được, không bị cooldown.
 - PR đổi tag `node` **phải sửa tay cùng PR** `.nvmrc`/`.node-version`/`engines` (Dependabot không làm, DEBT-502).
 - Bật "Dependabot alerts / security updates" trong Settings repo là việc người dùng khi push; hiệu lực kiểm ở

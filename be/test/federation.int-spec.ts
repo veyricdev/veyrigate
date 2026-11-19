@@ -148,8 +148,7 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
     issuedSecrets: [] as string[],
     // Tester (run 32): raw response override per path (3xx, oversized body); hits for leak checks.
     raw: undefined as
-      | ((path: string, res: import('node:http').ServerResponse) => boolean)
-      | undefined,
+      ((path: string, res: import('node:http').ServerResponse) => boolean) | undefined,
     hits: [] as string[],
   };
 

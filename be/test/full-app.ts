@@ -14,7 +14,7 @@ import { Writable } from 'node:stream';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/bootstrap';
 import { createFastifyAdapter } from '../src/common/http/framework-errors';
-import { buildPinoHttpOptions, LoggerModule } from '../src/common/logger/logger.module';
+import { buildLoggerParams, LoggerModule } from '../src/common/logger/logger.module';
 import { ConfigModule } from '../src/config/config.module';
 import { deriveS256Challenge } from '../src/common/crypto/pkce.util';
 import { buildConfig } from '../src/config/configuration';
@@ -39,7 +39,7 @@ import { TEST_MFA_ENCRYPTION_KEYS } from './helpers/mfa';
  * Only three seams differ:
  * - config comes from the hermetic `env` below (never `be/.env`: `ignoreEnvFile`);
  * - mail goes to an in-memory outbox (never an SMTP server);
- * - pino writes to `logStream` (default: discarded) with the real `buildPinoHttpOptions`.
+ * - pino writes to `logStream` (default: discarded) with the real `buildLoggerParams` (options + routes).
  * Mongo/Redis are the vg-test-* containers (own DB per spec, dropped on close).
  */
 export interface FullApp {
@@ -154,9 +154,14 @@ async function startFullApp(
         cb();
       },
     });
+  // Same params as production (incl. `forRoutes`, run 96), only the destination differs.
+  const loggerParams = buildLoggerParams(env.NODE_ENV);
   @Module({
     imports: [
-      PinoLoggerModule.forRoot({ pinoHttp: [buildPinoHttpOptions(env.NODE_ENV) as never, sink] }),
+      PinoLoggerModule.forRoot({
+        ...loggerParams,
+        pinoHttp: [loggerParams.pinoHttp as never, sink],
+      }),
     ],
   })
   class TestLoggerModule {}

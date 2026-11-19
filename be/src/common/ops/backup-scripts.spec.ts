@@ -102,7 +102,13 @@ describe('ops/backup scripts parse the real mongodump / mongorestore output (DEB
   };
   const manifestOf = (out: string, files: string[]) =>
     JSON.parse(
-      readFileSync(join(out, files.find((f) => f.endsWith('.manifest.json'))!), 'utf8'),
+      readFileSync(
+        join(
+          out,
+          files.find((f) => f.endsWith('.manifest.json'))!,
+        ),
+        'utf8',
+      ),
     ) as {
       collections: Record<string, number>;
       totalDocuments: number;

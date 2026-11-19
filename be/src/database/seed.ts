@@ -262,6 +262,7 @@ export async function seedBootstrap(
         codeName === 'IndexOptionsConflict' ||
         codeName === 'IndexKeySpecsConflict'
       ) {
+        // eslint-disable-next-line preserve-caught-error -- an E11000 error echoes the duplicated key value (PII); only model + code are kept
         throw new Error(
           `seed: ensuring the ${name} indexes failed (${String(code)}) — remove ` +
             'duplicated documents / run `pnpm db:sync-indexes` first; nothing was written',

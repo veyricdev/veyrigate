@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, RequestMethod } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { LoggerModule as PinoLoggerModule } from 'nestjs-pino';
 import type { AppConfig } from '../../config/configuration';
@@ -90,14 +90,27 @@ export function buildPinoHttpOptions(nodeEnv: string) {
   };
 }
 
+/**
+ * The nestjs-pino module params (exported for the wiring test, which mounts them on Fastify).
+ *
+ * `forRoutes` is explicit (run 96): nestjs-pino 5.3's default `{/*splat}` has no leading slash on
+ * purpose, but @fastify/middie >= 9.3.6 prefixes one (`/{/*splat}`), which matches only `/`, so
+ * every other route lost its access line. `/{*splat}` is a wildcard Nest recognises and matches `/`
+ * too. No global prefix is set, so nestjs-pino's prefix-exclusion routes do not apply.
+ */
+export function buildLoggerParams(nodeEnv: string) {
+  return {
+    pinoHttp: buildPinoHttpOptions(nodeEnv),
+    forRoutes: [{ path: '/{*splat}', method: RequestMethod.ALL }],
+  };
+}
+
 @Module({
   imports: [
     PinoLoggerModule.forRootAsync({
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => {
-        const { nodeEnv } = config.getOrThrow<AppConfig>('app');
-        return { pinoHttp: buildPinoHttpOptions(nodeEnv) };
-      },
+      useFactory: (config: ConfigService) =>
+        buildLoggerParams(config.getOrThrow<AppConfig>('app').nodeEnv),
     }),
   ],
 })

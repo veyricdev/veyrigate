@@ -2,9 +2,10 @@
 # pins); cooldown never applies to security updates. Limits and manual steps: runbook-deploy §7.
 # - docker: Dependabot has NO security updates for this ecosystem ⇒ an urgent Node/Debian CVE is a manual
 #   bump (security exception). Both Dockerfiles use literal FROM lines (ARG in FROM is not resolved).
-# - npm: pnpm 12 writes pnpm-lock.yaml as 2 YAML documents ⇒ the dependency graph does not see the
-#   packages ⇒ no Dependabot alert / security update for npm (version updates still run, DEBT-500). The
-#   security gate stays CI `pnpm audit --audit-level high` (fail-closed) + manual security exception.
+# - npm: the dependency graph does see the npm packages (alert #40, security PR #2; run 96 corrected the
+#   old DEBT-500 note, DEBT-585). The security gate stays CI `pnpm audit --audit-level high`
+#   (fail-closed) + manual security exception. The `ignore` entries below may also suppress security
+#   PRs for those ranges: drop them with DEBT-694/695 (DEBT-699).
 # - github-actions: security updates work and are not delayed by the cooldown.
 # - A PR that bumps the `node` image must also change .nvmrc / .node-version / engines (by hand, DEBT-502).
 # - Alerts / security updates are enabled in the repository Settings (not in this file).
@@ -14,6 +15,18 @@ updates:
     directory: /
     schedule: { interval: weekly }
     cooldown: { default-days: 14 }
+    ignore:
+      # Run 96 (D96.9): TypeScript 7 ships no compiler API (ts-jest, typescript-eslint, Nest CLI,
+      # openapi-typescript cannot run). 6.x is still proposed. Remove once migrated (DEBT-695).
+      - dependency-name: typescript
+        versions: ['>=7.0.0']
+      # Run 96 (D96.10): Start 1.169 renames inputValidator and getResponseHeaders() returns a copy
+      # (Set-Cookie refresh / no-store would be lost silently). Start 1.168.60 pins router 1.170.41.
+      # Remove both once fe-admin is migrated (DEBT-694).
+      - dependency-name: '@tanstack/react-start'
+        versions: ['>=1.169.0']
+      - dependency-name: '@tanstack/react-router'
+        versions: ['>1.170.41']
     groups:
       npm-minor-patch:
         applies-to: version-updates

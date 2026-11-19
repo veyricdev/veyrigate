@@ -60,10 +60,7 @@ export interface RecoverIo {
 }
 
 export type RefusalReason =
-  | 'user_not_found'
-  | 'super_admin_exists'
-  | 'target_locked'
-  | 'not_confirmed';
+  'user_not_found' | 'super_admin_exists' | 'target_locked' | 'not_confirmed';
 
 /** Run 95 (D95.4): outcome of the post-commit session revoke (`--reset-mfa` only). */
 export type SessionsOutcome = 'not_requested' | { revoked: number } | 'failed';

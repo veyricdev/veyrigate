@@ -157,7 +157,7 @@ export async function handleAudProbeCallback(
 
   // Replay the wrong-`aud` access token against the demo resource. A network/CORS/timeout error
   // is recorded as status 0 (fail-closed) rather than thrown, so the UI always lands back home.
-  let status = 0;
+  let status: number;
   try {
     const res = await callResource(config.demoApiUrl, token.access_token, fetchImpl);
     status = res.status;

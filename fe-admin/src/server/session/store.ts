@@ -157,7 +157,7 @@ export function createSessionStore({ redis, secret, now = Date.now }: SessionSto
     async get(key: string): Promise<SessionLookup> {
       const raw = await call(() => redis.get(key));
       if (raw === null) return { status: "none" };
-      let stored: z.infer<typeof StoredSchema> | null = null;
+      let stored: z.infer<typeof StoredSchema> | null;
       try {
         const parsed = StoredSchema.safeParse(JSON.parse(raw));
         stored = parsed.success ? parsed.data : null;

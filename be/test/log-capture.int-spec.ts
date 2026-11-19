@@ -26,7 +26,7 @@ import { tokenFromMailLink } from './helpers/mail-token';
 
 /**
  * Application log review (B7.4 Task 4, INV-20). The real app (`configureApp` + nestjs-pino with
- * the production `buildPinoHttpOptions`) writes into memory while a full flow runs: register,
+ * the production `buildLoggerParams`) writes into memory while a full flow runs: register,
  * verify email, password login, /authorize + /token (code + PKCE), refresh, /userinfo,
  * /introspect, /revoke, an admin call, /metrics, and the failure paths (500 whose error text carries
  * the email + a token, Mongo/readiness errors whose text carries a URI with credentials). Every

@@ -19,7 +19,7 @@ export async function fetchWithTimeout(
     return await fetchImpl(input, { ...init, signal: AbortSignal.timeout(timeoutMs) });
   } catch (err) {
     if (err instanceof DOMException && err.name === "TimeoutError") {
-      throw new Error(`OIDC request to ${input} timed out after ${timeoutMs}ms`);
+      throw new Error(`OIDC request to ${input} timed out after ${timeoutMs}ms`, { cause: err });
     }
     throw err;
   }

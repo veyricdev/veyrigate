@@ -135,7 +135,9 @@ export function readBootstrapEnv(env: Record<string, unknown>): FeAdminUris {
       try {
         validateRedirectUriList([uri], { allowHttpLocalhost });
       } catch (err) {
-        throw new Error(`${name} entry ${i + 1} is invalid: ${(err as Error).message}`);
+        throw new Error(`${name} entry ${i + 1} is invalid: ${(err as Error).message}`, {
+          cause: err,
+        });
       }
     });
     return list;
@@ -460,6 +462,7 @@ export async function reportCommitted(
       throw new Error(
         'the new fe-admin secret was committed but could not be printed: run db:bootstrap ' +
           '--rotate-secret --ticket <ref> to issue another one',
+        { cause: err },
       );
     }
   };

@@ -1,0 +1,73 @@
+# Log — run 96 Dependabot PR + dọn backlog
+
+- 2026-11-18 orchestrator: mở run (người dùng: "việc nào tự quyết được thì làm"). Preflight `codegraph sync` OK. T1 5 PR Dependabot, T2 dọn backlog 394 dòng mở. Analyst bỏ qua.
+- 2026-11-18 T2 triage (backlog): `codegraph sync`; số dòng mở thật là 237, không phải 394 (394 gồm cả 156 dòng của bảng "Đã đóng"). Đóng 21 dòng có bằng chứng: DEBT-017/049/076/078/079/080/083/085/094/117/162/194/225/227/255/284/351/430 đã xong, DEBT-408 trùng 693, DEBT-501 trùng 611, DEBT-500 không còn áp dụng (Dependabot npm có alert: #40 + PR #2, phần sửa doc ⇒ DEBT-585). Gắn mức cho 29 dòng chưa có mức (27 💭, 2 🟡: DEBT-072, 126). Sau triage còn 216 mở: 0 🔴 / 48 🟡 / 7 🟢 / 161 💭. Sửa `backlog.md` bằng script theo 5 lô, mỗi lô kiểm diff (50 dòng đổi, số dòng 706 giữ nguyên). Báo cáo + top 10: `backlog-triage.md`. 75 dòng 💭 giữ mở mới đọc mô tả + quét nhắc tới, chưa kiểm code (danh sách trong báo cáo).
+- 2026-11-18 tech-lead T1: **PASS**. Quyết định D96.5–D96.12 ở cuối `tasks.md`, bằng chứng trong `review-techlead.md`. Thử trên worktree tạm trong scratchpad, sau đó đã xoá và chạy `git worktree prune`; working tree chính không đổi code. Mọi bản đích đều ≥ 14 ngày tuổi (mới nhất 2026-11-03).
+  - #17: áp 36/38 gói, giữ nguyên TanStack Start/Router.
+  - #12 + #10: áp ESLint 10. Có 8 lỗi rule mới; 3 chỗ giữ việc bỏ cause có chủ ý.
+  - #11: hoãn TS 7, vì bản này không có compiler API.
+  - #2: đóng, đã có sẵn từ run 66/83.
+  - Cấu hình thêm: `minimumReleaseAge: 20160` + exclude theo phiên bản chính xác; override `zod` 4.6.7; override `fastify>light-my-request` 6.6.0 (Jest/ESM; be unit đạt 1296/1296).
+
+  Debt mới (orchestrator gộp vào `backlog.md`):
+  - **DEBT-694** 🟡 [FE]: migrate `@tanstack/react-start` 1.169 + `react-router` 1.170.46.
+    - `inputValidator` → `validator`.
+    - `getResponseHeaders()` giờ trả bản sao, phải chuyển sang `appendResponseHeader`/`setResponseHeader` ở `viewer.ts` và `admin-api/instance.ts`. Nếu không, Set-Cookie refresh và `no-store` mất âm thầm.
+    - Sửa 12 mock test và suy kiểu server fn (`nextCursor` đang ra `{}`).
+    - Xong thì gỡ `ignore` TanStack trong `dependabot.yml` và xét bỏ pin seroval (DEBT-267/228).
+  - **DEBT-695** 💭: TypeScript 7, chờ typescript-eslint, ts-jest, Nest CLI và openapi-typescript hỗ trợ API mới. Bước đệm là TS 6.0: bỏ `baseUrl` ở `be/tsconfig.json`, đặt `moduleResolution` tường minh; `@nestjs/schematics` đã đòi peer `typescript >=6`. Xong thì gỡ `ignore typescript >=7`.
+  - **DEBT-696** 💭: bỏ override `fastify>light-my-request` (kèm shim `content-disposition`) khi lên Node ≥ 24.9 hoặc khi Jest hỗ trợ require(esm) trên Node 22.
+  - **DEBT-697** 💭: dọn `minimumReleaseAgeExclude`. Các mục của run 83 hết tác dụng từ 2026-11-20; xoá ở lần bump deps kế tiếp.
+- 2026-11-18 backend-dev T1 Lot A + Lot C (chưa commit): `pnpm-workspace.yaml` `minimumReleaseAge: 20160` + 9 exclude run 83 (thử bỏ từng mục ⇒ cả 9 đều `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION`, giữ cả 9; Lot A/C không kéo bản < 14 ngày nào), override `zod` 4.6.7, `'fastify>light-my-request': 6.6.0` (DEBT-696); 36 gói #17 đúng lệnh tasks.md, TanStack giữ 1.168.60/1.170.41; `eslint --fix` 4 file chỉ đổi format; `be/src/public/styles.css` tái sinh bởi `@tailwindcss/cli` 4.3.4 (be build).
+  - Lot C: eslint 10.14.0 + @eslint/js 10.0.1 ×3 gói ⇒ đúng 8 lỗi, sửa theo D96.8 (cause ở `bootstrap.ts` ×2 + `fe-sso-test/oidc/http.ts`; disable-next-line có lý do ở mongo.service/seed/vault-transit; bỏ khởi tạo thừa ở `store.ts`/`probe.ts`). `dependabot.yml` ignore typescript >=7 (DEBT-695), Start >=1.169.0 + router >1.170.41 (DEBT-694).
+  - Verify trên A+C: `pnpm install --frozen-lockfile` "Lockfile passes supply-chain policies"; `pnpm audit --audit-level high` exit 0 (1 ignored = picomatch); typecheck 4/4 xanh; lint 3/3 0 lỗi; unit be 1296/1296 (66 suite), fe-admin 1658/1658 (69 file), fe-sso-test 269/269 (31 file); be build + fe-admin build OK; `prettier --check` 8 file be đổi OK (YAML gốc không theo prettier từ trước, không format lại). `pnpm why`: fastify→light-my-request 6.6.0 (platform-fastify trực tiếp vẫn 6.8.0), zod chỉ 4.6.7, Start 1.168.60, router 1.170.41.
+  - Playwright 1.64.1: dùng chromium-1248/headless-1248/webkit-2370/firefox-1555, cả 4 đã có sẵn (`INSTALLATION_COMPLETE`) ⇒ không tải gì. `pnpm peers check`: typescript <6 (@nestjs/schematics) và @types/node 22.10.5 (<22.12, vite) — cả hai có từ trước. Chưa chạy int/E2E/X3/pentest (tester). Tiếp: senior-reviewer.
+- 2026-11-18 senior-reviewer T1 Lot A + C: **PASS** (0 🔴 / 2 🟡 / 3 💭), chi tiết `review-senior.md`. Chạy lại: frozen-lockfile qua chính sách, audit exit 0 (1 ignored picomatch), be + fe-admin typecheck/lint 0 lỗi, unit be 1296/1296, fe-admin 1658/1658. `fastify>light-my-request` 6.6.0 chỉ được `require` lazy trong `inject()` (fastify.js:476-479), không advisory nào cho LMR/cookie@1 ⇒ không ảnh hưởng runtime, không hạ bản vá; platform-fastify khai 6.8.0 nhưng không import. 3 disable `preserve-caught-error` đúng; 3 cause không lộ (CLI chỉ in `cliErrorText` = message đã scrub). styles.css: chỉ đổi font stack mặc định Tailwind 4.3, không url()/@import, CSP `style-src 'self'` không đổi. Lockfile: 14 gói mới đều dev-only (ts-jest→handlebars, eslint 10→flat-cache/cacheable, synckit, eslint-scope).
+  Debt mới (orchestrator gộp vào `backlog.md`):
+  - **DEBT-698** 🟡 [ops/docs]: comment `pnpm-workspace.yaml` "A new release < 14 days is never excluded here" mâu thuẫn quy trình ngoại lệ bảo mật (plan §12 D83.x, tiền lệ run 51/83) ⇒ sửa thành "chỉ bản vá bảo mật, exact version + GHSA + D + hạn"; thêm bước `minimumReleaseAgeExclude` cho ngoại lệ tay vào `runbook-deploy.md` §7.
+  - **DEBT-699** 🟡 [ops/docs]: `ignore` trong `dependabot.yml` (typescript >=7, Start >=1.169, router >1.170.41) có thể tắt cả security PR cho khoảng đó (docs GitHub không nói rõ; cooldown thì chỉ áp version update). Cổng thật là CI `pnpm audit` fail-closed. Ghi một dòng vào runbook-deploy §7; gỡ cùng DEBT-694/695.
+  - Ghi chú: runbook-deploy §7 vẫn ghi "không có alert npm (DEBT-500)" trong khi T2 đóng DEBT-500 ⇒ bảo đảm DEBT-585 còn mở. Tiếp: tester.
+- 2026-11-18 tester T1 gate cuối (Lot A + C, chưa commit, HEAD `8641174`): **FAIL**. Chi tiết `test-report.md`.
+  - Xanh: frozen-lockfile (kết quả cache), audit high exit 0, typecheck 4/4, lint 3/3, unit be 1296 / fe-admin 1658 / fe-sso-test 269, build be + fe-admin, E2E 53 (3 Terminated), X3 42 (4), mutation 7/7 đỏ đúng (`be/dist` sha256 trước = sau), harness on/off must 268/268 exit 0, `HYG-MAIL`/`HYG-SMTP-AFTER` pass, grep evidence 0 secret. SMTP 220 ở mọi điểm kiểm; dọn sạch. ioredis/jose/mongoose/mongodb không đổi phiên bản ⇒ bỏ qua vault/sentinel/drill là đúng.
+  - **Đỏ: int 2502/2510**, 4 suite (`log-capture`, `b74-tester`, `run81-tester`, `run90-backend` C1 ×5). Chạy lại riêng vẫn đỏ đúng 8 test.
+    - Gốc: access log `request completed` của pino-http chỉ còn ghi cho `/`.
+    - Có trên runtime thật: E2E chỉ có 22 dòng access log, đều `url "/"`; log BE trong harness còn 148 dòng, so với 2577 ở run 95.
+    - Nghi ngờ `nestjs-pino` 5.2.1 → 5.3.1 (`DEFAULT_ROUTES '{/*splat}'` + `defaultRoutes()` + hook `onSend` mới) khi chạy với Nest/platform-fastify 12.3.2. `logger.module.ts` không truyền `forRoutes`.
+    - ⇒ Trả **backend-dev**: giữ 5.2.1 (thêm ignore + DEBT) hoặc truyền `forRoutes` tường minh. Sau khi sửa, tester chạy lại gate đầy đủ.
+  - Evidence mới chưa track: `runs/90-X6-pentest-signoff/evidence/pentest-20261118T092703Z.json` + 7 `pentest-mutant-20261118T0920…0923*.json`.
+
+  Debt mới (orchestrator gộp vào `backlog.md`):
+  - **DEBT-700** 🟡 [test]: E2E, X3 và harness xanh dù access log của mọi route đã mất. `HYG-BELOG` chỉ đòi `lines > 1`, E2E không kiểm log, nên hiện chỉ int bắt được lỗi này. Đề xuất: thêm một check `must` trong harness, yêu cầu có dòng `request completed` với `req.id` cho ít nhất `/login` và `/token` (hoặc đặt ngưỡng số dòng theo số request).
+- 2026-11-18 backend-dev T1 retry 1 (access log mất, chưa commit): **nguyên nhân gốc** không phải nestjs-pino tự đổi mà là `@fastify/middie` 9.3.5→**9.3.6** (bắc cầu, kéo theo platform-fastify 12.3.2): `joinPrefix` thêm `/` vào mount path không bắt đầu bằng `/` ⇒ route mặc định `{/*splat}` của nestjs-pino 5.3.1 thành `/{/*splat}` = chỉ khớp `/` (repro tối giản Nest+Fastify: chỉ `/` có log; `{/*splat}` tường minh cũng hỏng; `/{*splat}` và `*` khớp mọi path kể cả `/` và 404). Int không bắt được ở unit vì `test/full-app.ts` thay LoggerModule bằng `forRoot` riêng.
+  - Chọn **(b)**: `buildLoggerParams()` trong `logger.module.ts` trả `forRoutes: [{ path: '/{*splat}', method: ALL }]` (wildcard Nest nhận diện; app không có global prefix); `full-app.ts` dùng cùng params (chỉ đổi đích ghi). Hook `onSend` mới của nestjs-pino chỉ chép header lên `reply.raw` ⇒ serializer `res` allow-list (statusCode + location đã cắt query) vẫn chặn `set-cookie`; có test chứng minh. Không đổi dependency.
+  - Test đỏ trước: `logger.routes.spec.ts` (Nest + FastifyAdapter thật + params production) 5/6 đỏ đúng nguyên nhân (0 dòng cho /login, /token, /admin, 404) ⇒ xanh 6/6 sau sửa; gồm assert log không chứa `set-cookie`/`idp_session`/`SECRET_`.
+  - DEBT-700: thêm check `must` **HYG-ACCESSLOG** (`checks.mjs`; `ctx.mjs` ghi method/path/status/`x-request-id` mỗi response; `pentest.mjs` truyền `served`): mọi POST /login + POST /token phải có dòng `request completed` cùng req.id/method/path/status. Không đổi check khác (HYG-BELOG giữ nguyên). Tổng must full run 268 ⇒ 269.
+  - Verify: `--only HYG` trên dist lỗi (bỏ forRoutes, build exit 0) ⇒ exit 1, `HYG-ACCESSLOG` FAIL `accessLines 0`, login 0/3, token 0/1; trên dist đã sửa ⇒ exit 0, must 3/3, login 3/3, token 1/1, 19/19 response có dòng (evidence ở scratchpad, không vào repo; SMTP 220 trước/sau). be typecheck/lint 0 lỗi; unit 1302/1302 (lượt đầu 2 suite keys timeout hook 5 s do máy tải, chạy riêng 146/146, chạy lại full 67/67 suite xanh); int 4 suite đỏ ⇒ 124/124 (`log-capture`, `b74-tester`, `run81-tester`, `run90-backend`); frozen-lockfile qua chính sách; be build OK (`be/dist` đã build lại bản sửa). Prettier: 3 file TS sạch; 3 file harness `.mjs` vốn không theo prettier từ HEAD, không format lại. Tiếp: senior → tester chạy lại gate.
+- 2026-11-18 senior-reviewer T1 retry 1: **PASS** (0 🔴 / 0 🟡 / 4 💭), chi tiết mục "Retry 1" trong `review-senior.md`.
+  - Gốc lỗi xác nhận trong node_modules: middie 9.3.6 `joinPrefix` (index.js:133-141) + nestjs-pino 5.3.1 `DEFAULT_ROUTES '{/*splat}'` ⇒ `/{/*splat}`.
+  - Chạy lại: be typecheck/lint exit 0; `jest src/common/logger` 33/33; int `log-capture` 2/2.
+  - Mutation tay (bỏ `forRoutes`): spec mới 5 đỏ, int `log-capture` đỏ (`access.length` 0). Đã hoàn lại, sha256 trước = sau.
+  - Probe scratchpad (đã xoá): mỗi request đúng 1 dòng log, không lộ `authorization`/`cookie`/`set-cookie`. Đã thử route có tham số, HEAD, OPTIONS (trả trong onRequest), 404, `//x`; 2 `set-cookie` không bị nhân đôi.
+  - `HYG-ACCESSLOG`: chạy sau `be.stop()` nên không flaky; tương quan qua `x-request-id` do server sinh; evidence chỉ có số đếm.
+  - 💭 (không ghi DEBT): spec thêm route có tham số/OPTIONS/HEAD/authorization; `accessLog` nên phát hiện log đôi; comment `log-capture.int-spec.ts:29` còn tên cũ; cần `exclude` nếu sau này thêm global prefix.
+  - Không có DEBT mới. Tiếp: tester chạy lại gate đầy đủ.
+- 2026-11-19 tester T1 chạy lại gate sau retry 1 (chưa commit, HEAD `8641174`): **PASS**. Chi tiết ở mục "Rerun sau retry 1" trong `test-report.md`.
+  - Tĩnh và unit:
+    - frozen-lockfile qua chính sách (kết quả cache); audit high exit 0;
+    - typecheck 4/4, lint 3/3;
+    - unit be 1302/1302 (67 suite), fe-admin 1658, fe-sso-test 269;
+    - build be + fe-admin OK.
+  - int FULL **2510/2510**: 4 suite đỏ ở lượt 1 nay xanh.
+  - E2E **53/53** (3 Terminated). Lượt E2E đầu bị ngắt từ bên ngoài lúc 10:30:54Z do phiên/máy dừng (test 1–19 đã ok), nên chạy lại.
+    - Log BE có 1246 dòng `request completed` trên 75 URL (lượt 1: 22 dòng, toàn `/`).
+    - 0 dòng chứa `set-cookie`/`idp_session`.
+  - X3 **42/42** (4 Terminated).
+  - Mutation 7/7 đỏ đúng; `be/dist` sha256 trước = sau.
+  - Harness:
+    - timing on: must **269/269** exit 0. `HYG-ACCESSLOG` pass (login 518/518, token 38/38, 2435/2435 response có dòng log); `HYG-BELOG` 2583 dòng (run 95: 2577).
+    - `--timing off`: 269/269.
+    - `HYG-MAIL`/`HYG-SMTP-AFTER` pass ở cả hai lượt; grep evidence 0 secret.
+  - SMTP 220 ở mọi điểm kiểm. Dọn sạch: 0 `vg-int-*`, không có `vg-pentest`, db7 0, cổng trống.
+  - Đã xoá 16 file evidence untracked của build lỗi (`pentest-20261118T092703Z.*` + 7 mutant `20261118T0920…0923*`, cả json và log).
+  - Evidence mới: `runs/90-X6-pentest-signoff/evidence/pentest-20261119T042303Z.json` + 7 `pentest-mutant-20261119T0416…0419*.json`.
+  - Không có DEBT mới. Tiếp: orchestrator commit, push, chờ CI 9/9 (D96.12).

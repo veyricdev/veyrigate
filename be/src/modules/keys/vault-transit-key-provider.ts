@@ -421,6 +421,7 @@ export class VaultTransitKeyProvider implements KeyProvider {
     try {
       token = (await readFile(this.#cfg.tokenFile, 'utf8')).trim();
     } catch (err) {
+      // eslint-disable-next-line preserve-caught-error -- the ErrnoException carries the token sink path; only its code is kept
       throw new Error(
         `Vault token file could not be read (${(err as NodeJS.ErrnoException).code ?? 'error'})`,
       );

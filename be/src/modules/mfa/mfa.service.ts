@@ -19,8 +19,7 @@ interface UserMfaDoc {
 }
 
 export type MfaState =
-  | { enrolled: false }
-  | { enrolled: true; enrolledAt: Date; recoveryLeft: number };
+  { enrolled: false } | { enrolled: true; enrolledAt: Date; recoveryLeft: number };
 
 /** A factor check: `enrolledAt` is the enrollment it was checked against (re-checked later). */
 export type MfaCheck =

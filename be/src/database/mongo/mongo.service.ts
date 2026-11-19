@@ -45,6 +45,7 @@ export class MongoService implements OnApplicationBootstrap {
       )}`;
       if (production) {
         this.logger.error(detail);
+        // eslint-disable-next-line preserve-caught-error -- the driver error can carry the Mongo URI with credentials; the scrubbed detail is logged above
         throw new Error(`${NO_TRANSACTIONS} — could not read the server topology`);
       }
       this.logger.warn(detail);
