@@ -14,6 +14,20 @@ const url = () => z.url({ error: "must be a valid URL" });
 const httpsUrl = () =>
   z.url({ error: "must be a valid https URL", protocol: /^https$/ });
 const secret = () => z.string(required).min(32, { error: "must be at least 32 characters" });
+// Production session Redis (D97.22, DEBT-280): TLS and a dedicated ACL user (`~fea:*`), never the
+// `default` user. One fixed message for every failure, so the URL (maybe with a password) is never echoed.
+const REDIS_PROD = "must be a rediss:// URL with an ACL username in production";
+function aclUsername(v: string): string {
+  try {
+    return decodeURIComponent(new URL(v).username);
+  } catch {
+    return "";
+  }
+}
+const prodRedisUrl = () =>
+  z
+    .url({ error: REDIS_PROD, protocol: /^rediss$/, abort: true })
+    .refine((v) => !["", "default"].includes(aclUsername(v)), { error: REDIS_PROD });
 
 function schema(production: boolean) {
   const publicUrl = production ? httpsUrl : url;
@@ -24,7 +38,7 @@ function schema(production: boolean) {
     // Keys the Redis session id (HMAC) and encrypts the token blob (AES-256-GCM via HKDF): run 42.
     SESSION_SECRET: secret(),
     // Session store (Q-42.1, DEBT-265): Redis, keys prefixed `fea:`. Dev `/1`, E2E `/2`.
-    SESSION_REDIS_URL: url(),
+    SESSION_REDIS_URL: production ? prodRedisUrl() : url(),
     ADMIN_API_BASE_URL: publicUrl(),
     // Resource indicator (RFC 8707) the admin API access token is minted for.
     ADMIN_API_RESOURCE: url(),

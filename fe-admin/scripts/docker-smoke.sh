@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Smoke test of a built fe-admin image (run 52, A9): `bash fe-admin/scripts/docker-smoke.sh <image-tag>`.
 # Used locally and by the CI job `fe-admin-image`. Creates only the containers vg-fea-smoke-ok,
-# vg-fea-smoke-noenv, vg-fea-smoke-http and vg-fea-smoke-listen (removed on exit), publishes
+# vg-fea-smoke-noenv, vg-fea-smoke-http, vg-fea-smoke-redis and vg-fea-smoke-listen (removed on exit), publishes
 # 127.0.0.1:3300, never touches the image itself or any other container. Fake https URLs (.invalid) and
 # a Redis URL pointing into the container itself: nothing outside is reached. Secrets are generated per run, passed with `-e NAME`
 # (value from this shell's env, never on a command line) and never printed.
@@ -11,7 +11,7 @@ docker() { MSYS_NO_PATHCONV=1 command docker "$@"; }
 
 IMAGE="${1:?usage: docker-smoke.sh <image-tag>}"
 BASE="http://127.0.0.1:3300"
-NAMES=(vg-fea-smoke-ok vg-fea-smoke-noenv vg-fea-smoke-http vg-fea-smoke-listen)
+NAMES=(vg-fea-smoke-ok vg-fea-smoke-noenv vg-fea-smoke-http vg-fea-smoke-redis vg-fea-smoke-listen)
 TMP="$(mktemp -d)"
 cleanup() {
   docker rm -f "${NAMES[@]}" >/dev/null 2>&1 || true
@@ -32,7 +32,8 @@ export ADMIN_API_BASE_URL=https://idp.example.invalid
 export ADMIN_API_RESOURCE=https://idp.example.invalid/admin/
 export APP_URL=https://admin.example.invalid
 export OIDC_CLIENT_ID=fe-admin
-export SESSION_REDIS_URL=redis://127.0.0.1:1/0
+# Production requires rediss:// + an ACL user (D97.22); still a closed port inside the container.
+export SESSION_REDIS_URL=rediss://fea@127.0.0.1:1/0
 OIDC_CLIENT_SECRET="$(secret)"
 SESSION_SECRET="$(secret)"
 export OIDC_CLIENT_SECRET SESSION_SECRET
@@ -171,6 +172,17 @@ docker logs vg-fea-smoke-http >"$TMP/log" 2>&1
 grep -q APP_URL "$TMP/log" || fail 12 "log does not name APP_URL"
 pass 12 "http APP_URL => exit $exit_code"
 
+# 12b. production refuses a plain redis:// session store (D97.22, DEBT-280): exit 1, the log names the
+# variable and never echoes the URL
+SESSION_REDIS_URL=redis://127.0.0.1:1/0 docker run -d --name vg-fea-smoke-redis "${HARDEN[@]}" "${ENV_ARGS[@]}" \
+  -e APP_URL -e SESSION_SECRET "$IMAGE" >/dev/null
+exit_code="$(timeout 20 docker wait vg-fea-smoke-redis || echo timeout)"
+[ "$exit_code" = "1" ] || fail 12b "redis:// SESSION_REDIS_URL: exit '$exit_code', expected 1"
+docker logs vg-fea-smoke-redis >"$TMP/log" 2>&1
+grep -q SESSION_REDIS_URL "$TMP/log" || fail 12b "log does not name SESSION_REDIS_URL"
+if grep -qF 'redis://' "$TMP/log"; then fail 12b "log echoes the Redis URL"; fi
+pass 12b "redis:// SESSION_REDIS_URL => exit 1, named, URL not echoed"
+
 # 13. image hygiene: no env/key files, no sources/tests/dev deps, no secret in history/env
 # (as root, so no directory is skipped for lack of permission; the scan only reads)
 found="$(docker run --rm --user 0:0 --entrypoint sh "$IMAGE" -c 'find / -xdev \( -name ".env*" -o -name "*.pem" \) 2>/dev/null; true')"
@@ -192,4 +204,4 @@ docker logs vg-fea-smoke-listen >"$TMP/log" 2>&1
 grep -q "fe-admin: listen failed: EADDRNOTAVAIL" "$TMP/log" || fail 14 "log does not name the listen error"
 pass 14 "listen error => exit $exit_code, EADDRNOTAVAIL logged"
 
-echo "docker-smoke: 17/17 passed for $IMAGE"
+echo "docker-smoke: 18/18 passed for $IMAGE"

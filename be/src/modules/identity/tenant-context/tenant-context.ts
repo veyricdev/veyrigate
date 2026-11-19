@@ -6,6 +6,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   Optional,
   SetMetadata,
   UnauthorizedException,
@@ -15,15 +16,20 @@ import { ConfigService } from '@nestjs/config';
 import { Reflector } from '@nestjs/core';
 import { InjectModel } from '@nestjs/mongoose';
 import type { Model, Types } from 'mongoose';
+import { sha256 } from '../../../common/crypto/crypto.util';
 import { bearerToken } from '../../../common/http/bearer';
 import type { HttpRequest } from '../../../common/http/http.types';
 import type { AppConfig } from '../../../config/configuration';
+import { RedisService } from '../../../database/redis/redis.service';
 import { type Client, ClientService } from '../../clients/client.service';
 import { type AccessTokenClaims, TokenVerifier } from '../../keys/token-verifier';
 import { isAccessTokenLive } from '../../oauth/access-token-liveness';
 import { adminResourceIdentifier, isAdminCapableClient } from '../../oauth/token/token.service';
 import { ResourceService } from '../../resources/resource.service';
 import { SessionCookie } from '../../sessions/session.cookie';
+import { AuditAction } from '../../security/audit/audit-action.enum';
+import { AuditService } from '../../security/audit/audit.service';
+import { RateLimitService } from '../../security/rate-limit/rate-limit.service';
 import { SessionService } from '../../sessions/session.service';
 import { ADMIN_ROLE_VALUES } from '../admin-roles';
 import { UserTenantService } from '../user-tenant.service';
@@ -139,10 +145,14 @@ export const SuperAdminOnly = () => SetMetadata(SUPER_ADMIN_KEY, true);
  *  8. `@SuperAdminOnly()` route => the admin roles must include `super_admin`, else 403 `forbidden`
  *     (before any step-up demand, DEBT-325).
  * A Mongo/Redis fault at any step propagates (5xx), never a 401/403/200.
+ * Run 97 (DEBT-126, D97.8/D97.9): a refusal AFTER the signature verified is audited
+ * (`ADMIN_ACCESS_DENIED`, best effort, deduped per sub+reason for 15 min, at most 60 per minute
+ * overall); a missing or unverifiable token is only counted (filter metric), never written to Mongo.
  * Mints the `TenantContext` (`@Tenant()`) and the admin principal (`@AdminRoles()`).
  */
 @Injectable()
 export class AdminTokenGuard implements CanActivate {
+  private readonly logger = new Logger(AdminTokenGuard.name);
   private readonly adminAud: string;
 
   constructor(
@@ -154,6 +164,9 @@ export class AdminTokenGuard implements CanActivate {
     private readonly memberships: UserTenantService,
     @InjectModel('User') private readonly users: Model<{ _id: Types.ObjectId }>,
     config: ConfigService,
+    private readonly audit: AuditService,
+    private readonly redis: RedisService,
+    private readonly rateLimit: RateLimitService,
   ) {
     this.adminAud = adminResourceIdentifier(config.getOrThrow<AppConfig>('app').issuer);
   }
@@ -183,8 +196,12 @@ export class AdminTokenGuard implements CanActivate {
       if (err instanceof KeyProviderUnavailableError) throw err; // DEBT-394 ⇒ 503
       throw AdminAuthError.invalidToken();
     }
+    const deny = async (err: AdminAuthError, reason: AdminDenyAuditReason, tenantId?: string) => {
+      await this.auditDenied(req, claims, reason, tenantId);
+      return err;
+    };
     if (claims.aud !== this.adminAud || claims.sid === undefined) {
-      throw AdminAuthError.invalidToken();
+      throw await deny(AdminAuthError.invalidToken(), 'wrong_audience');
     }
     // Capture the client the liveness gate already loads (one lookup, same snapshot for the tenant).
     const seen: { client?: Client | null } = {};
@@ -198,19 +215,24 @@ export class AdminTokenGuard implements CanActivate {
       this.resources,
       this.adminAud,
     );
-    if (!live || !seen.client) throw AdminAuthError.invalidToken();
+    if (!live || !seen.client) {
+      throw await deny(AdminAuthError.invalidToken(), 'not_live', seen.client?.tenantId);
+    }
+    const tenantId = seen.client.tenantId;
     // DEBT-173(3): an `aud=admin` token minted before its client stopped being admin-capable (type /
     // auth method changed in DB) is refused at use too. Same opaque 401 as a non-live token.
-    if (!isAdminCapableClient(seen.client)) throw AdminAuthError.invalidToken();
-
-    if (!claims.scope.split(' ').includes(scope)) {
-      throw AdminAuthError.insufficientScope(scope);
+    if (!isAdminCapableClient(seen.client)) {
+      throw await deny(AdminAuthError.invalidToken(), 'not_admin_capable', tenantId);
     }
 
-    const tenantId = seen.client.tenantId;
+    if (!claims.scope.split(' ').includes(scope)) {
+      throw await deny(AdminAuthError.insufficientScope(scope), 'insufficient_scope', tenantId);
+    }
+
     const roles = (await this.memberships.activeRoles(claims.sub, tenantId)) ?? [];
     const adminRoles = roles.filter((r) => ADMIN_ROLES.includes(r));
-    if (adminRoles.length === 0) throw AdminAuthError.forbidden();
+    if (adminRoles.length === 0)
+      throw await deny(AdminAuthError.forbidden(), 'forbidden', tenantId);
     if (
       this.reflector.getAllAndOverride<boolean>(SUPER_ADMIN_KEY, [
         context.getHandler(),
@@ -218,7 +240,7 @@ export class AdminTokenGuard implements CanActivate {
       ]) &&
       !adminRoles.includes('super_admin')
     ) {
-      throw AdminAuthError.forbidden();
+      throw await deny(AdminAuthError.forbidden(), 'forbidden', tenantId);
     }
 
     req[TENANT_CTX] = Object.freeze({
@@ -234,7 +256,63 @@ export class AdminTokenGuard implements CanActivate {
     });
     return true;
   }
+
+  /**
+   * Best-effort audit of a refused, signature-verified admin token (D97.9). Never throws: Redis or
+   * Mongo down only skips the audit (the request is refused anyway), logged by error class only.
+   * When nothing gets written (cap reached, lookup/write failed) the dedupe key is released, so the
+   * next refusal of that sub+reason is not silenced for 15 minutes.
+   */
+  private async auditDenied(
+    req: HttpRequest,
+    claims: AccessTokenClaims,
+    reason: AdminDenyAuditReason,
+    tenantId: string | undefined,
+  ): Promise<void> {
+    const dedupeKey = `adm_deny:{${sha256(claims.sub)}}:${reason}`;
+    let release = false;
+    try {
+      const first = await this.redis.client.set(dedupeKey, '1', 'EX', DENY_AUDIT_DEDUPE_SEC, 'NX');
+      if (first !== 'OK') return;
+      release = true;
+      const cap = await this.rateLimit.hit(
+        { name: 'admin-deny-audit', limit: 60, windowSec: 60 },
+        { account: 'global' },
+      );
+      if (!cap.allowed) return;
+      // DEBT-707: liveness refuses a logged-out token before loading the client; look it up here
+      // (client_id is signature-verified, bounded by the cap above) so the tenant console sees it.
+      if (tenantId === undefined && reason === 'not_live') {
+        tenantId = (await this.clients.findByClientId(claims.client_id))?.tenantId;
+      }
+      const route = (req as { routeOptions?: { url?: string } }).routeOptions?.url;
+      await this.audit.record({
+        actorType: 'user',
+        actorId: claims.sub,
+        clientId: claims.client_id,
+        ...(tenantId !== undefined ? { tenantId } : {}),
+        action: AuditAction.ADMIN_ACCESS_DENIED,
+        result: 'failure',
+        metadata: {
+          reason,
+          method: String((req as { method?: string }).method),
+          route: route ?? '__unmatched',
+        },
+      });
+      release = false;
+    } catch (err) {
+      this.logger.warn(`admin deny audit skipped: ${(err as Error).name}`);
+    } finally {
+      if (release) await this.redis.client.del(dedupeKey).catch(() => undefined);
+    }
+  }
 }
+
+/** Audit-only reason of a refused admin token (finer than the opaque wire error, D97.8). */
+type AdminDenyAuditReason =
+  'wrong_audience' | 'not_live' | 'not_admin_capable' | 'insufficient_scope' | 'forbidden';
+/** One `ADMIN_ACCESS_DENIED` document per sub+reason per 15 minutes (D97.9). */
+const DENY_AUDIT_DEDUPE_SEC = 900;
 
 /** `@AdminRoles() roles` - the admin roles resolved by `AdminTokenGuard`. */
 export const AdminRoles = createParamDecorator((_data: unknown, context: ExecutionContext) => {

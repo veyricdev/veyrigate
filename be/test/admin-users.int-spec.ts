@@ -143,6 +143,8 @@ describe('Admin API B6.3b (users, families, consents, audit) on real Mongo + Red
           rateLimitMax: 100000,
           clientAuthFailIpMax: 100000,
           clientAuthFailClientMax: 100000,
+          clientAuthFailGlobalMax: 100000,
+          clientAuthFailUnknownMax: 100000,
         };
       if (ns === 'client') return { secretGraceTtl: 60 };
       if (ns === 'consent') return { policyVersion: '1', termsVersion: '1' };

@@ -2,11 +2,13 @@ import { AuditAction } from '../../modules/security/audit/audit-action.enum';
 import {
   observeAuditEvent,
   observeBackgroundWriteFailure,
+  observeClientAuthRateLimited,
   observeMailDropped,
   observeTokenError,
   registry,
   setMailQueueDepth,
   type BackgroundWrite,
+  type ClientAuthLimitScope,
   type MailDropReason,
 } from './metrics';
 
@@ -129,6 +131,22 @@ describe('metrics (B7.2 Task 2)', () => {
     observeMailDropped('shutdown', 3);
     expect(await value('sso_mail_dropped_total', { reason: 'queue_full' })).toBe(1);
     expect(await value('sso_mail_dropped_total', { reason: 'shutdown' })).toBe(3);
+  });
+
+  it('DEBT-072 (D97.16): client auth 429 series start at 0 per scope; +1 per call; an unknown scope adds nothing', async () => {
+    for (const scope of ['source', 'client', 'unknown_client']) {
+      expect(await value('sso_client_auth_rate_limited_total', { scope })).toBe(0);
+    }
+    const before = await registry.metrics();
+    expect(() =>
+      observeClientAuthRateLimited('made_up_scope' as ClientAuthLimitScope),
+    ).not.toThrow();
+    const after = await registry.metrics();
+    expect(after).not.toContain('made_up_scope');
+    expect(after.split('\n').length).toBe(before.split('\n').length);
+    observeClientAuthRateLimited('client');
+    expect(await value('sso_client_auth_rate_limited_total', { scope: 'client' })).toBe(1);
+    expect(await value('sso_client_auth_rate_limited_total', { scope: 'source' })).toBe(0);
   });
 
   it('DEBT-683 (D95.11): sso_mail_queue_depth is a gauge set to the pending count', async () => {

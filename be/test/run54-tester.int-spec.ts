@@ -87,6 +87,8 @@ const cfg = {
         rateLimitMax: 100000,
         clientAuthFailIpMax: 100000,
         clientAuthFailClientMax: 100000,
+        clientAuthFailGlobalMax: 100000,
+        clientAuthFailUnknownMax: 100000,
       };
     throw new Error(`Unexpected config namespace: ${ns}`);
   },

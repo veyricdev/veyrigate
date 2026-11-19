@@ -164,7 +164,9 @@ describe('run 80 tester: super_admin-only order, identifier rules, UI 500 log, O
         const snapshot = async () => ({
           resources: await resourceModel.find({}, { _id: 0 }).sort({ identifier: 1 }).lean(),
           kids: await jwksKids(),
-          audits: await auditModel.countDocuments({}),
+          // Run 97 (DEBT-126, D97.8): a refusal now writes ADMIN_ACCESS_DENIED (best-effort, deduped); every
+          // other audit (a state change) must still be absent.
+          audits: await auditModel.countDocuments({ action: { $ne: 'ADMIN_ACCESS_DENIED' } }),
         });
         const before = await snapshot();
         const taStale = await call(r.method, r.url, await tok(ids.tenantA, 6 * MIN), r.body?.());

@@ -530,6 +530,8 @@ describe('run 87 T2: built admin-recover CLI argument checks (no connection)', (
     RATE_LIMIT_MAX: '100000',
     CLIENT_AUTH_FAIL_IP_MAX: '100000',
     CLIENT_AUTH_FAIL_CLIENT_MAX: '100000',
+    CLIENT_AUTH_FAIL_GLOBAL_MAX: '100000',
+    CLIENT_AUTH_FAIL_UNKNOWN_MAX: '100000',
   });
   const cli = (argv: string[]) =>
     new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve, reject) => {

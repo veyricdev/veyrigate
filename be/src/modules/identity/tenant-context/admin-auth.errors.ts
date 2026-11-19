@@ -1,4 +1,5 @@
 import { type ArgumentsHost, Catch, type ExceptionFilter } from '@nestjs/common';
+import { observeAdminAuthDenied } from '../../../common/metrics/metrics';
 
 /**
  * Admin API (B6.1/B6.2) authentication/authorization failure with its exact wire shape. Opaque by
@@ -63,10 +64,20 @@ interface AdminReply {
   send(payload: unknown): unknown;
 }
 
-/** Renders `AdminAuthError` as-is (the global OAuth filter would rewrite the body). `no-store`. */
+/**
+ * Renders `AdminAuthError` as-is (the global OAuth filter would rewrite the body). `no-store`.
+ * Run 97 (DEBT-126, D97.7): every 401/403 is counted by wire error; the response never changes.
+ */
 @Catch(AdminAuthError)
 export class AdminAuthErrorFilter implements ExceptionFilter {
   catch(err: AdminAuthError, host: ArgumentsHost): void {
+    if (err.status === 401 || err.status === 403) {
+      try {
+        observeAdminAuthDenied(String(err.body.error));
+      } catch {
+        // a metric never breaks the response
+      }
+    }
     const reply = host.switchToHttp().getResponse<AdminReply>();
     reply.header('Cache-Control', 'no-store');
     if (err.wwwAuthenticate) reply.header('WWW-Authenticate', err.wwwAuthenticate);

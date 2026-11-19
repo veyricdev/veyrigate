@@ -149,6 +149,33 @@ describe('CLIENT_AUTH_FAIL_* rate limit (DEBT-029/039)', () => {
   });
 });
 
+describe('CLIENT_AUTH_FAIL_GLOBAL_MAX / CLIENT_AUTH_FAIL_UNKNOWN_MAX (DEBT-072, D97.15)', () => {
+  it('missing → defaults (global 100 per client, unknown 300)', () => {
+    const env = validateEnv(BASE);
+    expect(env.CLIENT_AUTH_FAIL_GLOBAL_MAX).toBe(100);
+    expect(env.CLIENT_AUTH_FAIL_UNKNOWN_MAX).toBe(300);
+  });
+
+  it('accepts positive overrides', () => {
+    const env = validateEnv({
+      ...BASE,
+      CLIENT_AUTH_FAIL_GLOBAL_MAX: '3',
+      CLIENT_AUTH_FAIL_UNKNOWN_MAX: '4',
+    });
+    expect(env.CLIENT_AUTH_FAIL_GLOBAL_MAX).toBe(3);
+    expect(env.CLIENT_AUTH_FAIL_UNKNOWN_MAX).toBe(4);
+  });
+
+  it('rejects zero/negative values, naming the variable', () => {
+    expect(() => validateEnv({ ...BASE, CLIENT_AUTH_FAIL_GLOBAL_MAX: '0' })).toThrow(
+      /CLIENT_AUTH_FAIL_GLOBAL_MAX/,
+    );
+    expect(() => validateEnv({ ...BASE, CLIENT_AUTH_FAIL_UNKNOWN_MAX: '-1' })).toThrow(
+      /CLIENT_AUTH_FAIL_UNKNOWN_MAX/,
+    );
+  });
+});
+
 describe('TRUST_PROXY (DEBT-006)', () => {
   it('missing → parses to false (disabled)', () => {
     expect(buildConfig(validateEnv(BASE)).app.trustProxy).toBe(false);

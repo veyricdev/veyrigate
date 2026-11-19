@@ -29,7 +29,12 @@ function config(overrides: Record<string, unknown> = {}): ConfigService {
     app: { nodeEnv: 'production', issuer: 'http://localhost:4000' },
     client: { secretGraceTtl: 3600 },
     // High thresholds so the client-auth failure limiter never fires in these unit-style tests.
-    security: { clientAuthFailIpMax: 10000, clientAuthFailClientMax: 10000 },
+    security: {
+      clientAuthFailIpMax: 10000,
+      clientAuthFailClientMax: 10000,
+      clientAuthFailGlobalMax: 10000,
+      clientAuthFailUnknownMax: 10000,
+    },
     ...overrides,
   };
   return { getOrThrow: (ns: string) => base[ns] } as unknown as ConfigService;
@@ -39,6 +44,8 @@ function config(overrides: Record<string, unknown> = {}): ConfigService {
 const noRateLimit = {
   reserve: async () => ({ blocked: false, retryAfterSec: 0 }),
   refund: async () => undefined,
+  reserveGlobal: async () => ({ blocked: false, retryAfterSec: 0, first: false }),
+  clientOk: async () => undefined,
 } as unknown as RateLimitService;
 
 describe('Clients + Resources on real Mongo (B3.1–B3.3)', () => {

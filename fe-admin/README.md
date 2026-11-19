@@ -28,7 +28,7 @@ at build time (CI builds without any secret). Copy `.env.example` to `.env` and 
 | `OIDC_CLIENT_ID` | non-empty |
 | `OIDC_CLIENT_SECRET` | >= 32 chars |
 | `SESSION_SECRET` | >= 32 chars (HMAC of the session id + AES-256-GCM key for the token blob) |
-| `SESSION_REDIS_URL` | URL of the session Redis (`aegate-redis`: `/1` dev, `/2` E2E; keys `fea:*`) |
+| `SESSION_REDIS_URL` | URL of the session Redis (`aegate-redis`: `/1` dev, `/2` E2E; keys `fea:*`). Production: `rediss://` with an ACL username other than `default` (ACL `~fea:*`, own Redis recommended; runbook-deploy §7, D97.22) |
 | `ADMIN_API_BASE_URL` | URL (`https:` in production) |
 | `ADMIN_API_RESOURCE` | URL (resource indicator of the admin API) |
 | `APP_URL` | origin only, no path / trailing slash (`https:` in production) |

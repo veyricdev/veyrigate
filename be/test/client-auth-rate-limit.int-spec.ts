@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { registry } from '../src/common/metrics/metrics';
 import { MODELS } from '../src/database/mongo/models';
 import { syncAllIndexes } from '../src/database/mongo/sync-indexes';
 import { parseTrustProxy } from '../src/config/trust-proxy';
@@ -49,12 +50,17 @@ const VERIFIER = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
 const CLIENT_MAX = 3;
 const IP_MAX = 5;
 
-function cfgFor(trustProxyEnv?: string): ConfigService {
+function cfgFor(
+  trustProxyEnv?: string,
+  globalMax = { clientAuthFailGlobalMax: 100000, clientAuthFailUnknownMax: 100000 },
+): ConfigService {
   const security = {
     rateLimitWindow: 60,
     rateLimitMax: 100,
     clientAuthFailIpMax: IP_MAX,
     clientAuthFailClientMax: CLIENT_MAX,
+    // The global per-client cap (DEBT-072) is out of the way except in its own describe below.
+    ...globalMax,
   };
   const base: Record<string, unknown> = {
     app: { nodeEnv: 'production', issuer: ISSUER, trustProxy: parseTrustProxy(trustProxyEnv) },
@@ -71,6 +77,15 @@ function cfgFor(trustProxyEnv?: string): ConfigService {
   return { getOrThrow: (ns: string) => base[ns] } as unknown as ConfigService;
 }
 
+const sha = (v: string) => createHash('sha256').update(v, 'utf8').digest('hex');
+/** Global cap keys (DEBT-072) of clients THIS spec created: `{sha256(clientId)}` hash tag only. */
+async function dropGlobalKeys(redis: IORedis, clientIds: string[]): Promise<void> {
+  for (const id of clientIds) {
+    const keys = await redis.keys(`rl:client-auth-g:{${sha(id)}}*`);
+    if (keys.length) await redis.del(...keys);
+  }
+}
+
 function form(fields: Record<string, string>): string {
   return Object.entries(fields)
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
@@ -85,10 +100,14 @@ function basic(id: string, secret: string): string {
  * gets its OWN Redis connection (RedisService quits it on `app.close()`), so closing one app never
  * tears down another app's / the test harness's client. Counters are shared via the same Redis DB.
  */
-async function buildApp(keyDir: string, trustProxyEnv?: string): Promise<NestFastifyApplication> {
+async function buildApp(
+  keyDir: string,
+  trustProxyEnv?: string,
+  globalMax?: Parameters<typeof cfgFor>[1],
+): Promise<NestFastifyApplication> {
   const provider = new LocalKeyProvider(keyDir);
   await provider.init();
-  const cfg = cfgFor(trustProxyEnv);
+  const cfg = cfgFor(trustProxyEnv, globalMax);
   const redis = new IORedis(REDIS_URL, { maxRetriesPerRequest: 1 });
   const moduleRef = await Test.createTestingModule({
     imports: [
@@ -209,6 +228,7 @@ describe('client-auth failure rate limit (DEBT-029/039 + DEBT-006) on real Mongo
 
   afterAll(async () => {
     if (app) await app.close();
+    if (redis) await dropGlobalKeys(redis, [CONF]); // its 7-day trusted-source key (DEBT-072)
     if (redis) await redis.quit();
     if (keyDir) await rm(keyDir, { recursive: true, force: true });
   });
@@ -536,6 +556,7 @@ describe('TRUST_PROXY (DEBT-006): X-Forwarded-For vs rate-limit bucket isolation
   }, 30_000);
 
   afterAll(async () => {
+    if (redis) await dropGlobalKeys(redis, [`${RUN2}-off`, `${RUN2}-on`]);
     if (redis) await redis.quit();
     if (keyDir) await rm(keyDir, { recursive: true, force: true });
   });
@@ -583,6 +604,168 @@ describe('TRUST_PROXY (DEBT-006): X-Forwarded-For vs rate-limit bucket isolation
     } finally {
       await app.close();
     }
+  });
+});
+
+/**
+ * Run 97 T1 (DEBT-072, D97.13-D97.17): global failure cap per client_id, all sources summed, with a
+ * 7-day exemption for a source that authenticated the client. TRUST_PROXY + XFF give each request
+ * its own source, so the per-IP buckets (1 failure each) never trip first.
+ */
+describe('DEBT-072: global client-auth failure cap per client_id (GLOBAL_MAX=3, UNKNOWN_MAX=3)', () => {
+  const GLOBAL_MAX = 3;
+  const RUN3 = `g${Date.now()}`;
+  let app: NestFastifyApplication;
+  let redis: IORedis;
+  let keyDir: string;
+  let creds: ClientCredentialService;
+  const ids: string[] = [];
+  let n = 0;
+  const UNKNOWN_KEYS = ['rl:client-auth-g:{unknown}', 'rl:client-auth-g:{unknown}:logged'];
+
+  const post = (url: string, payload: string, xff: string, auth?: string) =>
+    app.inject({
+      method: 'POST',
+      url,
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        'x-forwarded-for': xff,
+        ...(auth ? { authorization: auth } : {}),
+      },
+      payload,
+    });
+  const tokenAs = (clientId: string, secret: string, xff: string) =>
+    post(
+      '/token',
+      form({ grant_type: 'refresh_token', refresh_token: 'bogus' }),
+      xff,
+      basic(clientId, secret),
+    );
+  const limited = async (scope: string) => {
+    const { values } = await registry.getSingleMetric('sso_client_auth_rate_limited_total')!.get();
+    return values.find((v) => v.labels.scope === scope)!.value;
+  };
+
+  async function newClient(): Promise<{ id: string; secret: string }> {
+    const id = `${RUN3}-c${n++}`;
+    ids.push(id);
+    const clientModel = app.get<Model<Client>>(getModelToken('Client'));
+    await new ClientService(clientModel, cfgFor()).create({
+      clientId: id,
+      clientType: 'confidential',
+      tokenEndpointAuthMethod: 'client_secret_basic',
+      redirectUris: [REDIRECT],
+      grantTypes: ['refresh_token'],
+      tenantId: 'tenant-A',
+    });
+    return { id, secret: (await creds.createSecret(id)).secret };
+  }
+  /** Fill the client's global bucket: one wrong secret from each of GLOBAL_MAX fresh sources. */
+  async function fill(id: string, prefix: string): Promise<void> {
+    for (let i = 0; i < GLOBAL_MAX; i++) {
+      expect((await tokenAs(id, 'wrong', `${prefix}.${i}`)).statusCode).toBe(401);
+    }
+  }
+
+  beforeAll(async () => {
+    redis = new IORedis(REDIS_URL, { maxRetriesPerRequest: 1 });
+    keyDir = await mkdtemp(join(tmpdir(), 'vg-glob-int-'));
+    app = await buildApp(keyDir, '127.0.0.1', {
+      clientAuthFailGlobalMax: GLOBAL_MAX,
+      clientAuthFailUnknownMax: 3,
+    });
+    const clientModel = app.get<Model<Client>>(getModelToken('Client'));
+    await syncAllIndexes(clientModel.db);
+    creds = app.get(ClientCredentialService);
+  }, 60_000);
+
+  afterAll(async () => {
+    if (app) await app.close();
+    if (redis) {
+      await dropGlobalKeys(redis, ids);
+      await redis.del(...UNKNOWN_KEYS);
+      await redis.quit();
+    }
+    if (keyDir) await rm(keyDir, { recursive: true, force: true });
+  });
+
+  beforeEach(async () => {
+    // Per-IP buckets (pattern, as the describes above) + the ONE shared unknown-client bucket.
+    // Safe on the shared Redis db0 only because int suites run serially under `vg:int-lock`.
+    const keys = await redis.keys('rl:client-auth:*');
+    if (keys.length) await redis.del(...keys);
+    await redis.del(...UNKNOWN_KEYS);
+    jest.restoreAllMocks();
+  });
+
+  it('(a) 3 sources x 1 wrong secret => the 4th source gets 429 + Retry-After, no Argon2, counter client +1, one log line per window', async () => {
+    const { id } = await newClient();
+    await fill(id, '10.1.0');
+    const verify = jest.spyOn(creds, 'verifySecret');
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const before = await limited('client');
+    const blocked = await tokenAs(id, 'wrong', '10.1.0.99');
+    expect(blocked.statusCode).toBe(429);
+    expect(blocked.json().error).toBe('temporarily_unavailable');
+    expect(Number(blocked.headers['retry-after'])).toBeGreaterThanOrEqual(1);
+    expect(verify).not.toHaveBeenCalled();
+    expect(await limited('client')).toBe(before + 1);
+    expect((await tokenAs(id, 'wrong', '10.1.0.98')).statusCode).toBe(429);
+    const lines = warn.mock.calls.filter((c) => c[1] === 'client-auth global limit reached');
+    expect(lines).toEqual([[{ clientId: id }, 'client-auth global limit reached']]);
+  });
+
+  it('(b) a source that authenticated the client before stays exempt when the bucket is full (no reverse DoS)', async () => {
+    const { id, secret } = await newClient();
+    expect((await tokenAs(id, secret, '10.2.0.1')).statusCode).toBe(400); // client auth OK, bogus grant
+    await fill(id, '10.2.1');
+    expect((await tokenAs(id, 'x', '10.2.9.9')).statusCode).toBe(429); // bucket really full
+    expect((await tokenAs(id, secret, '10.2.0.1')).statusCode).toBe(400);
+  });
+
+  it("(b') successes of an exempt source never give back the global bucket: a new source with a wrong secret stays 429", async () => {
+    const { id, secret } = await newClient();
+    expect((await tokenAs(id, secret, '10.7.0.1')).statusCode).toBe(400); // trusted from now on
+    await fill(id, '10.7.1');
+    for (let i = 0; i < 5; i++) {
+      expect((await tokenAs(id, secret, '10.7.0.1')).statusCode).toBe(400);
+    }
+    expect((await tokenAs(id, 'wrong', '10.7.9.9')).statusCode).toBe(429);
+    expect(await redis.get(`rl:client-auth-g:{${sha(id)}}`)).toBe(String(GLOBAL_MAX));
+  });
+
+  it('(c) a NEW source with the CORRECT secret is refused while the bucket is full (accepted risk, DEBT-704)', async () => {
+    const { id, secret } = await newClient();
+    await fill(id, '10.3.0');
+    expect((await tokenAs(id, secret, '10.3.9.9')).statusCode).toBe(429);
+  });
+
+  it('(d) random client_ids from 4 sources => the 4th is 429 unknown_client; no Redis key holds a raw client_id', async () => {
+    const ghost = `${RUN3}-ghost`;
+    for (let i = 0; i < 3; i++) {
+      expect((await tokenAs(`${ghost}-${i}`, 'nope', `10.4.0.${i}`)).statusCode).toBe(401);
+    }
+    const before = await limited('unknown_client');
+    expect((await tokenAs(`${ghost}-3`, 'nope', '10.4.0.3')).statusCode).toBe(429);
+    expect(await limited('unknown_client')).toBe(before + 1);
+    expect(await redis.keys(`*${ghost}*`)).toEqual([]);
+  });
+
+  it('(e) window over (exactly the global keys of that client deleted) => a new source authenticates again', async () => {
+    const { id, secret } = await newClient();
+    await fill(id, '10.5.0');
+    expect((await tokenAs(id, secret, '10.5.9.9')).statusCode).toBe(429);
+    await redis.del(`rl:client-auth-g:{${sha(id)}}`, `rl:client-auth-g:{${sha(id)}}:logged`);
+    expect((await tokenAs(id, secret, '10.5.9.9')).statusCode).toBe(400);
+  });
+
+  it('(f) /introspect shares the global bucket: full => 429 temporarily_unavailable, no `active`', async () => {
+    const { id } = await newClient();
+    await fill(id, '10.6.0');
+    const res = await post('/introspect', form({ token: 'x' }), '10.6.9.9', basic(id, 'wrong'));
+    expect(res.statusCode).toBe(429);
+    expect(res.json().error).toBe('temporarily_unavailable');
+    expect(res.json().active).toBeUndefined();
   });
 });
 

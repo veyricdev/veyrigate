@@ -294,6 +294,10 @@ docker run --rm -i --env-file <env-app-production> <image> node dist/database/ad
   exit 0. CLI **không in email**. **Bắt buộc (DEBT-618)**: dán nguyên dòng JSON `{"alert":true,...}` + `eventId` vào
   kênh incident/security **ngay** và ghi vào ticket — CLI chạy ngoài app nên không có alert listener; output của
   `docker run --rm` trên host ops thường không vào pipeline log, nên dòng dán tay này là alert.
+  Từ run 97 (DEBT-618, D97.19/D97.20) app cũng tự phát alert `SsoAdminRecovered` (critical): mỗi 60 s app đọc timestamp
+  `ADMIN_RECOVERED` mới nhất từ `auditlogs` vào gauge `sso_audit_alert_last_event_timestamp_seconds`, alert bắn trong
+  30 phút sau sự kiện ⇒ thường thấy alert sau ≤ 60 s + một chu kỳ scrape. **Vẫn phải dán dòng JSON**: app chết hoặc không
+  scrape được quá 30 phút quanh lúc recover thì alert không bắn.
 - Từ chối (exit 1, không đổi membership/user, ghi audit `ADMIN_RECOVERED` failure nếu ghi được):
   - `refused: user_not_found` — email sai/chưa đăng ký (email được chuẩn hoá trim + chữ thường);
   - `refused: super_admin_exists` — còn super_admin dùng được ⇒ dùng admin API của người đó. Chỉ khi super_admin còn đó nhưng
@@ -744,3 +748,104 @@ Mailer không log từng thư bị bỏ (caller đã log `Authentication email d
 |---|---|---|
 | `queue_full` | SMTP chậm/chết, hoặc spam `/forgot`/`/register` vượt throttle | xử lý như `auth_mail` ở trên (kiểm SMTP; người dùng dùng `/forgot`) |
 | `shutdown` | thư còn chờ khi app dừng (deploy/restart); log WARN `mail queue closed with <n> unsent message(s)` | người dùng bị ảnh hưởng dùng `/forgot`; deploy lúc ít tải |
+
+## 14. `SsoAuditWriteFailed` — ghi audit lỗi (run 97, DEBT-218, D97.2–D97.4)
+
+Từ run 97 `AuditService.record` đếm `sso_audit_events_total` (và `sso_signing_key_rotations_total`) **trước** khi ghi
+`auditlogs`. Ghi lỗi ⇒ `sso_audit_write_failures_total{action}` +1, log ERROR `audit write failed`
+(`{alert, action, eventId, auditWriteFailed:true}`, không metadata, không message lỗi Mongo), rồi vẫn ném lỗi (INV-25):
+thao tác nhạy cảm đang trả **5xx** (fail-closed).
+
+**Dấu hiệu**: alert `SsoAuditWriteFailed` (critical) — `sum(increase(sso_audit_write_failures_total[5m])) > 0`; thường
+kèm `SsoHttp5xxRatioHigh`.
+
+**Nguyên nhân thường gặp**: Mongo không tới được / failover / đầy đĩa; user Mongo của app mất quyền ghi `auditlogs`;
+validation schema từ chối document (sau deploy sai phiên bản).
+
+**Thao tác**:
+1. `GET /ready`, log app `audit write failed` (lấy `action` + `eventId`), log Mongo; sửa phụ thuộc/quyền.
+2. Biết sự kiện nào **không có document**: so `sso_audit_events_total` với số document cùng `action` trong khoảng alert
+   (lệch đúng bằng `sso_audit_write_failures_total`). PromQL:
+   `sum by (action) (increase(sso_audit_write_failures_total[1h])) > 0`.
+3. `action="TOKEN_REUSE_DETECTED"` có lỗi ghi ⇒ `SsoTokenReuseDetected` vẫn bắn (đếm trước khi ghi) nhưng §2 bước 1 **không
+   thấy document**: xử lý như sự cố theo §2 dựa trên alert + log (`eventId`), không kết luận "không có gì" vì Mongo rỗng.
+   Reuse vẫn đã thu hồi family (thu hồi chạy trước khi ghi audit); nếu không xác định được family/client thì thu hồi rộng
+   theo §2.
+4. Xác nhận counter ngừng tăng (alert tự hết sau 5 phút không có lỗi mới); ghi khoảng thời gian thiếu audit vào ticket.
+
+## 15. `SsoAdminAccessDenied` / `SsoAdminInvalidTokenHigh` — admin API bị từ chối (run 97, DEBT-126, D97.6–D97.10)
+
+Mọi 401/403 của admin API được đếm ở `sso_admin_auth_denied_total{reason}` (`invalid_token`, `insufficient_scope`,
+`forbidden`, `step_up_required`; không nhãn route/tenant/user). Chỉ khi chữ ký token **đã hợp lệ** mới có audit
+`ADMIN_ACCESS_DENIED` (`result:'failure'`, `actorId` = sub, `clientId`, `tenantId` của client phát token — với `not_live`
+audit tự tra client nên console tenant thấy cả AT bị dùng lại sau logout (DEBT-707); chỉ `wrong_audience` không có tenant,
+`metadata.{reason, method, route}`; route là template, không có token): tối đa 1 document / sub / reason / 15 phút và
+tối đa 60 document / phút toàn hệ thống (Redis `adm_deny:{<sha256(sub)>}:<reason>` + bucket `admin-deny-audit`). Token thiếu
+hoặc sai chữ ký và `step_up_required` (luồng đăng nhập lại bình thường của fe-admin) **chỉ** có metric. Redis/Mongo lỗi khi
+audit ⇒ bỏ audit (log WARN `admin deny audit skipped: <lớp lỗi>`), response vẫn 401/403; khi không ghi được (trần 60/phút
+hoặc lỗi) khóa dedupe được xoá để lần từ chối kế tiếp vẫn được audit.
+
+`metadata.reason` (chi tiết hơn wire): `wrong_audience` (token không phải cho admin API, hoặc thiếu `sid`), `not_live`
+(phiên đã logout/thu hồi, client bị tắt, user bị xoá, client không còn admin-capable), `not_admin_capable` (phòng thủ thêm,
+thường đã thành `not_live`), `insufficient_scope`, `forbidden` (không có vai trò admin, hoặc route chỉ super_admin).
+
+**Dấu hiệu**:
+- `SsoAdminAccessDenied` (warning): ≥ 10 lần `forbidden|insufficient_scope` trong 15 phút — token đã xác thực đang dò route
+  không được phép;
+- `SsoAdminInvalidTokenHigh` (warning): `invalid_token` > 0,2/s kéo dài 10 phút.
+Ngưỡng tuyệt đối (traffic admin thấp), chỉnh theo traffic thật.
+
+**Điều tra (mongosh, CHỈ ĐỌC; `GET /admin/audit?action=ADMIN_ACCESS_DENIED` chỉ thấy document có `tenantId` của tenant mình)**
+```js
+db.auditlogs.aggregate([
+  { $match: { action: 'ADMIN_ACCESS_DENIED', timestamp: { $gte: new Date(Date.now() - 3600e3) } } },
+  { $group: { _id: { actorId: '$actorId', reason: '$metadata.reason' }, n: { $sum: 1 },
+      routes: { $addToSet: '$metadata.route' }, last: { $max: '$timestamp' } } },
+  { $sort: { last: -1 } } ]);
+```
+**Hành động**:
+- `not_live` lặp lại cho cùng `actorId` (mỗi 15 phút một document) ⇒ AT admin cũ đang bị dùng lại sau logout/thu hồi ⇒ coi như
+  **token admin bị lộ**: thu hồi mọi phiên của user (`POST /admin/users/<id>/sessions/revoke`), yêu cầu đổi mật khẩu
+  (`/account/password`), kiểm thiết bị/máy của người đó; nếu là nhiều user ⇒ nghi lộ ở fe-admin (Redis phiên, log) ⇒ §7.
+- `SsoAdminAccessDenied` bắn mà mongosh không có document tương ứng: `forbidden` ném từ handler (vd. `assertSuperAdmin`, sau
+  guard) chỉ được đếm metric, không audit (D97.8) ⇒ xem log truy cập `/admin/*` 403 theo route.
+- `forbidden`/`insufficient_scope` từ một `actorId` ⇒ xác nhận với người đó/quản lý (dò quyền hay console cũ); không có lý do
+  ⇒ khoá user (`POST /admin/users/<id>/lock`) và thu hồi phiên.
+- `invalid_token` cao mà **không** có document ⇒ ai đó gửi token rác/giả từ ngoài (không qua được chữ ký) ⇒ xem log proxy
+  (IP nguồn, User-Agent) cho `/admin/*`, chặn ở proxy/WAF. Có document `not_live` đi kèm ⇒ như trên.
+- Không chép token, IP, email thật vào ticket — chỉ id/placeholder.
+
+## 16. `SsoClientAuthGlobalLimit` — trần toàn cục xác thực client (run 97, DEBT-072, D97.13–D97.16)
+
+Ngoài 2 bucket theo nguồn (`CLIENT_AUTH_FAIL_IP_MAX`, `CLIENT_AUTH_FAIL_CLIENT_MAX`), mỗi `client_id` đã đăng ký có một bucket
+**thất bại toàn cục** cộng mọi IP (`CLIENT_AUTH_FAIL_GLOBAL_MAX`, mặc định 100 / `RATE_LIMIT_WINDOW`); mọi `client_id` không tồn tại
+dùng chung một bucket (`CLIENT_AUTH_FAIL_UNKNOWN_MAX`, mặc định 300). Chạm trần ⇒ `/token`, `/revoke`, `/introspect` trả
+`429 temporarily_unavailable` + `Retry-After`, không chạy Argon2. Xác thực thành công không bị đếm, và IP đã xác thực **thành công**
+client đó trong 7 ngày được **miễn** trần toàn cục (vẫn chịu bucket theo nguồn) ⇒ backend RP có IP ổn định không bị khoá khi bị tấn công.
+Metric `sso_client_auth_rate_limited_total{scope}`: `source` (bucket theo IP, không alert), `client`, `unknown_client`.
+
+**Dấu hiệu**: `SsoClientAuthGlobalLimit` (warning, theo `scope`); log WARN `client-auth global limit reached` với `clientId`
+(`(unknown)` cho bucket chung), tối đa 1 dòng / client / cửa sổ; log không có IP/secret.
+
+**Hành động**:
+- Lấy `clientId` từ log; `scope=unknown_client` ⇒ có người dò `client_id` (thường là quét/enumeration) ⇒ chặn nguồn ở proxy/WAF.
+- RP báo 429 ⇒ xác nhận IP egress của RP (từ phía RP), so với log proxy (IP nguồn đang gửi sai secret cho `/token`, `/revoke`,
+  `/introspect`), chặn nguồn tấn công ở proxy/WAF (giới hạn theo IP/ASN, challenge). `TRUST_PROXY` phải đúng (runbook-deploy §5),
+  nếu không mọi request trông như từ IP proxy.
+- **Không** xoá bucket: để tự hết cửa sổ (≤ `RATE_LIMIT_WINDOW`). Nếu bắt buộc (RP quan trọng bị chặn, đã chặn nguồn tấn công),
+  chỉ `DEL` đúng key của client đó, không `KEYS`/`SCAN`/`FLUSH`:
+  ```sh
+  H=$(printf '%s' '<clientId>' | sha256sum | cut -d' ' -f1)
+  redis-cli DEL "rl:client-auth-g:{$H}"
+  ```
+  (bucket chung cho client lạ: `rl:client-auth-g:{unknown}`). Tấn công còn tiếp thì bucket đầy lại ngay.
+- **Rủi ro còn lại (chấp nhận, DEBT-704)**: RP chưa xác thực thành công lần nào từ IP hiện tại trong 7 ngày (IP egress mới, RP ít
+  traffic) vẫn có thể bị 429 trong lúc bị tấn công ⇒ xử lý ở proxy/WAF như trên, hoặc `DEL` key sau khi đã chặn nguồn.
+- **Rủi ro còn lại (chấp nhận, DEBT-709)**: khi bucket chung `{unknown}` đầy, `client_id` không tồn tại trả 429 ngay còn `client_id`
+  có thật (bucket riêng chưa đầy) trả 401 ⇒ dò được id nào tồn tại. Chấp nhận vì `client_id` không phải bí mật (RFC 6749 §2.2) và
+  `/authorize` vốn đã phân biệt; secret vẫn chỉ thử được ≤ trần / cửa sổ.
+- **`TRUST_PROXY` sai làm hỏng miễn trừ (DEBT-710)**: miễn trừ theo IP nguồn nên phụ thuộc `req.ip` đúng (runbook-deploy §5). Tắt khi
+  chạy sau proxy ⇒ mọi request mang IP proxy ⇒ một lần RP thành công là IP proxy được miễn 7 ngày **cho cả botnet** (trần toàn cục mất
+  tác dụng). Tin quá rộng (CIDR gồm nguồn không phải proxy) ⇒ kẻ tấn công gửi `X-Forwarded-For` = IP egress của RP để được miễn. Thấy
+  `SsoClientAuthGlobalLimit` im lặng trong lúc log proxy có tấn công sai secret ⇒ kiểm `TRUST_PROXY` trước.
+- Không chép secret, IP thật của RP vào ticket — chỉ id/placeholder.

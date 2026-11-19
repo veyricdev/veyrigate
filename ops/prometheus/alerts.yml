@@ -85,3 +85,61 @@ groups:
         annotations:
           summary: The SMTP mailer dropped mail without sending it
           description: A full mail queue (queue_full) or a shutdown with mail pending (shutdown) lost verification, reset or notice mails. Check SMTP and runbook-ops section 13.
+
+      # Run 97 (DEBT-218, D97.4): an audit write failed. Counters are incremented before the write, so
+      # sso_audit_events_total (reuse, rotations) still moves; the sensitive operation answered 5xx (INV-25).
+      - alert: SsoAuditWriteFailed
+        expr: sum(increase(sso_audit_write_failures_total[5m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: An audit event could not be written to the audit log
+          description: Sensitive operations fail closed (5xx) while the audit log cannot be written. Check Mongo and runbook-ops section 14.
+
+      # Run 97 (DEBT-126, D97.10): authenticated admin tokens probing routes they may not use. Absolute
+      # thresholds (admin traffic is too low for a stable ratio); tune them to real traffic.
+      - alert: SsoAdminAccessDenied
+        expr: sum(increase(sso_admin_auth_denied_total{reason=~"forbidden|insufficient_scope"}[15m])) >= 10
+        labels:
+          severity: warning
+        annotations:
+          summary: Admin API calls are repeatedly refused for missing scope or role
+          description: A valid admin token keeps hitting routes it may not use. Check the ADMIN_ACCESS_DENIED audit events and runbook-ops section 15.
+
+      - alert: SsoAdminInvalidTokenHigh
+        expr: sum(rate(sso_admin_auth_denied_total{reason="invalid_token"}[5m])) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: The admin API keeps refusing invalid bearer tokens
+          description: Sustained invalid_token answers on the admin API (stale, revoked or forged tokens). Check runbook-ops section 15.
+
+      # Run 97 (DEBT-618, D97.20): ADMIN_RECOVERED / ADMIN_BOOTSTRAPPED are written by CLIs; the app polls the
+      # newest timestamp every 60 s. Fires for 30 min after the event (no `for`); 0 = no event never fires, and
+      # a restart does not re-fire an older event. `max` merges replicas. The CLI JSON line stays the main path.
+      - alert: SsoAdminRecovered
+        expr: time() - max(sso_audit_alert_last_event_timestamp_seconds{action="ADMIN_RECOVERED"}) < 1800
+        labels:
+          severity: critical
+        annotations:
+          summary: A super_admin was restored with the admin-recover CLI (break-glass)
+          description: An ADMIN_RECOVERED audit event was written in the last 30 minutes. Confirm it was a planned recovery (runbook-ops section 3d).
+
+      - alert: SsoAdminBootstrapped
+        expr: time() - max(sso_audit_alert_last_event_timestamp_seconds{action="ADMIN_BOOTSTRAPPED"}) < 1800
+        labels:
+          severity: warning
+        annotations:
+          summary: The admin control plane was bootstrapped with the db:bootstrap CLI
+          description: An ADMIN_BOOTSTRAPPED audit event was written in the last 30 minutes. Expected on the first deploy only (runbook-deploy section 16).
+
+      # Run 97 (DEBT-072, D97.16): the global per-client_id client-auth failure cap answered 429 (a botnet
+      # rotating IPs against one client, or many unknown client_ids). scope="source" (one IP) is not alerted.
+      - alert: SsoClientAuthGlobalLimit
+        expr: sum by (scope) (increase(sso_client_auth_rate_limited_total{scope=~"client|unknown_client"}[5m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: Client authentication hit the global per-client failure cap
+          description: Many sources are failing client authentication for one client (or for unknown client ids). Check the log line client-auth global limit reached and runbook-ops section 16.

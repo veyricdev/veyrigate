@@ -26,6 +26,7 @@ const prod = {
   ADMIN_API_BASE_URL: "https://api.example.com",
   ADMIN_API_RESOURCE: "https://api.example.com/admin/",
   APP_URL: "https://admin.example.com",
+  SESSION_REDIS_URL: "rediss://fea@redis.example.com:6380/0",
 };
 
 let logged: string[];
@@ -126,6 +127,50 @@ describe("production requires https", () => {
   it("http public URLs stay allowed outside production (local dev)", () => {
     expect(() => parseServerEnv({ ...valid, NODE_ENV: "development" })).not.toThrow();
     expect(() => parseServerEnv({ ...valid, NODE_ENV: "test" })).not.toThrow();
+  });
+});
+
+describe("production session Redis: rediss:// + ACL username (D97.22, DEBT-280)", () => {
+  const MSG = "SESSION_REDIS_URL: must be a rediss:// URL with an ACL username in production";
+  // Built at run time: no URL-with-password literal in the source (gitleaks).
+  const pw = "canary-" + "r".repeat(20);
+
+  it.each([
+    ["plain redis:// with a user", `redis://fea:${pw}@redis.example.com:6379/0`],
+    ["rediss:// without a user", `rediss://:${pw}@redis.example.com:6380/0`],
+    ["rediss:// as the default user", `rediss://default:${pw}@redis.example.com:6380/0`],
+    ["rediss:// as a percent-encoded default user", `rediss://%64efault:${pw}@redis.example.com:6380/0`],
+    ["another scheme", `https://fea:${pw}@redis.example.com/`],
+    ["not a URL", `canary-${pw} not a url`],
+  ])("rejects %s, naming the variable only", (_label, SESSION_REDIS_URL) => {
+    const err = errorOf({ ...prod, SESSION_REDIS_URL });
+    expect(err.message.split(MSG)).toHaveLength(2); // exactly one line, not one per failed check
+    const out = err.message + logged.join("\n");
+    expect(out).not.toContain(pw);
+    expect(out).not.toContain("redis.example.com");
+    expect(out).not.toContain("redis://"); // the fixed message says `rediss://`, never the value
+  });
+
+  it.each(["rediss://fea@redis.example.com:6380/0", `rediss://fea:${pw}@redis.example.com:6380/0`, "rediss://fea@10.0.0.5"])(
+    "accepts %s",
+    (SESSION_REDIS_URL) => {
+      expect(parseServerEnv({ ...prod, SESSION_REDIS_URL }).SESSION_REDIS_URL).toBe(SESSION_REDIS_URL);
+    },
+  );
+
+  it("a production build (import.meta.env.PROD) enforces it without NODE_ENV", () => {
+    vi.stubEnv("PROD", true);
+    try {
+      expect(errorOf({ ...prod, NODE_ENV: undefined, SESSION_REDIS_URL: "redis://localhost:6379/1" }).message).toContain(MSG);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("outside production redis:// without a user stays allowed (dev /1, E2E /2)", () => {
+    for (const NODE_ENV of [undefined, "development", "test"]) {
+      expect(parseServerEnv({ ...valid, NODE_ENV }).SESSION_REDIS_URL).toBe("redis://localhost:6379/1");
+    }
   });
 });
 

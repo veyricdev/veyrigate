@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import type { Model, QueryFilter, Types } from 'mongoose';
 import { randomUUID } from 'node:crypto';
-import { observeAuditEvent } from '../../../common/metrics/metrics';
+import { observeAuditEvent, observeAuditWriteFailure } from '../../../common/metrics/metrics';
 import type { TenantContext } from '../../identity/tenant-context/tenant-context';
 import { ALERT_ACTIONS, type AuditAction } from './audit-action.enum';
 import type { AuditAlertListener, AuditEvent, AuditEventInput, AuditMetadata } from './audit.types';
@@ -136,12 +136,28 @@ export class AuditService {
       eventId: randomUUID(),
       timestamp: at ? new Date(at.getTime()) : new Date(),
     };
-    await this.auditModel.create(event);
-    // B7.2: count only PERSISTED events; a metrics failure never fails the audit write.
+    // DEBT-218 (D97.2): count BEFORE the write, so a Mongo outage cannot silence the reuse/emergency
+    // alerts; a failed write is also counted. A metrics failure never fails the audit write.
     try {
       observeAuditEvent(event);
     } catch (err) {
       this.logger.error(`audit metrics failed: ${(err as Error).message}`);
+    }
+    try {
+      await this.auditModel.create(event);
+    } catch (err) {
+      observeAuditWriteFailure(event.action);
+      // No metadata and no driver message (it may quote document values).
+      this.logger.error(
+        {
+          alert: ALERT_ACTIONS.has(event.action),
+          action: event.action,
+          eventId: event.eventId,
+          auditWriteFailed: true,
+        },
+        'audit write failed',
+      );
+      throw err; // INV-25: still fail-closed
     }
 
     if (ALERT_ACTIONS.has(event.action)) {

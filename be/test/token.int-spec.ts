@@ -74,6 +74,8 @@ const cfg = {
         // dedicated spec sets small thresholds). Prevents cross-test 429 on the shared 127.0.0.1.
         clientAuthFailIpMax: 100000,
         clientAuthFailClientMax: 100000,
+        clientAuthFailGlobalMax: 100000,
+        clientAuthFailUnknownMax: 100000,
       };
     throw new Error(`unexpected ns ${ns}`);
   },

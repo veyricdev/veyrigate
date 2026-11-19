@@ -200,6 +200,7 @@ export const AUDIT_ACTIONS = [
   "AUTH_REAUTH_FAILED",
   "ADMIN_USER_MFA_RESET",
   "AUTH_MFA_LOCKED",
+  "ADMIN_ACCESS_DENIED",
 ] as const;
 /** `targetType` values the BE writes today (free string in the BE query: this is the UI choice). */
 export const AUDIT_TARGET_TYPES = ["user", "client", "resource", "session", "signing_key"] as const;

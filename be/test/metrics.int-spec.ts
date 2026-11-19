@@ -99,6 +99,8 @@ const cfg = {
         rateLimitMax: 100000,
         clientAuthFailIpMax: 100000,
         clientAuthFailClientMax: 100000,
+        clientAuthFailGlobalMax: 100000,
+        clientAuthFailUnknownMax: 100000,
       };
     // Run 89 (D89.4): the admin MFA gate is off in hand-composed modules, like `full-app`.
     if (ns === 'mfa') return { adminRequired: false };
@@ -523,7 +525,7 @@ describe('Prometheus /metrics + business metrics (B7.2)', () => {
       const clientId = await mkClient();
       jest
         .spyOn(app.get(ClientAuthenticationService), 'authenticate')
-        .mockRejectedValueOnce(new ClientAuthRateLimitedError(30));
+        .mockRejectedValueOnce(new ClientAuthRateLimitedError(30, 'source'));
       const before = await tokenErrors('temporarily_unavailable');
       const res = await exchange(clientId, 'whatever');
       expect(res.statusCode).toBe(429);
@@ -538,8 +540,14 @@ describe('Prometheus /metrics + business metrics (B7.2)', () => {
       expect(await audits(AuditAction.AUTH_LOGIN_FAILED, 'failure')).toBe(before! + 1);
     });
 
-    it('audit write fails => counter +0 (counters match persisted audit only)', async () => {
+    it('run 97 (DEBT-218, D97.2): audit write fails => event counter +1 (counted before the write) and write failure counter +1', async () => {
       const before = await audits(AuditAction.TOKEN_REVOKED, 'success');
+      const failures = async () =>
+        sample(await scrape(), 'sso_audit_write_failures_total', {
+          action: AuditAction.TOKEN_REVOKED,
+        });
+      const failuresBefore = await failures();
+      expect(failuresBefore).toBe(0);
       jest.spyOn(auditModel, 'create').mockRejectedValueOnce(new Error('mongo down') as never);
       await expect(
         app.get(AuditService).record({
@@ -548,7 +556,8 @@ describe('Prometheus /metrics + business metrics (B7.2)', () => {
           result: 'success',
         }),
       ).rejects.toThrow('mongo down');
-      expect(await audits(AuditAction.TOKEN_REVOKED, 'success')).toBe(before);
+      expect(await audits(AuditAction.TOKEN_REVOKED, 'success')).toBe(before! + 1);
+      expect(await failures()).toBe(failuresBefore! + 1);
     });
 
     it('observeAuditEvent throwing never breaks the request: code grant still 200 with tokens', async () => {

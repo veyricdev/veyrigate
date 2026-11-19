@@ -44,6 +44,8 @@ const env = (mongoUri = URI) => ({
   RATE_LIMIT_MAX: '100000',
   CLIENT_AUTH_FAIL_IP_MAX: '100000',
   CLIENT_AUTH_FAIL_CLIENT_MAX: '100000',
+  CLIENT_AUTH_FAIL_GLOBAL_MAX: '100000',
+  CLIENT_AUTH_FAIL_UNKNOWN_MAX: '100000',
 });
 
 const run = (cli: string, args: string[]) =>

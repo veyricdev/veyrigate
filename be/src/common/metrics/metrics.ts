@@ -21,11 +21,30 @@ export type BackgroundWrite = (typeof BACKGROUND_WRITES)[number];
 /** Why the SMTP mailer dropped a mail without sending it (DEBT-683, D95.11). */
 export const MAIL_DROP_REASONS = ['queue_full', 'shutdown'] as const;
 export type MailDropReason = (typeof MAIL_DROP_REASONS)[number];
+/** Wire error of a refused admin API call (401/403, DEBT-126, D97.7). */
+export const ADMIN_DENY_REASONS = [
+  'invalid_token',
+  'insufficient_scope',
+  'forbidden',
+  'step_up_required',
+] as const;
+/** Audit actions written by CLIs whose last timestamp the app polls (DEBT-618, D97.19/D97.20). */
+export const AUDIT_ALERT_WATCHED = ['ADMIN_RECOVERED', 'ADMIN_BOOTSTRAPPED'] as const;
+/** Which client-auth failure bucket answered 429 (DEBT-072, D97.16). */
+export const CLIENT_AUTH_LIMIT_SCOPES = ['source', 'client', 'unknown_client'] as const;
+export type ClientAuthLimitScope = (typeof CLIENT_AUTH_LIMIT_SCOPES)[number];
 
 const auditEvents = new Counter({
   name: 'sso_audit_events_total',
-  help: 'Audit events persisted, by action and result.',
+  help: 'Audit events recorded, by action and result (counted before the write; failed writes are also in sso_audit_write_failures_total).',
   labelNames: ['action', 'result'] as const,
+  registers: [registry],
+});
+
+const auditWriteFailures = new Counter({
+  name: 'sso_audit_write_failures_total',
+  help: 'Audit events whose write to the audit log failed, by action.',
+  labelNames: ['action'] as const,
   registers: [registry],
 });
 
@@ -63,6 +82,27 @@ const mailDropped = new Counter({
   registers: [registry],
 });
 
+const adminAuthDenied = new Counter({
+  name: 'sso_admin_auth_denied_total',
+  help: 'Admin API requests refused with 401/403, by wire error.',
+  labelNames: ['reason'] as const,
+  registers: [registry],
+});
+
+const auditAlertLastEvent = new Gauge({
+  name: 'sso_audit_alert_last_event_timestamp_seconds',
+  help: 'Unix time of the newest audit event of a CLI-written alert action (0 = none), polled from the audit log.',
+  labelNames: ['action'] as const,
+  registers: [registry],
+});
+
+const clientAuthRateLimited = new Counter({
+  name: 'sso_client_auth_rate_limited_total',
+  help: 'Client authentications refused with 429 by the failure limiter, by bucket (source = per IP, client = global per client_id, unknown_client = global for unknown client_ids).',
+  labelNames: ['scope'] as const,
+  registers: [registry],
+});
+
 export const httpDuration = new Histogram({
   name: 'sso_http_request_duration_seconds',
   help: 'HTTP request duration, by method, route template and status class.',
@@ -79,6 +119,7 @@ const isOneOf = <T extends string>(set: readonly T[], v: unknown): v is T =>
 // series born at 1 has no prior sample and the reuse/emergency alerts would never fire).
 for (const action of ACTIONS) {
   for (const result of RESULTS) auditEvents.inc({ action, result }, 0);
+  auditWriteFailures.inc({ action }, 0);
 }
 for (const mode of ROTATION_MODES) {
   for (const result of RESULTS) keyRotations.inc({ mode, result }, 0);
@@ -88,9 +129,12 @@ for (const endpoint of TOKEN_ENDPOINTS) {
 }
 for (const what of BACKGROUND_WRITES) backgroundWriteFailures.inc({ what }, 0);
 for (const reason of MAIL_DROP_REASONS) mailDropped.inc({ reason }, 0);
+for (const reason of ADMIN_DENY_REASONS) adminAuthDenied.inc({ reason }, 0);
+for (const action of AUDIT_ALERT_WATCHED) auditAlertLastEvent.set({ action }, 0);
+for (const scope of CLIENT_AUTH_LIMIT_SCOPES) clientAuthRateLimited.inc({ scope }, 0);
 
 /**
- * Count one PERSISTED audit event (called by `AuditService.record` after the write). Unknown
+ * Count one audit event recorded, before the write (called by `AuditService.record`, DEBT-218). Unknown
  * action/result/mode values are ignored (no new series). Synchronous; never awaits.
  */
 export function observeAuditEvent(event: Pick<AuditEvent, 'action' | 'result' | 'metadata'>): void {
@@ -100,6 +144,11 @@ export function observeAuditEvent(event: Pick<AuditEvent, 'action' | 'result' | 
     const mode = event.metadata?.mode;
     if (isOneOf(ROTATION_MODES, mode)) keyRotations.inc({ mode, result: event.result });
   }
+}
+
+/** Count one failed audit write (DEBT-218, D97.3); an unknown action is ignored. */
+export function observeAuditWriteFailure(action: string): void {
+  if (ACTIONS.has(action)) auditWriteFailures.inc({ action });
 }
 
 /** Count one OAuth error response of `/token` or `/revoke`; a code outside the union => server_error. */
@@ -121,4 +170,19 @@ export function setMailQueueDepth(n: number): void {
 /** Count `n` mails dropped by the SMTP mailer (DEBT-683); an unknown reason is ignored. */
 export function observeMailDropped(reason: MailDropReason, n = 1): void {
   if (isOneOf(MAIL_DROP_REASONS, reason)) mailDropped.inc({ reason }, n);
+}
+
+/** Count one admin API 401/403 by its wire error (DEBT-126, D97.7); any other value is ignored. */
+export function observeAdminAuthDenied(reason: string): void {
+  if (isOneOf(ADMIN_DENY_REASONS, reason)) adminAuthDenied.inc({ reason });
+}
+
+/** Set the newest audit timestamp (seconds) of a watched alert action (DEBT-618); others ignored. */
+export function setAuditAlertLastEvent(action: string, seconds: number): void {
+  if (isOneOf(AUDIT_ALERT_WATCHED, action)) auditAlertLastEvent.set({ action }, seconds);
+}
+
+/** Count one client auth refused with 429 (DEBT-072, D97.16); an unknown scope is ignored. */
+export function observeClientAuthRateLimited(scope: ClientAuthLimitScope): void {
+  if (isOneOf(CLIENT_AUTH_LIMIT_SCOPES, scope)) clientAuthRateLimited.inc({ scope });
 }

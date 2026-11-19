@@ -285,6 +285,8 @@ describe('run 71 tester: db:sync-indexes CLI on a legacy audit collection', () =
     RATE_LIMIT_MAX: '100000',
     CLIENT_AUTH_FAIL_IP_MAX: '100000',
     CLIENT_AUTH_FAIL_CLIENT_MAX: '100000',
+    CLIENT_AUTH_FAIL_GLOBAL_MAX: '100000',
+    CLIENT_AUTH_FAIL_UNKNOWN_MAX: '100000',
     ...(days !== undefined ? { AUDIT_RETENTION_DAYS: days } : {}),
   });
   const run = (days?: string) =>

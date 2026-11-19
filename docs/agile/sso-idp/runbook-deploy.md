@@ -165,7 +165,7 @@ fail-closed (thao tác ghi phiên/code lỗi rõ ràng) thay vì âm thầm mấ
 5'. Từ run 82: chạy truy vấn chỉ đọc `runbook-ops.md` §8 (scope ngoài RFC 6749 §3.3) — khác rỗng ⇒ dọn qua admin API trước, hoặc chấp nhận lần sửa kế tiếp của bản ghi đó sẽ `400`.
 5''. Từ run 84: chạy truy vấn chỉ đọc `runbook-ops.md` §10 (email ngoài ngữ pháp D84.1), ghi `count` vào ticket deploy — xem §13.
 6. Rollout tiến trình ứng dụng.
-7. Từ run 91 (DEBT-666, điều kiện go-live (2)): trước khi mở đăng ký công khai, nạp `ops/prometheus/alerts.yml` vào Prometheus thật (có `SsoBackgroundWriteFailed` + `SsoAuthMailFailed`) và route tới receiver có người trực (Alertmanager do môi trường quyết định, DEBT-670); xử lý theo `runbook-ops.md` §13.
+7. Từ run 91 (DEBT-666, điều kiện go-live (2)): trước khi mở đăng ký công khai, nạp `ops/prometheus/alerts.yml` vào Prometheus thật (có `SsoBackgroundWriteFailed` + `SsoAuthMailFailed`) và route tới receiver có người trực (Alertmanager do môi trường quyết định, DEBT-670); xử lý theo `runbook-ops.md` §13. Từ run 97 nạp lại file để có thêm `SsoAuditWriteFailed` (critical, `runbook-ops.md` §14), `SsoAdminAccessDenied` + `SsoAdminInvalidTokenHigh` (warning, §15), `SsoAdminRecovered` (critical, §3d), `SsoAdminBootstrapped` (warning, §16 bên dưới) và `SsoClientAuthGlobalLimit` (warning, `runbook-ops.md` §16); kiểm trên Prometheus (`/rules`) đủ các rule này. Trần toàn cục client auth miễn trừ theo IP nguồn ⇒ `TRUST_PROXY` phải đúng IP/CIDR của proxy (§5): tắt sau proxy thì botnet được miễn cùng RP, tin quá rộng thì giả được `X-Forwarded-For` (DEBT-710).
 8. Từ run 91 (DEBT-671, D91.14): `/verify-email` đòi thêm mật khẩu tài khoản (sai 5 lần ⇒ link bị huỷ). Link xác minh gửi trước deploy vẫn dùng được, chỉ phải nhập mật khẩu; người không nhớ mật khẩu dùng `/forgot` (cũng xác minh email). Báo trước cho bộ phận hỗ trợ.
 9. Từ run 91 (DEBT-651, D91.6): key Redis của authorization code đổi sang `authz_code:{<sha256>}` (hash tag, kèm dấu `authz_code_used:{…}` và denylist `at_revoked:<jti>`) ⇒ code đang bay lúc rollout (≤ 60 s) không đổi được, RP nhận `invalid_grant` và người dùng đăng nhập lại một lần. Không cần thao tác dữ liệu. AT thu hồi do code bị dùng lại chỉ bị từ chối ở IdP (`/introspect`, `/userinfo`, admin API); RS tự verify JWT cục bộ vẫn nhận tới `exp` (DEBT-669) ⇒ RS nhạy cảm nên introspect. **Hướng dẫn RP**: đổi mỗi code **đúng một lần**, không retry và không gửi song song cùng một code — lần đổi thứ hai (kể cả do RP tự retry) bị coi là dùng lại và thu hồi luôn token của lần đầu.
 
@@ -212,7 +212,7 @@ key, `src/`, test hay devDependencies; chạy user `1000:1000`, rootfs read-only
 
 ```bash
 docker build -f fe-admin/Dockerfile -t <registry>/veyrigate-fe-admin:<version> .
-bash fe-admin/scripts/docker-smoke.sh <registry>/veyrigate-fe-admin:<version>   # 13 check, như CI `fe-admin-image`
+bash fe-admin/scripts/docker-smoke.sh <registry>/veyrigate-fe-admin:<version>   # 18 check, như CI `fe-admin-image`
 ```
 
 **Build context fail-closed (DEBT-398)**: bước đầu stage `build` quét context qua bind mount (không tạo
@@ -230,7 +230,7 @@ ngoài máy build (cache `max` chứa layer trung gian của stage `build`); n�
 | `ADMIN_API_RESOURCE` | Resource indicator của admin API |
 | `OIDC_CLIENT_ID` | Client confidential của fe-admin |
 | `OIDC_CLIENT_SECRET`, `SESSION_SECRET` | ≥ 32 ký tự, ngẫu nhiên, lấy từ secret store; không đặt trong image/compose commit |
-| `SESSION_REDIS_URL` | Nên `rediss://` + user ACL chỉ `~fea:*` (DEBT-280) |
+| `SESSION_REDIS_URL` | **Bắt buộc ở production (boot fail)**: `rediss://<user>[:<mật khẩu>]@host:port[/db]`, user ACL khác rỗng và khác `default` (D97.22, DEBT-280). Xem "Redis phiên" bên dưới |
 | `HOST`, `PORT` | Mặc định image `0.0.0.0`, `3000` |
 
 - **Env lỗi ⇒ container thoát mã 1** (tự kiểm `/healthz` lúc boot). Log chỉ có **tên biến** + lý do
@@ -241,6 +241,27 @@ ngoài máy build (cache `max` chứa layer trung gian của stage `build`); n�
 - **Chỉ 1 replica** cho tới khi xong DEBT-278.
 - **Rate limit `/auth/login` ở proxy** (DEBT-284).
 - Sau proxy TLS, trình duyệt không gửi `Sec-Fetch-Site` có thể bị CSRF check chặn nhầm (DEBT-376).
+
+**Redis phiên (D97.22–D97.23, DEBT-280)**:
+- **Mặc định khuyến nghị: Redis riêng cho fe-admin** (instance standalone nhỏ, TLS, user ACL riêng). Mất
+  phiên fe-admin chỉ buộc admin đăng nhập lại. fe-admin chỉ nhận một URL standalone, **không** hỗ trợ
+  Sentinel (§10): trỏ thẳng master Redis IdP thì failover làm fe-admin 503 tới khi sửa env (DEBT-701).
+- Chỉ dùng chung instance Redis IdP khi có user ACL hạn chế ở dưới (user `default` ⇒ boot fail).
+- ioredis tự bật TLS với `rediss://`. CA riêng ⇒ `NODE_EXTRA_CA_CERTS=/đường/dẫn/ca.pem` (mount read-only).
+- User ACL (thay `…` bằng mật khẩu từ secret store; `+info` cho ready check của ioredis, `+select` khi URL có `/db`):
+
+```
+ACL SETUSER fea on >… resetkeys ~fea:* resetchannels -@all +get +set +del +pexpire +getdel +ping +info +select
+```
+
+- Kiểm trước khi bật fe-admin, **dán kết quả vào ticket deploy**:
+  - `ACL DRYRUN fea GET fea:x` ⇒ `OK`;
+  - `ACL DRYRUN fea GET sess:x` ⇒ bị từ chối (không có quyền key);
+  - `ACL DRYRUN fea KEYS *` ⇒ bị từ chối (không có quyền lệnh);
+  - `ACL DRYRUN fea INFO` ⇒ `OK` (thiếu ⇒ ioredis không ready, mọi login 503 trong khi `/healthz` vẫn 200);
+  - sau khi bật: đăng nhập console thật một lần (DEBT-705).
+- CI smoke (`fe-admin-image`, check 12b) chỉ kiểm `redis://` bị từ chối lúc boot; **không** dựng Redis ACL/TLS
+  trong CI, ACL chỉ kiểm bằng `ACL DRYRUN` ở trên (DEBT-702).
 
 **Healthcheck**: `GET|HEAD /healthz` ⇒ `200 ok`, `no-store`. Đây là **liveness**, không phải readiness:
 không chạm Redis/IdP (Redis/IdP chết ⇒ 503 theo từng request, `/healthz` vẫn 200). `/ready` ⇒ DEBT-378.
@@ -711,6 +732,9 @@ docker run --rm --log-driver none --env-file <env app> -e BOOTSTRAP_FE_ADMIN_RED
 6. Cấp `super_admin` bằng `db:admin-recover --email … --requested-by … --approved-by … --ticket …` (runbook-ops §3d, hai
    người).
 7. Đăng nhập console (fe-admin luôn `prompt=login`); kiểm `GET /admin/audit?action=ADMIN_BOOTSTRAPPED` có sự kiện bước 3.
+   Từ run 97 (DEBT-618, D97.20): BE đọc audit mỗi 60 s ⇒ alert `SsoAdminBootstrapped` (warning) **sẽ bắn** trong 30 phút
+   sau bước 3 (và `SsoAdminRecovered` sau bước 6) — đây là dự kiến ở lần triển khai đầu, báo trước cho người trực; alert
+   tự hết sau 30 phút. Ngoài lần đầu, alert này bắn mà không có thay đổi được duyệt ⇒ coi như sự cố.
 
 Xử lý sự cố:
 

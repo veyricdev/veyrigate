@@ -58,6 +58,12 @@ export enum AuditAction {
   ADMIN_USER_MFA_RESET = 'ADMIN_USER_MFA_RESET',
   /** Run 89 DEBT-640 (D89.25): the consecutive wrong-code cap was reached; TOTP is refused. */
   AUTH_MFA_LOCKED = 'AUTH_MFA_LOCKED',
+  /**
+   * Run 97 (DEBT-126, D97.8): an admin token with a verified signature was refused (`metadata.reason`:
+   * wrong_audience, not_live, not_admin_capable, insufficient_scope, forbidden). Deduped per sub+reason
+   * and globally capped; not an alert action (alerts come from `sso_admin_auth_denied_total`).
+   */
+  ADMIN_ACCESS_DENIED = 'ADMIN_ACCESS_DENIED',
 }
 
 /** Actions that must raise a separate alert (spec §10: reuse, key rotation, admin control-plane). */
@@ -76,10 +82,12 @@ export const ALERT_ACTIONS: ReadonlySet<AuditAction> = new Set([
   AuditAction.ADMIN_USER_UNLOCKED,
   AuditAction.ADMIN_USER_ROLES_CHANGED,
   AuditAction.OAUTH_CONSENT_REVOKED,
-  // Written by the `admin-recover` CLI, where no app listener runs: that path alerts through the JSON log line
-  // it prints (`{alert:true,...}`), which runbook-ops section 3d requires pasting into the incident channel.
+  // Written by the `admin-recover` CLI, where no app listener runs. Run 97 (DEBT-618): the app polls the audit log
+  // every 60 s into a gauge => alert SsoAdminRecovered; the CLI's JSON line (`{alert:true,...}`) must still be
+  // pasted into the incident channel (runbook-ops section 3d).
   AuditAction.ADMIN_RECOVERED,
-  // Same as ADMIN_RECOVERED: written by the `db:bootstrap` CLI, alerting through its `{alert:true,...}` line.
+  // Same as ADMIN_RECOVERED: written by the `db:bootstrap` CLI; app poll => alert SsoAdminBootstrapped, and the
+  // CLI's `{alert:true,...}` line.
   AuditAction.ADMIN_BOOTSTRAPPED,
   // Run 89 (D89.19): brute force on the second factor, and a factor removed.
   AuditAction.AUTH_MFA_THROTTLED,

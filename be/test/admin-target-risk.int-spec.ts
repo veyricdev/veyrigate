@@ -103,6 +103,8 @@ describe('run 30 QA (tester): DEBT-172 runtime guard variants', () => {
           rateLimitMax: 1000,
           clientAuthFailIpMax: 100000,
           clientAuthFailClientMax: 100000,
+          clientAuthFailGlobalMax: 100000,
+          clientAuthFailUnknownMax: 100000,
         };
       if (ns === 'client') return { secretGraceTtl: 60 };
       if (ns === 'consent') return { policyVersion: '1', termsVersion: '1' };

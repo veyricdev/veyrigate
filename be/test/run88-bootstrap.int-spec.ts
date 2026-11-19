@@ -504,6 +504,8 @@ describe('run 88 T1: built bootstrap CLI (no connection paths, AC7/AC10)', () =>
     RATE_LIMIT_MAX: '100000',
     CLIENT_AUTH_FAIL_IP_MAX: '100000',
     CLIENT_AUTH_FAIL_CLIENT_MAX: '100000',
+    CLIENT_AUTH_FAIL_GLOBAL_MAX: '100000',
+    CLIENT_AUTH_FAIL_UNKNOWN_MAX: '100000',
     BOOTSTRAP_FE_ADMIN_REDIRECT_URIS: 'https://admin.example.com/auth/callback',
     BOOTSTRAP_FE_ADMIN_POST_LOGOUT_REDIRECT_URIS: 'https://admin.example.com/',
     ...extra,

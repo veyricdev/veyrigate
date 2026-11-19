@@ -70,6 +70,7 @@ describe("parseServerEnv", () => {
       NODE_ENV: "production",
       ADMIN_API_BASE_URL: "https://api.example.com",
       APP_URL: "https://admin.example.com",
+      SESSION_REDIS_URL: "rediss://fea@redis.example.com:6380/0",
     };
     const err = captureError(() =>
       parseServerEnv({ ...prod, OIDC_ISSUER: "http://idp.example.com" }),

@@ -78,6 +78,8 @@ const cfg = {
         // High thresholds so the client-auth failure limiter never fires in these tests.
         clientAuthFailIpMax: 100000,
         clientAuthFailClientMax: 100000,
+        clientAuthFailGlobalMax: 100000,
+        clientAuthFailUnknownMax: 100000,
       };
     if (ns === 'session') return { cookieSecure: false }; // run 85: LoginThrottleService
     throw new Error(`unexpected ns ${ns}`);

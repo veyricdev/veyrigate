@@ -166,7 +166,8 @@ describe('run 59 tester: pre-routing framework errors on the real listening app 
       ['pwn', RUN],
     ],
     ['GET', 'XSS-shaped + bad escape', `/x/%3Cscript%3E${RUN}%zz`, 400, [RUN, '%3C']],
-    ['GET', 'param 101 chars', `/admin/users/${LONG}`, 414, ['aaaa', 'admin']],
+    // '/admin/users', not bare 'admin': metric names carry 'admin' (sso_admin_auth_denied_total, run 97)
+    ['GET', 'param 101 chars', `/admin/users/${LONG}`, 414, ['aaaa', '/admin/users']],
     ['GET', 'param 5000 chars', `/admin/users/${'b'.repeat(5000)}`, 414, ['bbbb']],
     [
       'GET',

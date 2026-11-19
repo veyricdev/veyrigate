@@ -457,6 +457,8 @@ describe('seed-dev: resourceId mapping works end-to-end on real seed data (Task 
           // High thresholds so the client-auth failure limiter never fires in these tests.
           clientAuthFailIpMax: 100000,
           clientAuthFailClientMax: 100000,
+          clientAuthFailGlobalMax: 100000,
+          clientAuthFailUnknownMax: 100000,
         };
       if (ns === 'client') return { secretGraceTtl: 60 };
       if (ns === 'consent') return { policyVersion: '1', termsVersion: '1' };
@@ -1035,6 +1037,8 @@ describe('seed-dev: DEBT-100 consent for a 2nd resource (`other`) + INV-8 chain 
           rateLimitMax: 100,
           clientAuthFailIpMax: 100000,
           clientAuthFailClientMax: 100000,
+          clientAuthFailGlobalMax: 100000,
+          clientAuthFailUnknownMax: 100000,
         };
       if (ns === 'client') return { secretGraceTtl: 60 };
       if (ns === 'consent') return { policyVersion: '1', termsVersion: '1' };

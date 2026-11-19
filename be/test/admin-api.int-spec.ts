@@ -131,6 +131,8 @@ describe('Admin API B6.3a (clients, secrets, resources) on real Mongo + Redis', 
           rateLimitMax: 100000,
           clientAuthFailIpMax: 100000,
           clientAuthFailClientMax: 100000,
+          clientAuthFailGlobalMax: 100000,
+          clientAuthFailUnknownMax: 100000,
         };
       if (ns === 'client') return { secretGraceTtl: 3600 };
       if (ns === 'consent') return { policyVersion: '1', termsVersion: '1' };

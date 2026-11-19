@@ -91,6 +91,10 @@ export interface SecurityConfig {
   clientAuthFailIpMax: number;
   /** Client-auth failure limit per `client_id|ip` (DEBT-029/039). */
   clientAuthFailClientMax: number;
+  /** Global client-auth failure limit per registered `client_id`, all sources (DEBT-072). */
+  clientAuthFailGlobalMax: number;
+  /** Global client-auth failure limit shared by every unknown `client_id` (DEBT-072). */
+  clientAuthFailUnknownMax: number;
 }
 
 export interface ConsentConfig {
@@ -206,6 +210,8 @@ export function buildConfig(env: Env): Config {
       rateLimitMax: env.RATE_LIMIT_MAX,
       clientAuthFailIpMax: env.CLIENT_AUTH_FAIL_IP_MAX,
       clientAuthFailClientMax: env.CLIENT_AUTH_FAIL_CLIENT_MAX,
+      clientAuthFailGlobalMax: env.CLIENT_AUTH_FAIL_GLOBAL_MAX,
+      clientAuthFailUnknownMax: env.CLIENT_AUTH_FAIL_UNKNOWN_MAX,
     },
     adminSeed: env.ADMIN_SEED_EMAIL ? { email: env.ADMIN_SEED_EMAIL } : undefined,
     mailer: {

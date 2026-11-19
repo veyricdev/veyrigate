@@ -251,3 +251,177 @@ tests:
       - eval_time: 24m
         alertname: SsoMailDropped
         exp_alerts: []
+
+  # Run 97 (DEBT-218, D97.4): one failed audit write fires SsoAuditWriteFailed; a reuse whose audit write
+  # failed is still counted (before the write), so SsoTokenReuseDetected fires too.
+  - interval: 1m
+    input_series:
+      - series: 'sso_audit_write_failures_total{action="TOKEN_REUSE_DETECTED",instance="a"}'
+        values: '0 0 0 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'sso_audit_events_total{action="TOKEN_REUSE_DETECTED",result="failure",instance="a"}'
+        values: '0 0 0 1 1 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: SsoAuditWriteFailed
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: SsoAuditWriteFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: An audit event could not be written to the audit log
+              description: Sensitive operations fail closed (5xx) while the audit log cannot be written. Check Mongo and runbook-ops section 14.
+      - eval_time: 4m
+        alertname: SsoTokenReuseDetected
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: Refresh token reuse detected (a refresh family was revoked)
+              description: A rotated refresh token was replayed in the last 5 minutes. Check the TOKEN_REUSE_DETECTED audit events.
+
+  # Run 97 (D97.4): no failed write => no alert.
+  - interval: 1m
+    input_series:
+      - series: 'sso_audit_write_failures_total{action="TOKEN_ISSUED",instance="a"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SsoAuditWriteFailed
+        exp_alerts: []
+
+  # Run 97 (DEBT-126, D97.10): 10 forbidden/insufficient_scope in 15m fires; 9 does not; a step-up storm
+  # never alerts (normal fe-admin re-login flow).
+  - interval: 1m
+    input_series:
+      - series: 'sso_admin_auth_denied_total{reason="forbidden",instance="a"}'
+        values: '0 0 2 4 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6 6'
+      - series: 'sso_admin_auth_denied_total{reason="insufficient_scope",instance="b"}'
+        values: '0 0 0 2 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4'
+      - series: 'sso_admin_auth_denied_total{reason="step_up_required",instance="a"}'
+        values: '0+50x40'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: SsoAdminAccessDenied
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: SsoAdminAccessDenied
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: Admin API calls are repeatedly refused for missing scope or role
+              description: A valid admin token keeps hitting routes it may not use. Check the ADMIN_ACCESS_DENIED audit events and runbook-ops section 15.
+      - eval_time: 35m
+        alertname: SsoAdminAccessDenied
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: SsoAdminInvalidTokenHigh
+        exp_alerts: []
+
+  # 9 refusals in 15m => below the threshold.
+  - interval: 1m
+    input_series:
+      - series: 'sso_admin_auth_denied_total{reason="forbidden",instance="a"}'
+        values: '0 0 3 6 9 9 9 9 9 9 9 9 9 9 9 9 9 9 9 9'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SsoAdminAccessDenied
+        exp_alerts: []
+
+  # invalid_token at 0.5/s (30/min) for > 10m fires; 0.1/s (6/min) does not.
+  - interval: 1m
+    input_series:
+      - series: 'sso_admin_auth_denied_total{reason="invalid_token",instance="a"}'
+        values: '0+30x40'
+      - series: 'sso_admin_auth_denied_total{reason="invalid_token",instance="b"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: SsoAdminInvalidTokenHigh
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: SsoAdminInvalidTokenHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: The admin API keeps refusing invalid bearer tokens
+              description: Sustained invalid_token answers on the admin API (stale, revoked or forged tokens). Check runbook-ops section 15.
+  - interval: 1m
+    input_series:
+      - series: 'sso_admin_auth_denied_total{reason="invalid_token",instance="a"}'
+        values: '0+6x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: SsoAdminInvalidTokenHigh
+        exp_alerts: []
+
+  # Run 97 (DEBT-618, D97.20). promtool's time() starts at 0, so the silent cases sit past 30 min: the gauge is
+  # 0 (no event) until 40m, then an event at t=2400 s (40m) is polled. 35m: 0 => silent; 50m: 10 min old =>
+  # fires (replica b still 0: max merges); 75m: 35 min old => silent (a restart never re-fires an old event).
+  - interval: 1m
+    input_series:
+      - series: 'sso_audit_alert_last_event_timestamp_seconds{action="ADMIN_RECOVERED",instance="a"}'
+        values: '0x40 2400x80'
+      - series: 'sso_audit_alert_last_event_timestamp_seconds{action="ADMIN_RECOVERED",instance="b"}'
+        values: '0x121'
+      - series: 'sso_audit_alert_last_event_timestamp_seconds{action="ADMIN_BOOTSTRAPPED",instance="a"}'
+        values: '0x40 2400x80'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: SsoAdminRecovered
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: SsoAdminRecovered
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: A super_admin was restored with the admin-recover CLI (break-glass)
+              description: An ADMIN_RECOVERED audit event was written in the last 30 minutes. Confirm it was a planned recovery (runbook-ops section 3d).
+      - eval_time: 75m
+        alertname: SsoAdminRecovered
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: SsoAdminBootstrapped
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: SsoAdminBootstrapped
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: The admin control plane was bootstrapped with the db:bootstrap CLI
+              description: An ADMIN_BOOTSTRAPPED audit event was written in the last 30 minutes. Expected on the first deploy only (runbook-deploy section 16).
+      - eval_time: 75m
+        alertname: SsoAdminBootstrapped
+        exp_alerts: []
+
+  # Run 97 (DEBT-072, D97.16): a global-cap 429 for one client fires one warning with scope=client; only
+  # per-IP (scope=source) 429s are silent, and so is a block older than 5m.
+  - interval: 1m
+    input_series:
+      - series: 'sso_client_auth_rate_limited_total{scope="client",instance="a"}'
+        values: '0 0 0 2 2 2 2 2 2 2 2 2 2'
+      - series: 'sso_client_auth_rate_limited_total{scope="unknown_client",instance="a"}'
+        values: '0x12'
+      - series: 'sso_client_auth_rate_limited_total{scope="source",instance="a"}'
+        values: '0 5 10 15 20 25 30 35 40 45 50 55 60'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: SsoClientAuthGlobalLimit
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: SsoClientAuthGlobalLimit
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              scope: client
+            exp_annotations:
+              summary: Client authentication hit the global per-client failure cap
+              description: Many sources are failing client authentication for one client (or for unknown client ids). Check the log line client-auth global limit reached and runbook-ops section 16.
+      - eval_time: 12m
+        alertname: SsoClientAuthGlobalLimit
+        exp_alerts: []

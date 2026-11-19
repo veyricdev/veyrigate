@@ -102,8 +102,14 @@ describe('ops/prometheus + ops/grafana vs the exported metrics (B7.2 Task 3)', (
   it('alerts.yml: one group sso-idp; every rule has alert, expr, labels.severity, annotations.summary', () => {
     expect(alerts.groups.map((g) => g.name)).toEqual(['sso-idp']);
     expect(rules.map((r) => r.alert).sort()).toEqual([
+      'SsoAdminAccessDenied',
+      'SsoAdminBootstrapped',
+      'SsoAdminInvalidTokenHigh',
+      'SsoAdminRecovered',
+      'SsoAuditWriteFailed',
       'SsoAuthMailFailed',
       'SsoBackgroundWriteFailed',
+      'SsoClientAuthGlobalLimit',
       'SsoEmergencyKeyRotation',
       'SsoHttp5xxRatioHigh',
       'SsoMailDropped',
@@ -118,8 +124,11 @@ describe('ops/prometheus + ops/grafana vs the exported metrics (B7.2 Task 3)', (
       // No label templating in annotations (nothing identifying can leak into a notification).
       expect(JSON.stringify(r.annotations)).not.toMatch(/\{\{|\$labels|\$value/);
       // Multi-instance safe: every selector is aggregated (a backup age: the oldest db, `max`); a
-      // `sum by (<finite label>)` keeps one alert per label value (run 91, DEBT-666).
-      expect(r.expr).toMatch(isExternal(r.expr) ? /^max\(/ : /^sum(\s+by\s*\([\w,\s]+\))?\s*\(/);
+      // `sum by (<finite label>)` keeps one alert per label value (run 91, DEBT-666); an event-age rule
+      // takes the newest timestamp over replicas, `time() - max(...)` (run 97, DEBT-618).
+      expect(r.expr).toMatch(
+        isExternal(r.expr) ? /^max\(/ : /^(sum(\s+by\s*\([\w,\s]+\))?\s*\(|time\(\)\s*-\s*max\()/,
+      );
     }
   });
 

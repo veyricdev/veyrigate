@@ -174,6 +174,11 @@ export const envSchema = z
     // (brute-forcing one client's secret from one IP). Window reuses RATE_LIMIT_WINDOW.
     CLIENT_AUTH_FAIL_IP_MAX: positiveInt.default(30),
     CLIENT_AUTH_FAIL_CLIENT_MAX: positiveInt.default(10),
+    // Global cap per registered client_id, summed over every source not exempt (DEBT-072, D97.13):
+    // a botnet rotating IPs cannot force more Argon2 runs per client and window. A source that
+    // authenticated the client in the last 7 days is exempt. Unknown client_ids share ONE bucket.
+    CLIENT_AUTH_FAIL_GLOBAL_MAX: positiveInt.default(100),
+    CLIENT_AUTH_FAIL_UNKNOWN_MAX: positiveInt.default(300),
 
     // Reverse-proxy trust for `req.ip` / X-Forwarded-For (DEBT-006). Disabled by default; set to
     // the proxy IP(s)/CIDR(s) in production so per-IP rate-limit buckets see the real client IP.

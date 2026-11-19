@@ -97,10 +97,76 @@ end
 return 1`,
 };
 
+/**
+ * Global client-auth failure cap per `client_id` (DEBT-072, D97.13/D97.14).
+ *
+ * KEYS = [gKey, okKey, logKey]; ARGV = [limit, windowMs].
+ * - `okKey` exists (this source authenticated this client in the last 7 days) => exempt:
+ *   `{0,0,0,0}`, nothing incremented (a botnet burning the cap cannot lock out a known RP source).
+ * - `gKey >= limit` => blocked, nothing incremented: `{1, pttl, first, 0}`; `first` = 1 only for the
+ *   first block of the window (`SET logKey NX PX pttl`), so the caller logs once per window.
+ * - else INCR `gKey` (TTL on the first hit) => `{0,0,0,1}` (last = reserved: only this may be refunded).
+ */
+const RESERVE_GLOBAL_SCRIPT = {
+  name: 'rateLimitReserveGlobal', // numberOfKeys omitted → key count passed as first argument
+  lua: `
+if redis.call('EXISTS', KEYS[2]) == 1 then
+  return {0, 0, 0, 0}
+end
+local count = tonumber(redis.call('GET', KEYS[1]) or '0')
+if count >= tonumber(ARGV[1]) then
+  local pttl = redis.call('PTTL', KEYS[1])
+  if pttl < 1 then pttl = 1 end
+  local first = redis.call('SET', KEYS[3], '1', 'NX', 'PX', pttl) and 1 or 0
+  return {1, pttl, first, 0}
+end
+if redis.call('INCR', KEYS[1]) == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[2]) end
+return {0, 0, 0, 1}`,
+};
+
+/**
+ * A successful client auth (D97.14 step 6): mark the source trusted for `ARGV[1]` ms (`SET okKey 1
+ * PX`) and, only when THIS request reserved a unit (`ARGV[2]` = '1'), give it back (DECR `gKey` when
+ * > 0, like `REFUND_SCRIPT`). An exempt source never decrements: else its successes would erase the
+ * botnet's failures and void the cap. KEYS = [gKey, okKey].
+ */
+const CLIENT_OK_SCRIPT = {
+  name: 'rateLimitClientOk', // numberOfKeys omitted → key count passed as first argument
+  lua: `
+if ARGV[2] == '1' then
+  local count = tonumber(redis.call('GET', KEYS[1]) or '0')
+  if count > 0 then redis.call('DECR', KEYS[1]) end
+end
+redis.call('SET', KEYS[2], '1', 'PX', ARGV[1])
+return 1`,
+};
+
+/** A source that authenticated a client stays exempt from its global cap for 7 days (D97.15). */
+const TRUSTED_SOURCE_TTL_MS = 7 * 24 * 3600 * 1000;
+
+/** The keys of one global client-auth reservation (caller owns the hash tag, see client-auth). */
+export interface GlobalReserveKeys {
+  gKey: string;
+  okKey: string;
+  logKey: string;
+}
+
+export interface GlobalReserveResult extends ReserveResult {
+  /** First block of this window (log once). */
+  first: boolean;
+  /** This call incremented the bucket (not exempt, not blocked): only then may success refund it. */
+  reserved: boolean;
+}
+
 type RateLimitRedis = {
   rateLimitHit(numKeys: number, ...keysAndArgs: (string | number)[]): Promise<number[]>;
   rateLimitReserve(numKeys: number, ...keysAndArgs: (string | number)[]): Promise<[number, number]>;
   rateLimitRefund(numKeys: number, ...keys: string[]): Promise<number>;
+  rateLimitReserveGlobal(
+    numKeys: number,
+    ...keysAndArgs: (string | number)[]
+  ): Promise<[number, number, number, number]>;
+  rateLimitClientOk(numKeys: number, ...keysAndArgs: (string | number)[]): Promise<number>;
 };
 
 /** One bucket to charge in a {@link RateLimitService.reserve} call. */
@@ -132,7 +198,13 @@ export class RateLimitService {
   ) {
     const { rateLimitMax, rateLimitWindow } = config.getOrThrow<SecurityConfig>('security');
     this.defaults = { limit: rateLimitMax, windowSec: rateLimitWindow };
-    loadLuaScripts(redis.client, [HIT_SCRIPT, RESERVE_SCRIPT, REFUND_SCRIPT]);
+    loadLuaScripts(redis.client, [
+      HIT_SCRIPT,
+      RESERVE_SCRIPT,
+      REFUND_SCRIPT,
+      RESERVE_GLOBAL_SCRIPT,
+      CLIENT_OK_SCRIPT,
+    ]);
   }
 
   async hit(rule: RateLimitRule, subject: RateLimitSubject): Promise<RateLimitResult> {
@@ -190,6 +262,38 @@ export class RateLimitService {
     }
     const client = this.redis.client as unknown as RateLimitRedis;
     await client.rateLimitRefund(keys.length, ...keys);
+  }
+
+  /**
+   * Reserve one unit against a client's global failure bucket (DEBT-072, D97.14 step 3), unless the
+   * source is trusted. Blocked => nothing incremented. A Redis error propagates (fail-closed).
+   */
+  async reserveGlobal(keys: GlobalReserveKeys, limit: number): Promise<GlobalReserveResult> {
+    const windowMs = this.defaults.windowSec * 1000;
+    const client = this.redis.client as unknown as RateLimitRedis;
+    const [blocked, retryAfterMs, first, reserved] = await client.rateLimitReserveGlobal(
+      3,
+      keys.gKey,
+      keys.okKey,
+      keys.logKey,
+      limit,
+      windowMs,
+    );
+    return {
+      blocked: blocked === 1,
+      retryAfterSec: blocked === 1 ? Math.max(1, Math.ceil(retryAfterMs / 1000)) : 0,
+      first: first === 1,
+      reserved: reserved === 1,
+    };
+  }
+
+  /**
+   * Successful client auth: trust this source for 7 days and refund the global bucket only when
+   * `reserved` (see {@link GlobalReserveResult.reserved}, D97.14).
+   */
+  async clientOk(gKey: string, okKey: string, reserved: boolean): Promise<void> {
+    const client = this.redis.client as unknown as RateLimitRedis;
+    await client.rateLimitClientOk(2, gKey, okKey, TRUSTED_SOURCE_TTL_MS, reserved ? 1 : 0);
   }
 
   private dimsFor(subject: RateLimitSubject): (keyof RateLimitSubject)[] {

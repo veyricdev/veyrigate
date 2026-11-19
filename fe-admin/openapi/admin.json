@@ -1000,7 +1000,8 @@
                 "MFA_RECOVERY_USED",
                 "AUTH_REAUTH_FAILED",
                 "ADMIN_USER_MFA_RESET",
-                "AUTH_MFA_LOCKED"
+                "AUTH_MFA_LOCKED",
+                "ADMIN_ACCESS_DENIED"
               ]
             }
           },
@@ -1961,7 +1962,8 @@
               "MFA_RECOVERY_USED",
               "AUTH_REAUTH_FAILED",
               "ADMIN_USER_MFA_RESET",
-              "AUTH_MFA_LOCKED"
+              "AUTH_MFA_LOCKED",
+              "ADMIN_ACCESS_DENIED"
             ]
           },
           "targetType": {

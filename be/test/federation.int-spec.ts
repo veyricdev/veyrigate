@@ -170,6 +170,8 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
           rateLimitMax: 100000,
           clientAuthFailIpMax: 100000,
           clientAuthFailClientMax: 100000,
+          clientAuthFailGlobalMax: 100000,
+          clientAuthFailUnknownMax: 100000,
         };
       if (ns === 'client') return { secretGraceTtl: 3600 };
       if (ns === 'consent') return { policyVersion: '1', termsVersion: '1' };
