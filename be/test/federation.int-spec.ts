@@ -390,7 +390,8 @@ describe('Federation broker (run 32, B5.1/B5.2) on real Mongo + Redis + mock pro
     const keyProvider = new LocalKeyProvider(keyDir);
     await keyProvider.init();
 
-    const pair = await generateKeyPair('RS256');
+    // jose 6: generateKeyPair is non-extractable by default; the mock-IdP tests export the private key
+    const pair = await generateKeyPair('RS256', { extractable: true });
     googleKey = pair.privateKey;
     const jwk = { ...(await exportJWK(pair.publicKey)), kid: 'mock-k1', alg: 'RS256' } as JWK;
 

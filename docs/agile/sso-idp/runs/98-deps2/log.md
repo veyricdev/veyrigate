@@ -1,0 +1,27 @@
+# Log — run 98 deps2
+
+- 2026-11-21 orchestrator: mở run (người dùng: "tiếp tục"). `codegraph sync`. Phạm vi T1 PR Dependabot #18–#21 (DEBT-706), T2 DEBT-697, T3 DEBT-711. Analyst bỏ qua. Tiếp: tech-lead fold.
+- 2026-11-21 tech-lead: fold **PASS**, quyết định D98.1–D98.14 ở cuối `tasks.md`, bằng chứng ở `review-techlead.md`. Thử trên worktree scratchpad, đã xoá; repo không đổi.
+  - #18: phải thêm `@tanstack/react-router@1.170.42`. Start 1.168.61 pin router này; PR để 1.170.41 ⇒ 2 bản router. Kèm theo: pin DEBT-442 → router-core 1.171.35, ignore router trong dependabot → `>1.170.42`.
+  - #19 jose 6: `generateKeyPair` mặc định non-extractable ⇒ sửa `federation.int-spec.ts:393`. kid/thumbprint không đổi. Bản chỉ có ESM vẫn chạy được: Jest ESM, require(esm) trên Node 22.23, ts-node.
+  - #20 view 12: không sửa code.
+  - #21 TS6: bỏ `baseUrl`; be thêm `moduleResolution: bundler`, `tsconfig.build.json` thêm `rootDir: ./src`.
+  - T2: xoá cả 9 exclude, frozen-lockfile vẫn qua.
+  - T3: warn khi production mà `TRUST_PROXY` unset/rỗng (`false` thì không warn); smoke Docker kiểm dòng warn.
+  - Gate thêm `test:vault` và drill rotate local.
+  - Debt mới: DEBT-712 (peer openapi-typescript đòi TS ^5).
+  - Tiếp: backend-dev.
+- 2026-11-21 backend-dev: T1–T3 xong theo D98.1–D98.12 (lệnh D98.9). T2 xoá cả khoá `minimumReleaseAgeExclude` + comment mới; #18 9 gói + router 1.170.42, pin DEBT-442 → 1.171.35, dependabot router `>1.170.42`; #19 jose 6.2.15 ×3 gói, `federation.int-spec.ts` `generateKeyPair(..., { extractable: true })`, comment jose 6 ở `federation.client.ts`/`providers.ts`; #20 view 12.0.1; #21 TS 6.0.3 ×4 gói, bỏ `baseUrl` (be, fe-admin), be `moduleResolution: bundler`, `tsconfig.build.json` `rootDir: ./src`.
+  - **Lệch nhỏ cần senior xem**: TS6 + `rootDir: ./src` đẩy `tsconfig.build.tsbuildinfo` ra `be/` (untracked, không bị gitignore, lọt vào context Docker) ⇒ thêm `"tsBuildInfoFile": "./dist/tsconfig.build.tsbuildinfo"` vào `be/tsconfig.build.json` (vị trí cũ; `deleteOutDir` xoá cùng dist). Mọi `.js/.d.ts/.map` trong `be/dist` giống hệt bản build TS 5.7.3 (`diff -r`, chỉ tsbuildinfo khác).
+  - T3 trust boundary: tài sản = độ chính xác `req.ip` (throttle per-IP, cap client-auth); không đổi state/quyền, chỉ log; message cố định không chèn env; không fail boot (fail-open có chủ đích D98.11). `main.ts` truyền `{ NODE_ENV, TRUST_PROXY }` (truyền thẳng `process.env` vướng TS2559 weak type). Unit +12 (RED: export thiếu ⇒ GREEN). Smoke check 14 (log ra file rồi `grep -c`), tổng 14/14; runbook-deploy §5 thêm 1 câu.
+  - Verify: frozen-lockfile "passes supply-chain policies"; audit high "No known vulnerabilities"; `pnpm why -r`: router 1.170.42, jose 6.2.15, typescript 6.0.3 (duy nhất), light-my-request 6.6.0 dưới fastify 5.12.8 (+6.8.0 platform-fastify như cũ); peers: chỉ openapi-typescript/TS và vite/@types/node; typecheck ×4, lint ×3 xanh; unit be 1363 (1351+12), fe-admin 1669, fe-sso-test 269; build be ⇒ `dist/main.js`, fe-admin build + check:bundle 0 hit; `gen:api` không diff; `bash -n` smoke OK; **int FULL 2524/2524** (99 suite). Chưa chạy: vault, drill rotate, E2E, X3, pentest, docker smoke thật (tester/CI).
+  - Debt mới: **DEBT-712** 💭 [deps] openapi-typescript 7.13.0 peer `typescript ^5.x` cảnh báo với TS 6.0.3; output `gen:api` giống hệt; bump khi có bản hỗ trợ TS 6 ≥ 14 ngày. Tiếp: senior-reviewer.
+- 2026-11-21 senior-reviewer: **PASS** (`review-senior.md`). 0 🔴, 1 🟡, 4 💭.
+  - Chạy lại: frozen-lockfile qua chính sách, audit high 0; typecheck ×4, lint ×3; unit be 1363, fe-admin 1669, fe-sso-test 269; be build (tsbuildinfo chỉ nằm trong `dist/`, image xoá `*.tsbuildinfo`); int jose 9 suite 269/269; `bash -n` smoke.
+  - Ngày phát hành: mọi gói mới trong lockfile ≤ 2026-11-02, kể cả 10 gói con TanStack.
+  - jose 6: mọi `jwtVerify` pin RS256; JWKS remote `redirect: "manual"` ⇒ 3xx ⇒ 502; mapping lỗi 401/502 không đổi.
+  - Lệch `tsBuildInfoFile` được chấp nhận. Gợi ý `node20` cho DEBT-695.
+  - Debt mới: **DEBT-713** 🟡 [BE] ponytail: spec T3 có 2 case thừa (`trust-proxy.spec.ts` L223/L241), smoke check 14 `docker logs` lặp lại check 11 (L303); net -9 dòng.
+  - Tiếp: tester (D98.13).
+- 2026-11-21 orchestrator: DEBT-713 (senior 🟡 ponytail) — bỏ 2 case thừa ở `trust-proxy.spec.ts` (absent trùng unset; 'never echoes' so 2 input rỗng); giữ `docker logs` riêng ở check 14 (rẻ, không phụ thuộc file log của check 11). 💭: comment `federation.int-spec.ts` bỏ số dòng cứng, reflow comment `federation.client.ts`. DEBT-713 mở + đóng.
+- 2026-11-21 tester: **PASS** gate D98.13 (`test-report.md`). Lockfile sha256 trước = sau, frozen-lockfile qua chính sách, audit high 0; typecheck ×4, lint ×3; unit be 1361, fe-admin 1669, fe-sso-test 269; build be (`dist/main.js`) + fe-admin `check:bundle` 0 hit; int FULL 99/2524; `test:vault` 32/32 (`vg-b73-vault` tạo/xoá đúng tên, image có sẵn); drill rotate local 23/23; E2E 53 (access log 1246 / 75 URL); X3 42; `mutate.mjs all` 7/7 đỏ đúng, `be/dist` sha256 khớp; harness on/off must 269/269, `HYG-ACCESSLOG` pass; SMTP 220 mọi điểm; grep evidence 0 secret. Chưa kiểm local: Docker smoke be (check 14) / fe-admin, promtool, sbom ⇒ CI. Evidence mới: `pentest-20261121T045803Z.json` + 7 `pentest-mutant-20261121T04*.json`, `rotate-local-20261121T042749Z.json`. Không debt mới. Tiếp: orchestrator commit + push, CI 9/9, đóng PR #18–#21 (D98.14).

@@ -21,12 +21,13 @@ updates:
       - dependency-name: typescript
         versions: ['>=7.0.0']
       # Run 96 (D96.10): Start 1.169 renames inputValidator and getResponseHeaders() returns a copy
-      # (Set-Cookie refresh / no-store would be lost silently). Start 1.168.60 pins router 1.170.41.
+      # (Set-Cookie refresh / no-store would be lost silently). Start 1.168.61 pins router 1.170.42
+      # (run 98, D98.2).
       # Remove both once fe-admin is migrated (DEBT-694).
       - dependency-name: '@tanstack/react-start'
         versions: ['>=1.169.0']
       - dependency-name: '@tanstack/react-router'
-        versions: ['>1.170.41']
+        versions: ['>1.170.42']
     groups:
       npm-minor-patch:
         applies-to: version-updates

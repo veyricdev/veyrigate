@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -6,7 +7,11 @@ import { AppModule } from './app.module';
 import { configureApp } from './bootstrap';
 import { createFastifyAdapter } from './common/http/framework-errors';
 import type { AppConfig } from './config/configuration';
-import { assertTrustProxyConsistent, parseTrustProxy } from './config/trust-proxy';
+import {
+  assertTrustProxyConsistent,
+  parseTrustProxy,
+  trustProxyBootWarning,
+} from './config/trust-proxy';
 
 async function bootstrap(): Promise<void> {
   // Load `.env` BEFORE anything reads `process.env` (R3). `@nestjs/config` only copies `.env` into
@@ -31,6 +36,11 @@ async function bootstrap(): Promise<void> {
   );
 
   await configureApp(app);
+
+  // DEBT-711: production without TRUST_PROXY => one warn line (pino is attached by configureApp).
+  const { NODE_ENV, TRUST_PROXY } = process.env;
+  const warning = trustProxyBootWarning({ NODE_ENV, TRUST_PROXY });
+  if (warning) new Logger('Bootstrap').warn(warning);
 
   const appConfig = app.get(ConfigService).getOrThrow<AppConfig>('app');
   // Fail fast if the adapter's trustProxy (parsed pre-bootstrap) and the typed config disagree —

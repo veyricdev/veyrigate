@@ -182,7 +182,7 @@ khoá được client hợp lệ.
   (fail-closed, không xác thực được peer liền kề) ⇒ `req.ip` rơi về IP socket của proxy, bucket IP
   thành giới hạn toàn cục mà **không có cảnh báo**. Vì vậy app **từ chối khởi động** nếu `TRUST_PROXY`
   là một số — thông báo lỗi hướng dẫn đặt IP/CIDR của proxy.
-- Thiếu/rỗng/`false` ⇒ mặc định TẮT (dùng IP socket). Chỉ dùng khi KHÔNG có proxy trước app.
+- Thiếu/rỗng/`false` ⇒ mặc định TẮT (dùng IP socket). Chỉ dùng khi KHÔNG có proxy trước app. Từ run 98, production mà thiếu/rỗng ⇒ một dòng warn lúc boot; đặt `TRUST_PROXY=false` nếu chắc chắn không có proxy (DEBT-711).
 - **TUYỆT ĐỐI không** `TRUST_PROXY=true` — tin mọi `X-Forwarded-For` ⇒ client spoof IP vượt
   bucket. App **từ chối khởi động** nếu gặp `true`, một số, hoặc IP/CIDR sai (`parseTrustProxy`).
 - **`X-Request-ID` (run 91, DEBT-667 d, D91.10)**: app chỉ dùng `x-request-id` của request khi socket

@@ -10,18 +10,9 @@ packages:
 # in a newer release => exact `<pkg>@<version>` below with GHSA, D-number and expiry date
 # (runbook-deploy §7, DEBT-698).
 minimumReleaseAge: 20160
-# Security exceptions from run 83 (exact versions, already in the lockfile). They become moot on
-# 2026-11-20 (14 days old); delete them on the next deps bump (DEBT-697).
-minimumReleaseAgeExclude:
-  - '@nestjs/cli@12.0.12'
-  - '@nestjs/schematics@12.0.13'
-  - '@angular-devkit/core@22.2.6'
-  - '@angular-devkit/schematics@22.2.6'
-  - '@angular-devkit/schematics-cli@22.2.6'
-  - '@fastify/static@10.1.10'
-  - '@isaacs/nonrecursive-glob-match@1.1.0'
-  - glob@14.0.4
-  - minimatch@11.0.5
+# No security exceptions in force (run 98 removed the run-83 ones, DEBT-697). A new one goes in
+# `minimumReleaseAgeExclude:` as an exact `<pkg>@<version>` with GHSA, D-number and expiry date
+# (runbook-deploy §7).
 
 # Native postinstall builds we trust (transitive dep of the eslint resolver).
 allowBuilds:

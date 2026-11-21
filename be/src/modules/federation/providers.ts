@@ -47,7 +47,7 @@ export interface GoogleProvider extends ProviderBase {
   name: 'google';
   issuers: readonly string[];
   /** Google's signing keys (remote JWKS in production; a local key set in tests). `jwks()` is the
-   *  remote set's last fetched key set (jose 5.10.0), read only to classify an empty set (DEBT-445). */
+   *  remote set's last fetched key set (jose 6), read only to classify an empty set (DEBT-445). */
   jwks: JWTVerifyGetKey & { jwks?: () => JSONWebKeySet | undefined };
 }
 

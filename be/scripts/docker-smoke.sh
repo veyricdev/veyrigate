@@ -298,4 +298,11 @@ printf '%s\n' "$out" | grep -qx 'dry-run: no connection made' || fail 13 "bootst
 if printf '%s' "$out" | grep -qF -e "$MONGO_PASSWORD" -e "${MFA_ENCRYPTION_KEYS#k1:}"; then fail 13 "bootstrap echoed a secret"; fi
 pass 13 "bootstrap --dry-run in the image (no ADMIN_SEED_EMAIL) => exit 0, target + plan, no connection"
 
-echo "docker-smoke: 13/13 passed for $IMAGE"
+# 14. production image without TRUST_PROXY => exactly one boot warn line (run 98, DEBT-711, D98.11).
+# Log goes to a file first: `docker logs | grep -q` under pipefail can fail on SIGPIPE.
+docker logs vg-be-smoke-ok >"$TMP/log" 2>&1
+warns="$(grep -c 'TRUST_PROXY is not set in production' "$TMP/log" || true)"
+[ "$warns" = "1" ] || fail 14 "TRUST_PROXY boot warning printed $warns times, expected 1"
+pass 14 "no TRUST_PROXY in production => one boot warning"
+
+echo "docker-smoke: 14/14 passed for $IMAGE"

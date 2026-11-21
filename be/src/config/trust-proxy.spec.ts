@@ -1,7 +1,7 @@
 import { FastifyAdapter } from '@nestjs/platform-fastify';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
-import { assertTrustProxyConsistent, parseTrustProxy } from './trust-proxy';
+import { assertTrustProxyConsistent, parseTrustProxy, trustProxyBootWarning } from './trust-proxy';
 
 // Resolve the SAME `@fastify/proxy-addr` the FastifyAdapter uses at runtime (it is a transitive dep
 // of `fastify`). Using the real library — instead of a hand-written mirror of its trust rules —
@@ -207,4 +207,30 @@ describe('assertTrustProxyConsistent (DEBT-006, fail-fast on adapter/config drif
       /TRUST_PROXY mismatch/,
     );
   });
+});
+
+describe('trustProxyBootWarning (DEBT-711, D98.11)', () => {
+  it.each([
+    ['unset', undefined],
+    ['empty', ''],
+    ['whitespace', '  '],
+  ])('production + TRUST_PROXY %s => the fixed warning', (_label, trustProxy) => {
+    const warning = trustProxyBootWarning({ NODE_ENV: 'production', TRUST_PROXY: trustProxy });
+    expect(warning).toMatch(/^TRUST_PROXY is not set in production: req\.ip is the TCP peer\./);
+    expect(warning).toContain('runbook-deploy §5');
+  });
+
+  it.each(['false', 'FALSE', ' False ', '10.0.0.0/8'])(
+    'production + TRUST_PROXY=%p => null (operator stated no proxy, or set one)',
+    (trustProxy) => {
+      expect(trustProxyBootWarning({ NODE_ENV: 'production', TRUST_PROXY: trustProxy })).toBeNull();
+    },
+  );
+
+  it.each(['development', 'test', undefined])(
+    'NODE_ENV=%p + TRUST_PROXY unset => null',
+    (nodeEnv) => {
+      expect(trustProxyBootWarning({ NODE_ENV: nodeEnv })).toBeNull();
+    },
+  );
 });

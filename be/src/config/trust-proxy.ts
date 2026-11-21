@@ -110,6 +110,24 @@ function ipOrCidrRejection(entry: string): string | null {
   return null;
 }
 
+const TRUST_PROXY_BOOT_WARNING =
+  'TRUST_PROXY is not set in production: req.ip is the TCP peer. Behind a reverse proxy every client shares the proxy IP (per-IP throttles and client-auth caps act globally; the proxy x-request-id is ignored). Set TRUST_PROXY to the proxy IP/CIDR (runbook-deploy §5), or TRUST_PROXY=false if clients connect directly.';
+
+/**
+ * DEBT-711 (D98.11): boot-time warning when production runs with `TRUST_PROXY` unset or blank.
+ * Not a boot failure (the IdP may legitimately face clients directly); `TRUST_PROXY=false` is the
+ * operator stating exactly that, so it stays silent. Fixed text: never echoes an env value.
+ */
+export function trustProxyBootWarning(env: {
+  NODE_ENV?: string;
+  TRUST_PROXY?: string;
+}): string | null {
+  if (env.NODE_ENV !== 'production') {
+    return null;
+  }
+  return (env.TRUST_PROXY ?? '').trim() === '' ? TRUST_PROXY_BOOT_WARNING : null;
+}
+
 /**
  * Guard against the two `parseTrustProxy` call-sites drifting apart. The Fastify adapter in
  * `main.ts` parses `TRUST_PROXY` directly (it must be set when the adapter is constructed, before

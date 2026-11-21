@@ -119,9 +119,10 @@ export async function verifyGoogleIdToken(
   } catch (err) {
     // DEBT-191 (F16): a JWKS fetch that never got an answer (network error, timeout) is the
     // provider being unavailable (502). DEBT-197: so is a JWKS answer that is not a usable key set —
-    // jose 5.10.0 `runtime/fetch_jwks.js` (non-200 / non-JSON => bare `ERR_JOSE_GENERIC`, the only
-    // places that raise it) and `jwks/local.js` (wrong JWKS shape => `ERR_JWKS_INVALID`). Every
-    // other JOSE failure (signature, claims, alg, unknown kid) is a bad identity (400).
+    // jose 6 `jwks/remote.js` (fetch; network error => TypeError, non-JOSE => 502; non-200 /
+    // non-JSON => bare `ERR_JOSE_GENERIC`, the only places that raise it) and `jwks/local.js`
+    // (wrong JWKS shape => `ERR_JWKS_INVALID`). Every other JOSE failure (signature, claims, alg,
+    // unknown kid) is a bad identity (400).
     if (!(err instanceof errors.JOSEError) || PROVIDER_JOSE_CODES.has(err.code)) {
       throw new FederationError('provider_unavailable');
     }

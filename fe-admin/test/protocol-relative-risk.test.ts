@@ -143,9 +143,9 @@ afterAll(async () => {
 });
 
 describe("DEBT-442: router-core resolved as in the production bundle", () => {
-  it("is the version the fold verified (1.171.34): a bump must re-run this file knowingly", () => {
+  it("is the version the fold verified (1.171.35): a bump must re-run this file knowingly", () => {
     const { version } = createRequire(import.meta.url)(routerCorePaths().pkg) as { version: string };
-    expect(version).toBe("1.171.34");
+    expect(version).toBe("1.171.35");
   });
 
   it("h3 (h3-v2 of start-server-core) and srvx are the versions whose URL rewriting the guard copies", () => {
