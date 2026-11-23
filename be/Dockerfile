@@ -8,7 +8,7 @@
 # after 14 days; otherwise refresh by hand with `docker buildx imagetools inspect
 # node:<version>-bookworm-slim`. Either way change both FROM lines + .nvmrc / .node-version / engines in
 # the same PR. Keep bookworm (glibc): @node-rs/argon2 ships a gnu binary, not musl.
-FROM node:22.23.4-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da AS build
+FROM node:22.23.4-bookworm-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d AS build
 # DEBT-398: fail closed if the build context holds anything secret-looking (an ignore rule was
 # lost). First step, on a read-only bind mount of the context: nothing reaches a layer or the cache.
 # Names only (never contents); src/modules/keys, src/routes/keys are code, so no bare `*/keys/*`.
@@ -33,7 +33,7 @@ RUN pnpm --filter @sso-idp/be deploy --prod /deploy \
  && cp -a be/dist /out/dist \
  && find /out/dist \( -name '*.d.ts' -o -name '*.map' -o -name '*.tsbuildinfo' \) -delete
 
-FROM node:22.23.4-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da AS runtime
+FROM node:22.23.4-bookworm-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d AS runtime
 ENV NODE_ENV=production PORT=4000
 WORKDIR /app
 # Files owned by root: the runtime user cannot change the app (nor create /app/.env, which main.ts
