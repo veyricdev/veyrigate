@@ -5,7 +5,7 @@
 # - npm: the dependency graph does see the npm packages (alert #40, security PR #2; run 96 corrected the
 #   old DEBT-500 note, DEBT-585). The security gate stays CI `pnpm audit --audit-level high`
 #   (fail-closed) + manual security exception. The `ignore` entries below may also suppress security
-#   PRs for those ranges: drop them with DEBT-694/695 (DEBT-699).
+#   PRs for those ranges: drop them with DEBT-694/695/714 (DEBT-699).
 # - github-actions: security updates work and are not delayed by the cooldown.
 # - A PR that bumps the `node` image must also change .nvmrc / .node-version / engines (by hand, DEBT-502).
 # - Alerts / security updates are enabled in the repository Settings (not in this file).
@@ -28,6 +28,10 @@ updates:
         versions: ['>=1.169.0']
       - dependency-name: '@tanstack/react-router'
         versions: ['>1.170.42']
+      # Run 99 (D99.7): 1.65.0 WebKit driver asserts (_WKPage._onTargetCreated) on cross-site navigation
+      # to a COOP same-origin page ⇒ X3 webkit 8/14. Remove once ≥ 1.65.1 keeps X3 webkit 14/14 (DEBT-714).
+      - dependency-name: '@playwright/test'
+        versions: ['1.65.0']
     groups:
       npm-minor-patch:
         applies-to: version-updates
