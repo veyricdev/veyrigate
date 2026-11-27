@@ -1,6 +1,6 @@
 # Summary — DEBT-694 + DEBT-715 (M8, deps/FE) — ✅ PASS 3/3
 - Phạm vi: T1 fe-admin `@tanstack/react-start` 1.168.61 → 1.169.5 + `@tanstack/react-router` 1.170.42 → 1.170.46 (1.169.6/7 < 14 ngày); T2 gỡ ignore TanStack trong `dependabot.yml`, bỏ override seroval; T3 flake `run71-tester` (DEBT-715).
-- Commit: `<hash>` (code), docs close riêng.
+- Commit: `1e6c6f2` (code, CI #82 9/9 xanh), docs close riêng.
 - Breaking đã xử lý: `inputValidator` → `validator` (25 chỗ); `getResponseHeaders()` giờ read-only ⇒ Set-Cookie xoá/refresh phiên qua `appendResponseHeader`, `no-store`/`pragma` qua `setResponseHeader` (viewer.ts, admin-api/instance.ts); h3 bị gỡ ⇒ viết lại `protocol-relative-risk.test.ts` theo pipeline 1.169 (8 case, không skip); guard `//` giữ nguyên.
 - Khoá runtime thật: 2 E2E mới (SSR 307 + xoá `fea_sid`, RPC `/_serverFn` xoá `fea_sid`) + assert `pragma: no-cache` ở secrets; mutation bỏ helper ⇒ đỏ.
 - DEBT-715: so khớp bí mật trên body đã khử UUID/ObjectId + tripwire đếm; 20/20 lần xanh, mutation mask Teredo ⇒ đỏ.
