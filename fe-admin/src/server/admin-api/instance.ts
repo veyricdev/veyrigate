@@ -1,5 +1,5 @@
 import "@tanstack/react-start/server-only";
-import { getRequest, getResponseHeaders } from "@tanstack/react-start/server";
+import { appendResponseHeader, getRequest, setResponseHeader } from "@tanstack/react-start/server";
 import type { AdminResult } from "@/features/admin-api/types";
 import { getAuth } from "../auth/instance";
 import { serverEnv } from "../env";
@@ -16,12 +16,16 @@ function getAdminApi(): AdminApi {
  * Body of an admin server function: runs `fn` for the current request and returns a typed failure
  * as a value (a thrown error would reach the browser as its message only). Anything else throws to
  * the server function boundary (generic 500/503).
+ *
+ * Set-Cookie goes through Start's `appendResponseHeader` (since 1.169 the response-headers getter
+ * returns a read-only copy). Start merges `set-cookie` by cookie identity (name + domain + path, the later one wins);
+ * cookies with another name are kept (DEBT-287).
  */
 export async function adminCall<T>(fn: (api: AdminApi, ctx: AdminCallContext) => Promise<T>): Promise<AdminResult<T>> {
   const ctx: AdminCallContext = {
     request: getRequest(),
     // append: never drop a Set-Cookie another part of the request wrote (DEBT-287)
-    setCookie: (value) => getResponseHeaders().append("set-cookie", value),
+    setCookie: (value) => appendResponseHeader("set-cookie", value),
   };
   try {
     return { ok: true, data: await fn(getAdminApi(), ctx) };
@@ -38,7 +42,6 @@ export function adminResourceIdentifier(): string {
 
 /** The answer of this server function must never be stored (it holds a one-time secret). */
 export function setNoStore(): void {
-  const headers = getResponseHeaders();
-  headers.set("cache-control", "no-store");
-  headers.set("pragma", "no-cache");
+  setResponseHeader("cache-control", "no-store");
+  setResponseHeader("pragma", "no-cache");
 }

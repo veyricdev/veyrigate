@@ -34,7 +34,7 @@ async function pageStores(page: Page): Promise<string> {
 }
 
 /** Click Issue/Rotate, confirm, read the one-time secret, close the dialog. */
-async function issueThroughUi(page: Page, label: "Issue secret" | "Rotate secret"): Promise<{ secret: string; noStore: boolean }> {
+async function issueThroughUi(page: Page, label: "Issue secret" | "Rotate secret"): Promise<{ secret: string; noStore: boolean; pragma: boolean }> {
   await page.getByRole("button", { name: label }).click();
   const dialog = page.getByRole("dialog");
   const answer = page.waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname.startsWith("/_serverFn/"));
@@ -45,10 +45,13 @@ async function issueThroughUi(page: Page, label: "Issue secret" | "Rotate secret
   const secret = (await code.textContent()) ?? "";
   expect(secret.length > 20, "a secret is shown").toBe(true);
   const noStore = (res.headers()["cache-control"] ?? "").includes("no-store");
+  // Run 101 (D101.6): only `setNoStore` sets `pragma` (`no-store` alone is also added by the
+  // security headers), so this proves Start's `setResponseHeader` reached the RPC answer.
+  const pragma = res.headers()["pragma"] === "no-cache";
   await dialog.getByRole("button", { name: "Close" }).click();
   await expect(dialog).toBeHidden();
   await expect(page.getByTestId("issued-secret")).toHaveCount(0);
-  return { secret, noStore };
+  return { secret, noStore, pragma };
 }
 
 test("fe-admin secrets: issue once, rotate, revoke a version, disable and enable", async ({ browser }) => {
@@ -73,6 +76,7 @@ test("fe-admin secrets: issue once, rotate, revoke a version, disable and enable
     // 2. Issue S1: shown once, answer not stored; it authenticates; gone after close and reload.
     const s1 = await issueThroughUi(page, "Issue secret");
     expect(s1.noStore, "issue answer has cache-control: no-store").toBe(true);
+    expect(s1.pragma, "issue answer has pragma: no-cache").toBe(true);
     expect(await clientAuth(clientId, s1.secret), "S1 authenticates").toBe(200);
     expect((await pageStores(page)).includes(s1.secret), "S1 not in HTML/storage/URL after close").toBe(false);
     await page.reload();
@@ -83,6 +87,7 @@ test("fe-admin secrets: issue once, rotate, revoke a version, disable and enable
     // 3. Rotate => S2; S1 (grace) and S2 both authenticate.
     const s2 = await issueThroughUi(page, "Rotate secret");
     expect(s2.noStore, "rotate answer has cache-control: no-store").toBe(true);
+    expect(s2.pragma, "rotate answer has pragma: no-cache").toBe(true);
     expect(s2.secret === s1.secret, "S2 differs from S1").toBe(false);
     expect(await clientAuth(clientId, s1.secret), "S1 still works in grace").toBe(200);
     expect(await clientAuth(clientId, s2.secret), "S2 authenticates").toBe(200);

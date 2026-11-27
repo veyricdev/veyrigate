@@ -12,7 +12,7 @@ const fakeApi = {
 
 vi.mock("@tanstack/react-start", () => ({
   createServerFn: () => ({
-    inputValidator: (schema: { parse: (v: unknown) => unknown }) => ({
+    validator: (schema: { parse: (v: unknown) => unknown }) => ({
       handler: (fn: (o: { data: unknown }) => unknown) => async (o: { data: unknown }) =>
         fn({ data: schema.parse(o.data) }),
     }),

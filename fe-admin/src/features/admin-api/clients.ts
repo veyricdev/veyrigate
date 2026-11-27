@@ -8,21 +8,21 @@ import { ClientIdSchema, CreateClientInput, ListClientsInput, UpdateClientInput 
  */
 
 export const listClients = createServerFn({ method: "GET" })
-  .inputValidator(ListClientsInput)
+  .validator(ListClientsInput)
   .handler(({ data }) => adminCall((api, ctx) => api.listClients(ctx, data)));
 
 export const getClient = createServerFn({ method: "GET" })
-  .inputValidator(ClientIdSchema)
+  .validator(ClientIdSchema)
   .handler(({ data }) => adminCall((api, ctx) => api.getClient(ctx, data)));
 
 /** `POST /admin/clients` (needs a recent sign-in: may answer `step_up_required`). */
 export const createClient = createServerFn({ method: "POST" })
-  .inputValidator(CreateClientInput)
+  .validator(CreateClientInput)
   .handler(({ data }) => adminCall((api, ctx) => api.createClient(ctx, data)));
 
 /** `PATCH /admin/clients/{id}` (needs a recent sign-in: may answer `step_up_required`). */
 export const updateClient = createServerFn({ method: "POST" })
-  .inputValidator(UpdateClientInput)
+  .validator(UpdateClientInput)
   .handler(({ data }) => adminCall((api, ctx) => api.updateClient(ctx, data.clientId, data.patch)));
 
 /**

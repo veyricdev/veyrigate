@@ -38,7 +38,11 @@ const CORPUS: [string | undefined, string | undefined, string[]][] = [
   // NAT64 64:ff9b::cb00:714f embeds 203.0.113.79 in the low 32 bits
   ['64:ff9b::cb00:714f', '64:ff9b::/48', ['cb00:714f', '203.0.113.79']],
   // Teredo: client ip obfuscated in the low 32 bits, port in hextet 6
-  ['2001:0:4136:e378:8000:63bf:3fff:fdd2', '2001:0:4136::/48', ['e378', '63bf', '3fff:fdd2']],
+  [
+    '2001:0:4136:e378:8000:63bf:3fff:fdd2',
+    '2001:0:4136::/48',
+    ['e378', '63bf', '4136:e378', 'e378:8000', '8000:63bf', '63bf:3fff', '3fff:fdd2'],
+  ],
   ['fe80::1234:5678%eth0', 'fe80::/48', ['1234:5678', '%eth0', 'eth0']],
   ['fe80::abcd:ef01%25', 'fe80::/48', ['abcd:ef01']],
   ['127.1', undefined, ['127.1']],
@@ -148,13 +152,25 @@ describe('run 71 tester: audit PII per viewer over real HTTP', () => {
     return { body: res.body, byId: new Map(items.map((i) => [i.eventId as string, i])) };
   }
 
+  // DEBT-715: random IDs in the body (eventId, actorId) can contain a bare hextet such as `e378`, so
+  // secrets are matched against the body with UUIDs/ObjectIds replaced by placeholders.
+  const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+  const OID_RE = /\b[0-9a-f]{24}\b/gi;
+
   function expectMasked({ body, byId }: Awaited<ReturnType<typeof list>>): void {
+    const scrubbed = body.replace(UUID_RE, '<uuid>').replace(OID_RE, '<oid>');
+    // Tripwire: the scrub removes only the known IDs (eventId + actorId per item), nothing else.
+    for (const id of eventIds) expect(body).toContain(id);
+    expect(scrubbed.match(UUID_RE)).toBeNull();
+    expect(scrubbed.match(OID_RE)).toBeNull();
+    expect(scrubbed.match(/<uuid>/g)).toHaveLength(2 * CORPUS.length);
+    expect(scrubbed).not.toContain('<oid>');
     CORPUS.forEach(([, masked, secrets], n) => {
       const item = byId.get(eventIds[n])!;
       if (masked === undefined) expect('ip' in item).toBe(false);
       else expect(item.ip).toBe(masked);
       expect('userAgent' in item).toBe(false);
-      for (const s of secrets) expect(body).not.toContain(s);
+      for (const s of secrets) expect(scrubbed).not.toContain(s);
     });
     expect(body).not.toContain('R71T-UA');
     expect(body).not.toContain('Mozilla');

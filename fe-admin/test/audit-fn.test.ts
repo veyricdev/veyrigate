@@ -9,7 +9,7 @@ const beFetch = vi.fn<(url: string, init: RequestInit) => Promise<Response>>();
 
 vi.mock("@tanstack/react-start", () => ({
   createServerFn: (opts: { method: string }) => ({
-    inputValidator: (schema: { parse: (v: unknown) => unknown }) => ({
+    validator: (schema: { parse: (v: unknown) => unknown }) => ({
       handler: (fn: (o: { data: unknown }) => unknown) =>
         Object.assign(async (o: { data: unknown }) => fn({ data: schema.parse(o.data) }), { method: opts.method }),
     }),
@@ -17,7 +17,8 @@ vi.mock("@tanstack/react-start", () => ({
 }));
 vi.mock("@tanstack/react-start/server", () => ({
   getRequest: () => new Request("http://localhost:3000/audit"),
-  getResponseHeaders: () => new Headers(),
+  appendResponseHeader: () => undefined,
+  setResponseHeader: () => undefined,
 }));
 vi.mock("@/server/env", () => ({
   serverEnv: () => ({ ADMIN_API_BASE_URL: "http://idp.test", OIDC_ISSUER: "http://idp.test" }),

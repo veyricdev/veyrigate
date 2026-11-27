@@ -17,7 +17,8 @@ vi.mock("@tanstack/react-start", () => ({
 }));
 vi.mock("@tanstack/react-start/server", () => ({
   getRequest: () => incoming,
-  getResponseHeaders: () => ({ append: () => undefined }),
+  appendResponseHeader: () => undefined,
+  setResponseHeader: () => undefined,
 }));
 vi.mock("@/server/env", () => ({
   serverEnv: () => ({ ADMIN_API_BASE_URL: "http://idp.test//", OIDC_ISSUER: "http://idp.test" }),

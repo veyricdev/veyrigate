@@ -12,5 +12,5 @@ export const listSigningKeys = createServerFn({ method: "GET" }).handler(() =>
 
 /** Normal or emergency rotation (`admin.write` + recent sign-in). Not idempotent: never re-sent. */
 export const rotateSigningKey = createServerFn({ method: "POST" })
-  .inputValidator(RotateKeyInput)
+  .validator(RotateKeyInput)
   .handler(({ data }) => adminCall((api, ctx) => api.rotateSigningKey(ctx, data.mode)));

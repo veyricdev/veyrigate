@@ -8,5 +8,5 @@ import { AuditListInput } from "./inputs";
  * email (`@`). Metadata is filtered again server-side (`AuditEventSchema`) before the browser.
  */
 export const listAudit = createServerFn({ method: "GET" })
-  .inputValidator(AuditListInput)
+  .validator(AuditListInput)
   .handler(({ data }) => adminCall((api, ctx) => api.listAudit(ctx, data)));

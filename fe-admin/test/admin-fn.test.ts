@@ -3,7 +3,8 @@
 // traversal, no unknown field), and `adminCall` returns a typed failure as a value.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const responseHeaders = new Headers();
+const appendHeader = vi.fn();
+const setHeader = vi.fn();
 const adminCallSpy = vi.fn(async (fn: (api: unknown, ctx: unknown) => Promise<unknown>) => ({ ok: true, data: await fn(fakeApi, {}) }));
 const fakeApi = {
   listClients: vi.fn(async () => "list"),
@@ -19,10 +20,10 @@ const fakeApi = {
   })),
 };
 
-// createServerFn(...).inputValidator(schema).handler(fn): run the validator like Start does.
+// createServerFn(...).validator(schema).handler(fn): run the validator like Start does.
 vi.mock("@tanstack/react-start", () => ({
   createServerFn: () => ({
-    inputValidator: (schema: { parse: (v: unknown) => unknown }) => ({
+    validator: (schema: { parse: (v: unknown) => unknown }) => ({
       handler: (fn: (o: { data: unknown }) => unknown) => async (o: { data: unknown }) =>
         fn({ data: schema.parse(o.data) }),
     }),
@@ -31,7 +32,8 @@ vi.mock("@tanstack/react-start", () => ({
 }));
 vi.mock("@tanstack/react-start/server", () => ({
   getRequest: () => new Request("http://localhost:3000/clients"),
-  getResponseHeaders: () => responseHeaders,
+  appendResponseHeader: appendHeader,
+  setResponseHeader: setHeader,
 }));
 
 type Fn = (o: { data: unknown }) => Promise<unknown>;
@@ -116,7 +118,6 @@ describe("adminCall", () => {
   it("typed failure => { ok:false, error } value; cookie appended; other errors rethrown", async () => {
     const { adminCall } = await import("@/server/admin-api/instance");
     const { AdminApiError } = await import("@/server/admin-api/client");
-    responseHeaders.append("set-cookie", "fea_theme=dark; Path=/");
     const res = await adminCall(async (_api, ctx) => {
       ctx.setCookie("fea_sid=; Path=/; Max-Age=0");
       throw new AdminApiError("step_up_required");
@@ -125,7 +126,10 @@ describe("adminCall", () => {
       ok: false,
       error: { code: "step_up_required", message: "Please confirm your identity to continue." },
     });
-    expect(responseHeaders.getSetCookie()).toEqual(["fea_theme=dark; Path=/", "fea_sid=; Path=/; Max-Age=0"]);
+    // append (never set): another Set-Cookie of the request is kept (DEBT-287)
+    expect(appendHeader).toHaveBeenCalledTimes(1);
+    expect(appendHeader).toHaveBeenCalledWith("set-cookie", "fea_sid=; Path=/; Max-Age=0");
+    expect(setHeader).not.toHaveBeenCalled();
     const boom = new Error("x");
     await expect(
       adminCall(async () => {

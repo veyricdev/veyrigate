@@ -14,48 +14,48 @@ import { RevokeConsentInput, RevokeFamilyInput, SetUserRolesInput, UserIdSchema,
  * must never reach a URL, the history, a log or `returnTo` (run 47 F2).
  */
 export const listUsers = createServerFn({ method: "POST" })
-  .inputValidator(UserListInput)
+  .validator(UserListInput)
   .handler(({ data }) => adminCall((api, ctx) => api.listUsers(ctx, data)));
 
 export const getUser = createServerFn({ method: "GET" })
-  .inputValidator(UserIdSchema)
+  .validator(UserIdSchema)
   .handler(({ data }) => adminCall((api, ctx) => api.getUser(ctx, data)));
 
 export const listUserFamilies = createServerFn({ method: "GET" })
-  .inputValidator(UserPageInput)
+  .validator(UserPageInput)
   .handler(({ data }) => adminCall((api, ctx) => api.listUserFamilies(ctx, data)));
 
 export const listUserConsents = createServerFn({ method: "GET" })
-  .inputValidator(UserPageInput)
+  .validator(UserPageInput)
   .handler(({ data }) => adminCall((api, ctx) => api.listUserConsents(ctx, data)));
 
 /** Lock (applied first, then every credential revoked: a 5xx may follow an applied lock). */
 export const lockUser = createServerFn({ method: "POST" })
-  .inputValidator(UserIdSchema)
+  .validator(UserIdSchema)
   .handler(({ data }) => adminCall((api, ctx) => api.lockUser(ctx, data)));
 
 export const unlockUser = createServerFn({ method: "POST" })
-  .inputValidator(UserIdSchema)
+  .validator(UserIdSchema)
   .handler(({ data }) => adminCall((api, ctx) => api.unlockUser(ctx, data)));
 
 /** Ends every session and refresh family of the user, in every tenant (idempotent). */
 export const revokeUserSessions = createServerFn({ method: "POST" })
-  .inputValidator(UserIdSchema)
+  .validator(UserIdSchema)
   .handler(({ data }) => adminCall((api, ctx) => api.revokeUserSessions(ctx, data)));
 
 /** Removes the second factor, then ends every session (idempotent: a 5xx may follow a removed factor). */
 export const resetUserMfa = createServerFn({ method: "POST" })
-  .inputValidator(UserIdSchema)
+  .validator(UserIdSchema)
   .handler(({ data }) => adminCall((api, ctx) => api.resetUserMfa(ctx, data)));
 
 /** Idempotent. */
 export const revokeUserFamily = createServerFn({ method: "POST" })
-  .inputValidator(RevokeFamilyInput)
+  .validator(RevokeFamilyInput)
   .handler(({ data }) => adminCall((api, ctx) => api.revokeUserFamily(ctx, data.userId, data.familyId)));
 
 /** Not idempotent (an already revoked consent is `not_found`). */
 export const revokeUserConsent = createServerFn({ method: "POST" })
-  .inputValidator(RevokeConsentInput)
+  .validator(RevokeConsentInput)
   .handler(({ data }) => adminCall((api, ctx) => api.revokeUserConsent(ctx, data.userId, data.consentId)));
 
 /**
@@ -64,5 +64,5 @@ export const revokeUserConsent = createServerFn({ method: "POST" })
  * target by a non super admin; `conflict`: the tenant would lose its last active super admin.
  */
 export const setUserRoles = createServerFn({ method: "POST" })
-  .inputValidator(SetUserRolesInput)
+  .validator(SetUserRolesInput)
   .handler(({ data }) => adminCall((api, ctx) => api.setUserRoles(ctx, data.userId, data.roles)));

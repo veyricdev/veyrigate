@@ -5,12 +5,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const SECRET = "S3CR3T-canary-fn-0123456789";
-let responseHeaders = new Headers();
+const setHeader = vi.fn();
+const appendHeader = vi.fn();
 const beFetch = vi.fn<(url: string, init: RequestInit) => Promise<Response>>();
 
 vi.mock("@tanstack/react-start", () => ({
   createServerFn: () => ({
-    inputValidator: (schema: { parse: (v: unknown) => unknown }) => ({
+    validator: (schema: { parse: (v: unknown) => unknown }) => ({
       handler: (fn: (o: { data: unknown }) => unknown) => async (o: { data: unknown }) =>
         fn({ data: schema.parse(o.data) }),
     }),
@@ -18,7 +19,8 @@ vi.mock("@tanstack/react-start", () => ({
 }));
 vi.mock("@tanstack/react-start/server", () => ({
   getRequest: () => new Request("http://localhost:3000/clients/app-1"),
-  getResponseHeaders: () => responseHeaders,
+  appendResponseHeader: appendHeader,
+  setResponseHeader: setHeader,
 }));
 vi.mock("@/server/env", () => ({
   serverEnv: () => ({ ADMIN_API_BASE_URL: "http://idp.test", OIDC_ISSUER: "http://idp.test" }),
@@ -36,7 +38,8 @@ let fns: { listSecrets: Fn; issueSecret: Fn; revokeSecret: Fn };
 let logged: string[];
 
 beforeEach(async () => {
-  responseHeaders = new Headers();
+  setHeader.mockReset();
+  appendHeader.mockReset();
   beFetch.mockReset();
   vi.stubGlobal("fetch", beFetch);
   logged = [];
@@ -57,8 +60,10 @@ describe("issueSecret", () => {
   it("success: plaintext returned once, answer marked no-store", async () => {
     beFetch.mockResolvedValue(json(201, { clientId: "app-1", version: 2, clientSecret: SECRET }));
     expect(await fns.issueSecret({ data: "app-1" })).toEqual({ ok: true, data: { clientId: "app-1", version: 2, clientSecret: SECRET } });
-    expect(responseHeaders.get("cache-control")).toBe("no-store");
-    expect(responseHeaders.get("pragma")).toBe("no-cache");
+    expect(setHeader.mock.calls).toEqual([
+      ["cache-control", "no-store"],
+      ["pragma", "no-cache"],
+    ]);
     const [url, init] = beFetch.mock.calls[0]!;
     expect(url).toBe("http://idp.test/admin/clients/app-1/secrets");
     expect(init.method).toBe("POST");
@@ -73,7 +78,8 @@ describe("issueSecret", () => {
     beFetch.mockResolvedValue(res());
     const result = (await fns.issueSecret({ data: "app-1" })) as { ok: boolean };
     expect(result.ok).toBe(false);
-    expect(responseHeaders.get("cache-control")).toBe("no-store");
+    expect(setHeader).toHaveBeenCalledWith("cache-control", "no-store");
+    expect(setHeader).toHaveBeenCalledWith("pragma", "no-cache");
     expect(JSON.stringify(result)).not.toContain(SECRET);
     expect(logged.join("\n")).not.toContain(SECRET);
   });
@@ -84,7 +90,8 @@ describe("issueSecret", () => {
       ok: false,
       error: { code: "unavailable", message: expect.any(String), uncertain: true },
     });
-    expect(responseHeaders.get("cache-control")).toBe("no-store");
+    expect(setHeader).toHaveBeenCalledWith("cache-control", "no-store");
+    expect(setHeader).toHaveBeenCalledWith("pragma", "no-cache");
     expect(beFetch).toHaveBeenCalledTimes(1);
   });
 

@@ -17,17 +17,18 @@ try {
   envValid = false; // already logged by onValidationError
 }
 
-// DEBT-387/442: the pathname the router checks for `//`. Before the router, h3@2.0.1-rc.20 `H3Event`
-// (`decodePathname`, dist/h3-*.mjs) rewrites the request's shared srvx URL when the path has a `%`:
-// `url.pathname = decodeURI(...)`, so `/%5C%5Cx` becomes `///x` (`\` => `/`, tab dropped). Same steps on
-// a copy; the request is not touched (no `%` => decodeURI is the identity, the setter idempotent).
-// A URIError is h3's 400 before the router: nothing to guard.
+// DEBT-387/442: a pathname that may reach the router as `//`. Up to Start 1.168, h3 rewrote the
+// request URL with `decodeURI` before the router (`/%5C%5Cx` => `///x`). Start 1.169 dropped h3:
+// `runInStartRequest` only answers 400 when the path has a `%` and `decodeURI` throws, without
+// rewriting the URL, and the router still answers 308 when the pathname starts with `//`
+// (`getNormalizedURL`). The decoded check is kept as a wider guard (no behaviour change); it runs on
+// a copy, the request is not touched. A URIError is Start's 400 before the router: nothing to guard.
 function routerPathname(href: string): string {
   const url = new URL(href);
   try {
     url.pathname = decodeURI(url.pathname.replaceAll("%25", "%2525"));
   } catch {
-    // h3 answers 400
+    // Start answers 400
   }
   return url.pathname;
 }

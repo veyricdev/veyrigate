@@ -3,12 +3,12 @@
 // router answers its protocol-relative 308 (absolute `Location` built from `Host`). The router side is
 // NOT mocked: `getNormalizedURL` is the real `@tanstack/router-core` function that
 // `@tanstack/start-server-core` `createStartHandler` calls (resolved through the same dependency chain
-// as the production bundle), and the stand-in handler reproduces exactly the bundle's pipeline: h3's
-// `requestHandler` first builds `new H3Event(request)` (real `h3-v2` = h3@2.0.1-rc.20, which on srvx
-// MUTATES the request's shared `_url`: `url.pathname = decodeURI(pathname)`; a URIError => 400), then
+// as the production bundle), and the stand-in handler reproduces the bundle's pipeline. Run 101
+// (D101.4, Start 1.169 / start-server-core 1.169.45): h3 is gone; `runInStartRequest` only answers 400
+// when the pathname has a `%` and `decodeURI` throws (the request URL is NOT rewritten), then
 // `createStartHandler`:
-//   const { url, handledProtocolRelativeURL } = getNormalizedURL(request.url);
-//   if (handledProtocolRelativeURL) return Response.redirect(url, 308);
+//   const normalized = getNormalizedURL(event.requestUrl); // event.requestUrl = new URL(request.url)
+//   if (normalized.handledProtocolRelativeURL) return Response.redirect(normalized.url, 308);
 // The host is the real srvx node adapter (same version as `serve.mjs`), driven with byte-exact
 // request targets (Node `http.request` sends `path` verbatim) and a hostile `Host`, so the guard and
 // the router see exactly what production gives them (srvx's own URL building included).
@@ -19,22 +19,30 @@ import { pathToFileURL } from "node:url";
 import { serve } from "srvx/node";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-type Normalize = (url: string) => { url: URL; handledProtocolRelativeURL: boolean };
+type Normalize = (url: string | URL) => { url: URL; handledProtocolRelativeURL: boolean };
 
 // Plain function (hoisted declaration): the mock factory below runs lazily, at the first import of
 // `@/server` in beforeAll, when the static imports are initialised.
-function routerCorePaths(): { pkg: string; entry: string; h3: string } {
+function routerCorePaths(): { pkg: string; entry: string; startServer: string } {
   // fe-admin -> @tanstack/react-start -> @tanstack/start-server-core -> @tanstack/router-core
   const req = createRequire(`${process.cwd()}/package.json`);
   const start = createRequire(req.resolve("@tanstack/react-start/package.json"));
-  const server = createRequire(start.resolve("@tanstack/start-server-core/package.json"));
-  const pkg = server.resolve("@tanstack/router-core/package.json");
-  const h3Pkg = server.resolve("h3-v2/package.json");
-  return {
-    pkg,
-    entry: pkg.replace(/package\.json$/, "dist/esm/ssr/ssr-server.js"),
-    h3: h3Pkg.replace(/package\.json$/, "dist/_entries/node.mjs"),
-  };
+  const startServer = start.resolve("@tanstack/start-server-core/package.json");
+  const pkg = createRequire(startServer).resolve("@tanstack/router-core/package.json");
+  return { pkg, entry: pkg.replace(/package\.json$/, "dist/esm/ssr/ssr-server.js"), startServer };
+}
+
+/** start-server-core 1.169.45 `runInStartRequest`: 400 when the path has a `%` and decodeURI throws. */
+function startRejects(request: Request): boolean {
+  const { pathname } = new URL(request.url);
+  if (!pathname.includes("%")) return false;
+  try {
+    decodeURI(pathname);
+    return false;
+  } catch (error) {
+    if (error instanceof URIError) return true;
+    throw error;
+  }
 }
 
 const calls = vi.hoisted(() => ({ router: 0, redirects: [] as string[] }));
@@ -43,20 +51,12 @@ vi.mock("@tanstack/react-start/server-entry", async () => {
   const { getNormalizedURL } = (await import(pathToFileURL(routerCorePaths().entry).href)) as {
     getNormalizedURL: Normalize;
   };
-  const { H3Event } = (await import(pathToFileURL(routerCorePaths().h3).href)) as {
-    H3Event: new (request: Request) => unknown;
-  };
   return {
     default: {
       fetch: async (request: Request) => {
-        try {
-          new H3Event(request); // the side effect on request._url is the point
-        } catch (error) {
-          if (error instanceof URIError) return new Response(null, { status: 400 });
-          throw error;
-        }
+        if (startRejects(request)) return new Response(null, { status: 400 });
         calls.router += 1;
-        const { url, handledProtocolRelativeURL } = getNormalizedURL(request.url);
+        const { url, handledProtocolRelativeURL } = getNormalizedURL(new URL(request.url));
         if (handledProtocolRelativeURL) {
           calls.redirects.push(`${request.url} -> ${url.href}`);
           return Response.redirect(url, 308);
@@ -115,9 +115,9 @@ async function pool<T, R>(items: T[], size: number, fn: (item: T) => Promise<R>)
 
 /** Every `/` + up to `depth` tokens: the separators/encodings the router and WHATWG treat specially. */
 const TOKENS = ["/", "\\", ".", "..", "%2e", "%2F", "%5C", "%09", "a", "?"];
-// DEBT-447 (senior fuzz, run 59 round 2): h3 `decodePathname` handles `%25` before `decodeURI`, upper/lower
-// case escapes differ for WHATWG dot-segments, `%0D` is dropped by the setter, `%E0` alone is a URIError
-// (h3 400), `%3F`/`%23` stay encoded. Smaller depth: the product of 18 tokens grows fast.
+// DEBT-447 (senior fuzz, run 59 round 2; kept for Start 1.169): `%25` before `decodeURI`, upper/lower
+// case escapes differ for WHATWG dot-segments, `%0D`, `%E0` alone is a URIError (Start 400), `%3F`/`%23`
+// stay encoded. Smaller depth: the product of 18 tokens grows fast.
 const TOKENS_DECODE = [...TOKENS, "%25", "%2525", "%2E", "%5c", "%0D", "%E0", "%3F", "%23"];
 function corpus(depth: number, tokens: string[] = TOKENS): string[] {
   let level = [""];
@@ -143,16 +143,16 @@ afterAll(async () => {
 });
 
 describe("DEBT-442: router-core resolved as in the production bundle", () => {
-  it("is the version the fold verified (1.171.35): a bump must re-run this file knowingly", () => {
+  it("is the version the fold verified (1.171.39): a bump must re-run this file knowingly", () => {
     const { version } = createRequire(import.meta.url)(routerCorePaths().pkg) as { version: string };
-    expect(version).toBe("1.171.35");
+    expect(version).toBe("1.171.39");
   });
 
-  it("h3 (h3-v2 of start-server-core) and srvx are the versions whose URL rewriting the guard copies", () => {
+  it("start-server-core (whose 400 step the stand-in copies) and the srvx host are the verified versions", () => {
     const load = createRequire(import.meta.url);
-    const h3 = load(routerCorePaths().h3.replace(/dist\/_entries\/node\.mjs$/, "package.json")) as { version: string };
+    const startServer = load(routerCorePaths().startServer) as { version: string };
     const srvx = load(`${process.cwd()}/node_modules/srvx/package.json`) as { version: string };
-    expect([h3.version, srvx.version]).toEqual(["2.0.1-rc.20", "0.11.22"]);
+    expect([startServer.version, srvx.version]).toEqual(["1.169.45", "0.11.22"]);
   });
 
   it("tripwire: the real getNormalizedURL still answers `//x` with a protocol-relative redirect", () => {
@@ -231,14 +231,14 @@ describe("DEBT-442: no request the guard lets through reaches the router's 308 (
     const count = (f: (r: Res) => boolean) => results.filter(({ res }) => f(res)).length;
     const guarded = count((r) => r.status === 404 && r.body === "Not Found");
     const routed = count((r) => r.body === "router");
-    const h3400 = count((r) => r.status === 400);
-    console.info(`[run59-tester] DEBT-447 corpus: ${targets.length} targets, guard 404 ${guarded}, router ${routed}, h3 400 ${h3400}`);
+    const start400 = count((r) => r.status === 400);
+    console.info(`[run59-tester] DEBT-447 corpus: ${targets.length} targets, guard 404 ${guarded}, router ${routed}, Start 400 ${start400}`);
     expect(guarded).toBeGreaterThan(500);
     expect(routed).toBeGreaterThan(500);
-    expect(h3400).toBeGreaterThan(0);
+    expect(start400).toBeGreaterThan(0);
   }, 120_000);
 
-  it("in-process (no h3: only the paths without `%` are meaningful here): for every corpus URL the guard passes, new Request(url).url never triggers the router 308", () => {
+  it("in-process (Start 1.169 no longer rewrites the URL before the router): for every corpus URL the guard passes, new Request(url).url never triggers the router 308", () => {
     let passed = 0;
     for (const p of corpus(4)) {
       let url: string;

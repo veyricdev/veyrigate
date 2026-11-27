@@ -8,7 +8,7 @@ import { ClientIdSchema, RevokeSecretInput } from "./inputs";
  */
 
 export const listSecrets = createServerFn({ method: "GET" })
-  .inputValidator(ClientIdSchema)
+  .validator(ClientIdSchema)
   .handler(({ data }) => adminCall((api, ctx) => api.listSecrets(ctx, data)));
 
 /**
@@ -16,7 +16,7 @@ export const listSecrets = createServerFn({ method: "GET" })
  * `useMutation`: its result must only live in the dialog's state (run 45 F3.1).
  */
 export const issueSecret = createServerFn({ method: "POST" })
-  .inputValidator(ClientIdSchema)
+  .validator(ClientIdSchema)
   .handler(({ data }) => {
     setNoStore(); // also on a failure: one rule for every answer of this function
     return adminCall((api, ctx) => api.issueSecret(ctx, data));
@@ -24,5 +24,5 @@ export const issueSecret = createServerFn({ method: "POST" })
 
 /** `DELETE /admin/clients/{id}/secrets/{version}` (immediate, no grace; needs a recent sign-in). */
 export const revokeSecret = createServerFn({ method: "POST" })
-  .inputValidator(RevokeSecretInput)
+  .validator(RevokeSecretInput)
   .handler(({ data }) => adminCall((api, ctx) => api.revokeSecret(ctx, data.clientId, data.version)));

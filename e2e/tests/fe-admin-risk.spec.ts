@@ -1,4 +1,5 @@
-import { test, expect, type Page, type BrowserContext } from "@playwright/test";
+import { randomBytes } from "node:crypto";
+import { test, expect, type Page, type BrowserContext, type APIResponse, type Response } from "@playwright/test";
 import {
   ADMIN_SEED_EMAIL,
   ADMIN_SEED_PASSWORD,
@@ -131,4 +132,86 @@ test("fe-admin: step-up that signs in as another user ends the session (DEBT-117
     await api.dispose();
   }
   await context.close();
+});
+
+/**
+ * Run 101 (D101.6): Start 1.169 made `getResponseHeaders()` a read-only copy; fe-admin now writes
+ * Set-Cookie through `appendResponseHeader`. Unit tests mock that helper, so these two lock the real
+ * runtime: a dead session cookie is cleared on the SSR answer and on the `/_serverFn` RPC answer.
+ */
+/** Set-Cookie values (`Response.headersArray()` is async, `APIResponse`'s is not). */
+const setCookies = async (res: APIResponse | Response): Promise<string[]> =>
+  (await res.headersArray()).filter((h) => h.name.toLowerCase() === "set-cookie").map((h) => h.value);
+
+function expectSidCleared(cookies: string[]) {
+  const sid = cookies.filter((c) => c.startsWith("fea_sid="));
+  expect(sid.length, "exactly one fea_sid Set-Cookie").toBe(1);
+  const attrs = sid[0]!.split(";").map((a) => a.trim());
+  expect(attrs[0], "fea_sid emptied").toBe("fea_sid=");
+  expect(attrs).toContain("Max-Age=0");
+  expect(attrs).toContain("HttpOnly");
+  expect(attrs.some((a) => a.startsWith("SameSite=")), "SameSite set").toBe(true);
+  expect(attrs).toContain("Path=/");
+}
+
+test("fe-admin: SSR with an unknown session cookie => 307 to login and the cookie cleared (D101.6)", async ({
+  playwright,
+}) => {
+  const api = await playwright.request.newContext();
+  try {
+    const res = await api.get(`${FE_ADMIN_URL}/`, {
+      headers: { cookie: `fea_sid=${randomBytes(32).toString("base64url")}` },
+      maxRedirects: 0,
+    });
+    expect(res.status()).toBe(307);
+    expect(res.headers()["location"]?.startsWith("/auth/login?"), "redirect to login").toBe(true);
+    const cookies = await setCookies(res);
+    expect(cookies.length, "only the clearing Set-Cookie").toBe(1);
+    expectSidCleared(cookies);
+    expect(res.headers()["cache-control"] ?? "").toContain("no-store");
+  } finally {
+    await api.dispose();
+  }
+});
+
+test("fe-admin: RPC getViewer with an unknown session cookie clears it and goes to login (D101.6)", async ({
+  browser,
+}) => {
+  // An IdP sign-in includes TOTP, which may wait up to one 30 s step (replay rule, AC2).
+  test.setTimeout(90_000);
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  try {
+    await page.goto(`${FE_ADMIN_URL}/`);
+    await signIn(page, ADMIN_SEED_EMAIL, ADMIN_SEED_PASSWORD, page.getByTestId("viewer-email"));
+    await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+    // Hydrated (dev server: every module loaded), else the click is a document load answered by SSR.
+    await page.waitForLoadState("networkidle");
+    const forged = randomBytes(32).toString("base64url");
+    // Clear first: an added cookie may not share the real one's identity (host-only flag) => two cookies.
+    await context.clearCookies({ name: "fea_sid" });
+    await context.addCookies([{ name: "fea_sid", value: forged, url: FE_ADMIN_URL, httpOnly: true, sameSite: "Lax" }]);
+    const sids = (await context.cookies(FE_ADMIN_URL)).filter((c) => c.name === "fea_sid");
+    expect(sids.length === 1 && sids[0]!.value === forged, "cookie replaced").toBe(true);
+
+    // Client-side navigation: the root guard calls getViewer through `/_serverFn` (no document load).
+    const rpc = page.waitForResponse((r) => r.request().method() === "GET" && new URL(r.url()).pathname.startsWith("/_serverFn/"));
+    // The IdP session is still live: answer the login route here, or it would sign straight back in.
+    let toLogin = 0;
+    await page.route(
+      (url) => isAdminApp(url) && url.pathname === "/auth/login",
+      (route) => {
+        if (route.request().isNavigationRequest()) toLogin += 1;
+        return route.fulfill({ status: 200, contentType: "text/plain", body: "login" });
+      },
+    );
+    await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Users" }).click();
+    const res = await rpc;
+    expect(res.request().isNavigationRequest(), "an RPC, not a document").toBe(false);
+    expectSidCleared(await setCookies(res));
+    await expect.poll(() => toLogin, { message: "the UI goes back to login (reloadDocument)" }).toBe(1);
+    expect(await sidOf(context), "cookie gone from the browser").toBeUndefined();
+  } finally {
+    await context.close();
+  }
 });

@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { getRequest, getResponseHeaders } from "@tanstack/react-start/server";
+import { appendResponseHeader, getRequest } from "@tanstack/react-start/server";
 import { getAuth } from "@/server/auth/instance";
 import type { Viewer } from "./viewer-types";
 
@@ -10,6 +10,6 @@ import type { Viewer } from "./viewer-types";
  */
 export const getViewer = createServerFn({ method: "GET" }).handler(async (): Promise<Viewer | null> => {
   const { viewer, setCookie } = await getAuth().viewer(getRequest());
-  if (setCookie) getResponseHeaders().append("set-cookie", setCookie); // append: never drop another cookie
+  if (setCookie) appendResponseHeader("set-cookie", setCookie); // append: never drop another cookie
   return viewer;
 });

@@ -1,7 +1,7 @@
 import { z } from "@/lib/zod";
 
 /**
- * Server function inputs (run 43 F2), validated on both sides by `.inputValidator`. A path id can
+ * Server function inputs (run 43 F2), validated on both sides by `.validator`. A path id can
  * never carry a path segment (`/`, `\`, `.`, `..`); it is still `encodeURIComponent`-ed server-side.
  */
 export const pathIdSchema = (message: string) =>

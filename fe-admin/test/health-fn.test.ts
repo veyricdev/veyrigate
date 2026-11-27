@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const beFetch = vi.fn<(url: string, init: RequestInit) => Promise<Response>>();
 const session = vi.fn<() => Promise<{ session: { key: string; token: string } | null; setCookie?: string }>>();
 const setCookies: string[] = [];
+const setHeader = vi.fn();
 
 vi.mock("@tanstack/react-start", () => ({
   createServerFn: (opts: { method: string }) => ({
@@ -16,7 +17,8 @@ vi.mock("@tanstack/react-start", () => ({
 }));
 vi.mock("@tanstack/react-start/server", () => ({
   getRequest: () => new Request("http://localhost:3000/"),
-  getResponseHeaders: () => ({ append: (_n: string, v: string) => void setCookies.push(v) }),
+  appendResponseHeader: (name: string, value: string) => void setCookies.push(`${name}: ${value}`),
+  setResponseHeader: setHeader,
 }));
 vi.mock("@/server/env", () => ({
   serverEnv: () => ({ ADMIN_API_BASE_URL: "http://idp.test/", OIDC_ISSUER: "http://idp.test" }),
@@ -38,6 +40,7 @@ beforeEach(async () => {
   session.mockReset();
   session.mockResolvedValue({ session: { key: "k", token: "at-SECRET" } });
   setCookies.length = 0;
+  setHeader.mockReset();
   vi.stubGlobal("fetch", beFetch);
   logged = [];
   for (const level of ["error", "warn", "log", "info", "debug"] as const) {
@@ -121,13 +124,15 @@ describe("getBackendHealth", () => {
     const out = await getBackendHealth();
     expect(out).toEqual({ ok: false, error: { code: "unauthenticated", message: expect.any(String) } });
     expect(beFetch).not.toHaveBeenCalled();
-    expect(setCookies).toEqual(["fea_sid=; Max-Age=0"]);
+    expect(setCookies).toEqual(["set-cookie: fea_sid=; Max-Age=0"]);
+    expect(setHeader).not.toHaveBeenCalled();
   });
 
   it("a refreshed session's Set-Cookie is forwarded before the check", async () => {
     session.mockResolvedValue({ session: { key: "k", token: "at" }, setCookie: "fea_sid=new" });
     beFetch.mockResolvedValue(json(200, OK));
     expect(await getBackendHealth()).toEqual({ ok: true, data: "up" });
-    expect(setCookies).toEqual(["fea_sid=new"]);
+    expect(setCookies).toEqual(["set-cookie: fea_sid=new"]);
+    expect(setHeader).not.toHaveBeenCalled();
   });
 });

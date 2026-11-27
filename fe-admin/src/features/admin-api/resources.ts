@@ -10,19 +10,19 @@ import { CreateResourceInput, PageInput, ResourcePathIdSchema, UpdateResourceInp
  */
 
 export const listResourcePage = createServerFn({ method: "GET" })
-  .inputValidator(PageInput)
+  .validator(PageInput)
   .handler(({ data }) => adminCall((api, ctx) => api.listResourcePage(ctx, data)));
 
 export const getResource = createServerFn({ method: "GET" })
-  .inputValidator(ResourcePathIdSchema)
+  .validator(ResourcePathIdSchema)
   .handler(({ data }) => adminCall((api, ctx) => api.getResource(ctx, data)));
 
 /** `POST /admin/resources` (not idempotent: a timeout/5xx is `uncertain`, never re-sent). */
 export const createResource = createServerFn({ method: "POST" })
-  .inputValidator(CreateResourceInput)
+  .validator(CreateResourceInput)
   .handler(({ data }) => adminCall((api, ctx) => api.createResource(ctx, data)));
 
 /** `PATCH /admin/resources/{id}` (body: `{ scopes }` only). */
 export const updateResource = createServerFn({ method: "POST" })
-  .inputValidator(UpdateResourceInput)
+  .validator(UpdateResourceInput)
   .handler(({ data }) => adminCall((api, ctx) => api.updateResource(ctx, data.resourceId, data.patch)));
