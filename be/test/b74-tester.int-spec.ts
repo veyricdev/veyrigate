@@ -28,6 +28,7 @@ import {
   type FullApp,
   type InjectResponse,
 } from './full-app';
+import { CookieJar, csrfOf, setCookiesOf } from './helpers/reset-ticket';
 import { INT_SETUP_TIMEOUT_MS, settled } from './int-hooks';
 import { authzBinding, seedConsent, seedOAuthUser } from './oauth-fixtures';
 
@@ -233,6 +234,66 @@ describe('B7.4 tester cross-checks', () => {
     it('DEBT-233: POST /login 403 HTML error page carries Cache-Control no-store', async () => {
       const res = await loginNoCsrf();
       expect(String(res.headers['cache-control'] ?? '')).toMatch(/\bno-store\b/);
+    });
+
+    // Run 100 (D100.3): Nest 12.5's urlencoded parser refuses a `__proto__` key (onProtoPoisoning
+    // 'error') before the route runs, so the form never reaches the HTML filter: a 4xx, never 5xx.
+    it('run 100: POST /login with a valid CSRF + __proto__ key => 4xx, no stack/password echo, no session cookie', async () => {
+      const jar = new CookieJar();
+      const page = await full.app.inject({ method: 'GET', url: '/login' });
+      jar.take(page);
+      const password = `pw-${randomBytes(8).toString('hex')}`;
+      const fields = new URLSearchParams({
+        _csrf: csrfOf(page),
+        email: `proto-${randomBytes(4).toString('hex')}@example.com`,
+        password,
+        returnTo: '/',
+      }).toString();
+      const post = (payload: string) =>
+        full.app.inject({
+          method: 'POST',
+          url: '/login',
+          headers: {
+            'content-type': 'application/x-www-form-urlencoded',
+            cookie: jar.header(),
+          },
+          payload,
+        });
+      const res = await post(`${fields}&__proto__=x`);
+      // Observed: 400 JSON {"error":"invalid_request",...} from the global OAuth filter.
+      expect(res.statusCode).toBe(400);
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.body).not.toContain(password);
+      expect(res.body).not.toMatch(/\bat \S|\.ts:\d|\.js:\d/);
+      expect(setCookiesOf(res).some((c) => c.startsWith('idp_session='))).toBe(false);
+      // Control: the same form without the key gets past the CSRF check (generic 401, not 403).
+      const control = await post(fields);
+      expect(control.statusCode).toBe(401);
+    });
+
+    // Run 100 (D100.3 a): on the production filter chain (token.int-spec's bare FastifyAdapter has
+    // no global filter, so the parser error there carries no OAuth body / no-store).
+    it('run 100: POST /token with a __proto__ key => 400 invalid_request + no-store, no token', async () => {
+      const res = await full.app.inject({
+        method: 'POST',
+        url: '/token',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          authorization: `Basic ${Buffer.from(`${client.clientId}:${client.secret}`).toString('base64')}`,
+        },
+        payload: `${new URLSearchParams({
+          grant_type: 'authorization_code',
+          code: 'x'.repeat(43),
+          redirect_uri: FLOW_REDIRECT,
+          code_verifier: 'v'.repeat(43),
+        }).toString()}&__proto__=x`,
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.headers['cache-control']).toBe('no-store');
+      const body = res.json<Record<string, unknown>>();
+      expect(body.error).toBe('invalid_request');
+      for (const k of ['access_token', 'id_token', 'refresh_token'])
+        expect(body).not.toHaveProperty(k);
     });
 
     it('GET /authorize 500 (dependency failure) => HTML with base security headers', async () => {

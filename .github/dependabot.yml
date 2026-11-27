@@ -32,6 +32,10 @@ updates:
       # to a COOP same-origin page ⇒ X3 webkit 8/14. Remove once ≥ 1.65.1 keeps X3 webkit 14/14 (DEBT-714).
       - dependency-name: '@playwright/test'
         versions: ['1.65.0']
+      # Run 100 (D100.4): types follow the Node runtime major (22.x, .nvmrc/engines). Bump the major with
+      # the Node image migration.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
     groups:
       npm-minor-patch:
         applies-to: version-updates
